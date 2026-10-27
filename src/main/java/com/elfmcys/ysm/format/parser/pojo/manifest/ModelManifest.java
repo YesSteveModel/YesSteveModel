@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.format.parser.pojo.manifest;
 
-
 import com.elfmcys.ysm.format.parser.pojo.manifest.metadata.ModelMetadata;
 import com.elfmcys.ysm.format.parser.pojo.manifest.models.ModelFiles;
 import com.elfmcys.ysm.format.parser.pojo.manifest.models.ModelFilesWarper;

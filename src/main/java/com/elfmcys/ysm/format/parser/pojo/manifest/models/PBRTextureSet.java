@@ -15,8 +15,7 @@ public class PBRTextureSet {
     public String normal;
     public String specular;
 
-    public PBRTextureSet() {
-    }
+    public PBRTextureSet() {}
 
     public PBRTextureSet(String uv) {
         this.uv = uv;

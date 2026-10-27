@@ -26,50 +26,52 @@ import java.util.stream.Collectors;
 @Mod.EventBusSubscriber
 @SuppressWarnings("removal")
 public final class CommandRegistry {
-    public static final SuggestionProvider<CommandSourceStack> ALL_MODELS = SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "models"), (source, builder) -> {
-        if (source.getSource() instanceof SharedSuggestionProvider) {
-            var paths = ServerModelService.current().flatMap(ServerModelService::catalog)
-                    .map(snapshot -> snapshot.models().values().stream()
-                            .map(handle -> handle.location().path().value()).distinct()
-                            .map(CommandRegistry::filterSuggestionStr).toList()).orElse(List.of());
-            return SharedSuggestionProvider.suggest(paths, builder);
-        } else {
-            return Suggestions.empty();
-        }
-    });
-
-    public static final SuggestionProvider<CommandSourceStack> ALL_ANIMATIONS = SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "animations"), (source, builder) -> {
-        if (source.getSource() instanceof SharedSuggestionProvider) {
-            if (FMLEnvironment.dist == Dist.DEDICATED_SERVER) {
-                // Fixme: 应该为服务器后台也添加提示功能
-                return Suggestions.empty();
+    public static final SuggestionProvider<CommandSourceStack> ALL_MODELS =
+        SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "models"), (source, builder) -> {
+            if (source.getSource() instanceof SharedSuggestionProvider) {
+                var paths = ServerModelService.current().flatMap(ServerModelService::catalog)
+                    .map(snapshot -> snapshot.models().values().stream().map(handle -> handle.location().value())
+                        .distinct().map(CommandRegistry::filterSuggestionStr).toList())
+                    .orElse(List.of());
+                return SharedSuggestionProvider.suggest(paths, builder);
             } else {
-                var main = ClientModelService.instance().defaultRenderTarget().playerResources().animations();
-                Set<String> animations = Sets.newHashSet();
-                animations.addAll(main.keySet().stream().map(CommandRegistry::filterSuggestionStr).toList());
-                animations.add("stop");
-                return SharedSuggestionProvider.suggest(animations, builder);
+                return Suggestions.empty();
             }
-        } else {
-            return Suggestions.empty();
-        }
-    });
+        });
 
-    public static final SuggestionProvider<CommandSourceStack> ALL_TEXTURES = SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "textures"), (source, builder) -> {
-        if (source.getSource() instanceof SharedSuggestionProvider) {
-            String modelPath = source.getArgument("model_path", String.class);
-            var model = ServerModelService.current().flatMap(ServerModelService::catalog)
-                    .flatMap(snapshot -> snapshot.findPath(modelPath));
-            if (model.isPresent()) {
-                List<String> textures = model.get().representation().view().getPlayer().getTextureNames().stream()
-                        .sorted()
-                        .map(CommandRegistry::filterSuggestionStr).collect(Collectors.toList());
-                textures.add(0, "-");
-                return SharedSuggestionProvider.suggest(textures, builder);
+    public static final SuggestionProvider<CommandSourceStack> ALL_ANIMATIONS =
+        SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "animations"), (source, builder) -> {
+            if (source.getSource() instanceof SharedSuggestionProvider) {
+                if (FMLEnvironment.dist == Dist.DEDICATED_SERVER) {
+                    // Fixme: 应该为服务器后台也添加提示功能
+                    return Suggestions.empty();
+                } else {
+                    var main = ClientModelService.instance().defaultRenderTarget().playerResources().animations();
+                    Set<String> animations = Sets.newHashSet();
+                    animations.addAll(main.keySet().stream().map(CommandRegistry::filterSuggestionStr).toList());
+                    animations.add("stop");
+                    return SharedSuggestionProvider.suggest(animations, builder);
+                }
+            } else {
+                return Suggestions.empty();
             }
-        }
-        return Suggestions.empty();
-    });
+        });
+
+    public static final SuggestionProvider<CommandSourceStack> ALL_TEXTURES =
+        SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "textures"), (source, builder) -> {
+            if (source.getSource() instanceof SharedSuggestionProvider) {
+                String modelPath = source.getArgument("model_path", String.class);
+                var model = ServerModelService.current().flatMap(ServerModelService::catalog)
+                    .flatMap(snapshot -> snapshot.findPath(modelPath));
+                if (model.isPresent()) {
+                    List<String> textures = model.get().representation().view().getPlayer().getTextureNames().stream()
+                        .sorted().map(CommandRegistry::filterSuggestionStr).collect(Collectors.toList());
+                    textures.add(0, "-");
+                    return SharedSuggestionProvider.suggest(textures, builder);
+                }
+            }
+            return Suggestions.empty();
+        });
 
     @SubscribeEvent
     public static void onServerStaring(RegisterCommandsEvent event) {
@@ -85,9 +87,9 @@ public final class CommandRegistry {
     }
 
     private static String filterSuggestionStr(String str) {
-        if (str.chars().allMatch(c -> StringReader.isAllowedInUnquotedString((char) c))) {
+        if (str.chars().allMatch(c -> StringReader.isAllowedInUnquotedString((char)c))) {
             return str;
         }
-        return String.format("\"%s\"", str.replace("\"", "\\\"").replace("'", "\\'"));
+        return "\"" + str.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 }

@@ -10,14 +10,11 @@ import java.nio.ByteBuffer;
 public class BufferArgument {
     public static Input packInput(UniBuffer buf) {
         if (buf instanceof ArrayBuffer arrayBuf) {
-            long flags = ((long) arrayBuf.arrayOffset() << 32)
-                    | ((long) arrayBuf.size() & 0xFFFF_FFFFL);
+            long flags = ((long)arrayBuf.arrayOffset() << 32) | ((long)arrayBuf.size() & 0xFFFF_FFFFL);
             return new Input(arrayBuf.array(), flags);
         } else if (buf instanceof NativeBuffer nativeBuf) {
             var nio = nativeBuf.nio();
-            long flags = Long.MIN_VALUE
-                    | ((long) nio.position() << 32)
-                    | ((long) nio.remaining() & 0xFFFF_FFFFL);
+            long flags = Long.MIN_VALUE | ((long)nio.position() << 32) | ((long)nio.remaining() & 0xFFFF_FFFFL);
             return new Input(nio, flags);
         }
         throw new IllegalArgumentException("Unknown UniBuffer type: " + buf.getClass().getName());
@@ -29,7 +26,7 @@ public class BufferArgument {
             return ArrayBuffer.move(array);
         } else if (buf instanceof ByteBuffer nio) {
             if (nio.isDirect()) {
-                return new NativeHeapBuffer(nio);
+                return NativeHeapBuffer.adopt(nio);
             } else {
                 return ArrayBuffer.move(nio);
             }
@@ -38,5 +35,6 @@ public class BufferArgument {
         }
     }
 
-    public record Input(Object obj, long flags) {}
+    public record Input(Object obj, long flags) {
+    }
 }

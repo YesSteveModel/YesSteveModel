@@ -18,17 +18,18 @@ REQUIRED_DIRECTORIES = {
     "governance",
     "standards/model-schema",
     "standards/protocol-v1",
-    "concepts",
-    "architecture/network",
-    "architecture/model-management",
-    "architecture/animation",
-    "architecture/rendering",
+    "architecture",
+    "verification",
     "future",
     "status/known-issues",
     "tools",
 }
 REQUIRED_FILES = {
     "README.md",
+    "architecture/README.md",
+    "governance/architecture-docs.md",
+    "verification/model-management.md",
+    "verification/molang-declarations.md",
     "migration-overview.md",
     "glossary.md",
     "governance/documentation-policy.md",
@@ -91,6 +92,81 @@ def headings(path: Path) -> set[str]:
     return {slug(match.group(1)) for match in HEADING_RE.finditer(mask_code(path.read_text("utf-8")))}
 
 
+OVERVIEW_SECTIONS = (
+    "职责与边界", "运行作用域与所有权", "数据流与交接",
+    "生命周期与失败", "关键契约与设计取舍", "实现与验证入口",
+)
+PROJECTION_DIRECTORIES = {"flows", "views"}
+
+
+def local_links(path: Path, text: str) -> list[tuple[Path, str]]:
+    links = []
+    for match in LINK_RE.finditer(mask_code(text)):
+        parsed = urlsplit(match.group("target").strip("<>"))
+        if not parsed.scheme and not parsed.netloc:
+            target = (path.parent / unquote(parsed.path)).resolve() if parsed.path else path.resolve()
+            links.append((target, unquote(parsed.fragment)))
+    return links
+
+
+def check_architecture(root: Path) -> list[str]:
+    """Check explicit structure and evidence links, not architectural meaning."""
+    root = root.resolve()
+    architecture = root / "architecture"
+    errors = []
+    if not architecture.is_dir():
+        return errors
+    for retired in ("design", "implementation", "maintenance.md", "overview.md", "runtime-model.md"):
+        if (architecture / retired).exists():
+            errors.append(f"architecture/{retired}: retired architecture entry is present")
+    for directory in sorted(path for path in architecture.rglob("*") if path.is_dir()):
+        relative = directory.relative_to(architecture)
+        if "design" in relative.parts:
+            errors.append(f"{directory.relative_to(root)}: design topics must be siblings of overview.md")
+        if "implementation" in relative.parts or relative.parts[0] in PROJECTION_DIRECTORIES:
+            continue
+        if not (directory / "overview.md").is_file():
+            errors.append(f"{directory.relative_to(root)}: subsystem overview.md is missing")
+    for path in markdown_files(architecture):
+        relative = path.relative_to(architecture)
+        text = path.read_text("utf-8")
+        links = local_links(path, text)
+        if path.name == "README.md" and path != architecture / "README.md":
+            errors.append(f"{path.relative_to(root)}: only the system entry uses README.md")
+        if "implementation" in relative.parts:
+            if path.name == "overview.md":
+                errors.append(f"{path.relative_to(root)}: implementation overview is forbidden")
+            intro = text.split("\n## ", 1)[0]
+            if not any(fragment and target.is_relative_to(architecture)
+                       and "implementation" not in target.relative_to(architecture).parts
+                       and target.suffix == ".md" and target.is_file()
+                       and target.relative_to(architecture).parts[0] not in PROJECTION_DIRECTORIES
+                       and slug(fragment) in headings(target)
+                       for target, fragment in local_links(path, intro)):
+                errors.append(f"{path.relative_to(root)}: implementation needs an introductory design-section link")
+        elif relative.parts[0] in PROJECTION_DIRECTORIES:
+            if path.name == "overview.md":
+                errors.append(f"{path.relative_to(root)}: projection overview is forbidden")
+            if not any(fragment and target.is_relative_to(architecture)
+                       and "implementation" not in target.relative_to(architecture).parts
+                       and target.suffix == ".md" and target.is_file()
+                       and target.relative_to(architecture).parts[0] not in PROJECTION_DIRECTORIES
+                       and slug(fragment) in headings(target)
+                       for target, fragment in links):
+                kind = "view" if relative.parts[0] == "views" else "flow"
+                errors.append(f"{path.relative_to(root)}: {kind} needs a design-section link")
+        elif path.name == "overview.md":
+            sections = re.findall(r"^## (.+)$", text, re.MULTILINE)
+            if sections != list(OVERVIEW_SECTIONS):
+                errors.append(f"{path.relative_to(root)}: overview needs the six ordered core sections")
+            parent = path.parent.parent
+            parent_entry = parent / ("README.md" if parent == architecture else "overview.md")
+            if not any(target == parent_entry and fragment and target.is_file()
+                       and slug(fragment) in headings(target) for target, fragment in links):
+                errors.append(f"{path.relative_to(root)}: overview needs a parent-contract section link")
+    return errors
+
+
 def run(root: Path) -> list[str]:
     root = root.resolve()
     errors: list[str] = []
@@ -100,8 +176,23 @@ def run(root: Path) -> list[str]:
     for relative in REQUIRED_FILES:
         if not (root / relative).is_file():
             errors.append(f"{relative}: required file is missing")
+        if relative.startswith("architecture/") and relative.endswith("/overview.md"):
+            retired = Path(relative).with_name("README.md")
+            if (root / retired).exists():
+                errors.append(f"{retired.as_posix()}: overview must be named overview.md")
+
+    errors.extend(check_architecture(root))
+    retired_directories = [root / "concepts"]
+    for directory in retired_directories:
+        if directory.exists():
+            errors.append(f"{directory.relative_to(root)}: retired directory is present")
+    if (root / "architecture/runtime-model.md").exists():
+        errors.append("architecture/runtime-model.md: retired page is present")
 
     files = markdown_files(root)
+    for path in files:
+        if path.is_relative_to(root / "architecture") and path.name == "design-rationale.md":
+            errors.append(f"{path.relative_to(root)}: rationale belongs with its design")
     entry = (root / "README.md").resolve()
     graph: dict[Path, set[Path]] = defaultdict(set)
     for path in files:
@@ -141,6 +232,11 @@ def run(root: Path) -> list[str]:
                 graph[path.resolve()].add(destination)
                 if parsed.fragment and slug(parsed.fragment) not in headings(destination):
                     errors.append(f"{path.relative_to(root)}: broken anchor {raw}")
+                elif parsed.fragment:
+                    matches = [slug(item.group(1)) for item in HEADING_RE.finditer(
+                        mask_code(destination.read_text("utf-8")))]
+                    if matches.count(slug(parsed.fragment)) > 1:
+                        errors.append(f"{path.relative_to(root)}: ambiguous anchor {raw}")
 
     reachable = {entry}
     queue = deque([entry])

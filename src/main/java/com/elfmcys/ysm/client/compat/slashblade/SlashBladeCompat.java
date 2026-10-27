@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.client.compat.slashblade;
 
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
 import com.elfmcys.ysm.client.entity.CustomHumanoidEntity;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.builder.LoopType;
@@ -53,30 +52,33 @@ public class SlashBladeCompat {
         return StringUtils.EMPTY;
     }
 
+    public static String getAnimationName(LivingEntity entity) {
+        return isSlashBladeLoaded() ? SlashBladeAnimation.getAnimationName(entity) : StringUtils.EMPTY;
+    }
+
+    /**
+     * The SlashBlade animation name of one borrowed entity, or the empty string when this entity is not a living entity
+     * or the adapter is unavailable.
+     *
+     * <p>
+     * This is the capability-facing form: it owns the living-entity narrowing so a caller never has to reach the
+     * optional adapter itself.
+     */
+    public static String animationName(net.minecraft.world.entity.Entity entity) {
+        return entity instanceof LivingEntity living ? getAnimationName(living) : StringUtils.EMPTY;
+    }
+
     @Nullable
-    public static PlayState playMainAnimation(LivingEntity livingEntity, AnimationEvent<? extends CustomHumanoidEntity<?>> event, String animationName, LoopType loopType) {
+    public static PlayState playMainAnimation(LivingEntity livingEntity,
+        AnimationEvent<? extends CustomHumanoidEntity<?>> event, String animationName, LoopType loopType) {
         if (isSlashBladeLoaded() && isSlashBladeItem(livingEntity.getMainHandItem())) {
             return SlashBladeAnimation.playMainAnimation(event, animationName, loopType);
         }
         return null;
     }
 
-    public static void addBinding(CtrlBinding binding) {
-        if (isSlashBladeLoaded()) {
-            SlashBladeBinding.addInnerBinding(binding);
-        } else {
-            addEmptyBinding(binding);
-        }
-    }
-
     public static boolean isResharped() {
         return IS_RESHARPED;
     }
 
-    /**
-     * 没有安装此模组时，这些 molang 应该存在，否则会报错
-     */
-    private static void addEmptyBinding(CtrlBinding binding) {
-        binding.livingEntityVar("slashblade_animation", ctx -> StringUtils.EMPTY);
-    }
 }

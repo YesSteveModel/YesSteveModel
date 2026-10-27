@@ -1,11 +1,8 @@
 package com.elfmcys.ysm.client.command.sub;
 
 import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
-import com.elfmcys.ysm.client.animation.molang.CustomMolangParser;
 import com.elfmcys.ysm.client.gui.overlay.DebugAnimationScreen;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
 import com.elfmcys.ysm.geckolib3.core.processor.DebugInfo;
-import com.elfmcys.ysm.molang.parser.ParseException;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -32,8 +29,7 @@ public class SimpleWatchCommand {
     private static final String CONTROLLER_NAME = "controller";
 
     /**
-     * 简化版本
-     * ysmclient watch var <exp> 等效于 ysmclient molang watch add post <exp_name> <exp>
+     * 简化版本 ysmclient watch var <exp> 等效于 ysmclient molang watch add post <exp_name> <exp>
      */
     public static LiteralArgumentBuilder<CommandSourceStack> get() {
         LiteralArgumentBuilder<CommandSourceStack> watch = Commands.literal(WATCH_NAME);
@@ -42,8 +38,10 @@ public class SimpleWatchCommand {
         LiteralArgumentBuilder<CommandSourceStack> state = Commands.literal(STATE_NAME);
         LiteralArgumentBuilder<CommandSourceStack> clear = Commands.literal(CLEAR_NAME);
 
-        Supplier<RequiredArgumentBuilder<CommandSourceStack, String>> exp = () -> Commands.argument(EXPRESSION_NAME, StringArgumentType.greedyString()).suggests(ALL_VARS);
-        Supplier<RequiredArgumentBuilder<CommandSourceStack, String>> controller = () -> Commands.argument(CONTROLLER_NAME, StringArgumentType.greedyString()).suggests(ALL_CONTROLLERS);
+        Supplier<RequiredArgumentBuilder<CommandSourceStack, String>> exp =
+            () -> Commands.argument(EXPRESSION_NAME, StringArgumentType.greedyString()).suggests(ALL_VARS);
+        Supplier<RequiredArgumentBuilder<CommandSourceStack, String>> controller =
+            () -> Commands.argument(CONTROLLER_NAME, StringArgumentType.greedyString()).suggests(ALL_CONTROLLERS);
 
         watch.then(var.then(exp.get().executes(SimpleWatchCommand::addExpression)));
         watch.then(state.then(controller.get().executes(SimpleWatchCommand::addControllerState)));
@@ -59,15 +57,8 @@ public class SimpleWatchCommand {
         }
         Minecraft mc = Minecraft.getInstance();
         String exp = StringArgumentType.getString(ctx, EXPRESSION_NAME);
-        IValue value;
-        try {
-            value = CustomMolangParser.parseSingleExpressionUnsafe(exp);
-        } catch (ParseException e) {
-            ctx.getSource().sendFailure(Component.translatable("message.yes_steve_model.model.debug_animation.parser_error", e.getMessage()));
-            return Command.SINGLE_SUCCESS;
-        }
         mc.execute(() -> mc.player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
-            DebugAnimationScreen.getDebugInfo().add(DebugInfo.Phase.POST_ANIMATION, exp, value);
+            DebugAnimationScreen.getDebugInfo().add(DebugInfo.Phase.POST_ANIMATION, exp, exp);
             // 强制打开调试界面
             if (!DebugAnimationScreen.isEnabled()) {
                 DebugAnimationScreen.enableForLocalPlayer();
@@ -84,7 +75,7 @@ public class SimpleWatchCommand {
         }
         Minecraft mc = Minecraft.getInstance();
         mc.execute(() -> mc.player.getCapability(PlayerAnimatableCapabilityProvider.CAP)
-                .ifPresent(cap -> DebugAnimationScreen.getDebugInfo().clear()));
+            .ifPresent(cap -> DebugAnimationScreen.getDebugInfo().clear()));
         DebugAnimationScreen.clearDebugController();
         return Command.SINGLE_SUCCESS;
     }

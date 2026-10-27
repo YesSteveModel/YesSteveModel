@@ -17,8 +17,7 @@ public final class SupportedAudioProbe {
     private static final byte[] VORBIS_SETUP = {5, 'v', 'o', 'r', 'b', 'i', 's'};
     private static final int[] OGG_CRC_TABLE = createCrcTable();
 
-    private SupportedAudioProbe() {
-    }
+    private SupportedAudioProbe() {}
 
     public static Inspection inspect(ByteBuffer source) {
         Objects.requireNonNull(source, "source");
@@ -28,53 +27,45 @@ public final class SupportedAudioProbe {
         } catch (UnknownMedia exception) {
             return Inspection.failure(Disposition.UNKNOWN, exception.getMessage());
         } catch (InvalidMedia | ArithmeticException exception) {
-            var disposition = parser.encoding == null
-                    ? Disposition.UNKNOWN
-                    : Disposition.CORRUPT_SUPPORTED;
+            var disposition = parser.encoding == null ? Disposition.UNKNOWN : Disposition.CORRUPT_SUPPORTED;
             return Inspection.failure(disposition, exception.getMessage());
         }
     }
 
-    public static Inspection admit(ByteBuffer source, Encoding encoding, int channels,
-                                   long sampleRate, long frames) {
+    public static Inspection admit(ByteBuffer source, Encoding encoding, int channels, long sampleRate, long frames) {
         Objects.requireNonNull(encoding, "encoding");
         var inspection = inspect(source);
         if (!inspection.playable()) {
             return inspection;
         }
         var media = inspection.media();
-        if (media.encoding() != encoding || media.channels() != channels
-                || media.sampleRate() != sampleRate || media.frames() != frames) {
+        if (media.encoding() != encoding || media.channels() != channels || media.sampleRate() != sampleRate
+            || media.frames() != frames) {
             return Inspection.failure(Disposition.CORRUPT_SUPPORTED,
-                    "declared audio metadata does not match the encoded stream");
+                "declared audio metadata does not match the encoded stream");
         }
         return inspection;
     }
 
     public static Optional<Encoding> detect(ByteBuffer source) {
         var inspection = inspect(source);
-        return inspection.playable()
-                ? Optional.of(inspection.media().encoding())
-                : Optional.empty();
+        return inspection.playable() ? Optional.of(inspection.media().encoding()) : Optional.empty();
     }
 
     public enum Encoding {
-        OGG_VORBIS,
-        OGG_OPUS
+        OGG_VORBIS, OGG_OPUS
     }
 
     public enum Disposition {
-        PLAYABLE,
-        UNKNOWN,
-        CORRUPT_SUPPORTED
+        PLAYABLE, UNKNOWN, CORRUPT_SUPPORTED
     }
 
-    public record MediaInfo(Encoding encoding, int channels, long sampleRate, long frames,
-                            int preSkip, int outputGain) {
+    public record MediaInfo(Encoding encoding, int channels, long sampleRate, long frames, int preSkip,
+        int outputGain) {
         public MediaInfo {
             Objects.requireNonNull(encoding, "encoding");
-            if ((channels != 1 && channels != 2) || sampleRate <= 0 || frames < 0
-                    || preSkip < 0 || outputGain < Short.MIN_VALUE || outputGain > Short.MAX_VALUE) {
+            if ((channels != 1 && channels != 2) || sampleRate <= 0 || frames < 0 || preSkip < 0
+                || outputGain < Short.MIN_VALUE || outputGain > Short.MAX_VALUE) {
                 throw new IllegalArgumentException("invalid audio metadata");
             }
         }
@@ -159,8 +150,7 @@ public final class SupportedAudioProbe {
             if (firstPage) {
                 rememberSupportedEncoding(pageOffset + 27 + segmentCount);
             }
-            require(checksum(pageOffset, pageSize) == unsignedInt(pageOffset + 22),
-                    "Ogg page checksum mismatch");
+            require(checksum(pageOffset, pageSize) == unsignedInt(pageOffset + 22), "Ogg page checksum mismatch");
 
             if (firstPage) {
                 require(bos && !continued && sequence == 0, "invalid initial Ogg page");
@@ -223,16 +213,14 @@ public final class SupportedAudioProbe {
         }
 
         private long unsignedInt(int index) {
-            return Integer.toUnsignedLong(unsignedByte(index)
-                    | unsignedByte(index + 1) << 8
-                    | unsignedByte(index + 2) << 16
-                    | unsignedByte(index + 3) << 24);
+            return Integer.toUnsignedLong(unsignedByte(index) | unsignedByte(index + 1) << 8
+                | unsignedByte(index + 2) << 16 | unsignedByte(index + 3) << 24);
         }
 
         private long littleLong(int index) {
             long result = 0;
             for (int shift = 0; shift < Long.SIZE; shift += 8) {
-                result |= (long) unsignedByte(index + shift / 8) << shift;
+                result |= (long)unsignedByte(index + shift / 8) << shift;
             }
             return result;
         }
@@ -265,7 +253,7 @@ public final class SupportedAudioProbe {
         public void acceptPacket(byte[] packet) throws InvalidMedia {
             if (packetIndex == 0) {
                 require(packet.length >= 30 && matches(packet, VORBIS_IDENTIFICATION),
-                        "invalid Vorbis identification header");
+                    "invalid Vorbis identification header");
                 require(littleUnsignedInt(packet, 7) == 0, "unsupported Vorbis version");
                 channels = Byte.toUnsignedInt(packet[11]);
                 require(channels == 1 || channels == 2, "unsupported Vorbis channel count");
@@ -292,8 +280,7 @@ public final class SupportedAudioProbe {
         public MediaInfo finish() throws InvalidMedia {
             require(packetIndex >= 3, "incomplete Vorbis headers");
             require(finalGranule >= 0, "Vorbis stream has no final granule");
-            return new MediaInfo(Encoding.OGG_VORBIS, channels, sampleRate,
-                    finalGranule, 0, 0);
+            return new MediaInfo(Encoding.OGG_VORBIS, channels, sampleRate, finalGranule, 0, 0);
         }
     }
 
@@ -310,16 +297,14 @@ public final class SupportedAudioProbe {
         @Override
         public void acceptPacket(byte[] packet) throws InvalidMedia {
             if (packetIndex == 0) {
-                require(packet.length == 19 && matches(packet, OPUS_HEAD),
-                        "invalid Opus identification header");
+                require(packet.length == 19 && matches(packet, OPUS_HEAD), "invalid Opus identification header");
                 int version = Byte.toUnsignedInt(packet[8]);
                 require(version <= 15, "unsupported Opus version");
                 channels = Byte.toUnsignedInt(packet[9]);
                 require(channels == 1 || channels == 2, "unsupported Opus channel count");
                 preSkip = littleUnsignedShort(packet, 10);
-                outputGain = (short) littleUnsignedShort(packet, 16);
-                require(Byte.toUnsignedInt(packet[18]) == 0,
-                        "unsupported Opus channel mapping family");
+                outputGain = (short)littleUnsignedShort(packet, 16);
+                require(Byte.toUnsignedInt(packet[18]) == 0, "unsupported Opus channel mapping family");
             } else if (packetIndex == 1) {
                 require(matches(packet, OPUS_TAGS), "invalid Opus tags header");
             } else {
@@ -338,14 +323,17 @@ public final class SupportedAudioProbe {
             }
             require(granule >= 0, "invalid Opus granule");
             if (origin == Long.MIN_VALUE) {
-                require(granule >= decodedFrames, "Opus granule precedes decoded packets");
-                origin = granule - decodedFrames;
+                if (eos && granule < decodedFrames) {
+                    origin = 0;
+                } else {
+                    require(granule >= decodedFrames, "Opus granule precedes decoded packets");
+                    origin = granule - decodedFrames;
+                }
             }
             long decodedGranule = Math.addExact(origin, decodedFrames);
             if (eos) {
                 require(granule <= decodedGranule, "Opus final granule exceeds decoded packets");
-                require(decodedGranule - granule <= pageFrames,
-                        "Opus end trimming exceeds the final page");
+                require(decodedGranule - granule <= pageFrames, "Opus end trimming exceeds the final page");
                 finalGranule = granule;
             } else {
                 require(granule == decodedGranule, "inconsistent Opus page granule");
@@ -356,12 +344,10 @@ public final class SupportedAudioProbe {
         @Override
         public MediaInfo finish() throws InvalidMedia {
             require(packetIndex >= 2, "incomplete Opus headers");
-            require(origin != Long.MIN_VALUE && finalGranule >= 0,
-                    "Opus stream has no playable timeline");
+            require(origin != Long.MIN_VALUE && finalGranule >= 0, "Opus stream has no playable timeline");
             long start = Math.addExact(origin, preSkip);
             require(finalGranule >= start, "Opus final granule precedes pre-skip");
-            return new MediaInfo(Encoding.OGG_OPUS, channels, 48_000,
-                    finalGranule - start, preSkip, outputGain);
+            return new MediaInfo(Encoding.OGG_OPUS, channels, 48_000, finalGranule - start, preSkip, outputGain);
         }
     }
 
@@ -371,11 +357,11 @@ public final class SupportedAudioProbe {
         int config = toc >>> 3;
         int samplesPerFrame;
         if (config < 12) {
-            samplesPerFrame = new int[]{480, 960, 1920, 2880}[config & 3];
+            samplesPerFrame = new int[] {480, 960, 1920, 2880}[config & 3];
         } else if (config < 16) {
-            samplesPerFrame = new int[]{480, 960}[config & 1];
+            samplesPerFrame = new int[] {480, 960}[config & 1];
         } else {
-            samplesPerFrame = new int[]{120, 240, 480, 960}[config & 3];
+            samplesPerFrame = new int[] {120, 240, 480, 960}[config & 3];
         }
         int frameCount = switch (toc & 3) {
             case 0 -> 1;
@@ -386,9 +372,8 @@ public final class SupportedAudioProbe {
             }
             default -> throw new AssertionError();
         };
-        require(frameCount > 0 && (long) samplesPerFrame * frameCount <= 5_760,
-                "invalid Opus packet duration");
-        return (long) samplesPerFrame * frameCount;
+        require(frameCount > 0 && (long)samplesPerFrame * frameCount <= 5_760, "invalid Opus packet duration");
+        return (long)samplesPerFrame * frameCount;
     }
 
     private static int littleUnsignedShort(byte[] bytes, int offset) {
@@ -396,10 +381,8 @@ public final class SupportedAudioProbe {
     }
 
     private static long littleUnsignedInt(byte[] bytes, int offset) {
-        return Integer.toUnsignedLong(Byte.toUnsignedInt(bytes[offset])
-                | Byte.toUnsignedInt(bytes[offset + 1]) << 8
-                | Byte.toUnsignedInt(bytes[offset + 2]) << 16
-                | Byte.toUnsignedInt(bytes[offset + 3]) << 24);
+        return Integer.toUnsignedLong(Byte.toUnsignedInt(bytes[offset]) | Byte.toUnsignedInt(bytes[offset + 1]) << 8
+            | Byte.toUnsignedInt(bytes[offset + 2]) << 16 | Byte.toUnsignedInt(bytes[offset + 3]) << 24);
     }
 
     private static boolean matches(ByteBuffer bytes, int offset, byte[] expected) {

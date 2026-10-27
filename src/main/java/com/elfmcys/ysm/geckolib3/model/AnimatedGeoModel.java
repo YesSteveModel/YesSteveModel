@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.geckolib3.model;
 
-import com.elfmcys.ysm.geckolib3.core.molang.util.StringPool;
+import com.elfmcys.ysm.util.StringPool;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoLocator;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
 import it.unimi.dsi.fastutil.ints.Int2ReferenceMap;
@@ -32,14 +32,6 @@ public class AnimatedGeoModel {
     @Nullable
     private final AnimatedGeoBone firstPersonViewLocator;
 
-    /**
-     * 仅用于 TLM 定位组
-     * <p>
-     * FIXME: 其实不应该这样耦合的
-     */
-    @Nullable
-    private Object tlmAnimatedGeoModel = null;
-
     public AnimatedGeoModel(GeoModel model) {
         this.model = model;
 
@@ -48,8 +40,7 @@ public class AnimatedGeoModel {
         var boneList = new ReferenceArrayList<AnimatedGeoBone>(sortedBones.size());
         this.boneAttributes = new float[sortedBones.size() * BONE_ATTRIBUTE_COUNT];
         for (var boneIndex = 0; boneIndex < sortedBones.size(); boneIndex++) {
-            var animated = new AnimatedGeoBone(sortedBones.get(boneIndex),
-                    boneAttributes, boneIndex);
+            var animated = new AnimatedGeoBone(sortedBones.get(boneIndex), boneAttributes, boneIndex);
             boneMap.put(animated.getPooledName(), animated);
             boneList.add(animated);
         }
@@ -74,7 +65,33 @@ public class AnimatedGeoModel {
     }
 
     public void setModelInplace(GeoModel model) {
-        this.model = Objects.requireNonNull(model, "model");
+        prepareModelBinding(model).run();
+    }
+
+    public Runnable prepareModelBinding(GeoModel model) {
+        Objects.requireNonNull(model, "model");
+        var bones = model.sortedBones();
+        if (bones.size() != sortedBones.size() || model.locatorMap().size() != locatorMap.size())
+            throw new IllegalArgumentException("Compatible geometry structure changed");
+        for (var index = 0; index < bones.size(); index++) {
+            if (bones.get(index).pooledName() != sortedBones.get(index).getPooledName())
+                throw new IllegalArgumentException("Compatible geometry bone order changed");
+        }
+        for (var index = 0; index < locatorMap.size(); index++) {
+            var nextGroup = model.locatorMap().get(index);
+            var currentGroup = locatorMap.get(index);
+            if (nextGroup.size() != currentGroup.size())
+                throw new IllegalArgumentException("Compatible geometry locator structure changed");
+            for (var member = 0; member < nextGroup.size(); member++) {
+                if (nextGroup.get(member).pooledName() != currentGroup.get(member).getPooledName())
+                    throw new IllegalArgumentException("Compatible geometry locator order changed");
+            }
+        }
+        return () -> {
+            this.model = model;
+            for (var index = 0; index < bones.size(); index++)
+                sortedBones.get(index).bindBoneData(bones.get(index));
+        };
     }
 
     public Int2ReferenceMap<AnimatedGeoBone> getBoneMap() {
@@ -111,14 +128,4 @@ public class AnimatedGeoModel {
         }
         throw new IllegalArgumentException("locator type mismatch");
     }
-
-    // TODO
-//    @SuppressWarnings("unchecked")
-//    public <T> T getTlmAnimatedGeoModel() {
-//        if (this.tlmAnimatedGeoModel == null) {
-//            // FIXME: 有可能会触发类加载？
-//            this.tlmAnimatedGeoModel = TlmConverterHelper.convertToTlmAnimatedModel(this);
-//        }
-//        return (T) this.tlmAnimatedGeoModel;
-//    }
 }

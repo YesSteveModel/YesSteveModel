@@ -10,7 +10,6 @@
   },
   "client": [
     "client.ArrowEntityAccessor",
-    "client.AudioChannelMixin",
     "client.BufferBuilderMixin",
     "client.BufferSourceMixin",
     "client.EntityRenderDispatcherMixin",
@@ -21,9 +20,6 @@
     "client.LivingRendererMixin",
     "client.NativeImageAccessor",
     "client.PauseScreenMixin",
-    "client.ChannelHandleMixin",
-    "client.SoundEngineAccessor",
-    "client.SoundManagerAccessor",
     "client.ThrowableItemProjectileAccessor",
     "client.LevelRendererMixin",
     "client.embeddium.SodiumBufferBuilderMixin"

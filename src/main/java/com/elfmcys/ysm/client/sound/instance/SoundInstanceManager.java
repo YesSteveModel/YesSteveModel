@@ -1,8 +1,9 @@
 package com.elfmcys.ysm.client.sound.instance;
 
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
-import com.elfmcys.ysm.init.ModSounds;
-import it.unimi.dsi.fastutil.ints.Int2ReferenceOpenHashMap;
+import com.elfmcys.ysm.expression.host.ModelSoundId;
+import com.elfmcys.ysm.api.client.audio.AudioBackend;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
+import it.unimi.dsi.fastutil.objects.Object2ReferenceOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.ResourceLocation;
@@ -10,101 +11,114 @@ import net.minecraft.sounds.SoundEvent;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
+/** Exact author-scope registry for pending and submitted sounds. */
 public class SoundInstanceManager {
-    private final Int2ReferenceOpenHashMap<ICanStopSound> instanceMap;
-    private final ReferenceArrayList<ICanStopSound> unnamedInstanceList;
+    private final Object2ReferenceOpenHashMap<ModelSoundId, ICanStopSound> instanceMap =
+        new Object2ReferenceOpenHashMap<>(0);
+    private final ReferenceArrayList<ICanStopSound> unnamedInstanceList = new ReferenceArrayList<>(0);
 
-    public SoundInstanceManager() {
-        this.instanceMap = new Int2ReferenceOpenHashMap<>(0);
-        this.unnamedInstanceList = new ReferenceArrayList<>(0);
-    }
-
-    public boolean playSound(AnimatableEntity<?> animatable, int id, String soundName, boolean force, @Nullable Consumer<@Nullable MinecraftSoundInstance> configure) {
-        MinecraftSoundInstance instance;
-        if (soundName.contains(":")) {
-            // 如果声音名带冒号，那么大概率就是调用原版音频，因为 Windows 中冒号不是合法的文件名
-            var soundId = ResourceLocation.tryParse(soundName);
-            if (soundId != null) {
-                SoundEvent soundEvent = SoundEvent.createVariableRangeEvent(soundId);
-                instance = new MinecraftSoundInstance(soundEvent, animatable.getEntity());
-            } else {
-                instance = null;
-            }
-        } else {
-            // 否则认为是自定义的音频文件
-            instance = animatable.getSoundStream(soundName)
-                    .map(provider -> new CustomSoundInstance(ModSounds.CUSTOM, provider, animatable.getEntity()))
-                    .orElse(null);
-        }
-        if (configure != null) {
-            configure.accept(instance);
-        }
-        if (instance == null) {
+    public boolean playSound(AnimatableEntity<?> animatable, ModelSoundId id, String soundName, boolean force,
+        @Nullable Consumer<SoundControl> configure) {
+        if (!id.playable()) {
             return false;
         }
 
-        if (id != 0) {
-            if (force) {
-                var oldInstance = instanceMap.put(id, instance);
-                if (oldInstance != null && !oldInstance.isStopped()) {
-                    oldInstance.setStopped();
+        final SoundControl control = new SoundControl(animatable.getEntity());
+        if (configure != null) {
+            configure.accept(control);
+        }
+
+        final AudioPlaybackFactory modelFactory;
+        final MinecraftSoundInstance namespaced;
+        if (soundName.contains(":")) {
+            var soundId = ResourceLocation.tryParse(soundName);
+            if (soundId == null) {
+                return false;
+            }
+            modelFactory = null;
+            namespaced =
+                new MinecraftSoundInstance(SoundEvent.createVariableRangeEvent(soundId), animatable.getEntity());
+            control.apply(namespaced);
+        } else {
+            modelFactory = animatable.getSoundPlayback(soundName).orElse(null);
+            namespaced = null;
+            if (modelFactory == null) {
+                return false;
+            }
+        }
+
+        return startResolved(id, force, () -> {
+            if (modelFactory != null) {
+                return modelFactory.play(control);
+            }
+            Minecraft.getInstance().execute(() -> {
+                var sounds = Minecraft.getInstance().getSoundManager();
+                sounds.play(namespaced);
+                if (!sounds.isActive(namespaced)) {
+                    namespaced.setStopped();
                 }
-            } else {
-                var newInstance = instanceMap.compute(id, (ignored, oldInstance) -> {
-                    if (oldInstance == null || oldInstance.isStopped()) {
-                        return instance;
-                    }
-                    return oldInstance;
-                });
-                if (newInstance != instance) {
-                    instance.setStopped();
+            });
+            return namespaced;
+        });
+    }
+
+    boolean startResolved(ModelSoundId id, boolean force, Supplier<@Nullable ICanStopSound> starter) {
+        if (!isUnnamed(id)) {
+            var old = instanceMap.get(id);
+            if (old != null && !old.isPlaybackStopped()) {
+                if (!force) {
                     return false;
                 }
+                instanceMap.remove(id, old);
+                old.setStopped(AudioBackend.CancelReason.FORCE_REPLACED);
             }
-        } else {
-            unnamedInstanceList.add(instance);
         }
-        Minecraft.getInstance().execute(() -> {
-            var sounds = Minecraft.getInstance().getSoundManager();
-            sounds.play(instance);
-            if (!sounds.isActive(instance)) {
-                instance.setStopped();
-            }
-        });
+
+        var instance = starter.get();
+        if (instance == null || instance.isPlaybackStopped()) {
+            return false;
+        }
+
+        if (isUnnamed(id)) {
+            unnamedInstanceList.add(instance);
+        } else {
+            instanceMap.put(id, instance);
+        }
         return true;
     }
 
-    public boolean stopPlayingSound(int id) {
-        if (id == 0) {
+    public boolean stopPlayingSound(ModelSoundId id) {
+        if (!id.playable() || isUnnamed(id)) {
             return false;
         }
         var instance = instanceMap.remove(id);
-        if (instance != null) {
-            instance.setStopped();
-            return true;
+        if (instance == null) {
+            return false;
         }
-        return false;
+        instance.setStopped(AudioBackend.CancelReason.AUTHOR_STOP);
+        return true;
     }
 
     public void stopAllPlayingSounds() {
-        instanceMap.values().forEach(ICanStopSound::setStopped);
-        for (var instance: unnamedInstanceList) {
-            instance.setStopped();
-        }
+        instanceMap.values().forEach(instance -> instance.setStopped(AudioBackend.CancelReason.SCOPE_RETIRED));
+        unnamedInstanceList.forEach(instance -> instance.setStopped(AudioBackend.CancelReason.SCOPE_RETIRED));
         instanceMap.clear();
         unnamedInstanceList.clear();
     }
 
     public void trim() {
-        var iter = instanceMap.int2ReferenceEntrySet().fastIterator();
+        var iter = instanceMap.object2ReferenceEntrySet().fastIterator();
         while (iter.hasNext()) {
-            var instance = iter.next();
-            if (instance.getValue().isStopped()) {
+            if (iter.next().getValue().isPlaybackStopped()) {
                 iter.remove();
             }
         }
+        unnamedInstanceList.removeIf(ICanStopSound::isPlaybackStopped);
+    }
 
-        unnamedInstanceList.removeIf(ICanStopSound::isStopped);
+    private static boolean isUnnamed(ModelSoundId id) {
+        return id instanceof ModelSoundId.Numeric numeric && numeric.value() == 0;
     }
 }

@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2020.
- * Author: Bernie G. (Gecko)
+ * Copyright (c) 2020. Author: Bernie G. (Gecko)
  */
 
 package com.elfmcys.ysm.geckolib3.core;

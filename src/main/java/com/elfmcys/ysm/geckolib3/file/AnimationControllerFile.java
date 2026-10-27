@@ -10,7 +10,8 @@ public class AnimationControllerFile {
     private final Map<String, AnimationControllerData> animationControllers;
 
     public AnimationControllerFile(Map<String, AnimationControllerData> animationControllers) {
-        this.animationControllers = Object2ReferenceMaps.unmodifiable(new Object2ReferenceOpenHashMap<>(animationControllers));
+        this.animationControllers =
+            Object2ReferenceMaps.unmodifiable(new Object2ReferenceOpenHashMap<>(animationControllers));
     }
 
     public Map<String, AnimationControllerData> animationControllers() {

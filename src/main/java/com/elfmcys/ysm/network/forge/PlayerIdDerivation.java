@@ -13,8 +13,7 @@ import java.util.UUID;
 final class PlayerIdDerivation {
     private static final byte[] MASK = "ysm.player.id.v0".getBytes(StandardCharsets.US_ASCII);
 
-    private PlayerIdDerivation() {
-    }
+    private PlayerIdDerivation() {}
 
     static PlayerId derive(UUID uuid) {
         try (var input = ArrayBuffer.move(input(uuid))) {
@@ -24,9 +23,7 @@ final class PlayerIdDerivation {
 
     static byte[] input(UUID uuid) {
         var bytes = ByteBuffer.allocate(PlayerId.SIZE).order(ByteOrder.BIG_ENDIAN)
-                .putLong(uuid.getMostSignificantBits())
-                .putLong(uuid.getLeastSignificantBits())
-                .array();
+            .putLong(uuid.getMostSignificantBits()).putLong(uuid.getLeastSignificantBits()).array();
         for (var index = 0; index < bytes.length; index++) {
             bytes[index] ^= MASK[index];
         }

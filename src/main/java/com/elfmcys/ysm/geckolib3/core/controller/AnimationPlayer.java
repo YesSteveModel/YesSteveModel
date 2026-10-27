@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2020.
- * Author: Bernie G. (Gecko)
+ * Copyright (c) 2020. Author: Bernie G. (Gecko)
  */
 
 package com.elfmcys.ysm.geckolib3.core.controller;
@@ -17,13 +16,12 @@ import com.elfmcys.ysm.geckolib3.core.keyframe.bone.BoneKeyFrame;
 import com.elfmcys.ysm.geckolib3.core.keyframe.bone.TransitionKeyFrame;
 import com.elfmcys.ysm.geckolib3.core.keyframe.point.*;
 import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
-import com.elfmcys.ysm.geckolib3.core.molang.context.AnimationContext;
-import com.elfmcys.ysm.geckolib3.core.molang.context.MolangContext;
+import com.elfmcys.ysm.expression.host.AnimationExecutionState;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
 import com.elfmcys.ysm.geckolib3.core.snapshot.BoneSnapshot;
 import com.elfmcys.ysm.geckolib3.core.snapshot.BoneTopLevelSnapshot;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.geckolib3.util.OrderedSegmentSearcher;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
 import com.mojang.datafixers.util.Pair;
 import it.unimi.dsi.fastutil.ints.Int2ReferenceOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
@@ -44,7 +42,7 @@ public class AnimationPlayer {
     /**
      * 与动画播放相关的 molang 上下文
      */
-    private final AnimationContext animationContext = new AnimationContext();
+    private final AnimationExecutionState animationContext = new AnimationExecutionState();
     /**
      * 实体对象
      */
@@ -77,7 +75,7 @@ public class AnimationPlayer {
     /**
      * 实例化动画播放器，每个播放器同一时间只能播放一个动画
      *
-     * @param animatableEntity      实体
+     * @param animatableEntity 实体
      * @param transitionLengthTicks 动画过渡时间（tick）
      */
     public AnimationPlayer(AnimatableEntity<?> animatableEntity, float transitionLengthTicks) {
@@ -87,11 +85,12 @@ public class AnimationPlayer {
     /**
      * 实例化动画播放器，每个播放器同一时间只能播放一个动画
      *
-     * @param animatableEntity      实体
+     * @param animatableEntity 实体
      * @param transitionLengthTicks 动画过渡时间（tick）
      * @param disableBeginningTransitionScale 是否对缩放帧禁用起始过渡
      */
-    public AnimationPlayer(AnimatableEntity<?> animatableEntity, float transitionLengthTicks, boolean disableBeginningTransitionScale) {
+    public AnimationPlayer(AnimatableEntity<?> animatableEntity, float transitionLengthTicks,
+        boolean disableBeginningTransitionScale) {
         this.animatableEntity = animatableEntity;
         this.beginningTransition = new LinearBlendTransition(transitionLengthTicks);
         this.disableBeginningTransitionScale = disableBeginningTransitionScale;
@@ -127,7 +126,8 @@ public class AnimationPlayer {
             return;
         }
 
-        if (lastSetAnim != null && lastSetAnim.getSecond().equals(animationName) && lastSetAnim.getFirst() == loopTypeOverride) {
+        if (lastSetAnim != null && lastSetAnim.getSecond().equals(animationName)
+            && lastSetAnim.getFirst() == loopTypeOverride) {
             return;
         }
 
@@ -147,8 +147,8 @@ public class AnimationPlayer {
      *
      * @param renderTicks 当前 tick + 插值 tick
      */
-    public void process(final float renderTicks, ExpressionEvaluator<MolangContext<?>> evaluator, boolean allowEmitting) {
-        evaluator.entity().setAnimationContext(animationContext);
+    public void process(final float renderTicks, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents) {
+        evaluation.setAnimationContext(animationContext);
         var animTicks = getAnimTicks(renderTicks);
 
         // 尾过渡结束后回到待机状态
@@ -160,16 +160,15 @@ public class AnimationPlayer {
          *  为了最后一个指令帧得以执行，以及基岩版控制器下一个状态的过渡动画能够正确衔接，需要延迟一帧停止动画，
          *  所以这块判断要放在上一块的后面
          */
-        if (this.state == AnimationState.RUNNING && currentLoopType == LoopType.PLAY_ONCE && animTicks >= currentAnim.animationLength) {
-            resetEventKeyframes(evaluator, allowEmitting);
+        if (this.state == AnimationState.RUNNING && currentLoopType == LoopType.PLAY_ONCE
+            && animTicks >= currentAnim.animationLength) {
+            resetEventKeyframes(evaluation, executeEvents);
             setupEndingTransition(renderTicks);
-            animationContext.reset(evaluator);
             animTicks = getAnimTicks(renderTicks);
         }
 
         if (this.state == AnimationState.IDLE) {
             // 没有动画正在播放时，尝试切换下一个动画
-            animationContext.reset(evaluator);
             if (!loadNextAnim()) {
                 return;
             }
@@ -191,7 +190,7 @@ public class AnimationPlayer {
             if (animTicks < this.beginningTransition.length()) {
                 // 更新起始过渡动画
                 animationContext.setAnimTime(0);
-                runBeginningTransition(evaluator, animTicks);
+                runBeginningTransition(evaluation, animTicks);
                 return;
             } else {
                 // 如果当前时间超过了过渡时长，则正式开始播放
@@ -208,13 +207,12 @@ public class AnimationPlayer {
 
                 if (currentLoopType == LoopType.LOOP) {
                     // 对于循环动画，本轮播放结束后重置 tick offset，开始下一轮循环
-                    animationContext.reset(evaluator);
                     if (currentAnim.animationLength > 0) {
                         animTicks = animTicks % currentAnim.animationLength;
                     } else {
                         animTicks = 0;
                     }
-                    resetEventKeyframes(evaluator, allowEmitting);
+                    resetEventKeyframes(evaluation, executeEvents);
                     animTickOffset = renderTicks - animTicks;
                 } else if (currentLoopType == LoopType.HOLD_ON_LAST_FRAME) {
                     // 对于停在最后一帧的动画，播放完成后 anim ticks 锁定在最后一帧的时间
@@ -226,9 +224,9 @@ public class AnimationPlayer {
 
             animationContext.setAnimTime(animTicks / 20f);
             // 更新事件关键帧（指令、音效、粒子等）
-            executeEventKeyframes(evaluator, animTicks, allowEmitting);
+            executeEventKeyframes(evaluation, animTicks, executeEvents);
             // 更新动画
-            runAnimation(evaluator, animTicks);
+            runAnimation(evaluation, animTicks);
             return;
         }
 
@@ -239,21 +237,21 @@ public class AnimationPlayer {
 
             animationContext.setAnimTime(endingTransitionSrcTick / 20f);
             // 更新结尾过渡动画
-            runEndingTransition(evaluator, animTicks);
+            runEndingTransition(evaluation, animTicks);
         }
     }
 
-    public AnimationContext getAnimationContext() {
+    public AnimationExecutionState getAnimationContext() {
         return this.animationContext;
     }
 
     /**
      * 执行剩余的事件关键帧，并重置到初始状态
      */
-    private void resetEventKeyframes(ExpressionEvaluator<MolangContext<?>> evaluator, boolean allowEmitting) {
+    private void resetEventKeyframes(EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents) {
         animationContext.setAnimTime(currentAnim.animationLength / 20f);
-        if (this.instructionKeyFrameExecutor != null) {
-            this.instructionKeyFrameExecutor.executeRemaining(evaluator, allowEmitting);
+        if (executeEvents && this.instructionKeyFrameExecutor != null) {
+            this.instructionKeyFrameExecutor.executeRemaining(evaluation);
             this.instructionKeyFrameExecutor.reset();
         }
         if (this.soundKeyFrameExecutor != null) {
@@ -261,27 +259,21 @@ public class AnimationPlayer {
         }
     }
 
-    public void finalizeAnimationContext(ExpressionEvaluator<MolangContext<?>> evaluator) {
-        evaluator.entity().setAnimationContext(animationContext);
-        animationContext.reset(evaluator);
-        evaluator.entity().setAnimationContext(null);
-    }
-
     /**
      * 执行时间关键帧指指定时间点
      */
-    private void executeEventKeyframes(ExpressionEvaluator<MolangContext<?>> evaluator, float animTicks, boolean allowEmitting) {
+    private void executeEventKeyframes(EntityExpressionRuntime.Evaluation evaluation, float animTicks,
+        boolean executeEvents) {
         if (soundKeyFrameExecutor != null) {
-            soundKeyFrameExecutor.executeTo(animatableEntity, animTicks, allowEmitting);
+            soundKeyFrameExecutor.executeTo(animatableEntity, animTicks, executeEvents);
         }
-        if (instructionKeyFrameExecutor != null) {
-            instructionKeyFrameExecutor.executeTo(evaluator, animTicks, allowEmitting);
+        if (executeEvents && instructionKeyFrameExecutor != null) {
+            instructionKeyFrameExecutor.executeTo(evaluation, animTicks);
         }
     }
 
     /**
-     * 保存当前姿态作为起始点，准备开始尾过渡；
-     * 必须在 resetBoneAnimationQueues 之前调用
+     * 保存当前姿态作为起始点，准备开始尾过渡； 必须在 resetBoneAnimationQueues 之前调用
      */
     private void setupEndingTransition(float renderTicks) {
         if (state == AnimationState.RUNNING || state == AnimationState.BEGINNING_TRANSITION) {
@@ -314,8 +306,8 @@ public class AnimationPlayer {
         }
     }
 
-    private void runBeginningTransition(ExpressionEvaluator<MolangContext<?>> evaluator, float transitionTicks) {
-        var blendWeight = currentAnim.blendWeight != null ? currentAnim.blendWeight.evalAsFloat(evaluator) : 1;
+    private void runBeginningTransition(EntityExpressionRuntime.Evaluation evaluation, float transitionTicks) {
+        var blendWeight = currentAnim.blendWeight != null ? evaluation.evaluate(currentAnim.blendWeight) : 1;
         var percentProgress = this.beginningTransition.get(transitionTicks);
 
         for (BoneAnimationQueue boneAnimationQueue : activeBoneAnimQueues) {
@@ -324,26 +316,28 @@ public class AnimationPlayer {
 
             // 添加即将出现的动画的初始位置，以便模型转换到新动画的初始状态
             if (boneAnimationQueue.rotationKeyFrames != null) {
-                boneAnimationQueue.rotation = getBeginningTransitionPointAtTick(boneAnimationQueue.rotationKeyFrames, transitionTicks, percentProgress,
-                        transitionOffset.rotation);
+                boneAnimationQueue.rotation = getBeginningTransitionPointAtTick(boneAnimationQueue.rotationKeyFrames,
+                    transitionTicks, percentProgress, transitionOffset.rotation);
             }
 
             if (boneAnimationQueue.positionKeyFrames != null) {
-                boneAnimationQueue.position = getBeginningTransitionPointAtTick(boneAnimationQueue.positionKeyFrames, transitionTicks, percentProgress,
-                        transitionOffset.position);
+                boneAnimationQueue.position = getBeginningTransitionPointAtTick(boneAnimationQueue.positionKeyFrames,
+                    transitionTicks, percentProgress, transitionOffset.position);
             }
 
             if (boneAnimationQueue.scaleKeyFrames != null) {
                 boneAnimationQueue.scale = disableBeginningTransitionScale
-                        ? getBeginningTransitionPointAtTick(boneAnimationQueue.scaleKeyFrames, this.beginningTransition.length(), 1.0f, transitionOffset.scale)
-                        : getBeginningTransitionPointAtTick(boneAnimationQueue.scaleKeyFrames, transitionTicks, percentProgress, transitionOffset.scale);
+                    ? getBeginningTransitionPointAtTick(boneAnimationQueue.scaleKeyFrames,
+                        this.beginningTransition.length(), 1.0f, transitionOffset.scale)
+                    : getBeginningTransitionPointAtTick(boneAnimationQueue.scaleKeyFrames, transitionTicks,
+                        percentProgress, transitionOffset.scale);
             }
         }
     }
 
-    private void runAnimation(ExpressionEvaluator<MolangContext<?>> evaluator, float animTicks) {
+    private void runAnimation(EntityExpressionRuntime.Evaluation evaluation, float animTicks) {
         // 循环遍历当前动画中的每个骨骼动画并处理值
-        var blendWeight = currentAnim.blendWeight != null ? currentAnim.blendWeight.evalAsFloat(evaluator) : 1;
+        var blendWeight = currentAnim.blendWeight != null ? evaluation.evaluate(currentAnim.blendWeight) : 1;
         for (BoneAnimationQueue boneAnimationQueue : activeBoneAnimQueues) {
             boneAnimationQueue.setBlendWeight(blendWeight);
 
@@ -361,22 +355,25 @@ public class AnimationPlayer {
         }
     }
 
-    private void runEndingTransition(ExpressionEvaluator<MolangContext<?>> evaluator, float transitionTicks) {
-        var blendWeight = currentAnim.blendWeight != null ? currentAnim.blendWeight.evalAsFloat(evaluator) : 1;
+    private void runEndingTransition(EntityExpressionRuntime.Evaluation evaluation, float transitionTicks) {
+        var blendWeight = currentAnim.blendWeight != null ? evaluation.evaluate(currentAnim.blendWeight) : 1;
 
         for (BoneAnimationQueue boneAnimationQueue : activeBoneAnimQueues) {
             boneAnimationQueue.setBlendWeight(blendWeight);
 
             if (boneAnimationQueue.rotationOffset != null) {
-                boneAnimationQueue.rotation = getEndingTransitionPointAtTick(transitionTicks, boneAnimationQueue.rotationOffset, boneAnimationQueue.disableEndingTransition);
+                boneAnimationQueue.rotation = getEndingTransitionPointAtTick(transitionTicks,
+                    boneAnimationQueue.rotationOffset, boneAnimationQueue.disableEndingTransition);
             }
 
             if (boneAnimationQueue.positionOffset != null) {
-                boneAnimationQueue.position = getEndingTransitionPointAtTick(transitionTicks, boneAnimationQueue.positionOffset, boneAnimationQueue.disableEndingTransition);
+                boneAnimationQueue.position = getEndingTransitionPointAtTick(transitionTicks,
+                    boneAnimationQueue.positionOffset, boneAnimationQueue.disableEndingTransition);
             }
 
             if (boneAnimationQueue.scaleOffset != null) {
-                boneAnimationQueue.scale = getEndingTransitionPointAtTick(transitionTicks, boneAnimationQueue.scaleOffset, boneAnimationQueue.disableEndingTransition);
+                boneAnimationQueue.scale = getEndingTransitionPointAtTick(transitionTicks,
+                    boneAnimationQueue.scaleOffset, boneAnimationQueue.disableEndingTransition);
             }
         }
     }
@@ -394,23 +391,25 @@ public class AnimationPlayer {
      */
     private KeyFramePoint getKeyFramePointAtTick(OrderedSegmentSearcher<BoneKeyFrame> frames, float tick) {
         var frame = frames.search(tick);
-        return new KeyFramePoint(tick - frame.getStartTick(), frame, animationContext);
+        return new KeyFramePoint(tick - frame.getStartTick(), frame);
     }
 
     /**
-     * 返回起始过渡点；
-     * 由于自定义过渡曲线的原因， 过渡进度需要单独传，而不能用 tick / length
+     * 返回起始过渡点； 由于自定义过渡曲线的原因， 过渡进度需要单独传，而不能用 tick / length
      */
-    private BeginningTransitionPoint getBeginningTransitionPointAtTick(OrderedSegmentSearcher<BoneKeyFrame> frames, float tick, float transitionPercentProgress, Vector3f offsetPoint) {
+    private BeginningTransitionPoint getBeginningTransitionPointAtTick(OrderedSegmentSearcher<BoneKeyFrame> frames,
+        float tick, float transitionPercentProgress, Vector3f offsetPoint) {
         var dstFrame = frames.search(0);
-        return new BeginningTransitionPoint(tick, transitionPercentProgress, this.beginningTransition.length(), offsetPoint, (TransitionKeyFrame) dstFrame, animationContext);
+        return new BeginningTransitionPoint(tick, transitionPercentProgress, this.beginningTransition.length(),
+            offsetPoint, (TransitionKeyFrame)dstFrame);
     }
 
     /**
      * 返回结尾过渡点
      */
-    private EndingTransitionPoint getEndingTransitionPointAtTick(float tick, Vector3f offsetPoint, boolean disableEndingTransition) {
-        return new EndingTransitionPoint(tick, disableEndingTransition ? 0f : endingTransitionLength, offsetPoint, animationContext);
+    private EndingTransitionPoint getEndingTransitionPointAtTick(float tick, Vector3f offsetPoint,
+        boolean disableEndingTransition) {
+        return new EndingTransitionPoint(tick, disableEndingTransition ? 0f : endingTransitionLength, offsetPoint);
     }
 
     /**
@@ -541,6 +540,8 @@ public class AnimationPlayer {
      * 清空所有状态
      */
     public void clear() {
+        // Committed playback belongs to its sound owner after this controller ends.
+        soundKeyFrameExecutor = null;
         reset();
         this.boneAnimQueues.clear();
     }

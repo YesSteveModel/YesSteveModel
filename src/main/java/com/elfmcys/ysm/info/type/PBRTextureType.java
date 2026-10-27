@@ -3,8 +3,7 @@ package com.elfmcys.ysm.info.type;
 import net.minecraft.resources.ResourceLocation;
 
 public enum PBRTextureType {
-    NORMAL("_n"),
-    SPECULAR("_s");
+    NORMAL("_n"), SPECULAR("_s");
 
     static final PBRTextureType[] VALUES = values();
 

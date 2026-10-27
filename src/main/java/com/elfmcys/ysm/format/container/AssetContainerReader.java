@@ -23,8 +23,7 @@ import org.apache.commons.lang3.SerializationException;
 
 /** Parses and validates container metadata. Chunk payload I/O belongs to ChunkDataSource implementations. */
 public final class AssetContainerReader {
-    private AssetContainerReader() {
-    }
+    private AssetContainerReader() {}
 
     @SuppressWarnings("UnstableApiUsage")
     public static AssetContainerView read(SeekableByteChannel file) throws IOException {
@@ -33,9 +32,7 @@ public final class AssetContainerReader {
         }
 
         var headLen = AssetContainerConstant.HEAD.length;
-        var reader = beginRead(file, 0,
-                headLen + AssetContainerConstant.MAX_SUMMARY_SIZE + 1,
-                4 * 1024);
+        var reader = beginRead(file, 0, headLen + AssetContainerConstant.MAX_SUMMARY_SIZE + 1, 4 * 1024);
         var head = new byte[headLen];
         reader.readFully(head);
         if (Arrays.compare(AssetContainerConstant.HEAD, head) != 0) {
@@ -47,8 +44,7 @@ public final class AssetContainerReader {
             headerOffset++;
         }
 
-        reader = beginRead(file, headerOffset, AssetContainerConstant.HEADER_SIZE,
-                AssetContainerConstant.HEADER_SIZE);
+        reader = beginRead(file, headerOffset, AssetContainerConstant.HEADER_SIZE, AssetContainerConstant.HEADER_SIZE);
         var headerSize = reader.readUnsignedShort();
         if (headerSize < AssetContainerConstant.HEADER_SIZE) {
             throw new SerializationException("Header size too small");
@@ -61,14 +57,10 @@ public final class AssetContainerReader {
         var majorVer = reader.readUnsignedByte();
         var minorVer = reader.readUnsignedShort();
         var patchVer = reader.readUnsignedShort();
-        var qualifierVer = BinaryUtil.readFixedString(reader,
-                AssetContainerConstant.HEADER_QUALIFIER_VERSION_SIZE);
-        var version = majorVer + "." + minorVer + "." + patchVer
-                + (qualifierVer.isEmpty() ? "" : "-" + qualifierVer);
-        if (!VersionCompatibility.isCompatible(AssetContainerConstant.CURRENT_VERSION,
-                version, String::equals)) {
-            throw new UnsupportedEncodingException(
-                    "Container version is not supported: " + version);
+        var qualifierVer = BinaryUtil.readFixedString(reader, AssetContainerConstant.HEADER_QUALIFIER_VERSION_SIZE);
+        var version = majorVer + "." + minorVer + "." + patchVer + (qualifierVer.isEmpty() ? "" : "-" + qualifierVer);
+        if (!VersionCompatibility.isCompatible(AssetContainerConstant.CURRENT_VERSION, version, String::equals)) {
+            throw new UnsupportedEncodingException("Container version is not supported: " + version);
         }
         var schema = BinaryUtil.readFixedString(reader, AssetContainerConstant.HEADER_SCHEMA_SIZE);
 
@@ -80,11 +72,9 @@ public final class AssetContainerReader {
         long tlvOffset = headerOffset + headerSize;
         long chunkTableOffset = tlvOffset + tlvSize;
         long chunkDataOffset = chunkTableOffset + chunkTableSize;
-        if (schemaPropertyCount < 0 || chunkCount < 0
-                || tlvSize < 0 || chunkTableSize < 0
-                || tlvOffset > Integer.MAX_VALUE || tlvOffset < 0
-                || chunkTableOffset > Integer.MAX_VALUE || chunkTableOffset < 0
-                || chunkDataOffset > Integer.MAX_VALUE || chunkDataOffset < 0) {
+        if (schemaPropertyCount < 0 || chunkCount < 0 || tlvSize < 0 || chunkTableSize < 0
+            || tlvOffset > Integer.MAX_VALUE || tlvOffset < 0 || chunkTableOffset > Integer.MAX_VALUE
+            || chunkTableOffset < 0 || chunkDataOffset > Integer.MAX_VALUE || chunkDataOffset < 0) {
             throw new SerializationException("Data overflow");
         }
 
@@ -116,8 +106,8 @@ public final class AssetContainerReader {
             var flags = reader.readInt();
             var alignmentShift = reader.readUnsignedByte();
             if (alignmentShift > AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT) {
-                throw new SerializationException("Alignment shift must not be greater than "
-                        + AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT);
+                throw new SerializationException(
+                    "Alignment shift must not be greater than " + AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT);
             }
             var alignment = 1 << alignmentShift;
             var hash = new byte[AssetContainerConstant.HASH_SIZE];
@@ -140,8 +130,8 @@ public final class AssetContainerReader {
                 }
             }
 
-            var info = new AssetContainerView.ChunkInfo(type, encoding, (int) offset, size,
-                    decodeSize, flags, (int) alignSize, alignmentShift, hash);
+            var info = new AssetContainerView.ChunkInfo(type, encoding, (int)offset, size, decodeSize, flags,
+                (int)alignSize, alignmentShift, hash);
             if (chunkTable.put(type, info) != null) {
                 throw new SerializationException("Duplicate chunk type: " + type);
             }
@@ -166,15 +156,15 @@ public final class AssetContainerReader {
             throw new SerializationException("Verification payload is too small");
         }
         final Hash256 containerId;
-        try (var verificationInput = NativeBuffer.allocate((int) chunkDataOffset)) {
+        try (var verificationInput = NativeBuffer.allocate((int)chunkDataOffset)) {
             readFully(file, 0, verificationInput.nio());
             var verificationPayload = new byte[verification.size()];
             readFully(file, verification.offset(), ByteBuffer.wrap(verificationPayload));
-            var signatureLength = Short.toUnsignedInt(ByteBuffer.wrap(verificationPayload,
-                    AssetContainerConstant.HASH_SIZE, Short.BYTES)
+            var signatureLength =
+                Short.toUnsignedInt(ByteBuffer.wrap(verificationPayload, AssetContainerConstant.HASH_SIZE, Short.BYTES)
                     .order(ByteOrder.LITTLE_ENDIAN).getShort());
-            if (verificationPayload.length
-                    != AssetContainerConstant.VERIFICATION_PAYLOAD_HEADER_SIZE + signatureLength) {
+            if (verificationPayload.length != AssetContainerConstant.VERIFICATION_PAYLOAD_HEADER_SIZE
+                + signatureLength) {
                 throw new SerializationException("Malformed verification signature length");
             }
             var hash = Arrays.copyOf(verificationPayload, AssetContainerConstant.HASH_SIZE);
@@ -191,29 +181,27 @@ public final class AssetContainerReader {
         }
 
         var preambleSize = Math.addExact(verification.offset(), verification.size());
-        return new AssetContainerView(minorVer, patchVer, qualifierVer, schema, containerId,
-                globalAlignmentShift, preambleSize,
-                Short2ReferenceMaps.unmodifiable(schemaProperties),
-                Object2ReferenceMaps.unmodifiable(chunkTable));
+        return new AssetContainerView(minorVer, patchVer, qualifierVer, schema, containerId, globalAlignmentShift,
+            preambleSize, Short2ReferenceMaps.unmodifiable(schemaProperties),
+            Object2ReferenceMaps.unmodifiable(chunkTable));
     }
 
     public static AssetContainerView readPreamble(byte[] containerPreamble) throws IOException {
         return readPreamble(containerPreamble, 0, containerPreamble.length);
     }
 
-    public static AssetContainerView readPreamble(byte[] containerPreamble,
-                                                  int offset, int size) throws IOException {
+    public static AssetContainerView readPreamble(byte[] containerPreamble, int offset, int size) throws IOException {
         try (var channel = new ByteArraySeekableChannel(containerPreamble, offset, size)) {
             return read(channel);
         }
     }
 
     @SuppressWarnings("UnstableApiUsage")
-    private static LittleEndianDataInputStream beginRead(SeekableByteChannel file, long offset,
-                                                          int maxSize, int bufferSize) throws IOException {
+    private static LittleEndianDataInputStream beginRead(SeekableByteChannel file, long offset, int maxSize,
+        int bufferSize) throws IOException {
         file.position(offset >= 0 ? offset : file.size() + offset);
-        return new LittleEndianDataInputStream(new BufferedInputStream(
-                new BoundedInputStream(Channels.newInputStream(file), maxSize), bufferSize));
+        return new LittleEndianDataInputStream(
+            new BufferedInputStream(new BoundedInputStream(Channels.newInputStream(file), maxSize), bufferSize));
     }
 
     private static void readFully(SeekableByteChannel file, long offset, ByteBuffer target) throws IOException {

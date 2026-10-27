@@ -25,9 +25,8 @@ import java.util.List;
 import java.util.Set;
 
 public class AssetContainerWriter implements AutoCloseable {
-    private static final ByteBuffer ZERO = ByteBuffer
-            .allocateDirect(1 << AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT)
-            .asReadOnlyBuffer();
+    private static final ByteBuffer ZERO =
+        ByteBuffer.allocateDirect(1 << AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT).asReadOnlyBuffer();
 
     private byte[] summary = new byte[0];
 
@@ -67,7 +66,8 @@ public class AssetContainerWriter implements AutoCloseable {
         schemaProperties.put(type, value);
     }
 
-    public void addChunk(String type, String encoding, int decodeSize, int alignmentShift, int flags, UniBuffer buffer, int compressLevel) {
+    public void addChunk(String type, String encoding, int decodeSize, int alignmentShift, int flags, UniBuffer buffer,
+        int compressLevel) {
         if (chunkTypes.size() == AssetContainerConstant.MAX_CHUNK_COUNT) {
             throw new IllegalArgumentException("Too many chunks");
         }
@@ -78,7 +78,8 @@ public class AssetContainerWriter implements AutoCloseable {
             throw new IllegalArgumentException("AlignmentShift must not be less than 0");
         }
         if (alignmentShift > AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT) {
-            throw new IllegalArgumentException("AlignmentShift must not be greater than " + AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT);
+            throw new IllegalArgumentException(
+                "AlignmentShift must not be greater than " + AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT);
         }
         byte[] hash = new byte[Blake3.HASH_SIZE];
         UniBuffer storedBuffer;
@@ -91,8 +92,7 @@ public class AssetContainerWriter implements AutoCloseable {
             }
             encoding = "zstd";
             decodeSize = buffer.size();
-            storedBuffer = Zstd.compressAndHash(
-                    buffer, hash, BufferType.NATIVE, compressLevel);
+            storedBuffer = Zstd.compressAndHash(buffer, hash, BufferType.NATIVE, compressLevel);
         } else {
             Blake3.computeHash(buffer, hash);
             storedBuffer = buffer.acquire();
@@ -102,8 +102,7 @@ public class AssetContainerWriter implements AutoCloseable {
                 throw new IllegalArgumentException("Chunk data too large");
             }
             chunkTypes.add(type);
-            chunkList.add(new Chunk(type, encoding, decodeSize, alignmentShift, flags,
-                    storedBuffer, hash));
+            chunkList.add(new Chunk(type, encoding, decodeSize, alignmentShift, flags, storedBuffer, hash));
             chunkDataSize += storedBuffer.size();
         } catch (Throwable error) {
             storedBuffer.close();
@@ -112,9 +111,8 @@ public class AssetContainerWriter implements AutoCloseable {
     }
 
     /** Adds an already verified stored representation without decoding and recompressing it. */
-    public void addStoredChunk(String type, String encoding, int decodeSize,
-                               int alignmentShift, int flags, UniBuffer buffer,
-                               byte[] logicalHash) {
+    public void addStoredChunk(String type, String encoding, int decodeSize, int alignmentShift, int flags,
+        UniBuffer buffer, byte[] logicalHash) {
         if (chunkTypes.size() == AssetContainerConstant.MAX_CHUNK_COUNT) {
             throw new IllegalArgumentException("Too many chunks");
         }
@@ -133,15 +131,13 @@ public class AssetContainerWriter implements AutoCloseable {
             try {
                 nextDataSize = Math.addExact(chunkDataSize, stored.size());
             } catch (ArithmeticException overflow) {
-                throw new IllegalArgumentException(
-                        "Stored chunk data is outside its bound", overflow);
+                throw new IllegalArgumentException("Stored chunk data is outside its bound", overflow);
             }
             if (stored.size() <= 0 || nextDataSize > Integer.MAX_VALUE) {
                 throw new IllegalArgumentException("Stored chunk data is outside its bound");
             }
             chunkTypes.add(type);
-            chunkList.add(new Chunk(type, encoding, decodeSize, alignmentShift, flags,
-                    stored, logicalHash.clone()));
+            chunkList.add(new Chunk(type, encoding, decodeSize, alignmentShift, flags, stored, logicalHash.clone()));
             chunkDataSize = nextDataSize;
         } catch (Throwable failure) {
             stored.close();
@@ -175,7 +171,8 @@ public class AssetContainerWriter implements AutoCloseable {
         writer.writeByte(AssetContainerConstant.CURRENT_MAJOR_VER);
         writer.writeShort(AssetContainerConstant.CURRENT_MINOR_VER);
         writer.writeShort(AssetContainerConstant.CURRENT_PATCH_VER);
-        BinaryUtil.writeFixedString(writer, AssetContainerConstant.CURRENT_QUALIFIER_VER, AssetContainerConstant.HEADER_QUALIFIER_VERSION_SIZE);
+        BinaryUtil.writeFixedString(writer, AssetContainerConstant.CURRENT_QUALIFIER_VER,
+            AssetContainerConstant.HEADER_QUALIFIER_VERSION_SIZE);
         BinaryUtil.writeFixedString(writer, schema, AssetContainerConstant.HEADER_SCHEMA_SIZE);
         writer.writeShort(schemaProperties.size());
         writer.writeShort(chunkList.size() + 1);
@@ -195,19 +192,18 @@ public class AssetContainerWriter implements AutoCloseable {
 
         var headerOffset = AssetContainerConstant.HEAD.length + summary.length + 1;
         var schemaPropertyDataSize = verificationInputStream.size() - AssetContainerConstant.HEADER_SIZE - headerOffset;
-        var schemaPropertySizeOffset = headerOffset + 2 + 1 + 2 + 2 +
-                AssetContainerConstant.HEADER_QUALIFIER_VERSION_SIZE +
-                AssetContainerConstant.HEADER_SCHEMA_SIZE + 4;
+        var schemaPropertySizeOffset = headerOffset + 2 + 1 + 2 + 2
+            + AssetContainerConstant.HEADER_QUALIFIER_VERSION_SIZE + AssetContainerConstant.HEADER_SCHEMA_SIZE + 4;
 
         var verificationPayload = new byte[AssetContainerConstant.VERIFICATION_PAYLOAD_HEADER_SIZE];
 
         // verification chunk
         BinaryUtil.writeShortString(writer, AssetContainerConstant.VERIFICATION_CHUNK_TYPE);
-        BinaryUtil.writeShortString(writer, AssetContainerConstant.HASH_NAME);    // encoding
-        writer.writeInt(verificationPayload.length);    // size
-        writer.writeInt(0);    // decode size
-        writer.writeInt(0);    // flags
-        writer.writeByte(0);   // alignment shift
+        BinaryUtil.writeShortString(writer, AssetContainerConstant.HASH_NAME); // encoding
+        writer.writeInt(verificationPayload.length); // size
+        writer.writeInt(0); // decode size
+        writer.writeInt(0); // flags
+        writer.writeByte(0); // alignment shift
         writer.write(new byte[AssetContainerConstant.HASH_SIZE]);
 
         // normal chunk
@@ -234,20 +230,29 @@ public class AssetContainerWriter implements AutoCloseable {
             throw new IOException("File size too large");
         }
 
-        var chunkTableSize = verificationInput.remaining() - headerOffset - AssetContainerConstant.HEADER_SIZE - schemaPropertyDataSize;
+        var chunkTableSize =
+            verificationInput.remaining() - headerOffset - AssetContainerConstant.HEADER_SIZE - schemaPropertyDataSize;
         verificationInput.putInt(schemaPropertySizeOffset, schemaPropertyDataSize);
         verificationInput.putInt(schemaPropertySizeOffset + 4, chunkTableSize);
         var containerHash = new byte[AssetContainerConstant.HASH_SIZE];
         Blake3.computeHash(ArrayBuffer.borrow(verificationInput), containerHash);
         System.arraycopy(containerHash, 0, verificationPayload, 0, containerHash.length);
 
-        output.write(verificationInput);
-        output.write(ByteBuffer.wrap(verificationPayload));
+        writeFully(output, verificationInput);
+        writeFully(output, ByteBuffer.wrap(verificationPayload));
         for (var i = 0; i < chunkList.size(); i++) {
             var chunk = chunkList.get(i);
             var alignSize = alignList.getInt(i);
-            output.write(ZERO.slice(0, alignSize));
-            output.write(chunk.buffer.nio());
+            writeFully(output, ZERO.slice(0, alignSize));
+            writeFully(output, chunk.buffer.nio());
+        }
+    }
+
+    private static void writeFully(WritableByteChannel output, ByteBuffer source) throws IOException {
+        while (source.hasRemaining()) {
+            if (output.write(source) == 0) {
+                throw new IOException("Container output made no write progress");
+            }
         }
     }
 
@@ -262,5 +267,7 @@ public class AssetContainerWriter implements AutoCloseable {
         return list;
     }
 
-    public record Chunk(String type, String encoding, int decodeSize, int alignmentShift, int flags, UniBuffer buffer, byte[] hash) {}
+    public record Chunk(String type, String encoding, int decodeSize, int alignmentShift, int flags, UniBuffer buffer,
+        byte[] hash) {
+    }
 }

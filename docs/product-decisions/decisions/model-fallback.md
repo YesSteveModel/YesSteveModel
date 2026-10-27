@@ -9,9 +9,13 @@
   - 因访问限制降级或重试: [DD.selection-permission-is-separate-from-asset-access](model-authorization.md#ddselection-permission-is-separate-from-asset-access)
   - 仅缺必要动画: [DD.model-controller-overrides-builtins](bone-and-controller.md#ddmodel-controller-overrides-builtins)
 - Landing:
-  - [architecture](../../architecture/model-management/failure-and-recovery.md)
-  - [architecture](../../architecture/animation/entity-and-frame-state.md#绑定与切换)
-  - [architecture](../../architecture/model-management/default-model.md)
+  - [design](../../architecture/animation/entity-lifecycle.md#失败记忆与恢复)
+  - [implementation](../../architecture/animation/implementation/entity-and-frame-state.md#绑定与切换)
+  - [implementation](../../architecture/model-management/client-resources/default-model.md#实现入口)
+  - [design](../../architecture/model-management/client-resources/overview.md#取得失败与纹理回退)
+  - [design](../../architecture/model-management/sessions/overview.md#失败与恢复资格)
+  - [design](../../architecture/animation/overview.md)
+  - [design](../../architecture/model-management/client-resources/default-model.md)
 
 ## DD.default-model-is-reliability-baseline
 
@@ -28,7 +32,7 @@
 
 ### BC.default-startup-is-required
 
-- Claim: 每次启动以模组 jar 内嵌资源作为默认模型的唯一来源，完成本侧职责所需的全部默认内容物化与可用性验证后才承认初始化完成；缓存有效不能成为跳过物化的理由。阻断性错误属于默认初始化失败，不能发布未完成兜底。
+- Claim: 每次启动以模组 jar 内嵌资源作为默认模型的唯一内容来源。物化过程允许读写磁盘及复用有效派生缓存，不要求每次重新编译。初始化完成前仍须完成本侧职责所需的全部默认内容物化与可用性验证。阻断性错误属于默认初始化失败，不能发布未完成兜底。
 
 ### BC.client-default-startup-closure
 
@@ -44,7 +48,7 @@
 
 ### BC.default-has-no-disk-dependency
 
-- Claim: 初始化完成后，进程存续期间不因磁盘和网络不可用而丢失默认内容。
+- Claim: 默认内容物化完成后，默认模型的加载与绑定不得依赖磁盘，所需内容应已驻留。初始化完成后，进程存续期间不因磁盘和网络不可用而丢失默认内容。
 
 ### BC.default-fallback-failure-is-exceptional
 

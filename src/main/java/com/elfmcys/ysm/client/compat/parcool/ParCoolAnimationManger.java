@@ -27,7 +27,7 @@ public class ParCoolAnimationManger {
     static String getAnimation(Player player) {
         Animation animation = Animation.get(player);
         if (animation != null && animation.hasAnimator()) {
-            Animator animator = ((AnimationAccessor) animation).getAnimator();
+            Animator animator = ((AnimationAccessor)animation).getAnimator();
             Parkourability parkourability = Parkourability.get(player);
             if (parkourability == null) {
                 return null;
@@ -120,7 +120,8 @@ public class ParCoolAnimationManger {
                 }
                 Vec3 bodyVec = VectorUtil.fromYawDegree(player.yBodyRot);
                 Vec3 vec = new Vec3(bodyVec.x, 0, bodyVec.z).normalize();
-                Vec3 dividedVec = new Vec3(vec.x * wall.x + vec.z * wall.z, 0, -vec.x * wall.z + vec.z * wall.x).normalize();
+                Vec3 dividedVec =
+                    new Vec3(vec.x * wall.x + vec.z * wall.z, 0, -vec.x * wall.z + vec.z * wall.x).normalize();
                 if (dividedVec.z < 0) {
                     return "parcool:wall_slide_right";
                 } else {
@@ -135,7 +136,8 @@ public class ParCoolAnimationManger {
 
     // 跑酷模组没有给这些动画命名，所以我们手动给命名吧
     private static String getAnimationName(Animator animator) {
-        return INDEX_MAP.computeIfAbsent(animator.getClass(), clz -> getAnimationNameFromClassName(clz.getSimpleName()));
+        return INDEX_MAP.computeIfAbsent(animator.getClass(),
+            clz -> getAnimationNameFromClassName(clz.getSimpleName()));
     }
 
     private static String getAnimationNameFromClassName(String name) {

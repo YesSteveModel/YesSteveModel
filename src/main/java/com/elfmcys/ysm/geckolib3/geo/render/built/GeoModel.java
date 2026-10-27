@@ -1,8 +1,10 @@
 package com.elfmcys.ysm.geckolib3.geo.render.built;
 
 import com.elfmcys.ysm.natives.render.NativeBakedModel;
-import com.elfmcys.ysm.proto.mixel.asset.model.data.Bone;
+import com.elfmcys.ysm.proto.mixel.asset.model.data.BoneProto;
+import com.elfmcys.ysm.proto.mixel.asset.model.data.GeoModelProto;
 import com.elfmcys.ysm.util.Closeable;
+import com.elfmcys.ysm.util.ResourceDiagnostics;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import it.unimi.dsi.fastutil.objects.ReferenceList;
 import it.unimi.dsi.fastutil.objects.ReferenceLists;
@@ -14,20 +16,17 @@ public class GeoModel implements Closeable {
     private final ReferenceList<GeoBone> sortedBones;
     private final GeoLocatorType locatorType;
     private final ReferenceList<ReferenceArrayList<GeoBone>> locatorMap;
-    private final NativeBakedModel bakedModel;
+    private NativeBakedModel bakedModel;
+    private float[] guiBoneBounds;
 
-    public GeoModel(String identity, com.elfmcys.ysm.proto.mixel.asset.model.data.GeoModel model,
-                    GeoLocatorType locatorType,
-                    NativeBakedModel.ReadResult bakedModel) {
-        this(identity, boneCount(model), index -> model.bones().get(index),
-                bakedModel.sortedBoneIndices(), locatorType,
-                bakedModel.bakedModel());
+    public GeoModel(String identity, GeoModelProto model, GeoLocatorType locatorType,
+        NativeBakedModel.ModelResult bakedModel) {
+        this(identity, boneCount(model), index -> model.bones().get(index), bakedModel.sortedBoneIndices(), locatorType,
+            bakedModel.bakedModel());
     }
 
-    private GeoModel(String identity, int boneCount,
-                     IntFunction<Bone> boneByIndex,
-                     short[] sortedBoneIndices, GeoLocatorType locatorType,
-                     NativeBakedModel bakedModel) {
+    private GeoModel(String identity, int boneCount, IntFunction<BoneProto> boneByIndex, short[] sortedBoneIndices,
+        GeoLocatorType locatorType, NativeBakedModel bakedModel) {
         this.identity = identity;
         Objects.requireNonNull(sortedBoneIndices, "sortedBoneIndices");
         this.locatorType = Objects.requireNonNull(locatorType, "locatorType");
@@ -51,18 +50,20 @@ public class GeoModel implements Closeable {
             var bone = new GeoBone(boneData, locator);
             sortedBones.add(bone);
             if (locator != null) {
-                 locatorMap.get(locator.seq() - 1).add(bone);
+                locatorMap.get(locator.seq() - 1).add(bone);
             }
         }
         this.sortedBones = ReferenceLists.unmodifiable(sortedBones);
         this.locatorMap = ReferenceLists.unmodifiable(locatorMap);
+        ResourceDiagnostics.track(ResourceDiagnostics.Kind.GEO, this, identity + " bones=" + boneCount);
+        bakedModel.share();
     }
 
     public String identity() {
         return identity;
     }
 
-    private static int boneCount(com.elfmcys.ysm.proto.mixel.asset.model.data.GeoModel model) {
+    private static int boneCount(GeoModelProto model) {
         return model.bones().size();
     }
 
@@ -79,11 +80,21 @@ public class GeoModel implements Closeable {
     }
 
     public NativeBakedModel bakedModel() {
-        return bakedModel;
+        return Objects.requireNonNull(bakedModel, "Geometry is closed");
+    }
+
+    /** Borrowed immutable geometry, populated only when a GUI actually draws this model. */
+    public float[] guiBoneBounds() {
+        if (guiBoneBounds == null) {
+            guiBoneBounds = bakedModel.getBoneBounds(sortedBones.size());
+        }
+        return guiBoneBounds;
     }
 
     @Override
     public void close() {
-        bakedModel.close();
+        bakedModel = null;
+        guiBoneBounds = null;
+        ResourceDiagnostics.untrack(ResourceDiagnostics.Kind.GEO, this);
     }
 }

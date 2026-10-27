@@ -35,6 +35,6 @@ public class DownloadScreenInterModEvent {
     }
 
     public static void openDownloadScreen(PlayerModelScreen modelScreen) {
-        modelScreen.getMinecraft().setScreen(Objects.requireNonNullElseGet(DOWNLOAD_SCREEN, () -> new DownloadScreen(modelScreen)));
+        modelScreen.showScreen(Objects.requireNonNullElseGet(DOWNLOAD_SCREEN, () -> new DownloadScreen(modelScreen)));
     }
 }

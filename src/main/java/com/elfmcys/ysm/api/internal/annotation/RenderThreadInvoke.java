@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.api.internal.annotation;
 
-
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 
@@ -12,5 +11,4 @@ import static java.lang.annotation.RetentionPolicy.CLASS;
  */
 @Retention(value = CLASS)
 @Target(value = {METHOD, TYPE})
-public @interface RenderThreadInvoke {
-}
+public @interface RenderThreadInvoke {}

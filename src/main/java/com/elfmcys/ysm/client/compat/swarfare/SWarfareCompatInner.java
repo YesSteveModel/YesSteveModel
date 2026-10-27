@@ -34,8 +34,10 @@ import java.util.Objects;
 
 @SuppressWarnings("removal")
 public class SWarfareCompatInner {
-    private static final TagKey<Item> PISTOL = TagKey.create(Registries.ITEM, new ResourceLocation("superbwarfare:animated/pistol"));
-    private static final TagKey<Item> RPG = TagKey.create(Registries.ITEM, new ResourceLocation("superbwarfare:animated/rpg"));
+    private static final TagKey<Item> PISTOL =
+        TagKey.create(Registries.ITEM, new ResourceLocation("superbwarfare:animated/pistol"));
+    private static final TagKey<Item> RPG =
+        TagKey.create(Registries.ITEM, new ResourceLocation("superbwarfare:animated/rpg"));
 
     static boolean isGun(ItemStack stack) {
         return stack.getItem() instanceof GunItem;
@@ -48,7 +50,8 @@ public class SWarfareCompatInner {
         return false;
     }
 
-    static void renderOffhandGun(ItemStack heldItem, GeoRenderData data, LivingEntity player, PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
+    static void renderOffhandGun(ItemStack heldItem, GeoRenderData data, LivingEntity player, PoseStack poseStack,
+        MultiBufferSource buffer, int packedLight) {
         ItemRenderer renderer = Minecraft.getInstance().getItemRenderer();
         if (heldItem.is(PISTOL)) {
             data.modelState.visitLocatorGroup(PlayerLocator.get().pistol, poseStack, locatorPose -> {
@@ -56,20 +59,23 @@ public class SWarfareCompatInner {
                 locatorPose.scale(0.65f, 0.65f, 0.65f);
                 locatorPose.mulPose(Axis.YP.rotationDegrees(90));
                 locatorPose.mulPose(Axis.ZP.rotationDegrees(-90.0F));
-                renderer.renderStatic(heldItem, ItemDisplayContext.FIXED, packedLight, OverlayTexture.NO_OVERLAY, locatorPose, buffer, player.level(), player.getId());
+                renderer.renderStatic(heldItem, ItemDisplayContext.FIXED, packedLight, OverlayTexture.NO_OVERLAY,
+                    locatorPose, buffer, player.level(), player.getId());
             });
         }
         if (!heldItem.is(PISTOL)) {
             data.modelState.visitLocatorGroup(PlayerLocator.get().rifle, poseStack, locatorPose -> {
                 locatorPose.scale(0.65f, 0.65f, 0.65f);
                 locatorPose.mulPose(Axis.YP.rotationDegrees(-180.0F));
-                renderer.renderStatic(heldItem, ItemDisplayContext.FIXED, packedLight, OverlayTexture.NO_OVERLAY, locatorPose, buffer, player.level(), player.getId());
+                renderer.renderStatic(heldItem, ItemDisplayContext.FIXED, packedLight, OverlayTexture.NO_OVERLAY,
+                    locatorPose, buffer, player.level(), player.getId());
             });
         }
     }
 
     @Nullable
-    static PlayState playLungeMineAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event) {
+    static PlayState
+        playLungeMineAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event) {
         LivingEntity livingEntity = event.getAnimatableEntity().getEntity();
         if (!Objects.equals(Minecraft.getInstance().player, livingEntity)) {
             return null;
@@ -91,11 +97,10 @@ public class SWarfareCompatInner {
     }
 
     /**
-     * tac:idle
-     * tac:run
-     * tac:walk
+     * tac:idle tac:run tac:walk
      */
-    static PlayState playGunMainAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event, String animationName, LoopType loopType) {
+    static PlayState playGunMainAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event,
+        String animationName, LoopType loopType) {
         String tacName = "tac:" + animationName;
         var playerAnimation = event.getAnimatableEntity().getAnimation(tacName);
         if (playerAnimation != null) {
@@ -105,19 +110,16 @@ public class SWarfareCompatInner {
     }
 
     @NotNull
-    private static PlayState getGunTypeAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event, ItemStack gun, String prefix) {
+    private static PlayState getGunTypeAnimation(
+        AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event, ItemStack gun, String prefix) {
         return getGunTypeAnimation(event, gun, prefix, LoopType.LOOP);
     }
 
     /**
-     * tac:hold:pistol
-     * tac:aim:pistol
-     * tac:reload:pistol
-     * tac:aim_shoot:pistol
-     * tac:hold_shoot:pistol
-     * tac:run:pistol
+     * tac:hold:pistol tac:aim:pistol tac:reload:pistol tac:aim_shoot:pistol tac:hold_shoot:pistol tac:run:pistol
      */
-    static PlayState playGunHoldAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event, ItemStack heldItem) {
+    static PlayState playGunHoldAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event,
+        ItemStack heldItem) {
         // 先检查刺雷
         PlayState playState = playLungeMineAnimation(event);
         if (playState != null) {
@@ -155,7 +157,8 @@ public class SWarfareCompatInner {
     /**
      * 这些动画可能是带有后摇的动画，故需要单独分一个频道来播放，从而才能超过时长进行播放
      */
-    static PlayState playGunOnceAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event, ItemStack heldItem) {
+    static PlayState playGunOnceAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event,
+        ItemStack heldItem) {
         if (!(heldItem.getItem() instanceof GunItem gunItem)) {
             return PlayState.STOP;
         }
@@ -182,7 +185,8 @@ public class SWarfareCompatInner {
         double fireTick = ClientEventHandler.fireRotTimer;
         if (0 < fireTick && fireTick < 1) {
             double aimProgress = ClientEventHandler.zoomTime;
-            boolean isClimbing = !livingEntity.isSwimming() && livingEntity.getPose() == Pose.SWIMMING && Math.abs(event.getLimbSwingAmount()) <= 0.05;
+            boolean isClimbing = !livingEntity.isSwimming() && livingEntity.getPose() == Pose.SWIMMING
+                && Math.abs(event.getLimbSwingAmount()) <= 0.05;
 
             if (isClimbing) {
                 return getGunTypeAnimation(event, heldItem, "tac:climbing:fire:", LoopType.PLAY_ONCE);
@@ -197,8 +201,9 @@ public class SWarfareCompatInner {
     }
 
     @NotNull
-    private static PlayState getGunTypeAnimation(AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event,
-                                                 ItemStack gun, String prefix, LoopType loopType) {
+    private static PlayState getGunTypeAnimation(
+        AnimationEvent<? extends CustomHumanoidEntity<? extends LivingEntity>> event, ItemStack gun, String prefix,
+        LoopType loopType) {
         var gunCondition = event.getAnimatableEntity().getConditionManager().getTAC();
         if (gunCondition != null) {
             ItemStack stack = event.getAnimatableEntity().getEntity().getMainHandItem();

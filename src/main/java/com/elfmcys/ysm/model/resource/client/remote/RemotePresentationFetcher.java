@@ -4,10 +4,13 @@ import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
+import com.elfmcys.ysm.model.session.client.ClientModelSession;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BooleanSupplier;
 
 /** Typed page-transfer seam; one invocation owns one page action and its publication terminal. */
 @FunctionalInterface
@@ -21,21 +24,32 @@ public interface RemotePresentationFetcher {
     record Preview(int slot, ModelFileIdentity identity) implements Member {
     }
 
-    record Icon(int slot, ModelFileIdentity identity,
-                AssetContainerView.ChunkInfo chunk) implements Member {
+    record Icon(int slot, ModelFileIdentity identity, AssetContainerView.ChunkInfo chunk) implements Member {
     }
 
     record PackCover(int slot, ModelPackDescriptor pack) implements Member {
     }
 
-    sealed interface Outcome permits Data, Unavailable {
-    }
+    sealed interface Outcome permits Data, Absent, Unavailable {}
 
-    record Data(UniBuffer bytes) implements Outcome {
+    record Data(UniBuffer bytes, ClientModelSession.PreviewObservation observation) implements Outcome {
+        public Data(UniBuffer bytes) {
+            this(bytes, null);
+        }
+
+        public Data {
+            Objects.requireNonNull(bytes, "bytes");
+        }
     }
 
     enum Unavailable implements Outcome {
         INSTANCE
+    }
+
+    record Absent(BooleanSupplier current) implements Outcome {
+        public Absent {
+            Objects.requireNonNull(current, "current");
+        }
     }
 
     @FunctionalInterface

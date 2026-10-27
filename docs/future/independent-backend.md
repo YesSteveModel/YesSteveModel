@@ -28,4 +28,4 @@ Backend 应从当前协议中复用仍适用的玩家状态和控制语义，并
 3. 再独立接入目录与资产，不与外部模型源混为一轮；
 4. 通过 Protocol conformance、恶意输入、取消、重连和多人验证后再标记为 current。
 
-当前网络边界见 [网络架构](../architecture/network/README.md)，协议要求见 [当前网络协议](../standards/protocol-v1/README.md)，实现状态见 [当前支持状态](../status/support-and-verification.md)。
+当前网络边界见 [网络架构](../architecture/network/overview.md#职责与边界)，协议要求见 [当前网络协议](../standards/protocol-v1/README.md)，实现状态见 [当前支持状态](../status/support-and-verification.md)。

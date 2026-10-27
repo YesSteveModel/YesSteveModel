@@ -34,9 +34,8 @@ public class BoneTopLevelSnapshot extends BoneSnapshot {
     public void commit() {
         bone.setHidden(hidden, childrenHidden);
 
-        bone.setRotation(rotation.x + bone.getInitialRotationX(),
-                rotation.y + bone.getInitialRotationY(),
-                rotation.z + bone.getInitialRotationZ());
+        bone.setRotation(rotation.x + bone.getInitialRotationX(), rotation.y + bone.getInitialRotationY(),
+            rotation.z + bone.getInitialRotationZ());
         bone.setPosition(position);
         bone.setScale(scale);
 

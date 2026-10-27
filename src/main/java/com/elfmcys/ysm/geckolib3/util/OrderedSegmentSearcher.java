@@ -65,7 +65,7 @@ public class OrderedSegmentSearcher<T> {
         }
 
         float left = currentRight;
-        for (int index = currentIndex + 1; ; ++index) {
+        for (int index = currentIndex + 1;; ++index) {
             var segment = segments.get(index);
             var right = rightBoundGetter.apply(segment);
             if (left > right) {

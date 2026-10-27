@@ -3,9 +3,9 @@ syntax = "proto3";
 
 package mixel.asset.strings.data;
 
-import "common/program.proto";
+import "expression/program.proto";
 
 message UserFunction {
   string name = 1;
-  common.Program body = 2;
+  expression.program.EncodedProgram body = 2;
 }

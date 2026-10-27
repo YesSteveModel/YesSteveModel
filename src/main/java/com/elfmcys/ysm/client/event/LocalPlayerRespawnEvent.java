@@ -22,9 +22,9 @@ public class LocalPlayerRespawnEvent {
         }
 
         event.getOldPlayer().reviveCaps();
-        event.getOldPlayer().getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(oldCap ->
-                event.getNewPlayer().getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(newCap ->
-                        newCap.moveFrom(oldCap)));
+        event.getOldPlayer().getCapability(PlayerAnimatableCapabilityProvider.CAP)
+            .ifPresent(oldCap -> event.getNewPlayer().getCapability(PlayerAnimatableCapabilityProvider.CAP)
+                .ifPresent(newCap -> newCap.moveFrom(oldCap)));
         event.getOldPlayer().invalidateCaps();
         ClientProtocolGateway.localPlayerCloned();
     }

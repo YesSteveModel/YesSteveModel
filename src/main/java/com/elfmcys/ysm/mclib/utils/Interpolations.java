@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.mclib.utils;
 
-
 public class Interpolations {
     /**
      * 线性插值

@@ -18,7 +18,7 @@ class FallbackVertexWriter {
     private static int[] VERTEX_DATA;
 
     static int[] getVertexData(int vertexCount) {
-        var size = vertexCount * STRIDE;
+        var size = Math.multiplyExact(vertexCount, STRIDE);
         if (VERTEX_DATA == null || VERTEX_DATA.length < size) {
             VERTEX_DATA = new int[size];
         }
@@ -38,25 +38,16 @@ class FallbackVertexWriter {
                 var a = (color >>> 24) / 255f;
 
                 var normal = vertexData[offset + INDEX_NORMAL];
-                var normalX = ((byte) ((normal & 0xFF))) / 127f;
-                var normalY = ((byte) ((normal >>> 8) & 0xFF)) / 127f;
-                var normalZ = ((byte) ((normal >>> 16) & 0xFF)) / 127f;
+                var normalX = ((byte)((normal & 0xFF))) / 127f;
+                var normalY = ((byte)((normal >>> 8) & 0xFF)) / 127f;
+                var normalZ = ((byte)((normal >>> 16) & 0xFF)) / 127f;
 
-                vertexBuffer.vertex(
-                        Float.intBitsToFloat(vertexData[offset + INDEX_X]),
-                        Float.intBitsToFloat(vertexData[offset + INDEX_Y]),
-                        Float.intBitsToFloat(vertexData[offset + INDEX_Z]),
-                        r,
-                        g,
-                        b,
-                        a,
-                        Float.intBitsToFloat(vertexData[offset + INDEX_TEX_U]),
-                        Float.intBitsToFloat(vertexData[offset + INDEX_TEX_V]),
-                        overlayUv,
-                        vertexData[offset + INDEX_LIGHT],
-                        normalX,
-                        normalY,
-                        normalZ);
+                vertexBuffer.vertex(Float.intBitsToFloat(vertexData[offset + INDEX_X]),
+                    Float.intBitsToFloat(vertexData[offset + INDEX_Y]),
+                    Float.intBitsToFloat(vertexData[offset + INDEX_Z]), r, g, b, a,
+                    Float.intBitsToFloat(vertexData[offset + INDEX_TEX_U]),
+                    Float.intBitsToFloat(vertexData[offset + INDEX_TEX_V]), overlayUv, vertexData[offset + INDEX_LIGHT],
+                    normalX, normalY, normalZ);
             }
         }
     }

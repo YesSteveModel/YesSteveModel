@@ -1,0 +1,282 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
+sourceSets {
+    benchmark {
+        java.setSrcDirs(['src/verification/benchmark/java', 'src/verification/shared/java'])
+        resources.setSrcDirs(['src/verification/benchmark/resources'])
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath + sourceSets.main.compileClasspath
+    }
+}
+
+tasks.named('processBenchmarkResources') {
+    from('src/verification/test/resources') {
+        include 'audio-playback/**', 'audio-fixtures/opus-long.ogg'
+    }
+}
+
+configurations {
+    benchmarkImplementation.extendsFrom implementation
+    benchmarkRuntimeOnly.extendsFrom runtimeOnly
+    jniBenchmarkRuntime
+}
+
+dependencies {
+    benchmarkImplementation 'org.openjdk.jmh:jmh-core:1.37'
+    benchmarkAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+    jniBenchmarkRuntime 'org.openjdk.jmh:jmh-core:1.37'
+    jniBenchmarkRuntime 'org.lwjgl:lwjgl:3.3.1'
+    jniBenchmarkRuntime 'org.lwjgl:lwjgl-jemalloc:3.3.1'
+    for (platform in ['natives-windows', 'natives-linux']) {
+        jniBenchmarkRuntime "org.lwjgl:lwjgl:3.3.1:${platform}"
+        jniBenchmarkRuntime "org.lwjgl:lwjgl-jemalloc:3.3.1:${platform}"
+    }
+}
+
+tasks.register('jniBenchmarkJar', Jar) {
+    group = 'verification'
+    description = 'Packages standalone JNI and allocation benchmarks for Windows and Linux x64.'
+    dependsOn tasks.named('benchmarkClasses')
+    archiveFileName = 'ysm-jni-benchmarks.jar'
+    destinationDirectory = layout.buildDirectory.dir('benchmark')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest { attributes 'Main-Class': 'org.openjdk.jmh.Main' }
+    from(sourceSets.benchmark.output) {
+        include 'com/elfmcys/ysm/benchmark/JniEntryBenchmark*.class'
+        include 'com/elfmcys/ysm/benchmark/*MemoryAllocationBenchmark*.class'
+        include 'com/elfmcys/ysm/benchmark/AllocationMode*.class'
+        include 'com/elfmcys/ysm/benchmark/jmh_generated/JniEntryBenchmark*.class'
+        include 'com/elfmcys/ysm/benchmark/jmh_generated/*MemoryAllocationBenchmark*.class'
+        include 'META-INF/BenchmarkList', 'META-INF/CompilerHints'
+        filesMatching('META-INF/*') {
+            filter { String line ->
+                line.contains('JniEntryBenchmark') || line.contains('MemoryAllocationBenchmark') ||
+                        line.startsWith('dontinline,*') ? line : null
+            }
+        }
+    }
+    from(sourceSets.main.output) { include 'com/elfmcys/ysm/util/UnsafeUtil.class' }
+    from { configurations.jniBenchmarkRuntime.collect { zipTree(it) } }
+}
+
+def benchmarkLauncher = javaToolchains.launcherFor(java.toolchain)
+def benchmarkResult = providers.gradleProperty('benchmarkResult').orElse('build/reports/benchmark/result.json')
+def benchmarkArguments = providers.gradleProperty('benchmarkArgsFile').map { value ->
+    def parsed = new JsonSlurper().parse(file(value))
+    if (!(parsed instanceof List) || !parsed.every { it instanceof String }) {
+        throw new GradleException('benchmarkArgsFile must contain a JSON array of strings')
+    }
+    parsed
+}.orElse(providers.gradleProperty('benchmarkArgs').map { it.trim().split(/\s+/).toList() })
+        .orElse(['-f', '1', '-wi', '3', '-i', '5', '-w', '1s', '-r', '1s', '-prof', 'gc'])
+
+tasks.register('benchmark', JavaExec) {
+    group = 'verification'
+    description = 'Runs maintained workloads in independent JMH forks.'
+    dependsOn tasks.named('benchmarkClasses')
+    javaLauncher = benchmarkLauncher
+    classpath = sourceSets.benchmark.runtimeClasspath
+    mainClass = 'org.openjdk.jmh.Main'
+    doFirst {
+        def result = file(benchmarkResult.get())
+        result.parentFile.mkdirs()
+        environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+        args = [providers.gradleProperty('benchmarkInclude').getOrElse('.*Native.*Benchmark.*')] +
+                benchmarkArguments.get() + ['-foe', 'true', '-rf', 'json', '-rff', result.absolutePath]
+    }
+}
+
+tasks.register('prepareBenchmark') {
+    group = 'verification'
+    description = 'Exports the exact JDK, classpath and native path for paired JMH campaigns.'
+    dependsOn tasks.named('benchmarkClasses')
+    doLast {
+        def result = layout.buildDirectory.file('benchmark/launch.json').get().asFile
+        result.parentFile.mkdirs()
+        result.text = JsonOutput.prettyPrint(JsonOutput.toJson([
+                java: benchmarkLauncher.get().executablePath.asFile.absolutePath,
+                classpath: sourceSets.benchmark.runtimeClasspath.files.collect { it.absolutePath },
+                nativeLibrary: ysmNativeLibraryPath.get(),
+                main: 'org.openjdk.jmh.Main',
+                jmh: '1.37'
+        ])) + '\n'
+    }
+}
+
+tasks.register('verifyMolangExecutionBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Checks scalar execution benchmark truth before any timing campaign.'
+    dependsOn tasks.named('benchmarkClasses')
+    javaLauncher = benchmarkLauncher
+    classpath = sourceSets.benchmark.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.benchmark.MolangExecutionBenchmark'
+    args = [layout.buildDirectory.dir('verification/molang-execution-bytecode').get().asFile.absolutePath]
+}
+
+tasks.register('nativeImageBenchmarkAgent', Jar) {
+    group = 'verification'
+    description = 'Supplies the two NativeImage Mixin getters to ordinary headless JMH forks.'
+    dependsOn tasks.named('benchmarkClasses')
+    archiveFileName = 'native-image-access-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('benchmark')
+    from(sourceSets.benchmark.output) { include 'com/elfmcys/ysm/benchmark/NativeImageAccessAgent*.class' }
+    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.benchmark.NativeImageAccessAgent' }
+}
+
+tasks.register('verifyDemandDiskReads', JavaExec) {
+    group = 'verification'
+    description = 'Checks actual file reads across page demand admission using production resource preparation.'
+    dependsOn tasks.named('benchmarkClasses'), tasks.named('nativeImageBenchmarkAgent')
+    javaLauncher = benchmarkLauncher
+    classpath = sourceSets.benchmark.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.model.resource.client.render.DemandDiskReadVerification'
+    doFirst {
+        environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+        jvmArgs '-Xmx3G', "-javaagent:${tasks.named('nativeImageBenchmarkAgent').get().archiveFile.get().asFile.absolutePath}"
+        args = [file(providers.gradleProperty('demandDiskReadOutput')
+                .getOrElse('build/reports/demand-disk-reads')).absolutePath]
+    }
+}
+
+tasks.register('guiPurposeInputAgent', Jar) {
+    group = 'verification'
+    dependsOn tasks.named('benchmarkClasses')
+    archiveFileName = 'gui-purpose-input-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('benchmark')
+    from(sourceSets.benchmark.output) {
+        include 'com/elfmcys/ysm/model/resource/client/render/GuiPurposeInputAgent*.class'
+    }
+    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.model.resource.client.render.GuiPurposeInputAgent' }
+}
+
+tasks.register('geometryReadAgent', Jar) {
+    group = 'verification'
+    dependsOn tasks.named('benchmarkClasses')
+    archiveFileName = 'geometry-read-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('benchmark')
+    from(sourceSets.benchmark.output) {
+        include 'com/elfmcys/ysm/model/resource/client/render/GeometryReadAgent*.class'
+    }
+    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.model.resource.client.render.GeometryReadAgent' }
+}
+
+tasks.register('readHandleAgent', Jar) {
+    group = 'verification'
+    dependsOn tasks.named('benchmarkClasses')
+    archiveFileName = 'read-handle-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('benchmark')
+    from(sourceSets.benchmark.output) { include 'com/elfmcys/ysm/benchmark/ReadHandle*.class' }
+    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.benchmark.ReadHandleAgent' }
+}
+
+tasks.register('verifyReadHandles', Test) {
+    group = 'verification'
+    description = 'Observes physical Java read channels through existing source and lifecycle suites.'
+    dependsOn tasks.named('testClasses'), tasks.named('readHandleAgent'), tasks.named('nativeImageBenchmarkAgent'),
+        tasks.named('geometryReadAgent'), 'previewDecodeAgent'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    filter {
+        ['ChannelReadPhaseTest', 'FileChunkBatchTest', 'AnimationSetArtifactTest', 'RuntimeContentStoreTest',
+           'DirectoryAccessTest', 'RawModelImporterTest', 'ModelParserTest', 'RawModelSourceTest',
+           'ChunkImageSourceTest', 'ManagedContainerResidencyTest',
+         'RemoteModelStoreTest', 'PreviewStoreTest', 'GeometryCacheReadTest', 'AtomicSharedCacheTest',
+         'ConvertedCacheCoordinatorTest'].each { includeTestsMatching "*${it}" }
+    }
+    doFirst {
+        def output = file(providers.gradleProperty('readHandleOutput').getOrElse('build/reports/read-handles.json'))
+        output.parentFile.mkdirs()
+        systemProperty 'ysm.readHandles.output', output.absolutePath
+        jvmArgs "-javaagent:${tasks.named('readHandleAgent').get().archiveFile.get().asFile.absolutePath}",
+            "-javaagent:${tasks.named('geometryReadAgent').get().archiveFile.get().asFile.absolutePath}",
+            "-javaagent:${tasks.named('previewDecodeAgent').get().archiveFile.get().asFile.absolutePath}",
+            "-javaagent:${tasks.named('nativeImageBenchmarkAgent').get().archiveFile.get().asFile.absolutePath}"
+    }
+}
+
+tasks.register('verifyGeometryRead', Test) {
+    group = 'verification'
+    description = 'Checks single geometry acquisition and independent persistence through production cache and JNI.'
+    dependsOn tasks.named('testClasses'), tasks.named('geometryReadAgent'), tasks.named('nativeImageBenchmarkAgent')
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    filter { includeTestsMatching '*GeometryCacheReadTest' }
+    doFirst {
+        jvmArgs "-javaagent:${tasks.named('geometryReadAgent').get().archiveFile.get().asFile.absolutePath}",
+            "-javaagent:${tasks.named('nativeImageBenchmarkAgent').get().archiveFile.get().asFile.absolutePath}"
+    }
+}
+
+tasks.register('catalogReloadTimingAgent', Jar) {
+    group = 'verification'
+    description = 'Measures catalog construction, publication, observer and metadata parsing in headless runs.'
+    dependsOn tasks.named('benchmarkClasses')
+    archiveFileName = 'catalog-reload-timing-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('benchmark')
+    from(sourceSets.benchmark.output) { include 'com/elfmcys/ysm/model/catalog/CatalogReloadTimingAgent*.class' }
+    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.model.catalog.CatalogReloadTimingAgent' }
+}
+
+tasks.register('playerMolangInventory', JavaExec) {
+    group = 'verification'
+    description = 'Exports the canonical player/main animation indices used by the Molang JMH benchmark.'
+    dependsOn tasks.named('benchmarkClasses')
+    javaLauncher = benchmarkLauncher
+    classpath = sourceSets.benchmark.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.benchmark.PlayerMolangCompileBenchmark'
+    doFirst {
+        def result = layout.buildDirectory.file('benchmark/player-molang-inventory.tsv').get().asFile
+        result.parentFile.mkdirs()
+        environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+        args = [result.absolutePath]
+    }
+}
+
+tasks.register('verifyBenchmarkGuard', JavaExec) {
+    group = 'verification'
+    description = 'Rejects failed native renders and invalid publications in the benchmark harness.'
+    dependsOn tasks.named('benchmarkClasses')
+    javaLauncher = benchmarkLauncher
+    classpath = sourceSets.benchmark.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.benchmark.NativeRenderGuardVerification'
+    doFirst {
+        environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+    }
+}
+
+apply from: 'gradle/callable-qualification.gradle'
+
+
+tasks.register('previewDecodeAgent', Jar) {
+    group = 'verification'
+    dependsOn tasks.named('benchmarkClasses')
+    archiveFileName = 'preview-decode-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('benchmark')
+    from(sourceSets.benchmark.output) { include 'com/elfmcys/ysm/model/storage/PreviewDecodeAgent*.class' }
+    from { configurations.benchmarkRuntimeClasspath.findAll { it.name ==~ /asm-[0-9].*\.jar/ }.collect { zipTree(it) } }
+    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.model.storage.PreviewDecodeAgent' }
+}
+
+tasks.register('verifyPreviewHandoff', Test) {
+    group = 'verification'
+    description = 'Observes actual preview codec calls, pixel admission and upload ownership.'
+    dependsOn tasks.named('testClasses'), tasks.named('previewDecodeAgent'), tasks.named('nativeImageBenchmarkAgent')
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching '*PreviewStoreTest'
+        includeTestsMatching '*PreviewPixelsTest'
+        includeTestsMatching '*AutomaticPreviewScopeTest'
+        includeTestsMatching '*ClientPreviewGeneratorTest'
+        includeTestsMatching '*CustomTextureTest'
+    }
+    doFirst {
+        jvmArgs "-javaagent:${tasks.named('previewDecodeAgent').get().archiveFile.get().asFile.absolutePath}",
+            "-javaagent:${tasks.named('nativeImageBenchmarkAgent').get().archiveFile.get().asFile.absolutePath}"
+    }
+}

@@ -12,10 +12,9 @@ public class BackpackCuriosCompat {
 
     @Nullable
     public static ItemStack getCuriosBackpack(LivingEntity livingEntity) {
-        return CuriosApi.getCuriosInventory(livingEntity)
-                .map(handler -> handler)
-                .flatMap(handler -> handler.getStacksHandler(SLOT_TYPE))
-                .map(curiosHandler -> CuriosCompatInner.searchCuriosHandler(curiosHandler, itemStack -> itemStack.getItem() instanceof BackpackItem))
-                .orElse(null);
+        return CuriosApi.getCuriosInventory(livingEntity).map(handler -> handler)
+            .flatMap(handler -> handler.getStacksHandler(SLOT_TYPE)).map(curiosHandler -> CuriosCompatInner
+                .searchCuriosHandler(curiosHandler, itemStack -> itemStack.getItem() instanceof BackpackItem))
+            .orElse(null);
     }
 }

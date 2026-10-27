@@ -4,7 +4,7 @@
 
 ## Q-01
 
-**主循环禁止等待的范围与当帧并行计算冲突。** [BC.no-main-loop-starvation](../../product-decisions/decisions/workload-budget.md#bcno-main-loop-starvation) 明确禁止正常模型工作让 tick/render 等待异步结果；[帧执行](../../architecture/rendering/frame-execution.md)却接受按需等待。实时 `CustomEntity.awaitAsyncUpdate` 等待 Future，`LevelRendererMixin.waitAll` 汇合动画任务；native `renderer::Render` 经 executor 启动 worker 后也等待完成。上述分别是跨调度阶段的动画等待和同一次 draw 内的 CPU fork/join，不能因为都是 wait 就假定具有相同风险，也不能自行给后者豁免。
+**主循环禁止等待的范围与当帧并行计算冲突。** [BC.no-main-loop-starvation](../../product-decisions/decisions/workload-budget.md#bcno-main-loop-starvation) 明确禁止正常模型工作让 tick/render 等待异步结果；[帧执行](../../architecture/rendering/implementation/frame-execution.md)却接受按需等待。实时 `AnimatableEntity.waitForAsyncUpdate` 经 `EntityExecutionLifecycle.awaitTask` 等待 Future，`LevelRendererMixin.waitAll` 汇合动画任务；native `renderer::Render` 经 executor 启动 worker 后也等待完成。上述分别是跨调度阶段的动画等待和同一次 draw 内的 CPU fork/join，不能因为都是 wait 就假定具有相同风险，也不能自行给后者豁免。
 
 - 跨阶段 Future 等待已违反现有条款，不需要重新批准该义务。待裁决的是：是否明确允许满足特定条件的当帧 CPU fork/join；若允许，例外的线程、工作量与降级边界是什么。
 - 默认解释：在新增裁决前按现有禁止条款记录偏差，不把“后台执行”当作符合主循环预算。
@@ -21,7 +21,7 @@
 
 **依赖级生成 checker 的维护成本缺少比较依据。** [可选联动降级](../../product-decisions/decisions/failure-isolation.md#ddlocal-failure-degradation)能直接解释 AN-10 的加载前门禁。它不能单独推出 AN-09 完整依赖分析、probe、manifest、fingerprint 与 runtime 反射结果协议的必要性。
 
-待补理由：需要接纳哪些真实扩展/API 变动，生成检查比版本门禁或较窄适配接口多保护了什么。先用实际扩展和不兼容版本样本比较误拒绝、漏检和维护工作；再决定是否收窄检查面。直接删 checker 会让现有 loader 跳过 handler；引入尚未存在的稳定公共桥接 API 也有高迁移成本，不能宣称只是等价删层。
+待补理由：需要接纳哪些真实扩展/API 变动，生成检查比版本门禁或较窄适配接口多保护了什么。先用实际扩展和不兼容版本样本比较误拒绝、漏检和维护工作；再决定是否收窄检查面。直接删 checker 会让现有 loader 跳过 handler/auto Molang 声明。统一 Molang 声明桥接已交付，但没有替代完整 checker 的检测职责；manual 前检也不构成 checker 收窄的成本证据。具体模组的 live worker 读取与真实缺 JAR/版本组合仍待环境验收。
 
 ## 其他实现边界
 

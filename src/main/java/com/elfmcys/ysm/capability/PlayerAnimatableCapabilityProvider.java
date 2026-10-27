@@ -15,8 +15,7 @@ import org.jetbrains.annotations.Nullable;
 
 @OnlyIn(Dist.CLIENT)
 public class PlayerAnimatableCapabilityProvider implements ICapabilityProvider {
-    public static Capability<PlayerAnimatableCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {
-    });
+    public static Capability<PlayerAnimatableCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {});
     private PlayerAnimatableCapability instance;
     private AbstractClientPlayer player;
 

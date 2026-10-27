@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2020.
- * Author: Bernie G. (Gecko)
+ * Copyright (c) 2020. Author: Bernie G. (Gecko)
  */
 
 package com.elfmcys.ysm.geckolib3.core.manager;
@@ -16,14 +15,12 @@ public class AnimationData {
     public static final float DEFAULT_ENDING_TRANSITION_LENGTH = 3;
 
     private final List<IAnimationController> animationControllers = new ReferenceArrayList<>(0);
-    private final Object2ReferenceOpenHashMap<String, IAnimationController> animationControllersMap = new Object2ReferenceOpenHashMap<>(0);
-    public float lastTick;
-    public float startTick = -1;
+    private final Object2ReferenceOpenHashMap<String, IAnimationController> animationControllersMap =
+        new Object2ReferenceOpenHashMap<>(0);
     // 全局尾过渡动画的长度，一定不能小于 1
     private float resetTickLength = DEFAULT_ENDING_TRANSITION_LENGTH;
 
-    public AnimationData() {
-    }
+    public AnimationData() {}
 
     public void addAnimationController(IAnimationController value) {
         animationControllers.add(value);
@@ -56,8 +53,6 @@ public class AnimationData {
     }
 
     public void reset() {
-        lastTick = 0;
-        startTick = -1;
         resetTickLength = DEFAULT_ENDING_TRANSITION_LENGTH;
         for (var controller : animationControllers) {
             controller.clear();

@@ -25,14 +25,16 @@ public class StarButton extends FlatColorButton {
         int startY = (this.height - 16) / 2;
         LocalPlayer player = Minecraft.getInstance().player;
         if (player != null) {
-            player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(modelInfoCap -> player.getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).ifPresent(starModelsCap -> {
-                var modelHash = modelInfoCap.getModelHash();
-                if (modelHash != null && starModelsCap.containModel(modelHash)) {
-                    graphics.blit(ICON, this.getX() + startX, this.getY() + startY, 16, 16, 16, 0, 16, 16, 256, 256);
-                } else {
-                    graphics.blit(ICON, this.getX() + startX, this.getY() + startY, 16, 16, 0, 0, 16, 16, 256, 256);
-                }
-            }));
+            player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(modelInfoCap -> player
+                .getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).ifPresent(starModelsCap -> {
+                    var modelHash = modelInfoCap.getModelHash();
+                    if (modelHash != null && starModelsCap.containModel(modelHash)) {
+                        graphics.blit(ICON, this.getX() + startX, this.getY() + startY, 16, 16, 16, 0, 16, 16, 256,
+                            256);
+                    } else {
+                        graphics.blit(ICON, this.getX() + startX, this.getY() + startY, 16, 16, 0, 0, 16, 16, 256, 256);
+                    }
+                }));
         }
     }
 
@@ -40,19 +42,20 @@ public class StarButton extends FlatColorButton {
     public void onPress() {
         LocalPlayer player = Minecraft.getInstance().player;
         if (player != null) {
-            player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(modelInfoCap -> player.getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).ifPresent(starModelsCap -> {
-                var modelHash = modelInfoCap.getModelHash();
-                if (modelHash == null) {
-                    return;
-                }
-                if (starModelsCap.containModel(modelHash)) {
-                    starModelsCap.removeModel(modelHash);
-                    ClientProtocolGateway.updateStar(modelHash, false);
-                } else {
-                    starModelsCap.addModel(modelHash);
-                    ClientProtocolGateway.updateStar(modelHash, true);
-                }
-            }));
+            player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(modelInfoCap -> player
+                .getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).ifPresent(starModelsCap -> {
+                    var modelHash = modelInfoCap.getModelHash();
+                    if (modelHash == null) {
+                        return;
+                    }
+                    if (starModelsCap.containModel(modelHash)) {
+                        starModelsCap.removeModel(modelHash);
+                        ClientProtocolGateway.updateStar(modelHash, false);
+                    } else {
+                        starModelsCap.addModel(modelHash);
+                        ClientProtocolGateway.updateStar(modelHash, true);
+                    }
+                }));
         }
     }
 }

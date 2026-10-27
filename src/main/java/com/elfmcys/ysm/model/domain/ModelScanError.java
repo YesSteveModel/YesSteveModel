@@ -6,12 +6,10 @@ import java.io.StringWriter;
 import java.time.Instant;
 import java.util.Objects;
 
-public record ModelScanError(Instant occurredAt, CatalogRootKind rootKind, String source,
-                             Category category, String code, String message, String detail) {
-    public ModelScanError(Instant occurredAt, CatalogRootKind rootKind, String source,
-                          String message, String detail) {
-        this(occurredAt, rootKind, source, Category.MODEL_SOURCE, "UNCLASSIFIED",
-                message, detail);
+public record ModelScanError(Instant occurredAt, CatalogRootKind rootKind, String source, Category category,
+    String code, String message, String detail) {
+    public ModelScanError(Instant occurredAt, CatalogRootKind rootKind, String source, String message, String detail) {
+        this(occurredAt, rootKind, source, Category.MODEL_SOURCE, "UNCLASSIFIED", message, detail);
     }
 
     public ModelScanError {
@@ -25,27 +23,27 @@ public record ModelScanError(Instant occurredAt, CatalogRootKind rootKind, Strin
     }
 
     public static ModelScanError from(CatalogRootKind rootKind, String source, Throwable error) {
+        com.elfmcys.ysm.YesSteveModel.LOGGER.error("Model source failed location={}", source, error);
         var text = new StringWriter();
         error.printStackTrace(new PrintWriter(text));
-        return new ModelScanError(Instant.now(), rootKind, source,
-                Objects.requireNonNullElse(error.getMessage(), error.getClass().getName()), text.toString());
+        return new ModelScanError(Instant.now(), rootKind, source, PublicFailure.summary(error), text.toString());
     }
 
-    public static ModelScanError infrastructure(CatalogRootKind rootKind, String source,
-                                                String code, Throwable error) {
+    public static ModelScanError infrastructure(CatalogRootKind rootKind, String source, String code, Throwable error) {
+        com.elfmcys.ysm.YesSteveModel.LOGGER.error("Model infrastructure failed location={} code={}", source, code,
+            error);
         var text = new StringWriter();
         error.printStackTrace(new PrintWriter(text));
-        return new ModelScanError(Instant.now(), rootKind, source,
-                Category.INFRASTRUCTURE, code,
-                Objects.requireNonNullElse(error.getMessage(), error.getClass().getName()),
-                text.toString());
+        return new ModelScanError(Instant.now(), rootKind, source, Category.INFRASTRUCTURE, code,
+            "Source is inaccessible", text.toString());
+    }
+
+    public static ModelScanError conflict(CatalogRootKind rootKind, String source) {
+        return new ModelScanError(Instant.now(), rootKind, source, Category.CONFLICT, "DUPLICATE_IDENTITY",
+            "Duplicate model identity", "");
     }
 
     public enum Category {
-        MODEL_SOURCE,
-        MODEL_PACK,
-        CONFLICT,
-        CACHE_HINT,
-        INFRASTRUCTURE
+        MODEL_SOURCE, MODEL_PACK, CONFLICT, CACHE_HINT, INFRASTRUCTURE
     }
 }

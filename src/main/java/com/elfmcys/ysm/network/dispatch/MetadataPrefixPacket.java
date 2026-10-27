@@ -6,7 +6,8 @@ import com.elfmcys.ysm.network.ProtocolBuffer;
 import com.elfmcys.ysm.network.frame.FrameCodec;
 import com.elfmcys.ysm.network.frame.OutboundFrame;
 import com.elfmcys.ysm.network.protocol.ProtocolMessages;
-import com.elfmcys.ysm.proto.network.MetadataPrefixFragment;
+import com.elfmcys.ysm.proto.network.MetadataPrefixFragmentProto;
+
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,14 +28,13 @@ final class MetadataPrefixPacket implements CancellablePacket {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     MetadataPrefixPacket(long transferId, List<Source> sources, Runnable closeHook,
-                         Consumer<RuntimeException> productionFailure) {
+        Consumer<RuntimeException> productionFailure) {
         if (transferId == 0 || sources.isEmpty()) {
             throw new IllegalArgumentException("Metadata transfer must be non-empty");
         }
         this.transferId = transferId;
         this.closeHook = Objects.requireNonNull(closeHook, "closeHook");
-        this.productionFailure = Objects.requireNonNull(productionFailure,
-                "productionFailure");
+        this.productionFailure = Objects.requireNonNull(productionFailure, "productionFailure");
         var acquired = new ArrayList<Part>(sources.size());
         var firstFragment = 0;
         try {
@@ -43,10 +43,8 @@ final class MetadataPrefixPacket implements CancellablePacket {
                 if (source.data.size() <= 0) {
                     throw new IllegalArgumentException("Metadata prefix is empty");
                 }
-                var count = Math.toIntExact((source.data.size() + (long) FRAGMENT_BYTES - 1)
-                        / FRAGMENT_BYTES);
-                acquired.add(new Part(source.containerId.clone(), source.data.acquire(),
-                        firstFragment, count));
+                var count = Math.toIntExact((source.data.size() + (long)FRAGMENT_BYTES - 1) / FRAGMENT_BYTES);
+                acquired.add(new Part(source.containerId.clone(), source.data.acquire(), firstFragment, count));
                 firstFragment = Math.addExact(firstFragment, count);
             }
             parts = List.copyOf(acquired);
@@ -84,15 +82,11 @@ final class MetadataPrefixPacket implements CancellablePacket {
             payload = new byte[length];
             System.arraycopy(source.array(), source.arrayOffset(), payload, 0, length);
         }
-        var message = MetadataPrefixFragment.newBuilder()
-                .setDataTransferId(transferId).setContainerId(ByteBuffer.wrap(part.containerId))
-                .setSequence(sequence).setFinalFragment(sequence + 1 == part.fragmentCount)
-                .setPayload(ByteBuffer.wrap(payload))
-                .build();
-        try (var protobuf = ProtocolBuffer.serialize(message);
-             var attachment = ArrayBuffer.allocate(0)) {
-            return FrameCodec.encode(ProtocolMessages.METADATA_PREFIX_FRAGMENT_ID,
-                    protobuf, attachment);
+        var message = MetadataPrefixFragmentProto.newBuilder().setDataTransferId(transferId)
+            .setContainerId(ByteBuffer.wrap(part.containerId)).setSequence(sequence)
+            .setFinalFragment(sequence + 1 == part.fragmentCount).setPayload(ByteBuffer.wrap(payload)).build();
+        try (var protobuf = ProtocolBuffer.serialize(message); var attachment = ArrayBuffer.allocate(0)) {
+            return FrameCodec.encode(ProtocolMessages.METADATA_PREFIX_FRAGMENT_ID, protobuf, attachment);
         }
     }
 
@@ -179,8 +173,7 @@ final class MetadataPrefixPacket implements CancellablePacket {
         }
     }
 
-    private record Part(byte[] containerId, UniBuffer data, int firstFragment,
-                        int fragmentCount) {
+    private record Part(byte[] containerId, UniBuffer data, int firstFragment, int fragmentCount) {
         private void close() {
             data.close();
         }

@@ -1,0 +1,56 @@
+// Bone sampling must not retarget a shared spring independently.
+// Uninitialized long-hair channels reuse the existing MHair response.
+// Preserve angular-velocity forcing using elapsed owner time.
+t.physics_dt=q.life_time-v.physics_time;
+t.physics_dt>0?{
+    v.MHair_bone_rot_F1xdot=(ysm.bone_rot('FLeftM1').x-v.MHair_bone_rot_F1x)/t.physics_dt;
+    v.MHair_bone_rot_F1x=ysm.bone_rot('FLeftM1').x;
+    v.MHair_bone_rot_M1xdot=(ysm.bone_rot('MLeftM1').x-v.MHair_bone_rot_M1x)/t.physics_dt;
+    v.MHair_bone_rot_M1x=ysm.bone_rot('MLeftM1').x;
+    v.MHair_bone_rot_M1zdot=(ysm.bone_rot('MLeftM1').z-v.MHair_bone_rot_M1z)/t.physics_dt;
+    v.MHair_bone_rot_M1z=ysm.bone_rot('MLeftM1').z;
+    v.physics_time=q.life_time;
+};
+// Legacy K3 scales forcing; response=0 avoids input-derivative feedforward.
+v.L1_P0=ysm.second_order('winefox_06_hanfu_l1_p0',30*0.8/2/math.pi/0.6*(math.clamp(q.vertical_speed+v.hv,-30,1)),0.6,0.8,0);
+v.L4_P0=ysm.second_order('winefox_06_hanfu_l4_p0',10*0.8/2/math.pi/0.6*(math.clamp((math.min(q.yaw_speed,-300)+math.max(q.yaw_speed,300)),-300,300)),0.6,0.8,0);
+v.L6_P0=ysm.second_order('winefox_06_hanfu_l6_p0',10*0.8/2/math.pi/1.2*(ysm.head_yaw),1.2,0.8,0);
+v.L6_P00=ysm.second_order('winefox_06_hanfu_l6_p00',10*0.8/2/math.pi/1.2*(ysm.head_pitch),1.2,0.8,0);
+v.L7_P0=ysm.second_order('winefox_06_hanfu_l7_p0',160*0.2/2/math.pi/5*(math.clamp(q.vertical_speed+v.bv,-30,30)),5,0.2,0);
+v.L8_P0=ysm.second_order('winefox_06_hanfu_l8_p0',160*0.2/2/math.pi/5*(math.clamp(q.ground_speed+v.bg,0,20)),5,0.2,0);
+v.L13_P02y=ysm.second_order('winefox_06_hanfu_l13_p02y',20*0.8/2/math.pi/2*(v.tail2y),2,0.8,0);
+v.L13_P02z=ysm.second_order('winefox_06_hanfu_l13_p02z',20*0.8/2/math.pi/2*(v.tail2z),2,0.8,0);
+v.L13_P03y=ysm.second_order('winefox_06_hanfu_l13_p03y',20*0.8/2/math.pi/2*(v.tail3y),2,0.8,0);
+v.L13_P03z=ysm.second_order('winefox_06_hanfu_l13_p03z',20*0.8/2/math.pi/2*(v.tail3z),2,0.8,0);
+v.L13_P04y=ysm.second_order('winefox_06_hanfu_l13_p04y',20*0.8/2/math.pi/2*(v.tail4y),2,0.8,0);
+v.L13_P04z=ysm.second_order('winefox_06_hanfu_l13_p04z',20*0.8/2/math.pi/2*(v.tail4z),2,0.8,0);
+v.L13_P05y=ysm.second_order('winefox_06_hanfu_l13_p05y',20*0.8/2/math.pi/2*(v.tail5y),2,0.8,0);
+v.L13_P06z=ysm.second_order('winefox_06_hanfu_l13_p06z',20*0.8/2/math.pi/2*(v.tail6z),2,0.8,0);
+v.MHair_pa0=ysm.second_order('winefox_06_hanfu_mhair_pa0',(ysm.head_pitch>-90?ysm.head_pitch:-90),1.5,0.6,0.3);
+v.MHair_va0=ysm.second_order('winefox_06_hanfu_mhair_va0',-math.clamp(q.vertical_speed+v.hv,-30,1),1.5,0.6,0.3);
+v.MHair_ga0=ysm.second_order('winefox_06_hanfu_mhair_ga0',math.clamp(2*q.ground_speed+v.hg,0,30),1.5,0.6,0.3);
+v.MHair_ya0=ysm.second_order('winefox_06_hanfu_mhair_ya0',math.clamp(0.1*q.yaw_speed+v.hy,-50,50),1.5,0.6,0.3);
+v.bone_rot_fxa0=ysm.second_order('winefox_06_hanfu_bone_rot_fxa0',v.MHair_bone_rot_F1xdot,1.5,0.5,0.5);
+v.bone_rot_xa0=ysm.second_order('winefox_06_hanfu_bone_rot_xa0',v.MHair_bone_rot_M1xdot,1.5,0.5,0.5);
+v.bone_rot_x1a0=ysm.second_order('winefox_06_hanfu_bone_rot_x1a0',ysm.bone_rot('LeftM1').x,1.5,0.5,0.5);
+v.bone_rot_x2a0=ysm.second_order('winefox_06_hanfu_bone_rot_x2a0',ysm.bone_rot('LeftM2').x,1.5,0.5,0.5);
+v.bone_rot_x3a0=ysm.second_order('winefox_06_hanfu_bone_rot_x3a0',ysm.bone_rot('LeftM3').x,1.5,0.5,0.5);
+v.bone_rot_x4a0=ysm.second_order('winefox_06_hanfu_bone_rot_x4a0',ysm.bone_rot('LeftM4').x,1.5,0.5,0.5);
+v.bone_rot_x5a0=ysm.second_order('winefox_06_hanfu_bone_rot_x5a0',ysm.bone_rot('LeftM5').x,1.5,0.5,0.5);
+v.bone_rot_za0=ysm.second_order('winefox_06_hanfu_bone_rot_za0',v.MHair_bone_rot_M1zdot,1.5,0.5,0.5);
+v.bone_rot_z1a0=ysm.second_order('winefox_06_hanfu_bone_rot_z1a0',ysm.bone_rot('LeftM1').z,1.5,0.5,0.5);
+v.bone_rot_z2a0=ysm.second_order('winefox_06_hanfu_bone_rot_z2a0',ysm.bone_rot('LeftM2').z,1.5,0.5,0.5);
+v.bone_rot_z3a0=ysm.second_order('winefox_06_hanfu_bone_rot_z3a0',ysm.bone_rot('LeftM3').z,1.5,0.5,0.5);
+v.bone_rot_z4a0=ysm.second_order('winefox_06_hanfu_bone_rot_z4a0',ysm.bone_rot('LeftM4').z,1.5,0.5,0.5);
+v.bone_rot_z5a0=ysm.second_order('winefox_06_hanfu_bone_rot_z5a0',ysm.bone_rot('LeftM5').z,1.5,0.5,0.5);
+v.L1_LongHair_roll0=ysm.second_order('winefox_06_hanfu_l1_longhair_roll0',q.yaw_speed/180,1.5,0.6,0.3);
+v.L5_LongHair_roll0=ysm.second_order('winefox_06_hanfu_l5_longhair_roll0',q.yaw_speed/180,1.5,0.6,0.3);
+v.L1_LongHair_pitch0=ysm.second_order('winefox_06_hanfu_l1_longhair_pitch0',-math.clamp(q.vertical_speed,-30,1),1.5,0.6,0.3);
+v.L2_LongHair_pitch0=ysm.second_order('winefox_06_hanfu_l2_longhair_pitch0',-math.clamp(q.vertical_speed,-30,1),1.5,0.6,0.3);
+v.L3_LongHair_pitch0=ysm.second_order('winefox_06_hanfu_l3_longhair_pitch0',-math.clamp(q.vertical_speed,-30,1),1.5,0.6,0.3);
+v.L4_LongHair_pitch0=ysm.second_order('winefox_06_hanfu_l4_longhair_pitch0',-math.clamp(q.vertical_speed,-30,1),1.5,0.6,0.3);
+v.L5_LongHair_pitch0=ysm.second_order('winefox_06_hanfu_l5_longhair_pitch0',-ysm.head_pitch,1.5,0.6,0.3);
+v.L2_LongHair_pitch2=ysm.second_order('winefox_06_hanfu_l2_longhair_pitch2',q.ground_speed,1.5,0.6,0.3);
+v.L3_LongHair_pitch2=ysm.second_order('winefox_06_hanfu_l3_longhair_pitch2',q.ground_speed,1.5,0.6,0.3);
+v.L4_LongHair_pitch2=ysm.second_order('winefox_06_hanfu_l4_longhair_pitch2',q.ground_speed,1.5,0.6,0.3);
+v.L5_LongHair_pitch2=ysm.second_order('winefox_06_hanfu_l5_longhair_pitch2',q.ground_speed,1.5,0.6,0.3);

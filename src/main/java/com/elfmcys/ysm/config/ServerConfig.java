@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.config;
 
+import com.elfmcys.ysm.natives.NativeRuntime;
+import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.google.common.collect.Lists;
 import net.minecraftforge.common.ForgeConfigSpec;
 
@@ -16,7 +18,7 @@ public class ServerConfig {
     public static ForgeConfigSpec.ConfigValue<String> DEFAULT_MODEL_PATH;
     public static ForgeConfigSpec.ConfigValue<String> DEFAULT_MODEL_TEXTURE;
 
-    // 禁止在玩家客户端 GUI 界面显示的模型相对路径
+    // Complete published addresses hidden from the client model list.
     public static ForgeConfigSpec.ConfigValue<List<String>> CLIENT_NOT_DISPLAY_MODEL_PATHS;
 
     public static ForgeConfigSpec init() {
@@ -26,8 +28,8 @@ public class ServerConfig {
     }
 
     private static void init(ForgeConfigSpec.Builder builder) {
-        builder.comment("The relative path of the default model when a player first enters the game");
-        DEFAULT_MODEL_PATH = builder.define("DefaultModelPath", "default");
+        builder.comment("The published address of the default model when a player first enters the game");
+        DEFAULT_MODEL_PATH = builder.define("DefaultModelPath", CatalogLocation.DEFAULT.value());
 
         builder.comment("The default model texture when a player first enters the game");
         DEFAULT_MODEL_TEXTURE = builder.define("DefaultModelTexture", "default");
@@ -35,14 +37,14 @@ public class ServerConfig {
         builder.comment("Whether or not players are allowed to switch models");
         CAN_SWITCH_MODEL = builder.define("CanSwitchModel", true);
 
-        builder.comment("Relative model paths that are not displayed on the client model selection screen");
-        builder.comment("Example: [\"model.mxc\", \"pack/private/legacy.ysm\"]");
+        builder.comment("Complete published addresses hidden from the client model selection screen");
+        builder.comment("Example: [\"local:custom/model.mxc\", \"global:auth/pack/private/legacy.ysm\"]");
         CLIENT_NOT_DISPLAY_MODEL_PATHS = builder.define("ClientNotDisplayModelPaths", Lists.newArrayList());
 
         builder.push("server_scheduler");
 
         builder.comment("Concurrent level for processing models. Value 0 means AUTO.");
-        THREAD_COUNT = builder.defineInRange("ThreadCount", 0, 0, Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
+        THREAD_COUNT = builder.defineInRange("ThreadCount", 0, 0, Math.max(2, NativeRuntime.availableProcessors() - 1));
 
         builder.comment("Global model distribution limit in Mbps. 0 means unlimited.");
         BANDWIDTH_LIMIT = builder.defineInRange("BandwidthLimit", 5, 0, 999);

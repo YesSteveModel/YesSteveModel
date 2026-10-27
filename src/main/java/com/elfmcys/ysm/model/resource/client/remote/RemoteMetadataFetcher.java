@@ -9,8 +9,7 @@ import java.util.concurrent.CompletableFuture;
 /** Network seam for one owned, continuous remote metadata prefix. */
 @FunctionalInterface
 public interface RemoteMetadataFetcher {
-    CompletableFuture<Void> fetchMetadata(
-            List<ModelFileIdentity> identities, MetadataReceiver receiver);
+    CompletableFuture<Void> fetchMetadata(List<ModelFileIdentity> identities, MetadataReceiver receiver);
 
     @FunctionalInterface
     interface MetadataReceiver {

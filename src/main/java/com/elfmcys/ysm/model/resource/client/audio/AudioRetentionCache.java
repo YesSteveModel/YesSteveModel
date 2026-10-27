@@ -1,10 +1,14 @@
 package com.elfmcys.ysm.model.resource.client.audio;
 
+import com.elfmcys.ysm.util.ResourceDiagnostics;
+import org.jetbrains.annotations.Nullable;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.LongSupplier;
 
+/** Immutable decoded audio retention with access-ordered eviction. Playback cursors never live in this cache. */
 final class AudioRetentionCache implements AutoCloseable {
     static final long DEFAULT_BUDGET = 64L * 1024 * 1024;
     static final long DEFAULT_TTL_NANOS = 30_000_000_000L;
@@ -13,6 +17,7 @@ final class AudioRetentionCache implements AutoCloseable {
     private final long ttlNanos;
     private final LongSupplier clock;
     private final Map<AudioCacheKey, Entry> entries = new HashMap<>();
+    private final Map<AudioCacheKey, Receipt> latestReceipts = new HashMap<>();
     private long retainedBytes;
     private long sequence;
     private boolean closed;
@@ -30,77 +35,44 @@ final class AudioRetentionCache implements AutoCloseable {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    synchronized Acquisition acquire(AudioCacheKey key) {
+    synchronized Lookup begin(AudioCacheKey key) {
         requireOpen();
+        Objects.requireNonNull(key, "key");
         long now = clock.getAsLong();
         expire(now);
+        var receipt = new Receipt(now, ++sequence);
+        latestReceipts.put(key, receipt);
         var entry = entries.get(key);
         if (entry == null) {
-            return null;
+            return new Lookup(null, receipt);
         }
-        var receipt = receipt(now);
         entry.receipt = receipt;
-        return new Acquisition(entry.audio.acquire(), receipt);
+        return new Lookup(entry.audio, receipt);
     }
 
-    synchronized Receipt retainAfterAcquire(AudioCacheKey key, CachedAudio audio) {
+    synchronized boolean publish(AudioCacheKey key, CachedAudio audio, Receipt candidateReceipt) {
         requireOpen();
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(audio, "audio");
-        long now = clock.getAsLong();
-        expire(now);
-        var receipt = receipt(now);
-        var existing = entries.get(key);
-        if (existing != null) {
-            existing.receipt = receipt;
-            if (existing.audio.pcm() || !audio.pcm()) {
-                return receipt;
-            }
-            remove(key, existing);
-        }
-        if (audio.size() <= budget) {
-            put(key, audio.acquire(), receipt);
-            evictToBudget();
-        }
-        return receipt;
-    }
-
-    synchronized boolean publishPcm(AudioCacheKey key, CachedAudio pcm,
-                                    Receipt candidateReceipt) {
-        requireOpen();
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(pcm, "pcm");
         Objects.requireNonNull(candidateReceipt, "candidateReceipt");
-        if (!pcm.pcm()) {
-            throw new IllegalArgumentException("Published audio must be PCM");
-        }
         long now = clock.getAsLong();
         expire(now);
+        if (!candidateReceipt.equals(latestReceipts.get(key))) {
+            return false;
+        }
         var existing = entries.get(key);
-        if (existing != null && existing.audio.pcm()) {
-            return false;
-        }
-        var retainedReceipt = existing == null ? candidateReceipt : existing.receipt;
-        if (expired(retainedReceipt, now) || pcm.size() > budget) {
-            return false;
-        }
         if (existing != null) {
-            remove(key, existing);
+            return existing.audio == audio;
         }
-        put(key, pcm.acquire(), retainedReceipt);
+        if (expired(candidateReceipt, now) || audio.retainedBytes() > budget) {
+            return false;
+        }
+        entries.put(key, new Entry(audio, candidateReceipt));
+        retainedBytes = Math.addExact(retainedBytes, audio.retainedBytes());
         evictToBudget();
-        var installed = entries.get(key);
-        return installed != null && installed.audio.pcm();
-    }
-
-    synchronized void invalidateEncoded(AudioCacheKey key) {
-        if (closed) {
-            return;
-        }
-        var existing = entries.get(Objects.requireNonNull(key, "key"));
-        if (existing != null && !existing.audio.pcm()) {
-            remove(key, existing);
-        }
+        ResourceDiagnostics.log("audio decoded retain: {} bytes={} entries={} retainedBytes={}", key, audio.retainedBytes(),
+            entries.size(), retainedBytes);
+        return entries.get(key) != null && entries.get(key).audio == audio;
     }
 
     synchronized void maintain() {
@@ -123,18 +95,9 @@ final class AudioRetentionCache implements AutoCloseable {
             return;
         }
         closed = true;
-        entries.values().forEach(entry -> entry.audio.close());
         entries.clear();
+        latestReceipts.clear();
         retainedBytes = 0;
-    }
-
-    private Receipt receipt(long now) {
-        return new Receipt(now, ++sequence);
-    }
-
-    private void put(AudioCacheKey key, CachedAudio audio, Receipt receipt) {
-        entries.put(key, new Entry(audio, receipt));
-        retainedBytes = Math.addExact(retainedBytes, audio.size());
     }
 
     private void expire(long now) {
@@ -144,10 +107,14 @@ final class AudioRetentionCache implements AutoCloseable {
             if (!expired(entry.getValue().receipt, now)) {
                 continue;
             }
-            retainedBytes -= entry.getValue().audio.size();
-            entry.getValue().audio.close();
+            retainedBytes -= entry.getValue().audio.retainedBytes();
+            latestReceipts.remove(entry.getKey(), entry.getValue().receipt);
             iterator.remove();
+            ResourceDiagnostics.log("audio decoded expire: {} entries={} retainedBytes={}", entry.getKey(), entries.size(),
+                retainedBytes);
         }
+        latestReceipts.entrySet()
+            .removeIf(entry -> !entries.containsKey(entry.getKey()) && expired(entry.getValue(), now));
     }
 
     private boolean expired(Receipt receipt, long now) {
@@ -158,22 +125,18 @@ final class AudioRetentionCache implements AutoCloseable {
         while (retainedBytes > budget) {
             Map.Entry<AudioCacheKey, Entry> oldest = null;
             for (var entry : entries.entrySet()) {
-                if (oldest == null || entry.getValue().receipt.sequence
-                        < oldest.getValue().receipt.sequence) {
+                if (oldest == null || entry.getValue().receipt.sequence < oldest.getValue().receipt.sequence) {
                     oldest = entry;
                 }
             }
             if (oldest == null) {
                 throw new IllegalStateException("Audio retention ledger is inconsistent");
             }
-            remove(oldest.getKey(), oldest.getValue());
-        }
-    }
-
-    private void remove(AudioCacheKey key, Entry entry) {
-        if (entries.remove(key, entry)) {
-            retainedBytes -= entry.audio.size();
-            entry.audio.close();
+            entries.remove(oldest.getKey());
+            latestReceipts.remove(oldest.getKey(), oldest.getValue().receipt);
+            retainedBytes -= oldest.getValue().audio.retainedBytes();
+            ResourceDiagnostics.log("audio decoded evict: {} entries={} retainedBytes={}", oldest.getKey(), entries.size(),
+                retainedBytes);
         }
     }
 
@@ -186,7 +149,7 @@ final class AudioRetentionCache implements AutoCloseable {
     record Receipt(long acquiredAtNanos, long sequence) {
     }
 
-    record Acquisition(CachedAudio audio, Receipt receipt) {
+    record Lookup(@Nullable CachedAudio audio, Receipt receipt) {
     }
 
     private static final class Entry {

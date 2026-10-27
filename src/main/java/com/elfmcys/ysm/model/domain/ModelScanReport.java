@@ -3,16 +3,14 @@ package com.elfmcys.ysm.model.domain;
 import java.time.Instant;
 import java.util.List;
 
-public record ModelScanReport(Instant startedAt, Instant completedAt,
-                              List<ModelScanError> errors,
-                              List<ModelScanWarning> warnings) {
+public record ModelScanReport(Instant startedAt, Instant completedAt, List<ModelScanError> errors,
+    List<ModelScanWarning> warnings) {
     public ModelScanReport {
         errors = List.copyOf(errors);
         warnings = List.copyOf(warnings);
     }
 
-    public ModelScanReport(Instant startedAt, Instant completedAt,
-                           List<ModelScanError> errors) {
+    public ModelScanReport(Instant startedAt, Instant completedAt, List<ModelScanError> errors) {
         this(startedAt, completedAt, errors, List.of());
     }
 

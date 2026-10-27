@@ -6,9 +6,8 @@ import com.elfmcys.ysm.client.entity.CustomPlayerEntity;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.model.resource.client.ResourceLease;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
-import com.elfmcys.ysm.molang.runtime.Struct;
 import it.unimi.dsi.fastutil.ints.Int2FloatMap;
 import it.unimi.dsi.fastutil.ints.Int2FloatOpenHashMap;
 import net.minecraft.client.player.LocalPlayer;
@@ -16,7 +15,6 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 @OnlyIn(Dist.CLIENT)
 public final class PlayerAnimatableCapability extends CustomPlayerEntity {
@@ -24,8 +22,7 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
 
     public PlayerAnimatableCapability(Player player) {
         super(player, player instanceof LocalPlayer, true);
-        roamingSession = new ClientRoamingSession(
-                player, player instanceof LocalPlayer, this::reloadGeoModel);
+        roamingSession = new ClientRoamingSession(player, player instanceof LocalPlayer, this::reloadGeoModel);
     }
 
     @Override
@@ -34,36 +31,25 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
     }
 
     public PlayerStateTracker getStateTracker() {
-        return (PlayerStateTracker) super.getStateTracker();
+        return (PlayerStateTracker)super.getStateTracker();
     }
 
     @Override
-    public @Nullable Struct getRoamingStruct() {
-        return roamingSession.currentStruct();
+    protected Runnable prepareRoleInstallation(ModelRenderTarget target,
+        com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.PreparedInstallation prepared) {
+        var player = super.prepareRoleInstallation(target, prepared);
+        var roaming = roamingSession.prepare(target.modelHash().roamingHash(), target.expressions(), prepared);
+        return () -> {
+            player.run();
+            roaming.run();
+        };
     }
 
     @Override
-    protected void onModelRenderTargetLoaded(ModelRenderTarget newModel) {
-        super.onModelRenderTargetLoaded(newModel);
-        roamingSession.modelLoaded(getModelRenderTarget().modelHash().roamingHash());
-    }
-
-    @Override
-    protected void resetModelRenderTarget() {
-        roamingSession.modelReset();
-        super.resetModelRenderTarget();
-    }
-
-    @Override
-    public void onLoadGeoModel(AnimatedGeoModel model) {
-        super.onLoadGeoModel(model);
-        roamingSession.geoModelLoaded();
-    }
-
-    @Override
-    protected void resetGeoModel() {
-        roamingSession.geoModelReset();
-        super.resetGeoModel();
+    protected void onModelEnded() {
+        super.onModelEnded();
+        if (roamingSession != null && !hasInstalledModel())
+            roamingSession.modelReset();
     }
 
     @Override
@@ -91,59 +77,67 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
     }
 
     @Override
-    protected void recoverLastCodedAnimation(boolean lastFrameUpdated) {
-        super.recoverLastCodedAnimation(lastFrameUpdated);
+    protected void recoverLastCodedAnimation() {
+        super.recoverLastCodedAnimation();
 
         AnimatedGeoModel model = getLoadedGeoModel();
         if (model != null && isLocalPlayer()) {
-            if ((FirstPersonCompat.isInstalled() || BetterCombatCompat.isInstalled()) && model.getFirstPersonAllHead() != null) {
+            if ((FirstPersonCompat.isInstalled() || BetterCombatCompat.isInstalled())
+                && model.getFirstPersonAllHead() != null) {
                 model.getFirstPersonAllHead().setHidden(false);
             }
         }
     }
 
     public void resetRoamingVars(int modelHashShort, Int2FloatOpenHashMap vars) {
-        roamingSession.resetFromServer(modelHashShort, vars);
+        getExpressionRuntime().serialized(() -> {
+            roamingSession.resetFromServer(getExpressionRuntime(), modelHashShort, vars);
+            return null;
+        });
     }
 
     public void clearRoamingVars() {
-        roamingSession.clearFromServer();
+        getExpressionRuntime().serialized(() -> {
+            roamingSession.clearFromServer(getExpressionRuntime());
+            return null;
+        });
     }
 
     public boolean hasRoamingStorage(int hashShort) {
-        return roamingSession.hasStorage(hashShort);
+        return getExpressionRuntime().serialized(() -> roamingSession.hasStorage(hashShort));
     }
 
     public void updateRemoteRoamingVars(int modelHashShort, Int2FloatMap vars) {
-        roamingSession.updateRemote(modelHashShort, vars);
+        getExpressionRuntime().serialized(() -> {
+            roamingSession.updateRemote(getExpressionRuntime(), modelHashShort, vars);
+            return null;
+        });
     }
 
-    public void handleRoamingVarsChanges() {
-        roamingSession.flushLocalChanges();
+    @Override
+    protected void onNormalRoamingChanges(dev.semaweave.RoamingPayload changes) {
+        roamingSession.maintainLocalChanges(changes);
     }
 
     public RoamingSnapshot roamingSnapshot(int authoritativeModelKey) {
-        return roamingSession.snapshot(authoritativeModelKey);
+        return roamingSession.snapshot(getExpressionRuntime(), authoritativeModelKey);
     }
 
     /** The roaming namespace of the applied model, or null before one is loaded. */
     public Integer localRoamingKey() {
-        return roamingSession.currentRoamingKey();
+        return getExpressionRuntime().serialized(roamingSession::currentRoamingKey);
     }
 
-    public record RoamingSnapshot(int modelKey, Int2FloatOpenHashMap values) {
+    public record RoamingSnapshot(int modelKey, Int2FloatOpenHashMap values,
+        com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.Installation installation) {
     }
 
     public void moveFrom(PlayerAnimatableCapability source) {
         roamingSession.moveFrom(source.roamingSession);
-        updateModelAndTexture(source.getModelHash(), source.textureName);
+        if (source.isAssigned())
+            updateModelAndTexture(source.getModelHash(), source.textureName);
+        else
+            revokeAssignment();
         setDisabled(source.isDisabled());
     }
-
-    @Override
-    @NotNull
-    protected HumanoidResourceHolder createResourceHolder(ResourceLease lease, boolean isFallback) {
-        return new HumanoidResourceHolder(lease, isFallback);
-    }
-
 }

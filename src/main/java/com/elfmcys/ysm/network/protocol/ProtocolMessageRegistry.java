@@ -12,7 +12,7 @@ public final class ProtocolMessageRegistry {
     private final Map<Class<?>, ProtocolMessageSpec<?>> byType;
 
     private ProtocolMessageRegistry(Map<Integer, ProtocolMessageSpec<?>> byId,
-                                    Map<Class<?>, ProtocolMessageSpec<?>> byType) {
+        Map<Class<?>, ProtocolMessageSpec<?>> byType) {
         this.byId = Map.copyOf(byId);
         this.byType = Map.copyOf(byType);
     }

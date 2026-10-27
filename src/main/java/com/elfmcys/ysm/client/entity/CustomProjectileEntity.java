@@ -1,5 +1,10 @@
 package com.elfmcys.ysm.client.entity;
 
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
+import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
+import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
+import com.elfmcys.ysm.config.ClientConfig;
+
 import com.elfmcys.ysm.geckolib3.core.builder.Animation;
 import com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
@@ -13,9 +18,9 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.projectile.Projectile;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import java.util.Objects;
 
-public class CustomProjectileEntity extends CustomEntity<Projectile> {
-    private ProjectileModelResources projectileResources;
+public class CustomProjectileEntity extends AnimatableEntity<Projectile> {
 
     public CustomProjectileEntity(Projectile projectile) {
         super(projectile, true);
@@ -24,10 +29,8 @@ public class CustomProjectileEntity extends CustomEntity<Projectile> {
     @Override
     protected String requestedRenderTargetId() {
         var hash = getModelHash();
-        return hash == null ? null : ClientModelService.instance()
-                .findRenderTarget(hash,
-                        RenderTargetKind.RENDER_TARGET_KIND_PROJECTILE,
-                        entity.getType().builtInRegistryHolder().key().location()).orElse(null);
+        return hash == null ? null : ClientModelService.instance().findRenderTarget(hash, RenderTargetKind.PROJECTILE,
+            entity.getType().builtInRegistryHolder().key().location()).orElse(null);
     }
 
     @Override
@@ -36,47 +39,24 @@ public class CustomProjectileEntity extends CustomEntity<Projectile> {
     }
 
     @Override
-    protected void onSetupAnimationController() {
-        if (projectileResources != null) {
-            projectileResources.controllerFactory().accept(this);
-        }
+    protected void prepareAnimationControllers(ModelRenderTarget target, AnimationData animations) {
+        Objects.requireNonNull(target.projectileResources(), "projectile resources").controllerFactory().accept(this,
+            animations);
     }
 
     @Override
-    @SuppressWarnings("deprecation")
-    protected @Nullable ResourceHolder createResourceHolder(ResourceLease lease, boolean isFallback) {
-        if (!(lease.poll() instanceof AcquireResult.Ready ready)) {
-            return null;
-        }
-        var model = ready.target();
-        if (!isFallback) {
-            var projectileResources = model.projectileResources();
-            if (projectileResources != null) {
-                return new ResourceHolder(lease, false);
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 当前箭矢没有模型时，由于跳过渲染而不会检查模型更新，此时依赖于异步更新的机制检查。
-     */
-    @Override
-    @SuppressWarnings("deprecation")
-    protected void onModelRenderTargetLoaded(ModelRenderTarget newModel) {
-        super.onModelRenderTargetLoaded(newModel);
-        projectileResources = newModel.projectileResources();
+    protected boolean presentationPermission() {
+        return !ClientConfig.DISABLE_PROJECTILE_MODEL.get();
     }
 
     @Override
-    public void resetModelRenderTarget() {
-        super.resetModelRenderTarget();
-        projectileResources = null;
+    protected AnimationControllerData resolveControllerData(ModelRenderTarget target, String name) {
+        return target.projectileResources().controllers().get(name);
     }
 
     @Override
-    protected GeoModel getYsmGeoModel() {
-        return projectileResources.model();
+    protected GeoModel resolveGeoModel(ModelRenderTarget target, String texture) {
+        return Objects.requireNonNull(target.projectileResources(), "projectile resources").model();
     }
 
     @Override
@@ -86,18 +66,18 @@ public class CustomProjectileEntity extends CustomEntity<Projectile> {
     }
 
     @Override
+    protected AnimationStore animationSource() {
+        return getModelRenderTarget().projectileResources().animations();
+    }
+
+    @Override
     public Animation getAnimation(String name) {
-        return projectileResources.animations().get(name);
+        return readAnimation(getModelRenderTarget().projectileResources().animations(), name);
     }
 
     @Override
     public @Nullable AnimationControllerData getAnimationControllerData(String animationControllerName) {
-        return projectileResources.controllers().get(animationControllerName);
-    }
-
-    @Override
-    public boolean isModelPresent() {
-        return super.isModelPresent() && projectileResources != null && getResourceHolder().isLoaded();
+        return getModelRenderTarget().projectileResources().controllers().get(animationControllerName);
     }
 
     @Override

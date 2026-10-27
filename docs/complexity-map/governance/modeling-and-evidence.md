@@ -16,6 +16,6 @@
 
 Java 机制页引用测试作为可定位的行为断言，未把测试名称或静态调用关系当成运行通过的证明。完整格式 golden、真实 GUI 反复翻页与关闭、GPU texture 回收和实机模型外观仍受[支持与验证边界](../../status/support-and-verification.md)限制。
 
-[Mock 验证设施](../../architecture/model-management/verification.md)的进程监督、物理 classpath 隔离与证据汇总是测试协调，不计为生产机制；通过某一层也不自动闭合其他层的未验项。精确读取实例、converted consumer/prune 及页面 batch 失败收敛分别展开于 MN-05、MN-24 与 AP-04，不另按验证场景新增节点。
+[Mock 验证设施](../../verification/model-management.md)的进程监督、物理 classpath 隔离与证据汇总是测试协调，不计为生产机制；通过某一层也不自动闭合其他层的未验项。精确读取实例、converted consumer/prune 及页面 batch 失败收敛分别展开于 MN-05、MN-24 与 AP-04，不另按验证场景新增节点。
 
 关系类型与按需加载规则见[关系登记入口](relationship-register.md)；Fact 边由四个子系统关系页和[跨子系统关系](cross-subsystem-relations.md)唯一维护，全局计数见[高扇出候选](global-fanout.md)，根键解释见[根依据总表](root-register.md)。

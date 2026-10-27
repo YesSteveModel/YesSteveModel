@@ -2,7 +2,7 @@ package com.elfmcys.ysm.buffer;
 
 import com.elfmcys.ysm.natives.buffer.NativeHeapBuffer;
 import com.elfmcys.ysm.util.ScopeGuard;
-import org.lwjgl.system.MemoryUtil;
+import io.netty.util.internal.PlatformDependent;
 
 import java.io.IOException;
 import java.lang.ref.Reference;
@@ -29,7 +29,9 @@ public interface NativeBuffer extends UniBuffer {
         try (var bufScope = allocateWithScope(size)) {
             var target = bufScope.get();
             try {
-                MemoryUtil.memCopy(ptr(), target.ptr(), size);
+                if (size != 0) {
+                    PlatformDependent.copyMemory(ptr(), target.ptr(), size);
+                }
             } finally {
                 Reference.reachabilityFence(this);
                 Reference.reachabilityFence(target);
@@ -91,8 +93,9 @@ public interface NativeBuffer extends UniBuffer {
     static NativeBuffer copyOf(ByteBuffer data) {
         var result = allocate(data.remaining());
         try {
-            if (data.isDirect()) {
-                MemoryUtil.memCopy(MemoryUtil.memAddress(data), result.ptr(), result.size());
+            if (data.isDirect() && result.size() != 0) {
+                PlatformDependent.copyMemory(PlatformDependent.directBufferAddress(data) + data.position(),
+                    result.ptr(), result.size());
             } else {
                 result.nio().put(data.duplicate());
             }

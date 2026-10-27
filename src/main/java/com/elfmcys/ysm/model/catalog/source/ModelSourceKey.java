@@ -5,7 +5,7 @@ import com.elfmcys.ysm.model.domain.ModelPath;
 import java.util.Objects;
 
 public record ModelSourceKey(CatalogRootIdentity root, ModelPath relativePath,
-                             ModelSourceKind sourceKind) implements Comparable<ModelSourceKey> {
+    ModelSourceKind sourceKind) implements Comparable<ModelSourceKey> {
     public ModelSourceKey {
         Objects.requireNonNull(root, "root");
         Objects.requireNonNull(relativePath, "relativePath");

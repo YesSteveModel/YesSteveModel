@@ -10,7 +10,7 @@ import java.util.Objects;
 
 /** Lightweight GUI metadata derived entirely from the catalog schema manifest. */
 public record CatalogModelMetadata(Hash256 modelHash, String path, ModelRepresentation representation,
-                                   ModelInfoView info) {
+    ModelInfoView info) {
     public CatalogModelMetadata {
         Objects.requireNonNull(modelHash, "modelHash");
         Objects.requireNonNull(path, "path");
@@ -21,7 +21,7 @@ public record CatalogModelMetadata(Hash256 modelHash, String path, ModelRepresen
     public static CatalogModelMetadata from(ClientCatalogEntry entry) {
         var representation = entry.displayRepresentation();
         return new CatalogModelMetadata(entry.modelHash(), entry.displayPath(), representation,
-                representation.view().getMetadata());
+            representation.view().getMetadata());
     }
 
     public String localized(String locale, String key, String fallback) {
@@ -29,8 +29,6 @@ public record CatalogModelMetadata(Hash256 modelHash, String path, ModelRepresen
     }
 
     public String defaultTexture() {
-        return ModelManifestLookup.chooseTexture(
-                representation.view().getManifest(),
-                RenderTargetIds.PLAYER, "");
+        return ModelManifestLookup.chooseTexture(representation.view().getManifest(), RenderTargetIds.PLAYER, "");
     }
 }

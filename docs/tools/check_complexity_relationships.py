@@ -27,7 +27,6 @@ SUBSYSTEM_PATHS = {
     "NR": "complexity-map/native-capabilities/causal-graph.md",
 }
 CROSS_PATH = "complexity-map/governance/cross-subsystem-relations.md"
-INDEX_PATH = "complexity-map/governance/relationship-register.md"
 FANOUT_PATH = "complexity-map/governance/global-fanout.md"
 MECHANISM_PATHS = {
     "AP": "complexity-map/java-assets-and-presentation/mechanisms.md",
@@ -35,7 +34,7 @@ MECHANISM_PATHS = {
     "AN": "complexity-map/java-animation-and-integration/mechanisms.md",
     "NR": "complexity-map/native-capabilities/mechanisms.md",
 }
-EXPECTED_MECHANISMS = {"AP": 9, "MN": 22, "AN": 14, "NR": 17}
+EXPECTED_MECHANISMS = {"AP": 9, "MN": 24, "AN": 14, "NR": 17}
 HEADING_RE = re.compile(r"^## (?P<title>.+?)\s*$", re.MULTILINE)
 MECHANISM_RE = re.compile(r"^\|\s*((?:AP|MN|AN|NR)-\d{2})\b", re.MULTILINE)
 NAMESPACE_RE = re.compile(r"^(AP|MN|AN|NR)-")
@@ -113,22 +112,6 @@ def row_owner(
         if namespace:
             namespaces.add(namespace)
     return next(iter(namespaces)) if len(namespaces) == 1 else "cross"
-
-
-def index_counts(text: str) -> dict[str, tuple[int, int]]:
-    result: dict[str, tuple[int, int]] = {}
-    for line in text.splitlines():
-        values = cells(line) if line.startswith("|") else []
-        if len(values) < 3:
-            continue
-        label = values[0].strip("*")
-        if label not in {*SUBSYSTEM_PATHS, "跨子系统", "合计"}:
-            continue
-        try:
-            result[label] = (int(values[1].strip("*")), int(values[2].strip("*")))
-        except ValueError:
-            continue
-    return result
 
 
 def fanout_rows(text: str) -> list[tuple[list[str], int, int]]:
@@ -227,22 +210,6 @@ def run(root: Path) -> list[str]:
                     f"{shard_paths[owner]}: non-causal row belongs to {expected}: "
                     f"{row[0]} {row[1]} {row[2]}"
                 )
-
-    actual_counts = {
-        owner: (len(fact_by_shard[owner]), len(non_causal_by_shard[owner]))
-        for owner in shard_paths
-    }
-    actual_counts["合计"] = (
-        sum(count[0] for count in actual_counts.values()),
-        sum(count[1] for count in actual_counts.values()),
-    )
-    actual_counts["跨子系统"] = actual_counts.pop("cross")
-    declared = index_counts((root / INDEX_PATH).read_text("utf-8"))
-    for owner, actual in actual_counts.items():
-        if declared.get(owner) != actual:
-            errors.append(
-                f"{INDEX_PATH}: {owner} declares {declared.get(owner)}, actual relationship rows are {actual}"
-            )
 
     for keys, expected_reachable, expected_direct in fanout_rows(
         (root / FANOUT_PATH).read_text("utf-8")

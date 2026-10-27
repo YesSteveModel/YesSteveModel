@@ -1,8 +1,6 @@
 package com.elfmcys.ysm.geckolib3.core.keyframe.bone;
 
-import com.elfmcys.ysm.geckolib3.core.molang.value.FloatValue;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
-import com.elfmcys.ysm.geckolib3.core.molang.value.RotationValue;
+import com.elfmcys.ysm.expression.aot.FloatExpression;
 
 @SuppressWarnings("FieldMayBeFinal,unused")
 public class RawBoneKeyFrame {
@@ -10,40 +8,34 @@ public class RawBoneKeyFrame {
     public EasingType easingType;
 
     public double preX;
-    public IValue preXValue;
+    public FloatExpression preXValue;
     public double preY;
-    public IValue preYValue;
+    public FloatExpression preYValue;
     public double preZ;
-    public IValue preZValue;
+    public FloatExpression preZValue;
 
     public double postX;
-    public IValue postXValue;
+    public FloatExpression postXValue;
     public double postY;
-    public IValue postYValue;
+    public FloatExpression postYValue;
     public double postZ;
-    public IValue postZValue;
+    public FloatExpression postZValue;
 
     public boolean contiguous;
 
     public Vector3v preValue;
     public Vector3v postValue;
 
-    public RawBoneKeyFrame() {
-    }
+    public RawBoneKeyFrame() {}
 
-    private IValue getValue(IValue value, double primitive, boolean isRotation, boolean flip) {
+    private FloatExpression getValue(FloatExpression value, double primitive, boolean isRotation, boolean flip) {
         if (value == null) {
-            if (isRotation) {
-                return new FloatValue(RotationValue.processValue((float) primitive, flip));
-            } else {
-                return new FloatValue((float) primitive);
-            }
+            value = new FloatExpression.Literal((float)primitive);
         }
         if (isRotation) {
-            return new RotationValue(value, flip);
-        } else {
-            return value;
+            return FloatExpression.scaled(value, (flip ? -1.0f : 1.0f) * ((float)Math.PI / 180.0f));
         }
+        return value;
     }
 
     public void init(boolean isRotation) {
@@ -51,22 +43,20 @@ public class RawBoneKeyFrame {
             return;
         }
 
-        preValue = new Vector3v(
-                getValue(this.preXValue, this.preX, isRotation, true),
-                getValue(this.preYValue, this.preY, isRotation, true),
-                getValue(this.preZValue, this.preZ, isRotation, false));
+        preValue = new Vector3v(getValue(this.preXValue, this.preX, isRotation, true),
+            getValue(this.preYValue, this.preY, isRotation, true),
+            getValue(this.preZValue, this.preZ, isRotation, false));
         if (contiguous) {
             postValue = preValue;
         } else {
-            postValue = new Vector3v(
-                    getValue(this.postXValue, this.postX, isRotation, true),
-                    getValue(this.postYValue, this.postY, isRotation, true),
-                    getValue(this.postZValue, this.postZ, isRotation, false));
+            postValue = new Vector3v(getValue(this.postXValue, this.postX, isRotation, true),
+                getValue(this.postYValue, this.postY, isRotation, true),
+                getValue(this.postZValue, this.postZ, isRotation, false));
         }
     }
 
     public float startTick() {
-        return (float) startTick;
+        return (float)startTick;
     }
 
     public EasingType easingType() {

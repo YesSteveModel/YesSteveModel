@@ -7,7 +7,8 @@
   - 游戏连接与错误隔离: [DD.local-failure-degradation](failure-isolation.md#ddlocal-failure-degradation)
   - 区分协议互通与作品语义兼容: [DD.explicit-support-is-stable](model-compatibility.md#ddexplicit-support-is-stable)
 - Landing:
-  - [architecture](../../architecture/network/transport-and-session.md)
+  - [implementation](../../architecture/network/implementation/transport-and-session.md)
+  - [design](../../architecture/network/overview.md)
 
 ## DD.protocol-compatibility-has-bounded-cost
 

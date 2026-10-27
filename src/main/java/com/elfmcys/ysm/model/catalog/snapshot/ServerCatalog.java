@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.model.catalog.snapshot;
 
 import com.elfmcys.ysm.model.catalog.content.ContentBinding;
-import com.elfmcys.ysm.model.catalog.source.CatalogModelLocation;
+import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 
 import com.elfmcys.ysm.model.domain.Hash256;
@@ -25,8 +25,8 @@ public final class ServerCatalog {
 
     public Map<Hash256, ManagedContainer> models() {
         var result = new LinkedHashMap<Hash256, ManagedContainer>();
-        catalog.byModelId().forEach((modelId, record) ->
-                result.put(modelId, (ManagedContainer) record.binding().content()));
+        catalog.byModelId()
+            .forEach((modelId, record) -> result.put(modelId, (ManagedContainer)record.binding().content()));
         return Map.copyOf(result);
     }
 
@@ -39,33 +39,26 @@ public final class ServerCatalog {
     }
 
     public Optional<ManagedContainer> find(Hash256 modelId) {
-        return catalog.binding(modelId).map(ContentBinding::content)
-                .map(ManagedContainer.class::cast);
+        return catalog.binding(modelId).map(ContentBinding::content).map(ManagedContainer.class::cast);
     }
 
-    public Optional<ManagedContainer> find(CatalogModelLocation location) {
+    public Optional<ManagedContainer> find(CatalogLocation location) {
         return catalog.resolve(location).flatMap(this::find);
     }
 
     public Optional<ManagedContainer> findPath(String path) {
-        ManagedContainer found = null;
-        for (var entry : catalog.byLocation().entrySet()) {
-            if (!entry.getKey().path().value().equals(path)) {
-                continue;
-            }
-            if (found != null) {
-                return Optional.empty();
-            }
-            found = find(entry.getValue()).orElse(null);
-        }
-        return Optional.ofNullable(found);
+        return resolvePath(path).found().flatMap(this::find);
+    }
+
+    public com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver.Result resolvePath(String path) {
+        return com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver.resolve(path, catalog.byLocation());
     }
 
     public Optional<ManagedContainer> defaultModel() {
         return catalog.byLocation().entrySet().stream()
-                .filter(entry -> entry.getKey().rootKind() == CatalogRootKind.BUILTIN
-                        && entry.getKey().path().value().equals("default"))
-                .findFirst().flatMap(entry -> find(entry.getValue()));
+            .filter(entry -> entry.getKey().rootKind() == CatalogRootKind.BUILTIN
+                && entry.getKey().path().value().equals("default"))
+            .findFirst().flatMap(entry -> find(entry.getValue()));
     }
 
     public CatalogSnapshot catalog() {

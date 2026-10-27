@@ -1,9 +1,14 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.proto.network.GenPreviewStartProto;
+import com.elfmcys.ysm.proto.network.MissingPreviewFragmentProto;
+import com.elfmcys.ysm.proto.network.PreviewUploadAdmissionProto;
+import com.elfmcys.ysm.proto.network.PreviewRepairResultProto;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.resource.client.remote.RemotePresentationFetcher;
 import com.elfmcys.ysm.model.service.ClientModelService;
 import com.elfmcys.ysm.model.session.client.ClientModelSession;
@@ -13,14 +18,19 @@ import com.elfmcys.ysm.model.session.client.state.PublicationEntry;
 import com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot;
 import com.elfmcys.ysm.network.NetworkHandler;
 import com.elfmcys.ysm.network.protocol.NegotiatedSessionPolicy;
-import com.elfmcys.ysm.proto.network.ChunkFragment;
-import com.elfmcys.ysm.proto.network.IconFragment;
-import com.elfmcys.ysm.proto.network.MetadataPrefixFragment;
-import com.elfmcys.ysm.proto.network.PackCoverFragment;
-import com.elfmcys.ysm.proto.network.PreviewFragment;
-import com.elfmcys.ysm.proto.network.ResourceTransferFailure;
-import com.elfmcys.ysm.proto.network.SessionDeltaFragment;
-import com.elfmcys.ysm.proto.network.SessionFullFragment;
+import com.elfmcys.ysm.proto.network.ChunkFragmentProto;
+import com.elfmcys.ysm.proto.network.IconFragmentProto;
+import com.elfmcys.ysm.proto.network.MetadataPrefixFragmentProto;
+import com.elfmcys.ysm.proto.network.PackCoverFragmentProto;
+import com.elfmcys.ysm.proto.network.PreviewFragmentProto;
+import com.elfmcys.ysm.proto.network.PreviewAvailableProto;
+import com.elfmcys.ysm.proto.network.ResourceTransferFailureProto;
+import com.elfmcys.ysm.proto.network.SessionDeltaFragmentProto;
+import com.elfmcys.ysm.proto.network.SessionFullFragmentProto;
+import com.elfmcys.ysm.util.ThreadScheduling;
+import com.elfmcys.ysm.util.ThreadScheduling.ThreadPolicy;
+import com.elfmcys.ysm.util.ThreadScheduling.ThreadRole;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -38,8 +48,7 @@ import net.minecraft.network.chat.Component;
 public final class ClientSessionRuntime {
     private static ConnectionState current;
 
-    private ClientSessionRuntime() {
-    }
+    private ClientSessionRuntime() {}
 
     public static synchronized ClientModelSession beginConnection(Connection connection) {
         Objects.requireNonNull(connection, "connection");
@@ -50,23 +59,21 @@ public final class ClientSessionRuntime {
         final ClientModelSession session;
         try {
             var requestedMode = ClientConfig.NETWORK_SESSION_MODE.get();
-            session = new ClientModelSession(requestedMode,
-                    NetworkHandler.isChannelPresent(connection), models.catalog().catalog());
+            session = new ClientModelSession(requestedMode, NetworkHandler.isChannelPresent(connection),
+                models.catalog().catalog());
         } catch (Throwable failure) {
             models.disconnect(sessionOwner);
             throw failure;
         }
-        var owner = new ConnectionState(
-                connection, session, ClientSessionRuntime::sendCatalogDeltaFailureNotice,
-                sessionOwner);
+        var owner =
+            new ConnectionState(connection, session, ClientSessionRuntime::sendCatalogDeltaFailureNotice, sessionOwner);
         current = owner;
         if (session.state() == ClientModelSession.State.NEGOTIATING) {
-            owner.collectionPublication = new SessionCollectionPublication.Receiver(
-                    SessionCollectionPublication.defaultAnimations());
-            owner.assetTransfer = new ClientAssetTransfer(session);
+            owner.collectionPublication =
+                new SessionCollectionPublication.Receiver(SessionCollectionPublication.defaultAnimations());
+            owner.assetTransfer = new ClientAssetTransfer(connection, session);
             try {
-                owner.activation = models.beginRemoteActivation(
-                        owner.assetTransfer, owner.assetTransfer, sessionOwner);
+                owner.activation = models.beginRemoteActivation(owner.assetTransfer, owner.assetTransfer, sessionOwner);
             } catch (IOException | RuntimeException failure) {
                 closeCurrent();
                 throw new IllegalStateException("Failed to open remote model store", failure);
@@ -85,6 +92,10 @@ public final class ClientSessionRuntime {
         return current.session;
     }
 
+    public static synchronized Optional<ClientModelSession> currentModelSession() {
+        return current == null || current.closed ? Optional.empty() : Optional.of(current.session);
+    }
+
     static synchronized Optional<BusinessSession> businessSession() {
         return current == null ? Optional.empty() : Optional.ofNullable(current.businessSession);
     }
@@ -93,15 +104,12 @@ public final class ClientSessionRuntime {
         return current == null ? Optional.empty() : Optional.of(current.session.state());
     }
 
-    public static synchronized Optional<Set<Hash256>>
-    authoritativeGrants() {
+    public static synchronized Optional<Set<Hash256>> authoritativeGrants() {
         if (current == null || current.session.state() == ClientModelSession.State.LOCAL
-                || current.session.state() == ClientModelSession.State.CLOSED) {
+            || current.session.state() == ClientModelSession.State.CLOSED) {
             return Optional.empty();
         }
-        return Optional.of(current.session.remoteSnapshot()
-                .map(RemotePublicationSnapshot::grants)
-                .orElseGet(Set::of));
+        return Optional.of(current.session.remoteSnapshot().map(RemotePublicationSnapshot::grants).orElseGet(Set::of));
     }
 
     public static synchronized boolean runIfCurrent(Connection connection, Runnable action) {
@@ -113,8 +121,8 @@ public final class ClientSessionRuntime {
         return true;
     }
 
-    static synchronized Optional<ClientModelSession.Response> onServerHello(
-            Connection connection, String transportVersion, boolean syncRoaming) {
+    static synchronized Optional<ClientModelSession.Response> onServerHello(Connection connection,
+        String transportVersion, boolean syncRoaming) {
         var owner = owner(connection);
         if (owner == null) {
             return Optional.empty();
@@ -127,100 +135,158 @@ public final class ClientSessionRuntime {
         return response;
     }
 
-    static synchronized void commitAcceptedSession(
-            Connection connection, boolean syncRoaming) {
+    static synchronized void commitAcceptedSession(Connection connection, boolean syncRoaming) {
         var owner = owner(connection);
         if (owner == null || owner.businessSession != null) {
             return;
         }
-        owner.businessSession = new BusinessSession(
-                connection, PlayerStateSessionPolicy.create(syncRoaming));
+        owner.businessSession = new BusinessSession(connection, PlayerStateSessionPolicy.create(syncRoaming));
     }
 
-    static synchronized void acceptSessionFullFragment(
-            Connection connection, SessionFullFragment message) {
+    static synchronized void acceptSessionFullFragment(Connection connection, SessionFullFragmentProto message) {
         var owner = owner(connection);
         if (owner == null || owner.collectionPublication == null) {
             return;
         }
         applyCollectionResult(owner, message.transferId(),
-                owner.collectionPublication.acceptFull(message,
-                        owner.session.remoteSnapshot().orElse(null)));
+            owner.collectionPublication.acceptFull(message, owner.session.remoteSnapshot().orElse(null)));
     }
 
-    static synchronized void acceptSessionDeltaFragment(
-            Connection connection, SessionDeltaFragment message) {
+    static synchronized void acceptSessionDeltaFragment(Connection connection, SessionDeltaFragmentProto message) {
         var owner = owner(connection);
         if (owner == null || owner.collectionPublication == null) {
             return;
         }
         applyCollectionResult(owner, message.transferId(),
-                owner.collectionPublication.acceptDelta(message,
-                        owner.session.remoteSnapshot().orElse(null)));
+            owner.collectionPublication.acceptDelta(message, owner.session.remoteSnapshot().orElse(null)));
     }
 
-    static synchronized void acceptMetadataPrefixFragment(
-            Connection connection, MetadataPrefixFragment message) {
+    static synchronized void acceptGenPreviewStart(Connection connection, GenPreviewStartProto message) {
+        var owner = owner(connection);
+        if (owner == null || owner.assetTransfer == null || owner.session.state() != ClientModelSession.State.ACTIVE)
+            return;
+        if (owner.previewRepair != null && !owner.previewRepair.terminal()) {
+            sendCatalogDeltaFailureNotice("message.yes_steve_model.gen_preview.busy");
+            return;
+        }
+        owner.previewRepair = new PreviewRepairBatch(owner.session, owner.assetTransfer,
+            ClientModelService.instance()::managementPreview,
+            item -> showPreviewMessage(Component.translatable("message.yes_steve_model.gen_preview.item", item.path(),
+                Component.translatable(
+                    "message.yes_steve_model.gen_preview." + item.outcome().name().toLowerCase(java.util.Locale.ROOT)),
+                item.reason())),
+            summary -> showPreviewMessage(Component.translatable("message.yes_steve_model.gen_preview.summary",
+                summary.total(), summary.success(), summary.failed(), summary.skipped(), summary.unprocessed())),
+            failure -> showPreviewMessage(Component.translatable("message.yes_steve_model.gen_preview.query_failed",
+                String.valueOf(failure.getMessage()))));
+    }
+
+    private static void showPreviewMessage(Component message) {
+        var player = Minecraft.getInstance().player;
+        if (player != null)
+            player.sendSystemMessage(message);
+    }
+
+    public static synchronized void tick() {
+        var owner = current;
+        if (owner == null || owner.closed)
+            return;
+        if (owner.assetTransfer != null) {
+            var megabits = com.elfmcys.ysm.config.ServerConfig.BANDWIDTH_LIMIT.get();
+            owner.assetTransfer.tickUpload(System.nanoTime(), megabits == 0 ? 0 : megabits * 1_000_000L / 8);
+        }
+        if (owner.previewRepair != null) {
+            owner.previewRepair.tick();
+            if (owner.previewRepair.terminal())
+                owner.previewRepair = null;
+        }
+    }
+
+    static synchronized void acceptMissingPreviewFragment(Connection connection, MissingPreviewFragmentProto message) {
+        var owner = owner(connection);
+        if (owner != null && owner.assetTransfer != null)
+            owner.assetTransfer.acceptMissingPreviews(message);
+    }
+
+    static synchronized void acceptPreviewUploadAdmission(Connection connection, PreviewUploadAdmissionProto message) {
+        var owner = owner(connection);
+        if (owner != null && owner.assetTransfer != null)
+            owner.assetTransfer.acceptUploadAdmission(message);
+    }
+
+    static synchronized void acceptPreviewRepairResult(Connection connection, PreviewRepairResultProto message) {
+        var owner = owner(connection);
+        if (owner != null && owner.assetTransfer != null)
+            owner.assetTransfer.acceptRepairResult(message);
+    }
+
+    static synchronized void acceptMetadataPrefixFragment(Connection connection, MetadataPrefixFragmentProto message) {
         var owner = owner(connection);
         if (owner != null && owner.assetTransfer != null) {
             owner.assetTransfer.acceptMetadata(message);
         }
     }
 
-    static synchronized void acceptChunkFragment(
-            Connection connection, ChunkFragment message,
-            UniBuffer data) {
+    static synchronized void acceptChunkFragment(Connection connection, ChunkFragmentProto message, UniBuffer data) {
         var owner = owner(connection);
         if (owner != null && owner.assetTransfer != null) {
             owner.assetTransfer.acceptChunk(message, data);
         }
     }
 
-    static synchronized void acceptPreviewFragment(
-            Connection connection, PreviewFragment message,
-            UniBuffer data) {
+    static synchronized void acceptPreviewFragment(Connection connection, PreviewFragmentProto message,
+        UniBuffer data) {
         var owner = owner(connection);
         if (owner != null && owner.assetTransfer != null) {
             owner.assetTransfer.acceptPreview(message, data);
         }
     }
 
-    static synchronized void acceptIconFragment(
-            Connection connection, IconFragment message,
-            UniBuffer data) {
+    static synchronized void acceptPreviewAvailable(Connection connection, PreviewAvailableProto message) {
+        var owner = owner(connection);
+        if (owner == null)
+            return;
+        if (message.modelId().remaining() != Hash256.SIZE || message.containerId().remaining() != Hash256.SIZE) {
+            failProtocolSession(owner);
+            return;
+        }
+        var identity = new ModelFileIdentity(new Hash256(com.elfmcys.ysm.util.ProtoBytes.copy(message.modelId())),
+            new Hash256(com.elfmcys.ysm.util.ProtoBytes.copy(message.containerId())));
+        owner.session.invalidatePreview(identity);
+        if (owner.previewRepair != null)
+            owner.previewRepair.repaired(identity);
+    }
+
+    static synchronized void acceptIconFragment(Connection connection, IconFragmentProto message, UniBuffer data) {
         var owner = owner(connection);
         if (owner != null && owner.assetTransfer != null) {
             owner.assetTransfer.acceptIcon(message, data);
         }
     }
 
-    static synchronized void acceptPackCoverFragment(
-            Connection connection, PackCoverFragment message,
-            UniBuffer data) {
+    static synchronized void acceptPackCoverFragment(Connection connection, PackCoverFragmentProto message,
+        UniBuffer data) {
         var owner = owner(connection);
         if (owner != null && owner.assetTransfer != null) {
             owner.assetTransfer.acceptPackCover(message, data);
         }
     }
 
-    private static void applyCollectionResult(
-            ConnectionState owner, long transferId,
-            SessionCollectionPublication.Result result) {
+    private static void applyCollectionResult(ConnectionState owner, long transferId,
+        SessionCollectionPublication.Result result) {
         if (result.status() == SessionCollectionPublication.Status.PENDING) {
             return;
         }
         if (result.status() == SessionCollectionPublication.Status.INTRINSIC_INVALID) {
-            YesSteveModel.LOGGER.warn(
-                    "Rejecting intrinsically invalid model-session publication transfer={}",
-                    transferId, result.cause());
+            YesSteveModel.LOGGER.warn("Rejecting intrinsically invalid model-session publication transfer={}",
+                transferId, result.cause());
             failCatalogSession(owner);
             notifyCatalogDeltaFailure(owner.connection, result.status());
             return;
         }
         if (result.status() == SessionCollectionPublication.Status.BASELINE_DRIFT) {
-            YesSteveModel.LOGGER.warn(
-                    "Discarding model-session delta for stale baseline transfer={}",
-                    transferId, result.cause());
+            YesSteveModel.LOGGER.warn("Discarding model-session delta for stale baseline transfer={}", transferId,
+                result.cause());
             notifyCatalogDeltaFailure(owner.connection, result.status());
             return;
         }
@@ -230,8 +296,8 @@ public final class ClientSessionRuntime {
             } else {
                 if (result.missingRemovals() != 0) {
                     YesSteveModel.LOGGER.debug(
-                            "Applied model-session delta with {} already-absent removal(s) transfer={}",
-                            result.missingRemovals(), transferId);
+                        "Applied model-session delta with {} already-absent removal(s) transfer={}",
+                        result.missingRemovals(), transferId);
                 }
                 owner.session.publishPublication(result.publication());
             }
@@ -240,35 +306,30 @@ public final class ClientSessionRuntime {
             }
             activateCurrent(owner, owner.activation);
         } catch (RuntimeException invalid) {
-            YesSteveModel.LOGGER.warn(
-                    "Failed to publish model-session collection transfer={}",
-                    transferId, invalid);
+            YesSteveModel.LOGGER.warn("Failed to publish model-session collection transfer={}", transferId, invalid);
             failCatalogSession(owner);
         }
     }
 
-    static synchronized void notifyCatalogDeltaFailure(
-            Connection connection, SessionCollectionPublication.Status status) {
+    static synchronized void notifyCatalogDeltaFailure(Connection connection,
+        SessionCollectionPublication.Status status) {
         Objects.requireNonNull(status, "status");
         var owner = owner(connection);
         if (owner == null || owner.catalogDeltaFailureNotified
-                || status != SessionCollectionPublication.Status.BASELINE_DRIFT
+            || status != SessionCollectionPublication.Status.BASELINE_DRIFT
                 && status != SessionCollectionPublication.Status.INTRINSIC_INVALID) {
             return;
         }
         var translationKey = switch (status) {
-            case BASELINE_DRIFT ->
-                    "message.yes_steve_model.client.catalog_delta_drift";
-            case INTRINSIC_INVALID ->
-                    "message.yes_steve_model.client.catalog_delta_invalid";
+            case BASELINE_DRIFT -> "message.yes_steve_model.client.catalog_delta_drift";
+            case INTRINSIC_INVALID -> "message.yes_steve_model.client.catalog_delta_invalid";
             default -> throw new AssertionError("handled above");
         };
         owner.catalogDeltaFailureNotified = true;
         try {
             owner.catalogDeltaFailureNotice.accept(translationKey);
         } catch (RuntimeException failure) {
-            YesSteveModel.LOGGER.warn(
-                    "Failed to show model-session delta failure notice", failure);
+            YesSteveModel.LOGGER.warn("Failed to show model-session delta failure notice", failure);
         }
     }
 
@@ -279,36 +340,27 @@ public final class ClientSessionRuntime {
         }
     }
 
-    static synchronized void acceptResourceTransferFailure(
-            Connection connection, ResourceTransferFailure failure) {
+    static synchronized void acceptResourceTransferFailure(Connection connection,
+        ResourceTransferFailureProto failure) {
         var owner = owner(connection);
         if (owner != null && owner.assetTransfer != null) {
             owner.assetTransfer.fail(failure);
         }
     }
 
-    private static void activateCurrent(
-            ConnectionState connection, RemoteCatalogActivation activation) {
+    private static void activateCurrent(ConnectionState connection, RemoteCatalogActivation activation) {
         var snapshot = connection.session.activationSnapshot().orElseThrow();
         ClientModelService.instance().publishSessionActivation(snapshot);
         var expectedEntries = snapshot.publication().entries();
-        activation.activate(snapshot).whenComplete((result, failure) ->
-                Minecraft.getInstance().execute(() ->
-                        completeActivation(connection, activation,
-                                expectedEntries, result, failure)));
+        activation.activate(snapshot).whenComplete((result, failure) -> Minecraft.getInstance()
+            .execute(() -> completeActivation(connection, activation, expectedEntries, result, failure)));
     }
 
-    private static synchronized void completeActivation(
-            ConnectionState connection, RemoteCatalogActivation activation,
-            Map<Hash256,
-                    PublicationEntry> expectedEntries,
-            ActivationSnapshot snapshot,
-            Throwable failure) {
-        if (current != connection || connection.closed
-                || connection.activation != activation
-                || connection.session.state() != ClientModelSession.State.ACTIVE
-                || !connection.session.remoteSnapshot().map(value ->
-                value.entries().equals(expectedEntries)).orElse(false)) {
+    private static synchronized void completeActivation(ConnectionState connection, RemoteCatalogActivation activation,
+        Map<Hash256, PublicationEntry> expectedEntries, ActivationSnapshot snapshot, Throwable failure) {
+        if (current != connection || connection.closed || connection.activation != activation
+            || connection.session.state() != ClientModelSession.State.ACTIVE || !connection.session.remoteSnapshot()
+                .map(value -> value.entries().equals(expectedEntries)).orElse(false)) {
             return;
         }
         if (failure != null) {
@@ -319,8 +371,8 @@ public final class ClientSessionRuntime {
         }
         try {
             connection.session.publishActivation(snapshot);
-            ClientModelService.instance().publishSessionActivation(
-                    connection.session.activationSnapshot().orElseThrow());
+            ClientModelService.instance()
+                .publishSessionActivation(connection.session.activationSnapshot().orElseThrow());
         } catch (RuntimeException invalid) {
             failCatalogSession(connection);
         }
@@ -341,7 +393,7 @@ public final class ClientSessionRuntime {
 
     private static void retryTransient(Hash256 modelId) {
         if (current == null || current.activation == null
-                || current.session.state() != ClientModelSession.State.ACTIVE) {
+            || current.session.state() != ClientModelSession.State.ACTIVE) {
             return;
         }
         var retries = current.session.retryTransient(modelId);
@@ -352,15 +404,19 @@ public final class ClientSessionRuntime {
         activateCurrent(current, current.activation);
     }
 
-    public static synchronized CompletableFuture<Void> fetchPresentation(
-            List<RemotePresentationFetcher.Member> members,
-            RemotePresentationFetcher.PresentationReceiver receiver) {
-        if (current == null || current.session.state() != ClientModelSession.State.ACTIVE
-                || current.assetTransfer == null) {
-            return CompletableFuture.failedFuture(
-                    new IOException("No active remote model session"));
+    public static synchronized RemotePresentationFetcher presentationFetcher() {
+        var owner = current;
+        return (members, receiver) -> fetchPresentation(owner, members, receiver);
+    }
+
+    private static synchronized CompletableFuture<Void> fetchPresentation(ConnectionState owner,
+        List<RemotePresentationFetcher.Member> members, RemotePresentationFetcher.PresentationReceiver receiver) {
+        if (owner == null || current != owner || owner.closed
+            || owner.session.state() != ClientModelSession.State.ACTIVE || owner.assetTransfer == null) {
+            return CompletableFuture
+                .failedFuture(new CancellationException("Page belongs to an inactive remote model session"));
         }
-        return current.assetTransfer.fetch(members, receiver);
+        return owner.assetTransfer.fetch(members, receiver);
     }
 
     public static synchronized void failProtocolSession(Connection connection) {
@@ -384,8 +440,7 @@ public final class ClientSessionRuntime {
     }
 
     private static ConnectionState owner(Connection connection) {
-        return current != null && current.connection == connection && !current.closed
-                ? current : null;
+        return current != null && current.connection == connection && !current.closed ? current : null;
     }
 
     private static void failProtocolSession(ConnectionState owner) {
@@ -429,40 +484,41 @@ public final class ClientSessionRuntime {
         private SessionCollectionPublication.Receiver collectionPublication;
         private ClientAssetTransfer assetTransfer;
         private RemoteCatalogActivation activation;
+        private PreviewRepairBatch previewRepair;
         private Thread missingServerNotice;
         private boolean catalogDeltaFailureNotified;
         private volatile boolean closed;
 
         private ConnectionState(Connection connection, ClientModelSession session,
-                                Consumer<String> catalogDeltaFailureNotice,
-                                Object sessionOwner) {
+            Consumer<String> catalogDeltaFailureNotice, Object sessionOwner) {
             this.connection = connection;
             this.session = session;
-            this.catalogDeltaFailureNotice = Objects.requireNonNull(
-                    catalogDeltaFailureNotice, "catalogDeltaFailureNotice");
+            this.catalogDeltaFailureNotice =
+                Objects.requireNonNull(catalogDeltaFailureNotice, "catalogDeltaFailureNotice");
             this.sessionOwner = Objects.requireNonNull(sessionOwner, "sessionOwner");
         }
 
         private void startMissingServerNotice() {
-            missingServerNotice = new Thread(() -> {
-                try {
-                    Thread.sleep(60_000);
-                } catch (InterruptedException ignored) {
-                    return;
-                }
-                if (closed) {
-                    return;
-                }
-                Minecraft.getInstance().execute(() -> runIfCurrent(connection, () -> {
-                    var player = Minecraft.getInstance().player;
-                    if (player != null && player.connection.isAcceptingMessages()
+            missingServerNotice =
+                new Thread(ThreadScheduling.entry(ThreadRole.MISSING_SERVER_NOTICE, ThreadPolicy.BELOW_NORMAL, () -> {
+                    try {
+                        Thread.sleep(60_000);
+                    } catch (InterruptedException ignored) {
+                        return;
+                    }
+                    if (closed) {
+                        return;
+                    }
+                    Minecraft.getInstance().execute(() -> runIfCurrent(connection, () -> {
+                        var player = Minecraft.getInstance().player;
+                        if (player != null && player.connection.isAcceptingMessages()
                             && session.state() == ClientModelSession.State.LOCAL
                             && !NetworkHandler.isChannelPresent(connection)) {
-                        player.sendSystemMessage(Component.translatable(
-                                "message.yes_steve_model.client.server_not_found"));
-                    }
-                }));
-            }, "YSM Missing Server Notice");
+                            player.sendSystemMessage(
+                                Component.translatable("message.yes_steve_model.client.server_not_found"));
+                        }
+                    }));
+                }), "YSM Missing Server Notice");
             missingServerNotice.setDaemon(true);
             missingServerNotice.start();
         }
@@ -488,6 +544,10 @@ public final class ClientSessionRuntime {
         }
 
         private void closeCatalogOwners() {
+            if (previewRepair != null) {
+                previewRepair.close();
+                previewRepair = null;
+            }
             var transfer = assetTransfer;
             var owner = activation;
             var publication = collectionPublication;

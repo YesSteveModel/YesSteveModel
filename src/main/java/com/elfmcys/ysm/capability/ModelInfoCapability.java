@@ -19,15 +19,12 @@ public final class ModelInfoCapability {
     private boolean disabled;
     private boolean dirty;
     private final RoamingVariableStore roamingVariables = new RoamingVariableStore();
-    private ServerDrivenPlayerPropertiesTracker propertiesTracker =
-            new ServerDrivenPlayerPropertiesTracker();
+    private ServerDrivenPlayerPropertiesTracker propertiesTracker = new ServerDrivenPlayerPropertiesTracker();
 
     public void setModelAndTexture(Hash256 modelId, String selectTexture) {
-        var keepIgnoreGrants = modelId != null && Objects.equals(this.modelId, modelId)
-                && ignoreGrants;
-        if (Objects.equals(this.modelId, modelId)
-                && this.selectTexture.equals(selectTexture)
-                && ignoreGrants == keepIgnoreGrants) {
+        var keepIgnoreGrants = modelId != null && Objects.equals(this.modelId, modelId) && ignoreGrants;
+        if (Objects.equals(this.modelId, modelId) && this.selectTexture.equals(selectTexture)
+            && ignoreGrants == keepIgnoreGrants) {
             return;
         }
         this.modelId = modelId;
@@ -36,14 +33,11 @@ public final class ModelInfoCapability {
         markDirty();
     }
 
-    public void setCommandSelection(Hash256 modelId, String selectTexture,
-                                    boolean ignoreGrants) {
+    public void setCommandSelection(Hash256 modelId, String selectTexture, boolean ignoreGrants) {
         Objects.requireNonNull(modelId, "modelId");
         Objects.requireNonNull(selectTexture, "selectTexture");
-        if (modelId.equals(this.modelId)
-                && selectTexture.equals(this.selectTexture)
-                && mandatory
-                && this.ignoreGrants == ignoreGrants) {
+        if (modelId.equals(this.modelId) && selectTexture.equals(this.selectTexture) && mandatory
+            && this.ignoreGrants == ignoreGrants) {
             return;
         }
         this.modelId = modelId;
@@ -103,8 +97,7 @@ public final class ModelInfoCapability {
         propertiesTracker.setExtraAnimation(player, !dirty, "");
     }
 
-    public void executeWithMolangVars(
-            Consumer<Object2FloatOpenHashMap<String>> consumer) {
+    public void executeWithMolangVars(Consumer<Object2FloatOpenHashMap<String>> consumer) {
         roamingVariables.execute(modelId, consumer);
     }
 
@@ -112,20 +105,16 @@ public final class ModelInfoCapability {
         return roamingVariables.get(modelId);
     }
 
-    public void updateRoamingVars(ServerPlayer player, int modelKey,
-                                  Object2FloatMap<String> variables) {
+    public void updateRoamingVars(ServerPlayer player, int modelKey, Object2FloatMap<String> variables) {
         roamingVariables.update(modelKey, variables);
-        propertiesTracker.updateMolangVars(player, !dirty,
-                modelKey, variables);
+        propertiesTracker.updateMolangVars(player, !dirty, modelKey, variables);
     }
 
     public void applyClientAnimation(String animation) {
         propertiesTracker.acceptClientAnimation(animation);
     }
 
-    public void applyClientRoaming(int modelKey,
-                                   Object2FloatMap<String> variables,
-                                   boolean full) {
+    public void applyClientRoaming(int modelKey, Object2FloatMap<String> variables, boolean full) {
         if (full) {
             roamingVariables.replace(modelKey, variables);
         } else {

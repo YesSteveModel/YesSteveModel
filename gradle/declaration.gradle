@@ -1,0 +1,72 @@
+sourceSets {
+    processorTest {
+        java.setSrcDirs(['src/verification/processorTest/java'])
+        resources.setSrcDirs(['src/verification/processorTest/resources'])
+        compileClasspath += sourceSets.main.output.classesDirs + sourceSets.main.compileClasspath
+        runtimeClasspath += output + compileClasspath + files('src/main/resources')
+    }
+}
+
+configurations {
+    processorAsm {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+}
+
+// Applied scripts cannot resolve types from the root plugins block.
+def shadowJarType = plugins.getPlugin('com.gradleup.shadow').class.classLoader.loadClass(
+        'com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar')
+def relocateProcessorAsmTask = tasks.register('relocateProcessorAsm', shadowJarType) {
+    group = 'build setup'
+    description = 'Relocates the ASM implementation embedded for the annotation processor.'
+    configurations = [project.configurations.processorAsm]
+    archiveFileName = 'ysm-processor-asm.jar'
+    destinationDirectory = layout.buildDirectory.dir('processor-libs')
+    relocate 'org.objectweb.asm', 'com.elfmcys.ysm.api.internal.processor.asm'
+}
+
+def declarationProcessorJar = tasks.register('declarationProcessorJar', Jar) {
+    from sourceSets.declaration.output
+    archiveClassifier = 'declaration-processor'
+}
+def builtinDeclarationProcessor = files(declarationProcessorJar.flatMap { it.archiveFile })
+
+sourceSets.main.compileClasspath += sourceSets.declaration.output
+sourceSets.main.runtimeClasspath += sourceSets.declaration.output
+sourceSets.processorTest.compileClasspath += sourceSets.declaration.output
+sourceSets.processorTest.runtimeClasspath += sourceSets.declaration.output
+tasks.named('jar') {
+    from(sourceSets.declaration.output) {
+        exclude 'META-INF/services/javax.annotation.processing.Processor'
+    }
+}
+tasks.named('compileDeclarationJava', JavaCompile) { options.compilerArgs += ['-proc:none'] }
+
+tasks.named('compileJava', JavaCompile) {
+    dependsOn declarationProcessorJar
+    options.annotationProcessorPath =
+            configurations.annotationProcessor + builtinDeclarationProcessor
+}
+
+dependencies {
+    processorAsm 'org.ow2.asm:asm:9.7.1'
+    processorAsm 'org.ow2.asm:asm-tree:9.7.1'
+    compileOnly files(relocateProcessorAsmTask.flatMap { it.archiveFile })
+    processorTestImplementation files(relocateProcessorAsmTask.flatMap { it.archiveFile })
+    processorTestImplementation builtinDeclarationProcessor
+    processorTestImplementation platform('org.junit:junit-bom:5.11.4')
+    processorTestImplementation 'org.junit.jupiter:junit-jupiter'
+    processorTestImplementation 'com.google.code.gson:gson:2.10.1'
+}
+
+tasks.register('processorTest', Test) {
+    description = 'Runs the extension compatibility annotation processor tests.'
+    group = 'verification'
+    testClassesDirs = sourceSets.processorTest.output.classesDirs
+    classpath = sourceSets.processorTest.runtimeClasspath
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('processorTest')
+}

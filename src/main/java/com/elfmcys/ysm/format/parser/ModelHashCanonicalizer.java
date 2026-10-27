@@ -37,15 +37,15 @@ public class ModelHashCanonicalizer {
     public byte[] aggregate() {
         long size = Integer.BYTES;
         for (var entry : items.entrySet()) {
-            size = Math.addExact(size, Integer.BYTES + (long) entry.getKey().role.length);
-            size = Math.addExact(size, Integer.BYTES + (long) entry.getKey().path.length);
-            size = Math.addExact(size, Long.BYTES + (long) entry.getValue().length);
+            size = Math.addExact(size, Integer.BYTES + (long)entry.getKey().role.length);
+            size = Math.addExact(size, Integer.BYTES + (long)entry.getKey().path.length);
+            size = Math.addExact(size, Long.BYTES + (long)entry.getValue().length);
         }
         if (size > UniBuffer.MAX_SIZE) {
             throw new IllegalArgumentException("Canonical model source is too large");
         }
 
-        try (var encoded = ArrayBuffer.allocate((int) size)) {
+        try (var encoded = ArrayBuffer.allocate((int)size)) {
             var output = encoded.nio().order(ByteOrder.LITTLE_ENDIAN);
             output.putInt(items.size());
             for (var entry : items.entrySet()) {
@@ -73,7 +73,7 @@ public class ModelHashCanonicalizer {
     private static byte[] portablePath(String path) {
         Objects.requireNonNull(path, "portablePath");
         if (path.isEmpty() || path.startsWith("/") || path.indexOf('\\') >= 0 || path.indexOf('\0') >= 0
-                || isWindowsAbsolute(path)) {
+            || isWindowsAbsolute(path)) {
             throw new IllegalArgumentException("Invalid portable path: " + path);
         }
         for (var segment : path.split("/", -1)) {
@@ -86,8 +86,8 @@ public class ModelHashCanonicalizer {
     }
 
     private static boolean isWindowsAbsolute(String path) {
-        return path.length() >= 3 && Character.isLetter(path.charAt(0))
-                && path.charAt(1) == ':' && path.charAt(2) == '/';
+        return path.length() >= 3 && Character.isLetter(path.charAt(0)) && path.charAt(1) == ':'
+            && path.charAt(2) == '/';
     }
 
     private static void validateSurrogates(String value) {

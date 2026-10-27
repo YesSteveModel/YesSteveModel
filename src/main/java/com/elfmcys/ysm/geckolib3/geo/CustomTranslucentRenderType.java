@@ -10,7 +10,8 @@ import java.util.function.Function;
 
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public class CustomTranslucentRenderType extends RenderType {
-    private static final Function<ResourceLocation, CustomTranslucentRenderType> CUSTOM_TRANSLUCENT = Util.memoize(CustomTranslucentRenderType::new);
+    private static final Function<ResourceLocation, CustomTranslucentRenderType> CUSTOM_TRANSLUCENT =
+        Util.memoize(CustomTranslucentRenderType::new);
 
     private final boolean isOutline;
     private final Optional<RenderType> outline;
@@ -20,7 +21,8 @@ public class CustomTranslucentRenderType extends RenderType {
     }
 
     private CustomTranslucentRenderType(RenderType inner) {
-        super("entity_translucent_ysm", inner.format(), inner.mode(), inner.bufferSize(), inner.affectsCrumbling(), false, inner::setupRenderState, inner::clearRenderState);
+        super("entity_translucent_ysm", inner.format(), inner.mode(), inner.bufferSize(), inner.affectsCrumbling(),
+            false, inner::setupRenderState, inner::clearRenderState);
         this.isOutline = inner.isOutline();
         this.outline = inner.outline();
     }

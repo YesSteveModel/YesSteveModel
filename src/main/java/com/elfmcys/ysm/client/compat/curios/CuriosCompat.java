@@ -1,7 +1,5 @@
 package com.elfmcys.ysm.client.compat.curios;
 
-import com.elfmcys.ysm.geckolib3.core.molang.binding.ContextBinding;
-import com.elfmcys.ysm.molang.runtime.Function;
 import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.LivingEntity;
@@ -27,58 +25,37 @@ public class CuriosCompat {
     }
 
     public static boolean hasAnyItemEquipped(LivingEntity entity, String slotType, ReferenceOpenHashSet<Item> items) {
-        return INSTALLED && CuriosApi.getCuriosInventory(entity)
-                .map(handler -> handler)
-                .flatMap(inventory -> inventory.getStacksHandler(slotType))
-                .map(curiosHandler -> searchCuriosHandler(curiosHandler, itemStack -> items.isEmpty() || items.contains(itemStack.getItem())) != null)
-                .orElse(false);
+        return INSTALLED && CuriosApi.getCuriosInventory(entity).map(handler -> handler)
+            .flatMap(inventory -> inventory.getStacksHandler(slotType))
+            .map(curiosHandler -> searchCuriosHandler(curiosHandler,
+                itemStack -> items.isEmpty() || items.contains(itemStack.getItem())) != null)
+            .orElse(false);
     }
 
     public static boolean hasAnyItemEquippedWithAnyTag(LivingEntity entity, String slotType, List<TagKey<Item>> tags) {
-        return INSTALLED && CuriosApi.getCuriosInventory(entity)
-                .map(handler -> handler)
-                .flatMap(inventory -> inventory.getStacksHandler(slotType))
-                .map(curiosHandler -> searchCuriosHandler(curiosHandler, itemStack -> {
-                    for (var tagKey : tags) {
-                        if (itemStack.is(tagKey)) {
-                            return true;
-                        }
+        return INSTALLED && CuriosApi.getCuriosInventory(entity).map(handler -> handler)
+            .flatMap(inventory -> inventory.getStacksHandler(slotType))
+            .map(curiosHandler -> searchCuriosHandler(curiosHandler, itemStack -> {
+                for (var tagKey : tags) {
+                    if (itemStack.is(tagKey)) {
+                        return true;
                     }
-                    return false;
-                }) != null)
-                .orElse(false);
+                }
+                return false;
+            }) != null).orElse(false);
     }
 
     public static boolean hasAnyItemEquippedWithAllTag(LivingEntity entity, String slotType, List<TagKey<Item>> tags) {
-        return INSTALLED && CuriosApi.getCuriosInventory(entity)
-                .map(handler -> handler)
-                .flatMap(inventory -> inventory.getStacksHandler(slotType))
-                .map(curiosHandler -> searchCuriosHandler(curiosHandler, itemStack -> {
-                    for (var tagKey : tags) {
-                        if (!itemStack.is(tagKey)) {
-                            return false;
-                        }
+        return INSTALLED && CuriosApi.getCuriosInventory(entity).map(handler -> handler)
+            .flatMap(inventory -> inventory.getStacksHandler(slotType))
+            .map(curiosHandler -> searchCuriosHandler(curiosHandler, itemStack -> {
+                for (var tagKey : tags) {
+                    if (!itemStack.is(tagKey)) {
+                        return false;
                     }
-                    return true;
-                }) != null)
-                .orElse(false);
+                }
+                return true;
+            }) != null).orElse(false);
     }
 
-    public static void addMolangBinding(ContextBinding binding) {
-        if (INSTALLED) {
-            CuriosCompatInner.addMolangBinding(binding);
-        } else {
-            addMolangBindingPlaceholder(binding);
-        }
-    }
-
-    private static void addMolangBindingPlaceholder(ContextBinding binding) {
-        binding.function("has_any_curios", Function.PLACE_HOLDER);
-        binding.function("has_any_curios_with_all_tags", Function.PLACE_HOLDER);
-        binding.function("has_any_curios_with_any_tag", Function.PLACE_HOLDER);
-        binding.livingEntityVar("dump_curios", ctx -> {
-            ctx.debugPrint("Curios not installed.");
-            return null;
-        });
-    }
 }

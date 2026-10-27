@@ -22,8 +22,7 @@ public final class AuthCommand {
     private static final String TARGETS = "targets";
     private static final String MODEL_PATH = "model_path";
 
-    private AuthCommand() {
-    }
+    private AuthCommand() {}
 
     public static LiteralArgumentBuilder<CommandSourceStack> get() {
         var auth = Commands.literal("auth").requires(source -> CommandUtil.hasPermission(source, 2));
@@ -31,17 +30,16 @@ public final class AuthCommand {
         var path = Commands.argument(MODEL_PATH, StringArgumentType.string()).suggests(CommandRegistry.ALL_MODELS);
         auth.then(targets.then(Commands.literal("add").then(path.executes(context -> change(context, true)))));
         auth.then(Commands.argument(TARGETS, EntityArgument.players())
-                .then(Commands.literal("remove").then(Commands.argument(MODEL_PATH, StringArgumentType.string())
-                        .suggests(CommandRegistry.ALL_MODELS).executes(context -> change(context, false)))));
+            .then(Commands.literal("remove").then(Commands.argument(MODEL_PATH, StringArgumentType.string())
+                .suggests(CommandRegistry.ALL_MODELS).executes(context -> change(context, false)))));
         auth.then(Commands.argument(TARGETS, EntityArgument.players())
-                .then(Commands.literal("all").executes(AuthCommand::all)));
+            .then(Commands.literal("all").executes(AuthCommand::all)));
         auth.then(Commands.argument(TARGETS, EntityArgument.players())
-                .then(Commands.literal("clear").executes(AuthCommand::clear)));
+            .then(Commands.literal("clear").executes(AuthCommand::clear)));
         return auth;
     }
 
-    private static int change(CommandContext<CommandSourceStack> context, boolean add)
-            throws CommandSyntaxException {
+    private static int change(CommandContext<CommandSourceStack> context, boolean add) throws CommandSyntaxException {
         var path = StringArgumentType.getString(context, MODEL_PATH);
         var snapshot = ServerModelService.instance().catalog().orElseThrow();
         var model = snapshot.findPath(path);
@@ -57,8 +55,7 @@ public final class AuthCommand {
                 } else {
                     capability.removeModel(hash);
                     player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(selection -> {
-                        if (hash.equals(selection.getModelId())
-                                && !selection.ignoresGrantsFor(hash)) {
+                        if (hash.equals(selection.getModelId()) && !selection.ignoresGrantsFor(hash)) {
                             ModelSelectionService.selectDefault(selection, snapshot);
                         }
                     });
@@ -88,10 +85,8 @@ public final class AuthCommand {
                 player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(selection -> {
                     var selected = selection.getModelId();
                     if (selected != null && snapshot.find(selected)
-                            .map(handle -> handle.location().rootKind().accessPolicy()
-                                    == AccessPolicy.SESSION_AUTHORIZED)
-                            .orElse(false)
-                            && !selection.ignoresGrantsFor(selected)) {
+                        .map(handle -> handle.location().rootKind().accessPolicy() == AccessPolicy.SESSION_AUTHORIZED)
+                        .orElse(false) && !selection.ignoresGrantsFor(selected)) {
                         ModelSelectionService.selectDefault(selection, snapshot);
                     }
                 });

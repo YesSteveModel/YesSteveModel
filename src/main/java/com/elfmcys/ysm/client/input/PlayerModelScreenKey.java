@@ -21,12 +21,9 @@ import org.lwjgl.glfw.GLFW;
 
 @Mod.EventBusSubscriber(value = Dist.CLIENT)
 public class PlayerModelScreenKey {
-    public static final KeyMapping PLAYER_MODEL_KEY = new KeyMapping("key.yes_steve_model.player_model.desc",
-            KeyConflictContext.IN_GAME,
-            KeyModifier.ALT,
-            InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_Y,
-            "key.category.yes_steve_model");
+    public static final KeyMapping PLAYER_MODEL_KEY =
+        new KeyMapping("key.yes_steve_model.player_model.desc", KeyConflictContext.IN_GAME, KeyModifier.ALT,
+            InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_Y, "key.category.yes_steve_model");
 
     @SubscribeEvent
     public static void onKeyboardInput(InputEvent.Key event) {

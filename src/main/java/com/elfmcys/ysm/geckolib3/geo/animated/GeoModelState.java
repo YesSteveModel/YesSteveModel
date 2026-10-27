@@ -14,7 +14,6 @@ import org.joml.Matrix4f;
 
 import java.util.function.Consumer;
 
-
 public final class GeoModelState implements Closeable {
     private final NativeModelState nativeState = NativeModelState.create();
     private final ReferenceArrayList<ShortArrayList> activeLocatorMap = new ReferenceArrayList<>(0);
@@ -23,47 +22,52 @@ public final class GeoModelState implements Closeable {
 
     public boolean extract(AnimatedGeoModel animatedModel) {
         invalidate();
-        var model = animatedModel.getModel();
-        var boneCount = model.sortedBones().size();
-        var activeLocatorMap = this.activeLocatorMap;
+        try {
+            var model = animatedModel.getModel();
+            var boneCount = model.sortedBones().size();
+            var activeLocatorMap = this.activeLocatorMap;
 
-        var valid = nativeState.extract(model.bakedModel(),
-                animatedModel.getBoneAttributes());
-        if (!valid) {
-            return false;
-        }
-
-        var locatorSlotCount = model.locatorType().size();
-        if (activeLocatorMap.size() != locatorSlotCount) {
-            var oldSize = activeLocatorMap.size();
-            activeLocatorMap.size(locatorSlotCount);
-            for (var i = oldSize; i < locatorSlotCount; i++) {
-                activeLocatorMap.set(i, new ExposedShortArrayList(2));
-            }
-        }
-        for(var list : activeLocatorMap) {
-            list.clear();
-        }
-
-        var sortedBones = model.sortedBones();
-        var activeLocators = nativeState.getLocatorBoneIndices();
-        for (var i = 0; i < activeLocators.size(); i++) {
-            var boneIndex = Short.toUnsignedInt(activeLocators.getShort(i));
-            if (boneIndex >= boneCount) {
+            var valid = nativeState.extract(model.bakedModel(), animatedModel.getBoneAttributes());
+            if (!valid) {
                 return false;
             }
-            var locatorType = sortedBones.get(boneIndex).locatorType();
-            if (locatorType != null) {
-                activeLocatorMap.get(Byte.toUnsignedInt(locatorType.seq()) - 1).add((short) boneIndex);
+
+            var locatorSlotCount = model.locatorType().size();
+            if (activeLocatorMap.size() != locatorSlotCount) {
+                var oldSize = activeLocatorMap.size();
+                activeLocatorMap.size(locatorSlotCount);
+                for (var i = oldSize; i < locatorSlotCount; i++) {
+                    activeLocatorMap.set(i, new ExposedShortArrayList(2));
+                }
+            }
+            for (var list : activeLocatorMap) {
+                list.clear();
+            }
+
+            var sortedBones = model.sortedBones();
+            var activeLocators = nativeState.getLocatorBoneIndices();
+            for (var i = 0; i < activeLocators.size(); i++) {
+                var boneIndex = Short.toUnsignedInt(activeLocators.getShort(i));
+                if (boneIndex >= boneCount) {
+                    return false;
+                }
+                var locatorType = sortedBones.get(boneIndex).locatorType();
+                if (locatorType != null) {
+                    activeLocatorMap.get(Byte.toUnsignedInt(locatorType.seq()) - 1).add((short)boneIndex);
+                }
+            }
+
+            this.model = model;
+            return true;
+        } finally {
+            if (this.model == null) {
+                nativeState.invalidate();
             }
         }
-
-        this.model = model;
-        return true;
     }
 
     public boolean isValid() {
-        return nativeState.isValid();
+        return model != null && nativeState.isValid();
     }
 
     public int getVertexCount() {
@@ -78,8 +82,8 @@ public final class GeoModelState implements Closeable {
         return nativeState;
     }
 
-    public void visitLocatorGroupOrDefault(GeoLocator locator, PoseStack poseStack,
-                                           Consumer<PoseStack> visitor, Consumer<PoseStack> applyDefaultPose) {
+    public void visitLocatorGroupOrDefault(GeoLocator locator, PoseStack poseStack, Consumer<PoseStack> visitor,
+        Consumer<PoseStack> applyDefaultPose) {
         if (locatorGroupSize(locator) > 0) {
             visitLocatorGroup(locator, poseStack, visitor);
         } else {
@@ -93,8 +97,7 @@ public final class GeoModelState implements Closeable {
         }
     }
 
-    public void visitLocatorGroup(GeoLocator locator, PoseStack poseStack,
-                                  Consumer<PoseStack> visitor) {
+    public void visitLocatorGroup(GeoLocator locator, PoseStack poseStack, Consumer<PoseStack> visitor) {
         if (model.locatorType() != locator.type()) {
             throw new IllegalArgumentException("locator type mismatch");
         }
@@ -131,7 +134,7 @@ public final class GeoModelState implements Closeable {
         if (model.locatorType() != locator.type()) {
             throw new IllegalArgumentException("locator type mismatch");
         }
-        return activeLocatorMap.get(Byte.toUnsignedInt(locator.seq())).size();
+        return activeLocatorMap.get(Byte.toUnsignedInt(locator.seq()) - 1).size();
     }
 
     private void invalidate() {

@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2020.
- * Author: Bernie G. (Gecko)
+ * Copyright (c) 2020. Author: Bernie G. (Gecko)
  */
 
 package com.elfmcys.ysm.geckolib3.util;
@@ -24,6 +23,6 @@ public class AnimationUtils {
      */
     public static <T extends Entity> EntityRenderer<T> getRenderer(T entity) {
         EntityRenderDispatcher renderManager = Minecraft.getInstance().getEntityRenderDispatcher();
-        return (EntityRenderer<T>) renderManager.getRenderer(entity);
+        return (EntityRenderer<T>)renderManager.getRenderer(entity);
     }
 }

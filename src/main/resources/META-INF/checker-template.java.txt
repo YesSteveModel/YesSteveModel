@@ -1,5 +1,5 @@
 {{PACKAGE}}
-@javax.annotation.processing.Generated("com.elfmcys.ysm.api.internal.processor.YsmExtensionProcessor")
+@javax.annotation.processing.Generated("com.elfmcys.ysm.api.internal.processor.ExtensionCompatibilityProcessor")
 public final class {{CHECKER}} {
     private static final String MANIFEST_RESOURCE = "{{RESOURCE}}";
     private static final int MANIFEST_VERSION = 1;

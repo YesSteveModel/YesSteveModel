@@ -1,17 +1,14 @@
 package com.elfmcys.ysm.client.animation.predicate;
 
 import com.elfmcys.ysm.client.animation.condition.ConditionManager;
-import com.elfmcys.ysm.client.animation.condition.ConditionalChair;
 import com.elfmcys.ysm.client.animation.condition.ConditionalVehicle;
 import com.elfmcys.ysm.client.compat.carryon.CarryOnCompat;
 import com.elfmcys.ysm.client.compat.swem.SwemCompat;
-import com.elfmcys.ysm.client.compat.touhoulittlemaid.client.TlmClientCompat;
 import com.elfmcys.ysm.client.entity.CustomHumanoidEntity;
 import com.elfmcys.ysm.client.entity.IPreviewEntity;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.builder.LoopType;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Saddleable;
@@ -27,7 +24,7 @@ import static com.elfmcys.ysm.client.animation.predicate.IAnimationPredicate.pla
 
 public class VehiclePredicate implements IAnimationPredicate<CustomHumanoidEntity<?>> {
     @Override
-    public PlayState test(AnimationEvent<CustomHumanoidEntity<?>> event, ExpressionEvaluator<?> evaluator) {
+    public PlayState test(AnimationEvent<CustomHumanoidEntity<?>> event) {
         PlayState vehicleAnimation = getVehicleAnimation(event);
         return Objects.requireNonNullElse(vehicleAnimation, PlayState.STOP);
     }
@@ -48,19 +45,7 @@ public class VehiclePredicate implements IAnimationPredicate<CustomHumanoidEntit
             return playAnimation(event, swemAnimation, LoopType.LOOP);
         }
 
-        // 优先判断 chair
         ConditionManager conditionManager = event.getAnimatableEntity().getConditionManager();
-        if (TlmClientCompat.isInstalled()) {
-            ConditionalChair conditionalChair = conditionManager.getChair();
-            if (conditionalChair != null) {
-                String name = conditionalChair.doTest(entity);
-                if (StringUtils.isNoneBlank(name)) {
-                    return playAnimation(event, name, LoopType.LOOP);
-                }
-            }
-        }
-
-        // 然后才是普通载具
         ConditionalVehicle vehicleCondition = conditionManager.getVehicle();
         if (vehicleCondition != null) {
             String name = vehicleCondition.doTest(entity);
@@ -82,15 +67,8 @@ public class VehiclePredicate implements IAnimationPredicate<CustomHumanoidEntit
 
         // carry on 兼容
         boolean playerIsOnPrincess = entity instanceof Player player && CarryOnCompat.isCarryOnPrincess(player);
-        boolean maidIsOnPrincess = TlmClientCompat.isMaid(entity) && entity.getVehicle() instanceof Player;
-        if (playerIsOnPrincess || maidIsOnPrincess) {
+        if (playerIsOnPrincess) {
             return playAnimation(event, "carryon:princess", LoopType.LOOP);
-        }
-
-        // 安装女仆模组后，那么需要兼容几个女仆的内容
-        PlayState playState = TlmClientCompat.getMaidVehicleAnimation(event, entity, vehicle);
-        if (playState != null) {
-            return playState;
         }
 
         return playAnimation(event, "sit", LoopType.LOOP);

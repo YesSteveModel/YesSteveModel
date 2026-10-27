@@ -5,15 +5,9 @@ import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import java.util.Map;
 import java.util.Objects;
 
-public record ModelPackDescriptor(
-        CatalogRootKind rootKind,
-        String hierarchy,
-        String name,
-        String description,
-        Map<String, LocalizedText> translations,
-        Hash256 coverHash,
-        String coverFormat,
-        int coverSize) implements Comparable<ModelPackDescriptor> {
+public record ModelPackDescriptor(CatalogRootKind rootKind, String hierarchy, String name, String description,
+    Map<String, LocalizedText> translations, Hash256 coverHash, String coverFormat,
+    int coverSize) implements Comparable<ModelPackDescriptor> {
 
     public ModelPackDescriptor {
         Objects.requireNonNull(rootKind, "rootKind");
@@ -29,16 +23,11 @@ public record ModelPackDescriptor(
 
     @Override
     public int compareTo(ModelPackDescriptor other) {
-        var byOrigin = rootKind.compareTo(other.rootKind);
-        return byOrigin != 0 ? byOrigin : hierarchy.compareTo(other.hierarchy);
+        return com.elfmcys.ysm.model.catalog.source.CatalogLocation.compareUtf8(hierarchy, other.hierarchy);
     }
 
     private static String normalizeHierarchy(String hierarchy) {
-        if (hierarchy == null || hierarchy.isBlank()) {
-            return "";
-        }
-        var path = new ModelPath(hierarchy).value();
-        return path + "/";
+        return com.elfmcys.ysm.model.catalog.source.CatalogLocation.directory(hierarchy).value();
     }
 
     public record LocalizedText(String name, String description) {

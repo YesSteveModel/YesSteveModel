@@ -1,0 +1,64 @@
+def abiSource = layout.projectDirectory.file('src/declaration/java/com/elfmcys/ysm/compatibility/AbiVersion.java')
+def readAbi = { String field ->
+    def match = abiSource.asFile.getText('UTF-8') =~ /public static final String ${field} = "([^"]+)";/
+    if (!match.find()) throw new GradleException("Missing ABI definition: ${field}")
+    match.group(1)
+}
+
+tasks.register('verifyNativeAbiDefinitions') {
+    group = 'verification'
+    def nativeHeader = layout.projectDirectory.file('../ysm-ng/modules/lib-jni/src/runtime/abi_version.h')
+    inputs.file(abiSource)
+    inputs.file(nativeHeader)
+    doLast {
+        def match = nativeHeader.asFile.getText('UTF-8') =~ /kNativeAbi = "([^"]+)"/
+        if (!match.find() || match.group(1) != readAbi('NATIVE'))
+            throw new GradleException('Java/native ABI definitions differ')
+    }
+}
+
+tasks.register('buildExpressionRuntime', Exec) {
+    group = 'build setup'
+    description = 'Builds the expression runtime with the animation ABI and installs the bundled jars.'
+    workingDir '../Semaweave'
+    doFirst {
+        def args = [':semaweave-engine:jar', ':semaweave-backend-janino:jar',
+                    "-PartifactAbi=${readAbi('CACHE_ANIMATION')}", '--console=plain']
+        commandLine(System.getProperty('os.name').startsWith('Windows')
+                ? ['cmd', '/c', 'gradlew.bat'] + args : ['./gradlew'] + args)
+    }
+    doLast {
+        ysmBundledExpressionLibraries.findAll { coordinate, target -> coordinate.startsWith('dev.semaweave:') }.each { coordinate, target ->
+            def module = coordinate.split(':')[1]
+            def artifact = file("../Semaweave/${module}/build/libs/${target.name}")
+            if (!artifact.isFile()) throw new GradleException("Missing expression runtime artifact: ${artifact}")
+            copy {
+                from artifact
+                into target.parentFile
+            }
+        }
+    }
+}
+
+tasks.register('verifyBundledExpressionAbi') {
+    group = 'verification'
+    inputs.file(abiSource)
+    inputs.files(provider { ysmBundledExpressionLibraries.findAll { key, value -> key.startsWith('dev.semaweave:') }.values() })
+    doLast { task ->
+        def receipts = []
+        task.inputs.files.files.findAll { it.name.endsWith('.jar') }.each { library ->
+            new java.util.jar.JarFile(library).withCloseable { jar ->
+                def entry = jar.getJarEntry('META-INF/semaweave/build-receipt.properties')
+                def receipt = new Properties()
+                if (entry != null) jar.getInputStream(entry).withCloseable { receipt.load(it) }
+                if (receipt.getProperty('artifact-abi') != readAbi('CACHE_ANIMATION'))
+                    throw new GradleException("Bundled expression ABI mismatch: ${library.name}; run buildExpressionRuntime")
+                receipts.add(receipt)
+            }
+        }
+        if (receipts.size() != 2 || receipts[0] != receipts[1])
+            throw new GradleException('Engine/backend source receipts do not identify one build input')
+    }
+}
+
+tasks.named('compileJava') { dependsOn tasks.named('verifyBundledExpressionAbi') }

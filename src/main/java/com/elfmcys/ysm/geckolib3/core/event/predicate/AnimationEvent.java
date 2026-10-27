@@ -1,28 +1,27 @@
 package com.elfmcys.ysm.geckolib3.core.event.predicate;
 
 import com.elfmcys.ysm.geckolib3.core.controller.CodedAnimationController;
-import com.elfmcys.ysm.geckolib3.core.molang.context.DebugSource;
+import com.elfmcys.ysm.client.animation.debug.DebugSource;
 import com.elfmcys.ysm.geckolib3.geo.RenderContext;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.geckolib3.model.provider.data.EntityModelData;
 import org.jetbrains.annotations.NotNull;
 
+/** Components borrow this event read-only between beginEval and endEval; controller selection can change inside it. */
 public class AnimationEvent<T extends AnimatableEntity<?>> {
     private final T animatable;
     private final int entityTickCount;
     private final float requestedPartialTick;
     private final float partialTick;
     private final RenderContext renderContext;
+    /** The owner sets monotonic sample time before any component borrows the event. */
     public float renderTicks;
     private final EntityModelData extraData;
     private final DebugSource debugSource;
     protected CodedAnimationController<T> codedController;
 
-    public AnimationEvent(T animatable,
-                          int entityTickCount, float requestedPartialTick, float partialTick,
-                          RenderContext renderContext,
-                          @NotNull EntityModelData extraData,
-                          DebugSource debugSource) {
+    public AnimationEvent(T animatable, int entityTickCount, float requestedPartialTick, float partialTick,
+        RenderContext renderContext, @NotNull EntityModelData extraData, DebugSource debugSource) {
         this.animatable = animatable;
         this.entityTickCount = entityTickCount;
         this.requestedPartialTick = requestedPartialTick;

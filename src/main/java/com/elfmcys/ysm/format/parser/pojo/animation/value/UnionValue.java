@@ -29,25 +29,27 @@ public class UnionValue {
     }
 
     public enum ValueType {
-        NONE,
-        FLOAT,
-        STRING
+        NONE, FLOAT, STRING
+    }
+
+    public static UnionValue fromJson(JsonElement json) {
+        if (json != null && json.isJsonPrimitive()) {
+            var primitive = json.getAsJsonPrimitive();
+            if (primitive.isNumber()) {
+                return UnionValue.of(primitive.getAsFloat());
+            }
+            if (primitive.isString()) {
+                return UnionValue.of(primitive.getAsString());
+            }
+        }
+        throw new JsonParseException("Invalid union value: " + (json == null ? "null" : json));
     }
 
     public static final class Adapter implements JsonDeserializer<UnionValue> {
         @Override
         public UnionValue deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
-                throws JsonParseException {
-            if (json != null && json.isJsonPrimitive()) {
-                var primitive = json.getAsJsonPrimitive();
-                if (primitive.isNumber()) {
-                    return UnionValue.of(primitive.getAsFloat());
-                }
-                if (primitive.isString()) {
-                    return UnionValue.of(primitive.getAsString());
-                }
-            }
-            throw new JsonParseException("Invalid union value: " + (json == null ? "null" : json));
+            throws JsonParseException {
+            return fromJson(json);
         }
     }
 }

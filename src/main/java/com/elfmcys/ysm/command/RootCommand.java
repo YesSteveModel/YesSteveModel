@@ -18,6 +18,7 @@ public class RootCommand {
         root.then(ModelCommand.get());
         root.then(AuthCommand.get());
         root.then(ExportCommand.get());
+        root.then(ExportCommand.getAll());
         root.then(PlayAnimationCommand.get());
         root.then(MolangCommand.get());
         root.then(PingCommand.get());

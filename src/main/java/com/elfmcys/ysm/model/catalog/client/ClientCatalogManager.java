@@ -31,7 +31,8 @@ public final class ClientCatalogManager implements AutoCloseable {
     private volatile ClientCatalogSnapshot catalog;
     private volatile LocalCatalogState local;
     private boolean sessionPublished;
-    private volatile Consumer<CatalogChange> listener = ignored -> { };
+    private volatile Consumer<CatalogChange> listener = ignored -> {
+    };
 
     public ClientCatalogManager(ReloadableModelCatalog owner) {
         this.owner = Objects.requireNonNull(owner, "owner");
@@ -53,6 +54,10 @@ public final class ClientCatalogManager implements AutoCloseable {
         return catalog;
     }
 
+    public com.elfmcys.ysm.model.catalog.CatalogScanProgress scanProgress() {
+        return owner.scanProgress();
+    }
+
     public LocalCatalogState localState() {
         return local;
     }
@@ -61,17 +66,14 @@ public final class ClientCatalogManager implements AutoCloseable {
         return catalog.catalog().byModelId().containsKey(modelId);
     }
 
-    public Optional<String> findRenderTarget(Hash256 modelId,
-                                             RenderTargetKind kind,
-                                             ResourceLocation entityType) {
+    public Optional<String> findRenderTarget(Hash256 modelId, RenderTargetKind kind, ResourceLocation entityType) {
         var entry = catalog.find(modelId).orElse(null);
         if (entry == null) {
             return Optional.empty();
         }
         for (var target : entry.displayRepresentation().view().getRenderTargets()) {
-            if (target.kind() == kind && !target.getTextureNames().isEmpty() && ModelIdUtil
-                    .getEntityIdMatch(target.matches().toArray(String[]::new))
-                    .contains(entityType)) {
+            if (target.kind() == kind && !target.getTextureNames().isEmpty()
+                && ModelIdUtil.getEntityIdMatch(target.matches().toArray(String[]::new)).contains(entityType)) {
                 return Optional.of(target.id());
             }
         }
@@ -79,22 +81,12 @@ public final class ClientCatalogManager implements AutoCloseable {
     }
 
     public Optional<Hash256> resolvePath(String path) {
-        Hash256 found = null;
-        for (var entry : catalog.catalog().byLocation().entrySet()) {
-            if (!entry.getKey().path().value().equals(path)) {
-                continue;
-            }
-            if (found != null) {
-                return Optional.empty();
-            }
-            found = entry.getValue();
-        }
-        return Optional.ofNullable(found);
+        return com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver.resolve(path, catalog.catalog().byLocation())
+            .found();
     }
 
     public String displayPath(Hash256 modelId) {
-        return catalog.find(modelId).map(ClientCatalogEntry::displayPath)
-                .orElse(modelId.toString());
+        return catalog.find(modelId).map(ClientCatalogEntry::displayPath).orElse(modelId.toString());
     }
 
     public synchronized CatalogSnapshot beginRemote() {
@@ -106,12 +98,10 @@ public final class ClientCatalogManager implements AutoCloseable {
         return active;
     }
 
-    public static CatalogChange remoteStartTransition(
-            ClientCatalogSnapshot previous, CatalogSnapshot localSnapshot) {
+    public static CatalogChange remoteStartTransition(ClientCatalogSnapshot previous, CatalogSnapshot localSnapshot) {
         Objects.requireNonNull(previous, "previous");
         Objects.requireNonNull(localSnapshot, "localSnapshot");
-        return new CatalogChange(previous,
-                new ClientCatalogSnapshot(localSnapshot.intrinsicDefaultOnly()));
+        return new CatalogChange(previous, new ClientCatalogSnapshot(localSnapshot.intrinsicDefaultOnly()));
     }
 
     public CatalogIndexSnapshot localIndex() {
@@ -120,12 +110,11 @@ public final class ClientCatalogManager implements AutoCloseable {
 
     public synchronized void publishSession(ActivationSnapshot activation) {
         var previous = catalog;
-        var failed = activation.failures().stream().map(value ->
-                new ClientFailedCatalogEntry(value.publication().modelId(),
-                        value.publication().path(), value.publication().access(),
-                        value.failure().message())).toList();
-        catalog = new ClientCatalogSnapshot(activation.readyCatalog()
-                .withIntrinsicDefaultFrom(local.snapshot()), failed);
+        var failed =
+            activation.failures().stream().map(value -> new ClientFailedCatalogEntry(value.publication().modelId(),
+                value.publication().path(), value.publication().access(), value.failure().message())).toList();
+        catalog = new ClientCatalogSnapshot(activation.readyCatalog().withIntrinsicDefaultFrom(local.snapshot()),
+            failed, activation.publication());
         sessionPublished = true;
         notifyListener(new CatalogChange(previous, catalog));
     }
@@ -160,8 +149,7 @@ public final class ClientCatalogManager implements AutoCloseable {
         try {
             listener.accept(change);
         } catch (Throwable failure) {
-            YesSteveModel.LOGGER.error(
-                    "Client catalog observer failed after publication", failure);
+            YesSteveModel.LOGGER.error("Client catalog observer failed after publication", failure);
         }
     }
 
@@ -178,8 +166,8 @@ public final class ClientCatalogManager implements AutoCloseable {
 
         public Map<Hash256, ManagedContainer> models() {
             var result = new LinkedHashMap<Hash256, ManagedContainer>();
-            snapshot.byModelId().forEach((modelId, record) -> result.put(
-                    modelId, (ManagedContainer) record.binding().content()));
+            snapshot.byModelId()
+                .forEach((modelId, record) -> result.put(modelId, (ManagedContainer)record.binding().content()));
             return Map.copyOf(result);
         }
 
@@ -188,7 +176,6 @@ public final class ClientCatalogManager implements AutoCloseable {
         }
     }
 
-    public record CatalogChange(ClientCatalogSnapshot previous,
-                                ClientCatalogSnapshot current) {
+    public record CatalogChange(ClientCatalogSnapshot previous, ClientCatalogSnapshot current) {
     }
 }

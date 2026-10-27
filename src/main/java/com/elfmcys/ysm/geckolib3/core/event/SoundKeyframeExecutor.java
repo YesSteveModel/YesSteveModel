@@ -1,13 +1,13 @@
 /*
- * Copyright (c) 2020.
- * Author: Bernie G. (Gecko)
+ * Copyright (c) 2020. Author: Bernie G. (Gecko)
  */
 
 package com.elfmcys.ysm.geckolib3.core.event;
 
 import com.elfmcys.ysm.client.sound.instance.SoundInstanceManager;
+import com.elfmcys.ysm.expression.host.ModelSoundId;
 import com.elfmcys.ysm.geckolib3.core.keyframe.event.EventKeyFrame;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import net.minecraft.util.StringUtil;
 
 import java.util.List;
@@ -30,7 +30,7 @@ public class SoundKeyframeExecutor {
             }
             nextIndex++;
             if (allowEmitting && !StringUtil.isNullOrEmpty(keyFrame.getEventData())) {
-                soundManager.playSound(animatable, 0, keyFrame.getEventData(), false, null);
+                soundManager.playSound(animatable, ModelSoundId.numeric(0), keyFrame.getEventData(), false, null);
             }
         }
     }

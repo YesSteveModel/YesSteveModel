@@ -20,7 +20,7 @@ public class PlayerAnimatorCompat {
     public static boolean hasThirdPersonModelAnim(AbstractClientPlayer player) {
         if (INSTALLED) {
             var stack = PlayerAnimationAccess.getPlayerAnimLayer(player);
-            return stack.getFirstPersonMode(0) == FirstPersonMode.THIRD_PERSON_MODEL;   // 最好整个 tick 期间都藏起来
+            return stack.getFirstPersonMode(0) == FirstPersonMode.THIRD_PERSON_MODEL; // 最好整个 tick 期间都藏起来
         }
         return false;
     }

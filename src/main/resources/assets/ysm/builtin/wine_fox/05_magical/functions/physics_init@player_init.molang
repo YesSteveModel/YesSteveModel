@@ -1,0 +1,19 @@
+// Preserve zero-state startup even when the first forcing input is nonzero.
+v.s=72;
+v.f=1;
+ysm.second_order('winefox_05_magical_l1_p0',0,0.6,0.8,0);
+ysm.second_order('winefox_05_magical_l2_p0',0,2,0.6,0);
+ysm.second_order('winefox_05_magical_l3_p0',0,2,0.6,0);
+ysm.second_order('winefox_05_magical_l4_p0',0,0.6,0.8,0);
+ysm.second_order('winefox_05_magical_l6_p0',0,1.2,0.8,0);
+ysm.second_order('winefox_05_magical_l6_p00',0,1.2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p01y',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p01z',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p02y',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p02z',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p03y',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p03z',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p04y',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p04z',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p05y',0,2,0.8,0);
+ysm.second_order('winefox_05_magical_l13_p06z',0,2,0.8,0);

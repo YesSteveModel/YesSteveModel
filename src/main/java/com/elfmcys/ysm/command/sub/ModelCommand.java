@@ -28,45 +28,51 @@ public final class ModelCommand {
     private static final String TEXTURE = "texture";
     private static final String IGNORE_AUTH = "ignore_auth";
 
-    private ModelCommand() {
-    }
+    private ModelCommand() {}
 
     public static LiteralArgumentBuilder<CommandSourceStack> get() {
         var model = Commands.literal("model").requires(source -> CommandUtil.hasPermission(source, 2));
         model.then(Commands.literal("reload").executes(ModelCommand::reload));
         model.then(Commands.literal("errors").executes(ModelCommand::errors));
-        model.then(Commands.literal("disable")
-                .then(Commands.argument(TARGETS, EntityArgument.players())
-                        .then(Commands.argument("value", BoolArgumentType.bool()).executes(ModelCommand::disable))));
-        var set = Commands.literal("set")
-                .then(Commands.argument(TARGETS, EntityArgument.players())
-                        .then(Commands.argument(MODEL_PATH, StringArgumentType.string())
-                                .suggests(CommandRegistry.ALL_MODELS)
-                                .then(Commands.argument(TEXTURE, StringArgumentType.string())
-                                        .suggests(CommandRegistry.ALL_TEXTURES)
-                                        .executes(context -> set(context, false))
-                                        .then(Commands.argument(IGNORE_AUTH, BoolArgumentType.bool())
-                                                .executes(context -> set(context,
-                                                        BoolArgumentType.getBool(context, IGNORE_AUTH)))))));
+        model.then(Commands.literal("gen-preview").requires(source -> source.hasPermission(2))
+            .executes(ModelCommand::genPreview));
+        model.then(Commands.literal("disable").then(Commands.argument(TARGETS, EntityArgument.players())
+            .then(Commands.argument("value", BoolArgumentType.bool()).executes(ModelCommand::disable))));
+        var set = Commands.literal("set").then(Commands.argument(TARGETS, EntityArgument.players()).then(Commands
+            .argument(MODEL_PATH, StringArgumentType.string()).suggests(CommandRegistry.ALL_MODELS)
+            .then(Commands.argument(TEXTURE, StringArgumentType.string()).suggests(CommandRegistry.ALL_TEXTURES)
+                .executes(context -> set(context, false)).then(Commands.argument(IGNORE_AUTH, BoolArgumentType.bool())
+                    .executes(context -> set(context, BoolArgumentType.getBool(context, IGNORE_AUTH)))))));
         model.then(set);
         return model;
     }
 
+    private static int genPreview(CommandContext<CommandSourceStack> context) {
+        var source = context.getSource();
+        if (!source.hasPermission(2) || !(source.getEntity() instanceof ServerPlayer player)
+            || !ServerModelService.instance().startGenPreview(player)) {
+            source.sendFailure(Component.translatable("message.yes_steve_model.gen_preview.no_client"));
+            return 0;
+        }
+        return Command.SINGLE_SUCCESS;
+    }
+
     private static int set(CommandContext<CommandSourceStack> context, boolean ignoreAuth)
-            throws CommandSyntaxException {
+        throws CommandSyntaxException {
         var path = StringArgumentType.getString(context, MODEL_PATH);
         var catalog = ServerModelService.instance().catalog().orElseThrow();
-        var model = catalog.findPath(path);
+        var resolution = catalog.resolvePath(path);
+        var model = resolution.found().flatMap(catalog::find);
         if (model.isEmpty()) {
-            context.getSource().sendFailure(Component.literal("Unknown or ambiguous model path: " + path));
+            context.getSource().sendFailure(Component.literal(resolution.message()));
             return 0;
         }
         var handle = model.get();
         var texture = StringArgumentType.getString(context, TEXTURE);
         if ("-".equals(texture)) {
             var requested = handle.view().getMetadata().getSettings().defaultTexture().orElse("");
-            texture = handle.view().getPlayer().getTextureNames().contains(requested)
-                    ? requested : handle.view().getPlayer().getTextureNames().stream().sorted().findFirst().orElse("");
+            texture = handle.view().getPlayer().getTextureNames().contains(requested) ? requested
+                : handle.view().getPlayer().getTextureNames().stream().sorted().findFirst().orElse("");
         }
         if (!handle.view().getPlayer().getTextureNames().contains(texture)) {
             context.getSource().sendFailure(Component.literal("Unknown texture for " + path + ": " + texture));
@@ -77,22 +83,21 @@ public final class ModelCommand {
         var selectedTexture = texture;
         Collection<ServerPlayer> targets = EntityArgument.getPlayers(context, TARGETS);
         for (var player : targets) {
-            player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(selection ->
-                    player.getCapability(AuthModelsCapabilityProvider.AUTH_MODELS_CAP).ifPresent(auth -> {
-                        if (!ignoreAuth && handle.location().rootKind().accessPolicy()
-                                == AccessPolicy.SESSION_AUTHORIZED
-                                && !auth.containModel(hash)) {
-                            context.getSource().sendFailure(Component.literal(
-                                    player.getScoreboardName() + " is not authorized for " + path));
-                            return;
-                        }
-                        if (!SessionProtocolHandler.applyCommandSelection(player, selection,
-                                new Selection.Model(hash, selectedTexture), ignoreAuth)) {
-                            context.getSource().sendFailure(Component.literal(
-                                    player.getScoreboardName() + " rejected the model selection"));
-                            return;
-                        }
-                    }));
+            player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(
+                selection -> player.getCapability(AuthModelsCapabilityProvider.AUTH_MODELS_CAP).ifPresent(auth -> {
+                    if (!ignoreAuth && handle.location().rootKind().accessPolicy() == AccessPolicy.SESSION_AUTHORIZED
+                        && !auth.containModel(hash)) {
+                        context.getSource().sendFailure(
+                            Component.literal(player.getScoreboardName() + " is not authorized for " + path));
+                        return;
+                    }
+                    if (!SessionProtocolHandler.applyCommandSelection(player, selection,
+                        new Selection.Model(hash, selectedTexture), ignoreAuth)) {
+                        context.getSource().sendFailure(
+                            Component.literal(player.getScoreboardName() + " rejected the model selection"));
+                        return;
+                    }
+                }));
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -100,23 +105,20 @@ public final class ModelCommand {
     private static int reload(CommandContext<CommandSourceStack> context) {
         context.getSource().sendSuccess(() -> Component.literal("Reloading model catalog..."), true);
         ServerModelService.instance().reload().thenAccept(result -> {
-            CommandUtil.sendAsyncFeedback(context.getSource(), Component.literal(result.success()
-                    ? "Model catalog reloaded: " + result.modelCount() + " model(s), "
-                    + result.errorCount() + " scan error(s)"
-                    : "Model catalog reload failed: " + result.message()), true);
+            CommandUtil.sendAsyncFeedback(context.getSource(),
+                Component.literal(result.success() ? "Model catalog reloaded: " + result.modelCount() + " model(s), "
+                    + result.errorCount() + " scan error(s)" : "Model catalog reload failed: " + result.message()),
+                true);
             if (result.success() && result.warningCount() > 0) {
                 for (var kind : ModelScanWarning.Kind.values()) {
-                    var count = result.warnings().stream()
-                            .filter(warning -> warning.kind() == kind)
-                            .mapToInt(ModelScanWarning::occurrences)
-                            .sum();
+                    var count = result.warnings().stream().filter(warning -> warning.kind() == kind)
+                        .mapToInt(ModelScanWarning::occurrences).sum();
                     if (count > 0) {
                         var key = switch (kind) {
                             case UNKNOWN_AUDIO -> "commands.ysm.model.reload.unknown_audio";
                             case INVALID_AUDIO -> "commands.ysm.model.reload.invalid_audio";
                         };
-                        CommandUtil.sendAsyncFeedback(context.getSource(),
-                                Component.translatable(key, count), true);
+                        CommandUtil.sendAsyncFeedback(context.getSource(), Component.translatable(key, count), true);
                     }
                 }
             }
@@ -133,9 +135,6 @@ public final class ModelCommand {
         context.getSource().sendSuccess(() -> Component.literal("Model scan errors: " + errors.size()), false);
         for (var error : errors) {
             var text = "[" + error.rootKind() + "] " + error.source() + ": " + error.message();
-            if (!error.detail().isBlank()) {
-                text += "\n" + error.detail();
-            }
             var output = text;
             context.getSource().sendSuccess(() -> Component.literal(output), false);
         }
@@ -146,7 +145,7 @@ public final class ModelCommand {
         var disabled = BoolArgumentType.getBool(context, "value");
         for (var player : EntityArgument.getPlayers(context, TARGETS)) {
             player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP)
-                    .ifPresent(capability -> capability.setDisabled(disabled));
+                .ifPresent(capability -> capability.setDisabled(disabled));
         }
         return Command.SINGLE_SUCCESS;
     }

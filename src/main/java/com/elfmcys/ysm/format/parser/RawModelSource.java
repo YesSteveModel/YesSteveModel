@@ -35,8 +35,7 @@ final class RawModelSource {
         return canonicalizer.aggregate();
     }
 
-    Optional<NativeBuffer> readFile(String path, String type,
-                                    boolean required) throws FileNotFoundException {
+    Optional<NativeBuffer> readFile(String path, String type, boolean required) throws FileNotFoundException {
         if (!StringUtils.isBlank(path)) {
             var borrowed = vfs.getFile(path);
             if (borrowed != null) {
@@ -50,16 +49,15 @@ final class RawModelSource {
         return Optional.empty();
     }
 
-    Optional<String> readText(String path, String type,
-                              boolean required) throws IOException {
+    Optional<String> readText(String path, String type, boolean required) throws IOException {
         return readFile(path, type, required).map(RawModelSource::readUtf8);
     }
 
-    <T> Optional<T> readJson(String path, String type, Gson gson,
-                             Class<T> typeClass, boolean required) throws IOException {
+    <T> Optional<T> readJson(String path, String type, Gson gson, Class<T> typeClass, boolean required)
+        throws IOException {
         return readFile(path, type, required).map(file -> {
-            try (var reader = new JsonReader(new InputStreamReader(
-                    new ByteBufferInputStream(file.nio()), StandardCharsets.UTF_8))) {
+            try (var reader =
+                new JsonReader(new InputStreamReader(new ByteBufferInputStream(file.nio()), StandardCharsets.UTF_8))) {
                 return gson.fromJson(reader, typeClass);
             } catch (IOException error) {
                 throw new UncheckedIOException(error);
@@ -67,8 +65,8 @@ final class RawModelSource {
         });
     }
 
-    void collectFiles(String directory, String extension, String type,
-                      boolean recursive, BiConsumer<String, NativeBuffer> consumer) {
+    void collectFiles(String directory, String extension, String type, boolean recursive,
+        BiConsumer<String, NativeBuffer> consumer) {
         collectFileNames(directory, extension, recursive, (name, path) -> {
             try {
                 consumer.accept(name, readFile(path, type, true).orElseThrow());
@@ -78,8 +76,7 @@ final class RawModelSource {
         });
     }
 
-    void collectFileNames(String directory, String extension, boolean recursive,
-                          BiConsumer<String, String> consumer) {
+    void collectFileNames(String directory, String extension, boolean recursive, BiConsumer<String, String> consumer) {
         var root = normalizePath(directory);
         collectFilesImpl(root, root, extension.toLowerCase(Locale.ROOT), recursive, consumer);
     }
@@ -88,21 +85,26 @@ final class RawModelSource {
         return StandardCharsets.UTF_8.decode(buffer.nio()).toString();
     }
 
-    private void collectFilesImpl(String root, String directory, String extension,
-                                  boolean recursive, BiConsumer<String, String> consumer) {
-        for (var file : vfs.listFiles(StringUtils.isBlank(directory) ? null : directory)) {
+    private void collectFilesImpl(String root, String directory, String extension, boolean recursive,
+        BiConsumer<String, String> consumer) {
+        var files = new java.util.ArrayList<>(
+            java.util.Arrays.asList(vfs.listFiles(StringUtils.isBlank(directory) ? null : directory)));
+        files.sort(String::compareTo);
+        for (var file : files) {
             if (!file.toLowerCase(Locale.ROOT).endsWith(extension)) {
                 continue;
             }
             var fullPath = joinPath(directory, file);
-            var relativePath = StringUtils.isBlank(root)
-                    ? fullPath : fullPath.substring(root.length() + 1);
+            var relativePath = StringUtils.isBlank(root) ? fullPath : fullPath.substring(root.length() + 1);
             consumer.accept(removeExtension(relativePath), fullPath);
         }
         if (!recursive) {
             return;
         }
-        for (var child : vfs.listDirectories(StringUtils.isBlank(directory) ? null : directory)) {
+        var children = new java.util.ArrayList<>(
+            java.util.Arrays.asList(vfs.listDirectories(StringUtils.isBlank(directory) ? null : directory)));
+        children.sort(String::compareTo);
+        for (var child : children) {
             collectFilesImpl(root, joinPath(directory, child), extension, true, consumer);
         }
     }

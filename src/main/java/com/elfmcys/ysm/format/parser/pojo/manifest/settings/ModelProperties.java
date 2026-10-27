@@ -32,6 +32,8 @@ public class ModelProperties {
 
     public boolean free = false;
 
+    public String originVer;
+
     @SerializedName("all_cutout")
     public boolean forceCulling = false;
 

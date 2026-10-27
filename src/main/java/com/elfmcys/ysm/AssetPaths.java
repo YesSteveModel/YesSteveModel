@@ -1,185 +1,78 @@
 package com.elfmcys.ysm;
 
-import net.minecraftforge.fml.ModList;
-import net.minecraftforge.fml.loading.FMLPaths;
-
-import java.io.IOException;
-import java.nio.file.Files;
+import com.elfmcys.ysm.model.storage.CacheDirectoryGuard;
 import java.nio.file.Path;
-import java.util.Locale;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 
-/**
- * Roots of every asset and model store the mod owns.
- *
- * <p>This class declares the game/config roots, the mod-owned model directories, the game-local
- * cache root with its store directories, the platform-level cache root shared by the remote and
- * baked caches together with its game-local fallback, the export root, and the resolve rules
- * between them. It stops at the store root: directories inside one store, the partitioning below them and
- * the individual file names stay with the store that writes and reads them. Layout-taking methods
- * accept their root so callers can keep injecting a temporary root instead of reaching for the
- * process default.
- *
- * <p>Paths that are not asset storage stay with their own owner; native library extraction, for
- * example, is defined by {@link com.elfmcys.ysm.util.NativeLibUtil}.
- */
+/** Complete directory selection published after startup probes and cleanup finish. */
 public final class AssetPaths {
-    /** Directory of the mod inside the game and config directories. */
-    private static final String MOD_DIRECTORY = YesSteveModel.MOD_ID;
+    private final Path gameDirectory;
+    private final Path configDirectory;
+    private final Path builtinModelsResource;
+    private final Path localDataRoot;
+    private final Path localCacheRoot;
+    private final GlobalDirectories global;
+    private final List<Diagnostic> diagnostics;
 
-    private static final String MODEL_DIRECTORY = "ysm";
-    private static final String EXPORT_DIRECTORY = "export";
-    private static final String CUSTOM_MODEL_DIRECTORY = "custom";
-    private static final String AUTH_MODEL_DIRECTORY = "auth";
-    private static final String BUILTIN_MODEL_DIRECTORY = "builtin";
-
-    private static final String BAKE_DIRECTORY = "bake";
-    private static final String REMOTE_DIRECTORY = "remote";
-
-    /** Cache directory below the mod-owned directory; both cache roots end in {@code ysm/cache}. */
-    private static final String CACHE_DIRECTORY = "cache";
-    private static final String CONVERTED_DIRECTORY = "converted";
-
-    private AssetPaths() {
+    AssetPaths(Path gameDirectory, Path configDirectory, Path builtinModelsResource,
+        GlobalDirectories global, List<Diagnostic> diagnostics) {
+        this.gameDirectory = Objects.requireNonNull(gameDirectory).toAbsolutePath().normalize();
+        this.configDirectory = Objects.requireNonNull(configDirectory).toAbsolutePath().normalize();
+        this.builtinModelsResource = Objects.requireNonNull(builtinModelsResource);
+        localDataRoot = gameModelsRoot(this.gameDirectory);
+        localCacheRoot = gameCacheRoot(this.gameDirectory);
+        this.global = global;
+        this.diagnostics = List.copyOf(diagnostics);
     }
 
-    // ---------------------------------------------------------------- roots
-
-    /** Forge game directory. */
-    public static Path gameDirectory() {
-        return FMLPaths.GAMEDIR.get();
+    public static AssetPaths discover(Path gameDirectory, Path configDirectory, Path builtinModelsResource,
+        Map<String, String> environment, AssetDirectoryPlatform.Kind platform,
+        AssetDirectoryPlatform.MacDirectories macDirectories) {
+        return AssetDirectoryProbe.discover(gameDirectory, configDirectory, builtinModelsResource,
+            Map.copyOf(environment), platform, macDirectories, (operation, path) -> {});
     }
 
-    /** Forge config directory. */
-    public static Path configDirectory() {
-        return FMLPaths.CONFIGDIR.get();
+    /** Explicit layout for tests and embedded callers; no environment or filesystem access. */
+    public static AssetPaths localOnly(Path gameDirectory, Path configDirectory, Path builtinModelsResource) {
+        return new AssetPaths(gameDirectory, configDirectory, builtinModelsResource, null, List.of());
     }
 
-    /** Mod-owned directory inside the game directory. */
-    public static Path gameModelsRoot() {
-        return gameModelsRoot(gameDirectory());
-    }
+    public Path gameDirectory() { return gameDirectory; }
+    public Path configDirectory() { return configDirectory; }
+    public Path configRoot() { return configDirectory.resolve("ysm"); }
+    public Path exportRoot() { return configRoot().resolve("export"); }
+    public Path builtinModelsResource() { return builtinModelsResource; }
+    public Path builtinIndex() { return builtinModelsResource.resolveSibling("builtin-index.json"); }
+    public Path gameModelsRoot() { return localDataRoot; }
+    public Path gameCacheRoot() { return localCacheRoot; }
+    public Path customModelsRoot() { return customModelsRoot(localDataRoot); }
+    public Path authModelsRoot() { return authModelsRoot(localDataRoot); }
+    public boolean globalEnabled() { return global != null; }
+    public Optional<GlobalDirectories> global() { return Optional.ofNullable(global); }
+    public List<Diagnostic> diagnostics() { return diagnostics; }
+    public Path defaultCustomRoot() { return global == null ? customModelsRoot() : global.customRoot(); }
+    public Path remoteRoot() { return (global == null ? localCacheRoot : global.cacheRoot()).resolve("remote"); }
 
-    /** Mod-owned directory inside the given game directory. */
-    public static Path gameModelsRoot(Path gameDirectory) {
-        return gameDirectory.resolve(MOD_DIRECTORY);
-    }
+    public static Path gameModelsRoot(Path gameDirectory) { return gameDirectory.resolve("ysm"); }
+    public static Path gameCacheRoot(Path gameDirectory) { return gameModelsRoot(gameDirectory).resolve("cache"); }
+    public static Path customModelsRoot(Path dataRoot) { return dataRoot.resolve("custom"); }
+    public static Path authModelsRoot(Path dataRoot) { return dataRoot.resolve("auth"); }
+    public static Path convertedRoot(Path cacheRoot) { return cacheRoot.resolve("converted"); }
+    public static Path bakedRoot(Path gameDirectory) { return gameCacheRoot(gameDirectory).resolve("bake"); }
 
-    /** Mod-owned directory inside the config directory; owns the export root. */
-    public static Path configRoot() {
-        return configDirectory().resolve(MOD_DIRECTORY);
-    }
-
-    /** Game-local cache root of the current instance; owns the converted store. */
-    public static Path gameCacheRoot() {
-        return gameCacheRoot(gameDirectory());
-    }
-
-    /** Game-local cache root of one game directory: {@code <game-dir>/ysm/cache}. */
-    public static Path gameCacheRoot(Path gameDirectory) {
-        return gameModelsRoot(gameDirectory).resolve(CACHE_DIRECTORY);
-    }
-
-    /** Root of explicit direct-container export. */
-    public static Path exportRoot() {
-        return configRoot().resolve(EXPORT_DIRECTORY);
-    }
-
-    // -------------------------------------------------------- local catalog
-
-    /** User-supplied model sources. */
-    public static Path customModelsRoot() {
-        return customModelsRoot(gameModelsRoot());
-    }
-
-    /** User-supplied model sources under the given mod-owned directory. */
-    public static Path customModelsRoot(Path gameModelsRoot) {
-        return gameModelsRoot.resolve(CUSTOM_MODEL_DIRECTORY);
-    }
-
-    /** Server-issued model sources. */
-    public static Path authModelsRoot() {
-        return authModelsRoot(gameModelsRoot());
-    }
-
-    /** Server-issued model sources under the given mod-owned directory. */
-    public static Path authModelsRoot(Path gameModelsRoot) {
-        return gameModelsRoot.resolve(AUTH_MODEL_DIRECTORY);
-    }
-
-    /** Builtin models embedded in the mod jar. */
-    public static Path builtinModelsResource() {
-        return ModList.get().getModFileById(MOD_DIRECTORY).getFile()
-                .findResource("assets", MOD_DIRECTORY, BUILTIN_MODEL_DIRECTORY);
-    }
-
-    // --------------------------------------------------------- game cache
-
-    /** Converted store inside the game-local cache root. */
-    public static Path convertedRoot(Path gameCacheRoot) {
-        return gameCacheRoot.resolve(CONVERTED_DIRECTORY);
-    }
-
-    // ---------------------------------------------------- platform cache
-
-    /**
-     * Platform-level cache root shared by remote and baked content, or {@code null} when the
-     * platform has no such location.
-     *
-     * <p>It is the {@code ysm/cache} directory of the platform application data location:
-     * {@code %LOCALAPPDATA%} on Windows, the user Library Application Support on macOS and
-     * {@code ~/.local/share} elsewhere.
-     */
-    public static Path platformCacheRoot() {
-        var home = System.getProperty("user.home");
-        var os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("win")) {
-            var local = System.getenv("LOCALAPPDATA");
-            return local == null || local.isBlank()
-                    ? null
-                    : Path.of(local, MODEL_DIRECTORY, CACHE_DIRECTORY);
+    public record GlobalDirectories(Path dataRoot, Path cacheRoot, CacheDirectoryGuard cacheGuard) {
+        public GlobalDirectories {
+            Objects.requireNonNull(dataRoot);
+            Objects.requireNonNull(cacheRoot);
+            Objects.requireNonNull(cacheGuard);
         }
-        if (home == null || home.isBlank()) {
-            return null;
-        }
-        return os.contains("mac")
-                ? Path.of(home, "Library", "Application Support", MODEL_DIRECTORY, CACHE_DIRECTORY)
-                : Path.of(home, ".local", "share", MODEL_DIRECTORY, CACHE_DIRECTORY);
+        public Path customRoot() { return customModelsRoot(dataRoot); }
+        public Path authRoot() { return authModelsRoot(dataRoot); }
     }
 
-    /**
-     * Remote cache root: the platform-level location when it can be created and written, game-local
-     * otherwise.
-     */
-    public static Path remoteRoot(Path gameDirectory) {
-        return sharedContentRoot(gameDirectory, REMOTE_DIRECTORY, platformCacheRoot());
-    }
-
-    /** Game-local baked render cache root: {@code <game-dir>/ysm/cache/bake}. */
-    public static Path bakedRoot(Path gameDirectory) {
-        return gameCacheRoot(gameDirectory).resolve(BAKE_DIRECTORY);
-    }
-
-    /**
-     * Resolves one shared content directory under {@code platformRoot}, falling back to the
-     * game-local cache root {@code <game-dir>/ysm/cache}. The platform directory is created to
-     * prove it is usable.
-     */
-    static Path sharedContentRoot(Path gameDirectory, String contentDirectory, Path platformRoot) {
-        if (platformRoot != null) {
-            var preferred = platformRoot.resolve(contentDirectory);
-            if (isWritableDirectory(preferred)) {
-                return preferred;
-            }
-        }
-        return gameCacheRoot(gameDirectory).resolve(contentDirectory);
-    }
-
-    private static boolean isWritableDirectory(Path directory) {
-        try {
-            Files.createDirectories(directory);
-            return Files.isWritable(directory);
-        } catch (IOException | RuntimeException unusable) {
-            return false;
-        }
-    }
+    /** Host-only diagnostic; never include this record in catalog or network messages. */
+    public record Diagnostic(String operation, Path path, String message) {}
 }

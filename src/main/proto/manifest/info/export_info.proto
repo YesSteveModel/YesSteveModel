@@ -5,6 +5,5 @@ package mixel.manifest.info;
 
 message ExportInfo {
   uint64 timestamp = 1;
-  string version = 2;
-  string extra = 3;
+  string extra = 2;
 }

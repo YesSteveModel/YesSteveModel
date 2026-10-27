@@ -11,8 +11,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 public class ProjectileModelInfoCapabilityProvider implements ICapabilitySerializable<CompoundTag> {
-    public static Capability<ProjectileModelInfoCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {
-    });
+    public static Capability<ProjectileModelInfoCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {});
     private ProjectileModelInfoCapability instance = null;
 
     @Override

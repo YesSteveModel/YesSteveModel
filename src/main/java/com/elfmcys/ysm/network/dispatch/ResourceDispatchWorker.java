@@ -47,7 +47,7 @@ public final class ResourceDispatchWorker implements AutoCloseable {
 
     /** Atomically transfers all packets to the exact session owner or transfers none. */
     public synchronized boolean enqueue(ServerModelSession owner, TransportPort transport,
-                                        List<? extends LogicalPacket> packets) {
+        List<? extends LogicalPacket> packets) {
         Objects.requireNonNull(owner, "owner");
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(packets, "packets");
@@ -158,8 +158,7 @@ public final class ResourceDispatchWorker implements AutoCloseable {
     private void visit(Session session, Settings current) {
         final int initialBudget;
         synchronized (session) {
-            initialBudget = session.queue.size() >= current.softLimit()
-                    ? 1 : Integer.MAX_VALUE;
+            initialBudget = session.queue.size() >= current.softLimit() ? 1 : Integer.MAX_VALUE;
         }
         var budget = initialBudget;
         while (budget-- > 0) {
@@ -186,15 +185,13 @@ public final class ResourceDispatchWorker implements AutoCloseable {
                     advance = true;
                 } else {
                     var estimate = packet.estimateFrameBytes(cursor);
-                    if (estimate < 0 || !session.transport.isWritable()
-                            || wouldExceed(session.transport.pendingBytes(), estimate,
-                            session.transport.highWatermarkBytes())) {
+                    if (estimate < 0 || !session.transport.isWritable() || wouldExceed(session.transport.pendingBytes(),
+                        estimate, session.transport.highWatermarkBytes())) {
                         return;
                     }
                     OutboundFrame built;
                     try {
-                        built = Objects.requireNonNull(packet.buildFragment(cursor),
-                                "buildFragment returned null");
+                        built = Objects.requireNonNull(packet.buildFragment(cursor), "buildFragment returned null");
                     } catch (RuntimeException failure) {
                         finishedPacket = session.detachHeadLocked();
                         if (packet instanceof CancellablePacket cancellable) {
@@ -210,16 +207,14 @@ public final class ResourceDispatchWorker implements AutoCloseable {
                             var frameBytes = frame.size();
                             var pendingBytes = session.transport.pendingBytes();
                             var highWatermarkBytes = session.transport.highWatermarkBytes();
-                            if (frameBytes <= 0 || frameBytes > FrameCodec.MAX_BODY_BYTES + 14
-                                    || pendingBytes < 0 || highWatermarkBytes < 0
-                                    || frameBytes > highWatermarkBytes) {
+                            if (frameBytes <= 0 || frameBytes > FrameCodec.MAX_BODY_BYTES + 14 || pendingBytes < 0
+                                || highWatermarkBytes < 0 || frameBytes > highWatermarkBytes) {
                                 finishedPacket = session.detachHeadLocked();
                                 if (packet instanceof CancellablePacket cancellable) {
                                     failedPacket = cancellable;
                                     productionFailure = new IllegalStateException(
-                                            "Built resource frame cannot be dispatched: frame="
-                                                    + frameBytes + ", pending=" + pendingBytes
-                                                    + ", high=" + highWatermarkBytes);
+                                        "Built resource frame cannot be dispatched: frame=" + frameBytes + ", pending="
+                                            + pendingBytes + ", high=" + highWatermarkBytes);
                                 }
                                 stop = true;
                             } else if (pendingBytes > highWatermarkBytes - frameBytes) {
@@ -267,13 +262,11 @@ public final class ResourceDispatchWorker implements AutoCloseable {
         }
     }
 
-    private static void reportProductionFailure(CancellablePacket packet,
-                                                 RuntimeException failure) {
+    private static void reportProductionFailure(CancellablePacket packet, RuntimeException failure) {
         try {
             packet.productionFailed(failure);
         } catch (RuntimeException callbackFailure) {
-            YesSteveModel.LOGGER.error(
-                    "Failed to report resource packet production failure", callbackFailure);
+            YesSteveModel.LOGGER.error("Failed to report resource packet production failure", callbackFailure);
         }
     }
 
@@ -282,8 +275,7 @@ public final class ResourceDispatchWorker implements AutoCloseable {
             try {
                 packet.close();
             } catch (RuntimeException closeFailure) {
-                YesSteveModel.LOGGER.error(
-                        "Failed to close a detached resource packet", closeFailure);
+                YesSteveModel.LOGGER.error("Failed to close a detached resource packet", closeFailure);
             }
         }
     }
@@ -407,8 +399,7 @@ public final class ResourceDispatchWorker implements AutoCloseable {
     public record Settings(int softLimit, int hardLimit, long bytesPerSecond) {
         public Settings {
             if (softLimit < 1 || softLimit >= hardLimit || hardLimit > 256) {
-                throw new IllegalArgumentException(
-                        "Dispatch limits must satisfy 1 <= soft < hard <= 256");
+                throw new IllegalArgumentException("Dispatch limits must satisfy 1 <= soft < hard <= 256");
             }
             if (bytesPerSecond != 0 && bytesPerSecond < 32 * 1024) {
                 throw new IllegalArgumentException("Bandwidth must be 0 or at least 32 KiB/s");
@@ -425,8 +416,7 @@ public final class ResourceDispatchWorker implements AutoCloseable {
             }
             var now = System.nanoTime();
             nextNanos = Math.max(nextNanos, now);
-            long delay = (long) Math.ceil((double) bytes * TimeUnit.SECONDS.toNanos(1)
-                    / bytesPerSecond);
+            long delay = (long)Math.ceil((double)bytes * TimeUnit.SECONDS.toNanos(1) / bytesPerSecond);
             nextNanos = saturatingAdd(nextNanos, delay);
             while ((delay = nextNanos - System.nanoTime()) > 0) {
                 LockSupport.parkNanos(delay);

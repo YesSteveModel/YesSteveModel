@@ -7,7 +7,7 @@ import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.builder.LoopType;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
 import com.elfmcys.ysm.geckolib3.geo.GeoRenderData;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.tacz.guns.api.TimelessAPI;
@@ -38,6 +38,10 @@ import java.util.Locale;
 import java.util.Optional;
 
 class TacCompatInner {
+    static boolean isMainhandHoldingGun(LivingEntity entity) {
+        return IGun.mainhandHoldGun(entity);
+    }
+
     static boolean isGun(ItemStack itemStack) {
         return itemStack.getItem() instanceof IGun;
     }
@@ -51,7 +55,8 @@ class TacCompatInner {
         return false;
     }
 
-    static void renderOffhandGun(ItemStack heldItem, GeoRenderData data, LivingEntity player, PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
+    static void renderOffhandGun(ItemStack heldItem, GeoRenderData data, LivingEntity player, PoseStack poseStack,
+        MultiBufferSource buffer, int packedLight) {
         IGun gun = IGun.getIGunOrNull(heldItem);
         if (gun == null) {
             return;
@@ -66,20 +71,23 @@ class TacCompatInner {
                     locatorPose.scale(0.65f, 0.65f, 0.65f);
                     locatorPose.mulPose(Axis.YP.rotationDegrees(-90.0F));
                     locatorPose.mulPose(Axis.ZP.rotationDegrees(90.0F));
-                    renderer.renderStatic(heldItem, ItemDisplayContext.FIXED, packedLight, OverlayTexture.NO_OVERLAY, locatorPose, buffer, player.level(), player.getId());
+                    renderer.renderStatic(heldItem, ItemDisplayContext.FIXED, packedLight, OverlayTexture.NO_OVERLAY,
+                        locatorPose, buffer, player.level(), player.getId());
                 });
             }
             if (!isType(weaponType, GunTabType.PISTOL)) {
                 data.modelState.visitLocatorGroup(PlayerLocator.get().rifle, poseStack, locatorPose -> {
                     locatorPose.scale(0.65f, 0.65f, 0.65f);
                     locatorPose.mulPose(Axis.YP.rotationDegrees(-180.0F));
-                    renderer.renderStatic(heldItem, ItemDisplayContext.FIXED, packedLight, OverlayTexture.NO_OVERLAY, locatorPose, buffer, player.level(), player.getId());
+                    renderer.renderStatic(heldItem, ItemDisplayContext.FIXED, packedLight, OverlayTexture.NO_OVERLAY,
+                        locatorPose, buffer, player.level(), player.getId());
                 });
             }
         });
     }
 
-    static PlayState playGrenadeAnimation(AnimationEvent<? extends AnimatableEntity<? extends LivingEntity>> event, InteractionHand hand) {
+    static PlayState playGrenadeAnimation(AnimationEvent<? extends AnimatableEntity<? extends LivingEntity>> event,
+        InteractionHand hand) {
         // TODO 手雷还没有
         if (hand == InteractionHand.MAIN_HAND) {
             return playLoopAnimation(event, "tac:mainhand:grenade");
@@ -88,11 +96,10 @@ class TacCompatInner {
     }
 
     /**
-     * tac:idle
-     * tac:run
-     * tac:walk
+     * tac:idle tac:run tac:walk
      */
-    static PlayState playGunMainAnimation(AnimationEvent<? extends AnimatableEntity<? extends LivingEntity>> event, String animationName, LoopType loopType) {
+    static PlayState playGunMainAnimation(AnimationEvent<? extends AnimatableEntity<? extends LivingEntity>> event,
+        String animationName, LoopType loopType) {
         String tacName = "tac:" + animationName;
         if (event.getAnimatableEntity().getAnimation(tacName) != null) {
             return playAnimation(event, tacName, loopType);
@@ -101,12 +108,7 @@ class TacCompatInner {
     }
 
     /**
-     * tac:hold:pistol
-     * tac:aim:pistol
-     * tac:reload:pistol
-     * tac:aim_shoot:pistol
-     * tac:hold_shoot:pistol
-     * tac:run:pistol
+     * tac:hold:pistol tac:aim:pistol tac:reload:pistol tac:aim_shoot:pistol tac:hold_shoot:pistol tac:run:pistol
      */
     static PlayState playGunHoldAnimation(AnimationEvent<? extends CustomHumanoidEntity<?>> event, ItemStack heldItem) {
         IGun gun = IGun.getIGunOrNull(heldItem);
@@ -181,7 +183,8 @@ class TacCompatInner {
 
         if (fireTick > 0) {
             float aimProgress = operator.getSynAimingProgress();
-            boolean isClimbing = !livingEntity.isSwimming() && livingEntity.getPose() == Pose.SWIMMING && Math.abs(event.getLimbSwingAmount()) <= 0.05;
+            boolean isClimbing = !livingEntity.isSwimming() && livingEntity.getPose() == Pose.SWIMMING
+                && Math.abs(event.getLimbSwingAmount()) <= 0.05;
 
             if (isClimbing) {
                 return getGunTypeAnimation(event, weaponType, "tac:climbing:fire:", LoopType.PLAY_ONCE);
@@ -218,12 +221,14 @@ class TacCompatInner {
     }
 
     @NotNull
-    private static PlayState getGunTypeAnimation(AnimationEvent<? extends CustomHumanoidEntity<?>> event, String weaponType, String prefix) {
+    private static PlayState getGunTypeAnimation(AnimationEvent<? extends CustomHumanoidEntity<?>> event,
+        String weaponType, String prefix) {
         return getGunTypeAnimation(event, weaponType, prefix, LoopType.LOOP);
     }
 
     @NotNull
-    private static PlayState getGunTypeAnimation(AnimationEvent<? extends CustomHumanoidEntity<?>> event, String weaponType, String prefix, LoopType loopType) {
+    private static PlayState getGunTypeAnimation(AnimationEvent<? extends CustomHumanoidEntity<?>> event,
+        String weaponType, String prefix, LoopType loopType) {
         ConditionTAC conditionTAC = event.getAnimatableEntity().getConditionManager().getTAC();
         if (conditionTAC != null) {
             ItemStack stack = event.getAnimatableEntity().getEntity().getMainHandItem();

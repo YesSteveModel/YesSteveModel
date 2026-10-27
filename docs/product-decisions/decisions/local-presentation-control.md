@@ -7,7 +7,7 @@
   - 恢复替换后模型不可用: [DD.default-model-is-reliability-baseline](model-fallback.md#dddefault-model-is-reliability-baseline)
   - 模型声音触发: [DD.model-sounds-are-observable-content](model-sound.md#ddmodel-sounds-are-observable-content)
 - Landing:
-  - [concept](../../concepts/rendering.md#本地呈现边界)
+  - [design](../../architecture/rendering/overview.md#本地呈现边界)
 
 ## DD.local-player-controls-presentation
 

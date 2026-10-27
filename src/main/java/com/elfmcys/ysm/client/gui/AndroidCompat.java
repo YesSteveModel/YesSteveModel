@@ -39,8 +39,9 @@ public class AndroidCompat {
 
             Component configIcon = Component.literal("\uD83D\uDD27");
             Button extraPlayerButton = Button.builder(configIcon, button -> mc.setScreen(new ExtraPlayerConfigScreen()))
-                    .bounds(screen.width / 2 - 120, screen.height - 35, 50, 30).build();
-            extraPlayerButton.setTooltip(Tooltip.create(Component.translatable("key.yes_steve_model.open_extra_player_render.desc")));
+                .bounds(screen.width / 2 - 120, screen.height - 35, 50, 30).build();
+            extraPlayerButton.setTooltip(
+                Tooltip.create(Component.translatable("key.yes_steve_model.open_extra_player_render.desc")));
 
             Component icon = Component.literal("\uD83D\uDE04");
             Button rouletteButton = Button.builder(icon, button -> {
@@ -54,7 +55,8 @@ public class AndroidCompat {
                     });
                 }
             }).bounds(screen.width / 2 + 69, screen.height - 35, 50, 30).build();
-            rouletteButton.setTooltip(Tooltip.create(Component.translatable("key.yes_steve_model.animation_roulette.desc")));
+            rouletteButton
+                .setTooltip(Tooltip.create(Component.translatable("key.yes_steve_model.animation_roulette.desc")));
 
             return List.of(skinButton, extraPlayerButton, rouletteButton);
         }

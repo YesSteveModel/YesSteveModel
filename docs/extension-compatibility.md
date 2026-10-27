@@ -53,6 +53,19 @@ if (!result.isCompatible() || !result.coverageComplete()) {
 
 类标注生成 `MyIntegrationCompatibilityChecker.check()`。调用 checker 的 bootstrap 类本身不得在继承树、字段或方法签名中引用 YSM；否则 JVM 可能在执行 checker 前就链接失败。
 
+## Molang 声明
+
+同一发布主 JAR 同时提供公共注解与 JDK-only `UnifiedDeclarationProcessor`；无需额外 processor 制品。auto `@YsmMolangExtension` 自带类级 CLIENT 完整 checker，成员不追加依赖。签名、值和生命周期见[共同声明契约](architecture/animation/molang-declarations.md)。
+
+默认 auto 由 YSM 收集、前检并冻结。选择 `mode = MolangAdmissionMode.MANUAL` 时，独立 bootstrap 完成自由前检后，在 client 服务冻结前提交：
+
+```java
+String resource = "META-INF/ysm/molang/com.example.Adapter.bin";
+MolangDeclarations.submit(resource, adapterSourceUrl, compatible, detail);
+```
+
+`adapterSourceUrl` 是该 AP resource 的 URL，不是实现类 Class；bootstrap 仍不得提前链接实现/optional subject。票据不绕过 source ownership、共同声明验证或 all-of 依赖；同类未提交/重复、auto/manual 双路、冲突及冻结后提交均拒绝，不覆盖先到者。接纳失败不发布对应 Molang 符号。完整 checker 算法与事件 handler 契约不因声明收敛改变。
+
 ## 自动注册事件处理器
 
 需要监听 YSM 自有事件总线时，可用 `@YsmEventHandler` 代替类级

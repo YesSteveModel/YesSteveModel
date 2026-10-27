@@ -1,12 +1,11 @@
 /*
- * Copyright (c) 2020.
- * Author: Bernie G. (Gecko)
+ * Copyright (c) 2020. Author: Bernie G. (Gecko)
  */
 
 package com.elfmcys.ysm.geckolib3.core.keyframe;
 
 import com.elfmcys.ysm.geckolib3.core.keyframe.bone.BoneKeyFrame;
-import com.elfmcys.ysm.geckolib3.core.molang.util.StringPool;
+import com.elfmcys.ysm.util.StringPool;
 
 import java.util.List;
 
@@ -17,7 +16,8 @@ public class BoneAnimation {
     public final List<BoneKeyFrame> positionKeyFrames;
     public final List<BoneKeyFrame> scaleKeyFrames;
 
-    public BoneAnimation(String boneName, List<BoneKeyFrame> rotationKeyFrames, List<BoneKeyFrame> positionKeyFrames, List<BoneKeyFrame> scaleKeyFrames) {
+    public BoneAnimation(String boneName, List<BoneKeyFrame> rotationKeyFrames, List<BoneKeyFrame> positionKeyFrames,
+        List<BoneKeyFrame> scaleKeyFrames) {
         this.boneName = boneName;
         this.bonePooledName = StringPool.computeIfAbsent(boneName);
         this.rotationKeyFrames = rotationKeyFrames;

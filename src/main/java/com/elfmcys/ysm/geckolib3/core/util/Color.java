@@ -1,5 +1,6 @@
 /*
-    Direct copy of https://github.com/shedaniel/cloth-basic-math/blob/master/src/main/java/me/shedaniel/math/Color.java under the unlicense.
+ * Direct copy of https://github.com/shedaniel/cloth-basic-math/blob/master/src/main/java/me/shedaniel/math/Color.java
+ * under the unlicense.
  */
 package com.elfmcys.ysm.geckolib3.core.util;
 
@@ -40,7 +41,7 @@ public final class Color {
     }
 
     public static Color ofRGBA(float r, float g, float b, float a) {
-        return ofRGBA((int) (r * 255 + 0.5), (int) (g * 255 + 0.5), (int) (b * 255 + 0.5), (int) (a * 255 + 0.5));
+        return ofRGBA((int)(r * 255 + 0.5), (int)(g * 255 + 0.5), (int)(b * 255 + 0.5), (int)(a * 255 + 0.5));
     }
 
     public static Color ofRGBA(int r, int g, int b, int a) {
@@ -55,43 +56,43 @@ public final class Color {
     public static int HSBtoRGB(float hue, float saturation, float brightness) {
         int r = 0, g = 0, b = 0;
         if (saturation == 0) {
-            r = g = b = (int) (brightness * 255.0f + 0.5f);
+            r = g = b = (int)(brightness * 255.0f + 0.5f);
         } else {
-            float h = (hue - (float) Math.floor(hue)) * 6.0f;
-            float f = h - (float) Math.floor(h);
+            float h = (hue - (float)Math.floor(hue)) * 6.0f;
+            float f = h - (float)Math.floor(h);
             float p = brightness * (1.0f - saturation);
             float q = brightness * (1.0f - saturation * f);
             float t = brightness * (1.0f - (saturation * (1.0f - f)));
-            switch ((int) h) {
+            switch ((int)h) {
                 case 0 -> {
-                    r = (int) (brightness * 255.0f + 0.5f);
-                    g = (int) (t * 255.0f + 0.5f);
-                    b = (int) (p * 255.0f + 0.5f);
+                    r = (int)(brightness * 255.0f + 0.5f);
+                    g = (int)(t * 255.0f + 0.5f);
+                    b = (int)(p * 255.0f + 0.5f);
                 }
                 case 1 -> {
-                    r = (int) (q * 255.0f + 0.5f);
-                    g = (int) (brightness * 255.0f + 0.5f);
-                    b = (int) (p * 255.0f + 0.5f);
+                    r = (int)(q * 255.0f + 0.5f);
+                    g = (int)(brightness * 255.0f + 0.5f);
+                    b = (int)(p * 255.0f + 0.5f);
                 }
                 case 2 -> {
-                    r = (int) (p * 255.0f + 0.5f);
-                    g = (int) (brightness * 255.0f + 0.5f);
-                    b = (int) (t * 255.0f + 0.5f);
+                    r = (int)(p * 255.0f + 0.5f);
+                    g = (int)(brightness * 255.0f + 0.5f);
+                    b = (int)(t * 255.0f + 0.5f);
                 }
                 case 3 -> {
-                    r = (int) (p * 255.0f + 0.5f);
-                    g = (int) (q * 255.0f + 0.5f);
-                    b = (int) (brightness * 255.0f + 0.5f);
+                    r = (int)(p * 255.0f + 0.5f);
+                    g = (int)(q * 255.0f + 0.5f);
+                    b = (int)(brightness * 255.0f + 0.5f);
                 }
                 case 4 -> {
-                    r = (int) (t * 255.0f + 0.5f);
-                    g = (int) (p * 255.0f + 0.5f);
-                    b = (int) (brightness * 255.0f + 0.5f);
+                    r = (int)(t * 255.0f + 0.5f);
+                    g = (int)(p * 255.0f + 0.5f);
+                    b = (int)(brightness * 255.0f + 0.5f);
                 }
                 case 5 -> {
-                    r = (int) (brightness * 255.0f + 0.5f);
-                    g = (int) (p * 255.0f + 0.5f);
-                    b = (int) (q * 255.0f + 0.5f);
+                    r = (int)(brightness * 255.0f + 0.5f);
+                    g = (int)(p * 255.0f + 0.5f);
+                    b = (int)(q * 255.0f + 0.5f);
                 }
             }
         }
@@ -126,7 +127,7 @@ public final class Color {
      */
     public Color brighter(double factor) {
         int r = getRed(), g = getGreen(), b = getBlue();
-        int i = (int) (1.0 / (1.0 - (1 / factor)));
+        int i = (int)(1.0 / (1.0 - (1 / factor)));
         if (r == 0 && g == 0 && b == 0) {
             return ofRGBA(i, i, i, getAlpha());
         }
@@ -139,7 +140,8 @@ public final class Color {
         if (b > 0 && b < i) {
             b = i;
         }
-        return ofRGBA(Math.min((int) (r / (1 / factor)), 255), Math.min((int) (g / (1 / factor)), 255), Math.min((int) (b / (1 / factor)), 255), getAlpha());
+        return ofRGBA(Math.min((int)(r / (1 / factor)), 255), Math.min((int)(g / (1 / factor)), 255),
+            Math.min((int)(b / (1 / factor)), 255), getAlpha());
     }
 
     /**
@@ -149,7 +151,8 @@ public final class Color {
      * @return 更加深暗的颜色
      */
     public Color darker(double factor) {
-        return ofRGBA(Math.max((int) (getRed() * (1 / factor)), 0), Math.max((int) (getGreen() * (1 / factor)), 0), Math.max((int) (getBlue() * (1 / factor)), 0), getAlpha());
+        return ofRGBA(Math.max((int)(getRed() * (1 / factor)), 0), Math.max((int)(getGreen() * (1 / factor)), 0),
+            Math.max((int)(getBlue() * (1 / factor)), 0), getAlpha());
     }
 
     @Override
@@ -160,7 +163,7 @@ public final class Color {
         if (other == null || getClass() != other.getClass()) {
             return false;
         }
-        return color == ((Color) other).color;
+        return color == ((Color)other).color;
     }
 
     @Override

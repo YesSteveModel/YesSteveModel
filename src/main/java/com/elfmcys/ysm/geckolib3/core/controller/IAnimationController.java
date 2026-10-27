@@ -1,11 +1,10 @@
 package com.elfmcys.ysm.geckolib3.core.controller;
 
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.geckolib3.core.molang.context.MolangContext;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
+import com.elfmcys.ysm.expression.aot.EventProgram;
 import com.elfmcys.ysm.geckolib3.core.snapshot.BoneTopLevelSnapshot;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceMap;
 
 import java.util.List;
@@ -25,9 +24,17 @@ public interface IAnimationController<T extends AnimatableEntity<?>> {
     /**
      * 更新模型
      */
-    void updateModel(List<BoneTopLevelSnapshot> modelRendererList, Object2ReferenceMap<String, List<IValue>> eventHandlers);
+    void updateModel(List<BoneTopLevelSnapshot> modelRendererList,
+        Object2ReferenceMap<String, List<EventProgram>> eventHandlers, java.util.function.Function<String,
+            com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData> definitions);
 
-    void process(AnimationEvent<T> event, ExpressionEvaluator<MolangContext<?>> evaluator, boolean allowEmitting);
+    default Runnable prepareResourceBinding(Object2ReferenceMap<String, List<EventProgram>> eventHandlers,
+        java.util.function.Function<String,
+            com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData> definitions) {
+        return () -> {};
+    }
+
+    void process(AnimationEvent<T> event, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents);
 
     void visitBoneAnimationQueues(Consumer<IBoneAnimationQueue> visitor);
 
@@ -37,8 +44,8 @@ public interface IAnimationController<T extends AnimatableEntity<?>> {
      * 曾经某个版本的 YSM 加入了并行动画的混合功能，但是仅混合动画旋转数值
      *
      * @return 如果是 CodedAnimationController，那么仅并行动画返回 true
-     * <p>
-     * 如果使用动画控制器，那么将永远返回 false
+     *         <p>
+     *         如果使用动画控制器，那么将永远返回 false
      */
     @Deprecated
     default boolean blendRotation() {

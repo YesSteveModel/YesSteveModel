@@ -24,13 +24,13 @@ public final class SpinLock {
     }
 
     public void enter(Runnable task) {
-        try(var lock = enter()) {
+        try (var lock = enter()) {
             task.run();
         }
     }
 
     public <T> T enter(Supplier<T> task) {
-        try(var lock = enter()) {
+        try (var lock = enter()) {
             return task.get();
         }
     }

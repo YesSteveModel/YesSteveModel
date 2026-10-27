@@ -20,12 +20,11 @@ public final class FrameCodec {
     private static final int FLAG_PROTOBUF_ZSTD = 1;
     private static final int FULL_HEADER_BYTES = 1 + 1 + Integer.BYTES * 3;
 
-    private FrameCodec() {
-    }
+    private FrameCodec() {}
 
     public static OutboundFrame encode(int messageId, byte[] protobuf, byte[] attachment) {
         return encode(messageId, ArrayBuffer.borrow(protobuf),
-                attachment == null ? ArrayBuffer.borrow(new byte[0]) : ArrayBuffer.borrow(attachment));
+            attachment == null ? ArrayBuffer.borrow(new byte[0]) : ArrayBuffer.borrow(attachment));
     }
 
     public static OutboundFrame encode(int messageId, UniBuffer protobuf, UniBuffer attachment) {
@@ -37,7 +36,7 @@ public final class FrameCodec {
         }
         if (attachment.size() == 0 && protobuf.size() < MAX_BODY_BYTES) {
             var target = ArrayBuffer.allocate(1 + protobuf.size());
-            target.array()[target.arrayOffset()] = (byte) (messageId << 1);
+            target.array()[target.arrayOffset()] = (byte)(messageId << 1);
             UniBufferIO.copy(protobuf, 0, target, 1, protobuf.size());
             return new OutboundFrame(target);
         }
@@ -47,8 +46,7 @@ public final class FrameCodec {
         var flags = 0;
         try {
             if (protobuf.size() > COMPRESSION_THRESHOLD) {
-                compressed = Zstd.compressAndHash(
-                        protobuf, null, BufferType.NATIVE, COMPRESSION_LEVEL);
+                compressed = Zstd.compressAndHash(protobuf, null, BufferType.NATIVE, COMPRESSION_LEVEL);
                 if (compressed.size() < protobuf.size()) {
                     stored = compressed;
                     flags = FLAG_PROTOBUF_ZSTD;
@@ -59,14 +57,13 @@ public final class FrameCodec {
             try {
                 var array = target.array();
                 var offset = target.arrayOffset();
-                array[offset] = (byte) ((messageId << 1) | FULL_KIND);
-                array[offset + 1] = (byte) flags;
+                array[offset] = (byte)((messageId << 1) | FULL_KIND);
+                array[offset + 1] = (byte)flags;
                 writeInt(array, offset + 2, protobuf.size());
                 writeInt(array, offset + 6, stored.size());
                 writeInt(array, offset + 10, attachment.size());
                 UniBufferIO.copy(stored, 0, target, FULL_HEADER_BYTES, stored.size());
-                UniBufferIO.copy(attachment, 0, target, FULL_HEADER_BYTES + stored.size(),
-                        attachment.size());
+                UniBufferIO.copy(attachment, 0, target, FULL_HEADER_BYTES + stored.size(), attachment.size());
                 return new OutboundFrame(target);
             } catch (Throwable error) {
                 target.close();
@@ -105,8 +102,7 @@ public final class FrameCodec {
                 if (size >= MAX_BODY_BYTES) {
                     throw malformed("Simple frame body must be smaller than 30 KiB");
                 }
-                return new DecodedFrame(messageId, frame.slice(1, size).acquire(),
-                        ArrayBuffer.allocate(0), false);
+                return new DecodedFrame(messageId, frame.slice(1, size).acquire(), ArrayBuffer.allocate(0), false);
             }
             if (frame.size() < FULL_HEADER_BYTES) {
                 throw malformed("Truncated full-frame header");
@@ -122,7 +118,7 @@ public final class FrameCodec {
                 throw malformed("Invalid decoded protobuf size: " + decodedSize);
             }
             checkBody(storedSize, attachmentSize);
-            if ((long) FULL_HEADER_BYTES + storedSize + attachmentSize != frame.size()) {
+            if ((long)FULL_HEADER_BYTES + storedSize + attachmentSize != frame.size()) {
                 throw malformed("Full-frame sizes do not match the remaining bytes");
             }
             var compressed = (flags & FLAG_PROTOBUF_ZSTD) != 0;
@@ -130,13 +126,11 @@ public final class FrameCodec {
             UniBuffer attachment = null;
             try {
                 if (compressed) {
-                    if (storedSize == 0 || decodedSize <= COMPRESSION_THRESHOLD
-                            || storedSize >= decodedSize) {
+                    if (storedSize == 0 || decodedSize <= COMPRESSION_THRESHOLD || storedSize >= decodedSize) {
                         throw malformed("Invalid zstd protobuf representation");
                     }
                     try (var stored = frame.slice(FULL_HEADER_BYTES, storedSize).acquire()) {
-                        protobuf = Zstd.decompressAndValidate(
-                                stored, decodedSize, null, BufferType.ARRAY);
+                        protobuf = Zstd.decompressAndValidate(stored, decodedSize, null, BufferType.ARRAY);
                     }
                 } else {
                     if (decodedSize != storedSize) {
@@ -147,8 +141,10 @@ public final class FrameCodec {
                 attachment = frame.slice(FULL_HEADER_BYTES + storedSize, attachmentSize).acquire();
                 return new DecodedFrame(messageId, protobuf, attachment, compressed);
             } catch (RuntimeException error) {
-                if (protobuf != null) protobuf.close();
-                if (attachment != null) attachment.close();
+                if (protobuf != null)
+                    protobuf.close();
+                if (attachment != null)
+                    attachment.close();
                 throw malformed("Invalid full frame", error);
             }
         }
@@ -161,24 +157,21 @@ public final class FrameCodec {
     }
 
     private static void checkBody(int storedSize, int attachmentSize) {
-        if (storedSize < 0 || attachmentSize < 0
-                || (long) storedSize + attachmentSize >= MAX_BODY_BYTES) {
+        if (storedSize < 0 || attachmentSize < 0 || (long)storedSize + attachmentSize >= MAX_BODY_BYTES) {
             throw malformed("Full-frame body must be smaller than 30 KiB");
         }
     }
 
     private static void writeInt(byte[] target, int offset, int value) {
-        target[offset] = (byte) value;
-        target[offset + 1] = (byte) (value >>> 8);
-        target[offset + 2] = (byte) (value >>> 16);
-        target[offset + 3] = (byte) (value >>> 24);
+        target[offset] = (byte)value;
+        target[offset + 1] = (byte)(value >>> 8);
+        target[offset + 2] = (byte)(value >>> 16);
+        target[offset + 3] = (byte)(value >>> 24);
     }
 
     private static int readInt(byte[] source, int offset) {
-        return source[offset] & 0xff
-                | (source[offset + 1] & 0xff) << 8
-                | (source[offset + 2] & 0xff) << 16
-                | source[offset + 3] << 24;
+        return source[offset] & 0xff | (source[offset + 1] & 0xff) << 8 | (source[offset + 2] & 0xff) << 16
+            | source[offset + 3] << 24;
     }
 
     private static IllegalArgumentException malformed(String message) {
@@ -195,8 +188,7 @@ public final class FrameCodec {
         private final UniBuffer attachment;
         private final boolean compressed;
 
-        private DecodedFrame(int messageId, UniBuffer protobuf, UniBuffer attachment,
-                             boolean compressed) {
+        private DecodedFrame(int messageId, UniBuffer protobuf, UniBuffer attachment, boolean compressed) {
             this.messageId = messageId;
             this.protobuf = protobuf;
             this.attachment = attachment;

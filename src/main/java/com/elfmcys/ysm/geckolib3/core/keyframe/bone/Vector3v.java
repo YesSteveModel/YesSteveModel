@@ -1,23 +1,21 @@
 package com.elfmcys.ysm.geckolib3.core.keyframe.bone;
 
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
+import com.elfmcys.ysm.expression.aot.FloatExpression;
 import org.joml.Vector3f;
 
 public class Vector3v {
-    private final IValue x;
-    private final IValue y;
-    private final IValue z;
+    private final FloatExpression x;
+    private final FloatExpression y;
+    private final FloatExpression z;
 
-    public Vector3v(IValue x, IValue y, IValue z) {
+    public Vector3v(FloatExpression x, FloatExpression y, FloatExpression z) {
         this.x = x;
         this.y = y;
         this.z = z;
     }
 
-    public Vector3f eval(ExpressionEvaluator<?> evaluator) {
-        return new Vector3f(x.evalAsFloat(evaluator),
-                y.evalAsFloat(evaluator),
-                z.evalAsFloat(evaluator));
+    public Vector3f eval(EntityExpressionRuntime.Evaluation evaluation) {
+        return new Vector3f(evaluation.evaluate(x), evaluation.evaluate(y), evaluation.evaluate(z));
     }
 }

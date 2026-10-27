@@ -23,7 +23,7 @@ public class GeoLocatorType {
         if (frozen.get()) {
             throw new IllegalStateException("Registry is already frozen");
         }
-        return nameMap.computeIfAbsent(name, n -> new GeoLocator(this, name, (byte) (nameMap.size() + 1)));
+        return nameMap.computeIfAbsent(name, n -> new GeoLocator(this, name, (byte)(nameMap.size() + 1)));
     }
 
     public int size() {
@@ -36,8 +36,7 @@ public class GeoLocatorType {
             return null;
         }
         var suffixStart = name.length();
-        while (suffixStart > 0 &&
-                Character.isDigit(name.charAt(suffixStart - 1))) {
+        while (suffixStart > 0 && Character.isDigit(name.charAt(suffixStart - 1))) {
             suffixStart--;
         }
         if (suffixStart > 0 && suffixStart < name.length()) {

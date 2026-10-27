@@ -83,16 +83,13 @@ final class TextureRegistrationState<I> {
     }
 
     enum ReleaseResult {
-        IGNORED,
-        DISCARD,
-        DELAYED
+        IGNORED, DISCARD, DELAYED
     }
 
     record Activation(Token token, boolean registered) {
     }
 
     static final class Token {
-        private Token() {
-        }
+        private Token() {}
     }
 }

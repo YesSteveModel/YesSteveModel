@@ -19,36 +19,66 @@ enum StarredModelOperation {
   STARRED_MODEL_OPERATION_REMOVE = 2;
 }
 
-message EntityAnimationActionRequest {
-  EntityRef target = 1;
-  oneof action {
-    bool stop = 2;
-    RouletteAnimationSelection play = 3;
+message ExpressionTargetIdentity {
+  // Schema 2: module_identity is the shared model/target/config/event-contract
+  // projection. Local artifact, ProgramId, profile, backend and layout are excluded.
+  uint32 schema_version = 1;
+  bytes model_id = 2;
+  string target_id = 3;
+  bytes module_identity = 4;
+  bytes config_identity = 5;
+  bytes catalog_identity = 6;
+}
+
+message ConfigAction {
+  string button_id = 1;
+  uint32 form_index = 2;
+  oneof payload {
+    bool bool_value = 3;
+    float f32_value = 4;
+    uint32 label_index = 5;
   }
+  string label_name = 6;
 }
 
-message RouletteAnimationSelection {
-  string classification_id = 1;
-  uint32 animation_index = 2;
+message SubmitConfigActionRequest {
+  EntityRef target = 1;
+  ExpressionTargetIdentity identity = 2;
+  ConfigAction action = 3;
 }
 
-message ExecuteMolangEvent {
-  repeated EntityRef targets = 1;
-  string expression = 2;
+message ConfigActionEvent {
+  EntityRef subject = 1;
+  ExpressionTargetIdentity identity = 2;
+  ConfigAction action = 3;
 }
 
-message SubmitRouletteExpressionRequest {
-  optional EntityRef target = 1;
-  string expression = 2;
+message PrivilegedTransientTarget {
+  EntityRef target = 1;
+  bytes model_id = 2;
+  string target_id = 3;
+}
+
+message PrivilegedTransientEvent {
+  repeated PrivilegedTransientTarget targets = 1;
+  string source = 2;
+  TransientCapability capability = 3;
+}
+
+enum TransientCapability {
+  TRANSIENT_CAPABILITY_UNSPECIFIED = 0;
+  TRANSIENT_CAPABILITY_SERVER_ADMIN_ACTION = 1;
 }
 
 message EmitMolangSync {
   repeated float arguments = 1;
+  ExpressionTargetIdentity identity = 2;
 }
 
 message MolangSyncEvent {
-  optional EntityRef subject = 1;
+  EntityRef subject = 1;
   repeated float arguments = 2;
+  ExpressionTargetIdentity identity = 3;
 }
 
 message SwingHandRequest {

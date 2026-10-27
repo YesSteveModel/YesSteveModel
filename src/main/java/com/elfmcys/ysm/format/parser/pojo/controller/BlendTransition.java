@@ -23,7 +23,7 @@ public class BlendTransition {
     public static final class Adapter implements JsonDeserializer<BlendTransition> {
         @Override
         public BlendTransition deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
-                throws JsonParseException {
+            throws JsonParseException {
             var transition = new BlendTransition();
             if (json == null || json.isJsonNull()) {
                 return transition;

@@ -19,16 +19,20 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 @OnlyIn(Dist.CLIENT)
 @SuppressWarnings("removal")
 public class SlashBladeRender {
-    private static final ResourceLocation RESOURCE_DEFAULT_MODEL = new ResourceLocation("slashblade", "model/blade.obj");
-    private static final ResourceLocation RESOURCE_DEFAULT_TEXTURE = new ResourceLocation("slashblade", "model/blade.png");
+    private static final ResourceLocation RESOURCE_DEFAULT_MODEL =
+        new ResourceLocation("slashblade", "model/blade.obj");
+    private static final ResourceLocation RESOURCE_DEFAULT_TEXTURE =
+        new ResourceLocation("slashblade", "model/blade.png");
 
-    public static void renderSlashBlade(PoseStack matrixStack, MultiBufferSource bufferIn, int lightIn, ItemStack stack) {
+    public static void renderSlashBlade(PoseStack matrixStack, MultiBufferSource bufferIn, int lightIn,
+        ItemStack stack) {
         if (stack.isEmpty()) {
             return;
         }
         stack.getCapability(CapabilitySlashBlade.BLADESTATE).ifPresent(bladeState -> {
             ResourceLocation texture = bladeState.getTexture().orElse(RESOURCE_DEFAULT_TEXTURE);
-            WavefrontObject obj = BladeModelManager.getInstance().getModel(bladeState.getModel().orElse(RESOURCE_DEFAULT_MODEL));
+            WavefrontObject obj =
+                BladeModelManager.getInstance().getModel(bladeState.getModel().orElse(RESOURCE_DEFAULT_MODEL));
             String part;
             if (bladeState.isBroken()) {
                 part = "blade_damaged";
@@ -36,19 +40,21 @@ public class SlashBladeRender {
                 part = "blade";
             }
             BladeRenderState.renderOverrided(stack, obj, part, texture, matrixStack, bufferIn, lightIn);
-            BladeRenderState.renderOverridedLuminous(stack, obj, part + "_luminous", texture, matrixStack, bufferIn, lightIn);
+            BladeRenderState.renderOverridedLuminous(stack, obj, part + "_luminous", texture, matrixStack, bufferIn,
+                lightIn);
             BladeRenderState.renderOverrided(stack, obj, "sheath", texture, matrixStack, bufferIn, lightIn);
-            BladeRenderState.renderOverridedLuminous(stack, obj, "sheath_luminous", texture, matrixStack, bufferIn, lightIn);
+            BladeRenderState.renderOverridedLuminous(stack, obj, "sheath_luminous", texture, matrixStack, bufferIn,
+                lightIn);
         });
     }
 
     public static void renderMainhandSlashBlade(LivingEntity livingEntity, GeoRenderData data, PoseStack matrixStack,
-                                                MultiBufferSource bufferIn, int lightIn, ItemStack stack) {
+        MultiBufferSource bufferIn, int lightIn, ItemStack stack) {
         if (SlashBladeCompat.isSlashBladeItem(stack)) {
             // 如果没有 bladeBones 和 sheathBones，说明是旧版渲染
-            if (data.modelState.locatorGroupSize(PlayerLocator.get().blade) == 0 ||
-                data.modelState.locatorGroupSize(PlayerLocator.get().sheath) == 0 ||
-                data.modelState.locatorGroupSize(PlayerLocator.get().leftWaist) == 0) {
+            if (data.modelState.locatorGroupSize(PlayerLocator.get().blade) == 0
+                || data.modelState.locatorGroupSize(PlayerLocator.get().sheath) == 0
+                || data.modelState.locatorGroupSize(PlayerLocator.get().leftWaist) == 0) {
                 oldMainhandSlashBlade(livingEntity, data, matrixStack, bufferIn, lightIn, stack);
             } else {
                 stack.getCapability(CapabilitySlashBlade.BLADESTATE).ifPresent(bladeState -> {
@@ -59,9 +65,10 @@ public class SlashBladeRender {
     }
 
     private static void newMainhandSlashBlade(ISlashBladeState bladeState, GeoRenderData data, PoseStack matrixStack,
-                                              MultiBufferSource bufferIn, int lightIn, ItemStack stack) {
+        MultiBufferSource bufferIn, int lightIn, ItemStack stack) {
         ResourceLocation texture = bladeState.getTexture().orElse(RESOURCE_DEFAULT_TEXTURE);
-        WavefrontObject obj = BladeModelManager.getInstance().getModel(bladeState.getModel().orElse(RESOURCE_DEFAULT_MODEL));
+        WavefrontObject obj =
+            BladeModelManager.getInstance().getModel(bladeState.getModel().orElse(RESOURCE_DEFAULT_MODEL));
         String part;
         if (bladeState.isBroken()) {
             part = "blade_damaged";
@@ -77,9 +84,11 @@ public class SlashBladeRender {
             locatorPose.mulPose(Axis.ZP.rotationDegrees(180));
 
             BladeRenderState.renderOverrided(stack, obj, part, texture, locatorPose, bufferIn, lightIn);
-            BladeRenderState.renderOverridedLuminous(stack, obj, part + "_luminous", texture, locatorPose, bufferIn, lightIn);
+            BladeRenderState.renderOverridedLuminous(stack, obj, part + "_luminous", texture, locatorPose, bufferIn,
+                lightIn);
             BladeRenderState.renderOverrided(stack, obj, "sheath", texture, locatorPose, bufferIn, lightIn);
-            BladeRenderState.renderOverridedLuminous(stack, obj, "sheath_luminous", texture, locatorPose, bufferIn, lightIn);
+            BladeRenderState.renderOverridedLuminous(stack, obj, "sheath_luminous", texture, locatorPose, bufferIn,
+                lightIn);
         });
 
         // 定位点定在刀柄中心，刀朝向前方（默认）
@@ -90,7 +99,8 @@ public class SlashBladeRender {
             locatorPose.mulPose(Axis.XP.rotationDegrees(180));
 
             BladeRenderState.renderOverrided(stack, obj, part, texture, locatorPose, bufferIn, lightIn);
-            BladeRenderState.renderOverridedLuminous(stack, obj, part + "_luminous", texture, locatorPose, bufferIn, lightIn);
+            BladeRenderState.renderOverridedLuminous(stack, obj, part + "_luminous", texture, locatorPose, bufferIn,
+                lightIn);
         });
 
         // 定位点定在刀鞘最末端，刀朝向前方（默认）
@@ -101,19 +111,21 @@ public class SlashBladeRender {
             locatorPose.mulPose(Axis.ZP.rotationDegrees(180));
 
             BladeRenderState.renderOverrided(stack, obj, "sheath", texture, locatorPose, bufferIn, lightIn);
-            BladeRenderState.renderOverridedLuminous(stack, obj, "sheath_luminous", texture, locatorPose, bufferIn, lightIn);
+            BladeRenderState.renderOverridedLuminous(stack, obj, "sheath_luminous", texture, locatorPose, bufferIn,
+                lightIn);
         });
     }
 
-    private static void oldMainhandSlashBlade(LivingEntity livingEntity, GeoRenderData data, PoseStack matrixStack, MultiBufferSource bufferIn,
-                                              int lightIn, ItemStack stack) {
+    private static void oldMainhandSlashBlade(LivingEntity livingEntity, GeoRenderData data, PoseStack matrixStack,
+        MultiBufferSource bufferIn, int lightIn, ItemStack stack) {
         if (stack.isEmpty()) {
             return;
         }
 
         stack.getCapability(CapabilitySlashBlade.BLADESTATE).ifPresent(bladeState -> {
             ResourceLocation texture = bladeState.getTexture().orElse(RESOURCE_DEFAULT_TEXTURE);
-            WavefrontObject obj = BladeModelManager.getInstance().getModel(bladeState.getModel().orElse(RESOURCE_DEFAULT_MODEL));
+            WavefrontObject obj =
+                BladeModelManager.getInstance().getModel(bladeState.getModel().orElse(RESOURCE_DEFAULT_MODEL));
             String part;
             if (bladeState.isBroken()) {
                 part = "blade_damaged";
@@ -129,7 +141,8 @@ public class SlashBladeRender {
                 locatorPose.mulPose(Axis.ZP.rotationDegrees(180));
 
                 BladeRenderState.renderOverrided(stack, obj, "sheath", texture, locatorPose, bufferIn, lightIn);
-                BladeRenderState.renderOverridedLuminous(stack, obj, "sheath_luminous", texture, locatorPose, bufferIn, lightIn);
+                BladeRenderState.renderOverridedLuminous(stack, obj, "sheath_luminous", texture, locatorPose, bufferIn,
+                    lightIn);
                 long time = livingEntity.level().getGameTime() - bladeState.getLastActionTime();
                 if (time < 5) {
                     float i = time + data.partialTicks;
@@ -138,7 +151,8 @@ public class SlashBladeRender {
                     locatorPose.mulPose(Axis.XP.rotationDegrees(90));
                 }
                 BladeRenderState.renderOverrided(stack, obj, part, texture, locatorPose, bufferIn, lightIn);
-                BladeRenderState.renderOverridedLuminous(stack, obj, part + "_luminous", texture, locatorPose, bufferIn, lightIn);
+                BladeRenderState.renderOverridedLuminous(stack, obj, part + "_luminous", texture, locatorPose, bufferIn,
+                    lightIn);
             }, locatorPose -> {
                 locatorPose.translate(-0.25, 1.25, 0);
                 locatorPose.mulPose(Axis.XP.rotationDegrees(20));
@@ -146,7 +160,8 @@ public class SlashBladeRender {
         });
     }
 
-    public static void renderOffhandSlashBlade(GeoRenderData data, PoseStack matrixStack, MultiBufferSource bufferIn, int lightIn, ItemStack stack) {
+    public static void renderOffhandSlashBlade(GeoRenderData data, PoseStack matrixStack, MultiBufferSource bufferIn,
+        int lightIn, ItemStack stack) {
         if (SlashBladeCompat.isSlashBladeItem(stack)) {
             // 副手的刀渲染在右边
             data.modelState.visitLocatorGroupOrDefault(PlayerLocator.get().rightWaist, matrixStack, locatorPose -> {

@@ -18,7 +18,8 @@ public class MobEffectSyncEvent {
         if (event.getEntity() instanceof ServerPlayer player && event.getEffectInstance().getEffect() != null) {
             var effectInstance = event.getEffectInstance();
             player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(cap -> {
-                cap.getPropertiesTracker().addEffect(player, effectInstance.getEffect(), effectInstance.getAmplifier() + 1);
+                cap.getPropertiesTracker().addEffect(player, effectInstance.getEffect(),
+                    effectInstance.getAmplifier() + 1);
             });
         }
     }
@@ -40,7 +41,8 @@ public class MobEffectSyncEvent {
         if (!YesSteveModel.isAvailable() || event.getEntity().level().isClientSide()) {
             return;
         }
-        if (event.getEntity() instanceof ServerPlayer player && event.getEffectInstance() != null && event.getEffectInstance().getEffect() != null) {
+        if (event.getEntity() instanceof ServerPlayer player && event.getEffectInstance() != null
+            && event.getEffectInstance().getEffect() != null) {
             player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(cap -> {
                 cap.getPropertiesTracker().removeEffect(player, event.getEffectInstance().getEffect());
             });

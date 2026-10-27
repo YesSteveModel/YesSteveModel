@@ -7,8 +7,8 @@ import java.util.Optional;
 public class ReflectionUtil {
     public static Optional<VarHandle> getField(Class<?> clazz, String name, Class<?> type) {
         try {
-            return Optional.of(MethodHandles.privateLookupIn(clazz, MethodHandles.lookup())
-                    .findVarHandle(clazz, name, type));
+            return Optional
+                .of(MethodHandles.privateLookupIn(clazz, MethodHandles.lookup()).findVarHandle(clazz, name, type));
         } catch (NoSuchFieldException | IllegalAccessException e) {
             e.printStackTrace();
         }

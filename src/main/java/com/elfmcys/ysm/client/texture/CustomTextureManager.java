@@ -18,8 +18,7 @@ public final class CustomTextureManager {
     private static final int DEFAULT_REMOVAL_DELAY_TICKS = 10 * 20;
     private static final Registry REGISTRY = new Registry(new MinecraftHost());
 
-    private CustomTextureManager() {
-    }
+    private CustomTextureManager() {}
 
     public static TextureHolder register(AbstractTexture texture) {
         return register(texture, DEFAULT_REMOVAL_DELAY_TICKS);
@@ -44,8 +43,7 @@ public final class CustomTextureManager {
         private static final int MAX_MILLI = 20;
 
         private final Host host;
-        private final IdentityHashMap<AbstractTexture, TextureRegistration> registrations =
-                new IdentityHashMap<>();
+        private final IdentityHashMap<AbstractTexture, TextureRegistration> registrations = new IdentityHashMap<>();
         private final Queue<CleanupEvent> cleanupEvents = new ConcurrentLinkedQueue<>();
         private final Queue<RemovalEvent> pendingRemovals = new ArrayDeque<>();
         private long counter;
@@ -57,8 +55,7 @@ public final class CustomTextureManager {
         TextureHolder register(AbstractTexture texture, int removingDelayTicks) {
             var registration = registrations.get(texture);
             if (registration == null) {
-                registration = new TextureRegistration(
-                        new TextureRegistrationState<>(nextId()));
+                registration = new TextureRegistration(new TextureRegistrationState<>(nextId()));
                 registrations.put(texture, registration);
             } else {
                 var current = registration.holder();
@@ -72,8 +69,7 @@ public final class CustomTextureManager {
                 try {
                     host.register(registration.state.id(), texture);
                 } catch (RuntimeException | Error failure) {
-                    discardIfUnregistered(texture, registration,
-                            registration.state.release(activation.token()));
+                    discardIfUnregistered(texture, registration, registration.state.release(activation.token()));
                     throw failure;
                 }
                 if (!registration.state.markRegistered(activation.token())) {
@@ -101,14 +97,13 @@ public final class CustomTextureManager {
             while ((cleanup = cleanupEvents.poll()) != null) {
                 var registration = registrations.get(cleanup.texture());
                 if (registration != null) {
-                    discardIfUnregistered(cleanup.texture(), registration,
-                            registration.state.release(cleanup.token()));
+                    discardIfUnregistered(cleanup.texture(), registration, registration.state.release(cleanup.token()));
                 }
             }
 
             for (var entry : registrations.entrySet()) {
-                entry.getValue().state.tickRemoval().ifPresent(token ->
-                        pendingRemovals.add(new RemovalEvent(entry.getKey(), token)));
+                entry.getValue().state.tickRemoval()
+                    .ifPresent(token -> pendingRemovals.add(new RemovalEvent(entry.getKey(), token)));
             }
 
             var stopWatch = StopWatch.createStarted();
@@ -130,11 +125,10 @@ public final class CustomTextureManager {
             }
         }
 
-        private void discardIfUnregistered(AbstractTexture texture,
-                                             TextureRegistration registration,
-                                             TextureRegistrationState.ReleaseResult result) {
+        private void discardIfUnregistered(AbstractTexture texture, TextureRegistration registration,
+            TextureRegistrationState.ReleaseResult result) {
             if (result == TextureRegistrationState.ReleaseResult.DISCARD
-                    && registrations.get(texture) == registration) {
+                && registrations.get(texture) == registration) {
                 registrations.remove(texture);
             }
         }
@@ -191,7 +185,6 @@ public final class CustomTextureManager {
     }
 
     private record TextureHolderImpl(ResourceLocation id,
-                                     TextureRegistrationState.Token token)
-            implements TextureHolder {
+        TextureRegistrationState.Token token) implements TextureHolder {
     }
 }

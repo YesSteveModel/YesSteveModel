@@ -18,7 +18,7 @@
 |---|---|---|
 | 输入冻结与验证 | AP-01/02/03/09 | 冻结实际解析闭包，分层验证，并对 raw 图片和模型音频应用各自 profile |
 | 转换交付与来源准入 | AP-06/07/09 | staging 重开验证、音频投影与 direct 来源 policy 不进入 schema reader |
-| 页面与 hover 需求 | AP-04/05 | 只保存当前意图，过滤短命浏览且不驱动普通远端下载 |
+| 页面与 hover 需求 | AP-04/05 | 集中保存展示资格与独立准备，页面统一准入模型和图片，自动 GUI 最多离线 |
 | Preview 与 export | AP-08 | 弱关联图片 cache、有限 operation admission 与完整导出 |
 
 本主题拥有 AP 内部关系；跨域边由[跨子系统关系](../governance/cross-subsystem-relations.md)唯一维护，加载规则见[关系登记入口](../governance/relationship-register.md)。

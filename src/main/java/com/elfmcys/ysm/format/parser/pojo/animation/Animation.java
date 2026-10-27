@@ -49,12 +49,11 @@ public class Animation {
     public static final class Adapter implements JsonDeserializer<Animation> {
         @Override
         public Animation deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
-                throws JsonParseException {
-            return deserializeAnimation(json, context, false);
+            throws JsonParseException {
+            return deserializeAnimation(json, false);
         }
 
-        static Animation deserializeAnimation(JsonElement json, JsonDeserializationContext context,
-                                              boolean mergeInstKeyframeLines) {
+        static Animation deserializeAnimation(JsonElement json, boolean mergeInstKeyframeLines) {
             var animation = new Animation();
             if (json == null || json.isJsonNull() || !json.isJsonObject()) {
                 return animation;
@@ -62,19 +61,19 @@ public class Animation {
             var object = json.getAsJsonObject();
             var animationLength = object.get("animation_length");
             if (animationLength != null && animationLength.isJsonPrimitive()
-                    && animationLength.getAsJsonPrimitive().isNumber()) {
+                && animationLength.getAsJsonPrimitive().isNumber()) {
                 animation.animationLength = secondsToTicks(animationLength.getAsFloat());
             }
             animation.loop = LoopType.fromJson(object.get("loop"));
-            animation.startDelay = readUnionValue(object, "start_delay", context);
-            animation.loopDelay = readUnionValue(object, "loop_delay", context);
-            animation.animTimeUpdate = readUnionValue(object, "anim_time_update", context);
-            animation.blendWeight = readUnionValue(object, "blend_weight", context);
+            animation.startDelay = readUnionValue(object, "start_delay");
+            animation.loopDelay = readUnionValue(object, "loop_delay");
+            animation.animTimeUpdate = readUnionValue(object, "anim_time_update");
+            animation.blendWeight = readUnionValue(object, "blend_weight");
             animation.overridePreviousAnimation = readBoolean(object.get("override_previous_animation"));
 
             readSoundEffects(animation, object.get("sound_effects"));
             readTimeline(animation, object.get("timeline"), mergeInstKeyframeLines);
-            readBones(animation, object.get("bones"), context);
+            readBones(animation, object.get("bones"));
 
             if (animation.animationLength == -1) {
                 animation.animationLength = calculateLength(animation.boneAnimations);
@@ -82,7 +81,7 @@ public class Animation {
             return animation;
         }
 
-        private static UnionValue readUnionValue(JsonObject object, String name, JsonDeserializationContext context) {
+        private static UnionValue readUnionValue(JsonObject object, String name) {
             var value = object.get(name);
             if (value == null || value.isJsonNull() || !value.isJsonPrimitive()) {
                 return null;
@@ -91,18 +90,18 @@ public class Animation {
             if (!primitive.isNumber() && !primitive.isString()) {
                 return null;
             }
-            return context.deserialize(value, UnionValue.class);
+            return UnionValue.fromJson(value);
         }
 
         private static Boolean readBoolean(JsonElement json) {
             if (json == null || json.isJsonNull() || !json.isJsonPrimitive()
-                    || !json.getAsJsonPrimitive().isBoolean()) {
+                || !json.getAsJsonPrimitive().isBoolean()) {
                 return null;
             }
             return json.getAsBoolean();
         }
 
-        private static void readBones(Animation animation, JsonElement json, JsonDeserializationContext context) {
+        private static void readBones(Animation animation, JsonElement json) {
             if (json == null || json.isJsonNull()) {
                 return;
             }
@@ -111,7 +110,7 @@ public class Animation {
                 if (item.getValue() == null || item.getValue().isJsonNull() || !item.getValue().isJsonObject()) {
                     throw new JsonParseException("Invalid bone animation: " + item.getKey());
                 }
-                var boneAnimation = context.<BoneAnimation>deserialize(item.getValue(), BoneAnimation.class);
+                var boneAnimation = BoneAnimation.fromJson(item.getValue());
                 boneAnimation.boneName = item.getKey();
                 animation.boneAnimations.add(boneAnimation);
             }
@@ -131,7 +130,7 @@ public class Animation {
                         var builder = new StringBuilder();
                         for (JsonElement element : value.getAsJsonArray()) {
                             if (element == null || element.isJsonNull() || !element.isJsonPrimitive()
-                                    || !element.getAsJsonPrimitive().isString()) {
+                                || !element.getAsJsonPrimitive().isString()) {
                                 continue;
                             }
                             builder.append(element.getAsString()).append('\n');
@@ -140,14 +139,13 @@ public class Animation {
                     } else {
                         for (JsonElement element : value.getAsJsonArray()) {
                             if (element == null || element.isJsonNull() || !element.isJsonPrimitive()
-                                    || !element.getAsJsonPrimitive().isString()) {
+                                || !element.getAsJsonPrimitive().isString()) {
                                 continue;
                             }
                             keyFrame.eventData.add(element.getAsString());
                         }
                     }
-                } else if (value != null && value.isJsonPrimitive()
-                        && value.getAsJsonPrimitive().isString()) {
+                } else if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
                     keyFrame.eventData.add(value.getAsString());
                 }
                 animation.customInstructionKeyframes.add(keyFrame);

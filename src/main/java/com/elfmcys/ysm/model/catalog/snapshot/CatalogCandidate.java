@@ -10,17 +10,14 @@ public record CatalogCandidate(CatalogIndexSnapshot index, CatalogSnapshot snaps
     public CatalogCandidate {
         Objects.requireNonNull(index, "index");
         Objects.requireNonNull(snapshot, "snapshot");
-        if (!index.packs().equals(snapshot.packs())
-                || !index.report().equals(snapshot.report())) {
-            throw new IllegalArgumentException(
-                    "Catalog index and content snapshot metadata do not match");
+        if (!index.packs().equals(snapshot.packs()) || !index.report().equals(snapshot.report())) {
+            throw new IllegalArgumentException("Catalog index and content snapshot metadata do not match");
         }
     }
 
     public static CatalogCandidate empty() {
         var report = ModelScanReport.empty();
-        return new CatalogCandidate(
-                new CatalogIndexSnapshot(List.of(), List.of(), report),
-                new CatalogSnapshot(Map.of(), List.of(), report));
+        return new CatalogCandidate(new CatalogIndexSnapshot(List.of(), List.of(), report),
+            new CatalogSnapshot(Map.of(), List.of(), report));
     }
 }

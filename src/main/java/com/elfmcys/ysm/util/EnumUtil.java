@@ -12,7 +12,8 @@ import java.util.stream.Collectors;
 
 public class EnumUtil {
     private final static Object2ReferenceOpenHashMap<String, EquipmentSlot> EQUIPMENT_SLOTS =
-            new Object2ReferenceOpenHashMap<>(Arrays.stream(EquipmentSlot.values()).collect(Collectors.toMap(u -> u.getName().toLowerCase(Locale.US), u -> u)));
+        new Object2ReferenceOpenHashMap<>(Arrays.stream(EquipmentSlot.values())
+            .collect(Collectors.toMap(u -> u.getName().toLowerCase(Locale.US), u -> u)));
 
     public static Optional<UseAnim> getUseAnim(String name) {
         return Optional.ofNullable(EnumUtils.getEnum(UseAnim.class, name.toUpperCase(Locale.US)));

@@ -21,10 +21,8 @@ public final class ResidentChunkDataSource implements ChunkDataSource {
         this.chunks = Map.copyOf(chunks);
     }
 
-    public static ResidentChunkDataSource copyOf(ChunkDataSource source,
-                                                 AssetContainerView view,
-                                                 Set<String> retainedTypes)
-            throws IOException {
+    public static ResidentChunkDataSource copyOf(ChunkDataSource source, AssetContainerView view,
+        Set<String> retainedTypes) throws IOException {
         var result = new LinkedHashMap<String, ArrayBuffer>();
         try {
             for (var type : retainedTypes.stream().sorted().toList()) {
@@ -44,24 +42,21 @@ public final class ResidentChunkDataSource implements ChunkDataSource {
     }
 
     /** Copies every stored chunk from a container whose envelope was already verified. */
-    public static ResidentChunkDataSource fromContainer(
-            byte[] container, AssetContainerView view) throws IOException {
+    public static ResidentChunkDataSource fromContainer(byte[] container, AssetContainerView view) throws IOException {
         return fromContainer(ArrayBuffer.borrow(container), view);
     }
 
     /** Copies every stored chunk from a container whose envelope was already verified. */
-    public static ResidentChunkDataSource fromContainer(
-            UniBuffer container, AssetContainerView view) throws IOException {
+    public static ResidentChunkDataSource fromContainer(UniBuffer container, AssetContainerView view)
+        throws IOException {
         var result = new LinkedHashMap<String, ArrayBuffer>();
         try {
             for (var chunk : view.getChunkTable().values()) {
                 var end = Math.addExact(chunk.offset(), chunk.size());
                 if (chunk.offset() < 0 || end > container.size()) {
-                    throw AssetLoadException.content(
-                            "Resident chunk range exceeds the container: " + chunk.type());
+                    throw AssetLoadException.content("Resident chunk range exceeds the container: " + chunk.type());
                 }
-                var stored = ArrayBuffer.copyOf(container.slice(
-                        chunk.offset(), chunk.size()).nio());
+                var stored = ArrayBuffer.copyOf(container.slice(chunk.offset(), chunk.size()).nio());
                 try {
                     if (!chunk.type().equals(AssetContainerConstant.VERIFICATION_CHUNK_TYPE)) {
                         ChunkDecoding.validateStored(stored, chunk);
@@ -80,8 +75,7 @@ public final class ResidentChunkDataSource implements ChunkDataSource {
     }
 
     @Override
-    public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk,
-                                 BufferType bufferType) throws IOException {
+    public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
         if (!ChunkDecoding.isZstd(chunk)) {
             return readStoredVerified(chunk, bufferType);
         }
@@ -91,16 +85,13 @@ public final class ResidentChunkDataSource implements ChunkDataSource {
     }
 
     @Override
-    public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk,
-                                        BufferType bufferType) throws IOException {
+    public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
         var readType = ChunkDecoding.isZstd(chunk) ? BufferType.NATIVE : bufferType;
         try (var stored = copyStored(chunk, readType)) {
             if (!chunk.type().equals(AssetContainerConstant.VERIFICATION_CHUNK_TYPE)) {
                 ChunkDecoding.validateStored(stored, chunk);
             }
-            return bufferType == BufferType.NATIVE
-                    ? stored.acquireNative()
-                    : stored.acquireArray();
+            return bufferType == BufferType.NATIVE ? stored.acquireNative() : stored.acquireArray();
         }
     }
 
@@ -108,22 +99,19 @@ public final class ResidentChunkDataSource implements ChunkDataSource {
         return chunks.keySet();
     }
 
-    private ArrayBuffer require(AssetContainerView.ChunkInfo chunk)
-            throws AssetLoadException {
+    private ArrayBuffer require(AssetContainerView.ChunkInfo chunk) throws AssetLoadException {
         var bytes = chunks.get(chunk.type());
         if (bytes == null) {
-            throw AssetLoadException.content(
-                    "Chunk was preprocessed and its raw payload was discarded: " + chunk.type());
+            throw AssetLoadException
+                .content("Chunk was preprocessed and its raw payload was discarded: " + chunk.type());
         }
         return bytes;
     }
 
-    private UniBuffer copyStored(AssetContainerView.ChunkInfo chunk,
-                                 BufferType bufferType) throws IOException {
+    private UniBuffer copyStored(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
         var bytes = require(chunk);
         if (bytes.size() != chunk.size()) {
-            throw AssetLoadException.content(
-                    "Resident chunk has an unexpected stored size: " + chunk.type());
+            throw AssetLoadException.content("Resident chunk has an unexpected stored size: " + chunk.type());
         }
         var array = bytes.copy();
         if (bufferType == BufferType.ARRAY) {

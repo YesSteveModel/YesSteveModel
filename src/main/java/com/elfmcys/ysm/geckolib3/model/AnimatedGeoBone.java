@@ -15,7 +15,7 @@ public class AnimatedGeoBone implements BoneView {
     private static final int COLOR_OFFSET = 12;
     private static final int TRANSPARENCY_GLOW_OFFSET = 13;
 
-    private final GeoBone bone;
+    private GeoBone bone;
     private final float[] attributes;
     private final int baseOffset;
 
@@ -24,19 +24,35 @@ public class AnimatedGeoBone implements BoneView {
         this.attributes = attributes;
         this.baseOffset = boneIndex * AnimatedGeoModel.BONE_ATTRIBUTE_COUNT;
 
+        initializeAttributes(bone, attributes, boneIndex);
+    }
+
+    public static void initializeAttributes(GeoBone bone, float[] attributes, int boneIndex) {
+        int baseOffset = boneIndex * AnimatedGeoModel.BONE_ATTRIBUTE_COUNT;
         var rotation = bone.rotation();
-        setRotation(rotation.x, rotation.y, rotation.z);
-        setPosition(0, 0, 0);
-        setScale(1, 1, 1);
+        attributes[baseOffset + ROTATION_OFFSET] = rotation.x;
+        attributes[baseOffset + ROTATION_OFFSET + 1] = rotation.y;
+        attributes[baseOffset + ROTATION_OFFSET + 2] = rotation.z;
+        attributes[baseOffset + POSITION_OFFSET] = 0;
+        attributes[baseOffset + POSITION_OFFSET + 1] = 0;
+        attributes[baseOffset + POSITION_OFFSET + 2] = 0;
+        attributes[baseOffset + SCALE_OFFSET] = 1;
+        attributes[baseOffset + SCALE_OFFSET + 1] = 1;
+        attributes[baseOffset + SCALE_OFFSET + 2] = 1;
+        attributes[baseOffset + CUBES_HIDDEN_OFFSET] = 0;
+        attributes[baseOffset + CHILDREN_HIDDEN_OFFSET] = 0;
         var locator = bone.locatorType();
-        attributes[baseOffset + LOCATOR_SEQUENCE_OFFSET] =
-                locator == null ? 0 : Byte.toUnsignedInt(locator.seq());
+        attributes[baseOffset + LOCATOR_SEQUENCE_OFFSET] = locator == null ? 0 : Byte.toUnsignedInt(locator.seq());
         attributes[baseOffset + COLOR_OFFSET] = 0xFFFFFF;
-        attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET] = 0xFFFF;
+        attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET] = bone.glow() ? 0x0FFF : 0xFFFF;
     }
 
     public GeoBone getBoneData() {
         return bone;
+    }
+
+    void bindBoneData(GeoBone bone) {
+        this.bone = bone;
     }
 
     public Vector3f getInitialRotation() {
@@ -194,30 +210,17 @@ public class AnimatedGeoBone implements BoneView {
     }
 
     public void setColor(int red, int green, int blue) {
-        attributes[baseOffset + COLOR_OFFSET] =
-                red | (green << 8) | (blue << 16);
+        attributes[baseOffset + COLOR_OFFSET] = red | (green << 8) | (blue << 16);
     }
 
     public void setTransparency(int alpha) {
-        var packed = (int) attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET];
-        attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET] =
-                (packed & 0xFF00) | alpha;
+        var packed = (int)attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET];
+        attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET] = (packed & 0xFF00) | alpha;
     }
 
     public void setGlow(int level) {
-        var packed = (int) attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET];
+        var packed = (int)attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET];
         var glow = level == -1 ? 0xFF : level;
-        attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET] =
-                (packed & 0xFF) | (glow << 8);
+        attributes[baseOffset + TRANSPARENCY_GLOW_OFFSET] = (packed & 0xFF) | (glow << 8);
     }
-
-    // TODO
-//    @SuppressWarnings("unchecked")
-//    public <T> T getTlmBone() {
-//        if (this.tlmBone == null) {
-//            // FIXME: 有可能会触发类加载？
-//            this.tlmBone = TlmConverterHelper.convertToTlmGeoBone(this);
-//        }
-//        return (T) this.tlmBone;
-//    }
 }

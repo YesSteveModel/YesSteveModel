@@ -15,28 +15,23 @@ public final class ActivationSnapshot {
     private final RemotePublicationSnapshot publication;
     private final Map<Hash256, State> entries;
 
-    public ActivationSnapshot(RemotePublicationSnapshot publication,
-                              Map<Hash256, State> entries) {
+    public ActivationSnapshot(RemotePublicationSnapshot publication, Map<Hash256, State> entries) {
         this.publication = Objects.requireNonNull(publication, "publication");
         Objects.requireNonNull(entries, "entries");
         if (!publication.entries().keySet().equals(entries.keySet())) {
-            throw new IllegalArgumentException(
-                    "Activation entries do not match publication authority");
+            throw new IllegalArgumentException("Activation entries do not match publication authority");
         }
         var copy = new LinkedHashMap<Hash256, State>();
         publication.entries().forEach((modelId, expected) -> {
             var state = Objects.requireNonNull(entries.get(modelId), "state");
             if (!expected.equals(state.publication())) {
-                throw new IllegalArgumentException(
-                        "Activation state does not match publication entry");
+                throw new IllegalArgumentException("Activation state does not match publication entry");
             }
             if (state instanceof Ready ready) {
                 var record = ready.record();
-                if (!modelId.equals(record.entry().modelId())
-                        || !expected.path().equals(record.entry().path())
-                        || expected.access() != record.entry().access()) {
-                    throw new IllegalArgumentException(
-                            "Ready record does not match publication authority");
+                if (!modelId.equals(record.entry().modelId()) || !expected.path().equals(record.entry().path())
+                    || expected.access() != record.entry().access()) {
+                    throw new IllegalArgumentException("Ready record does not match publication authority");
                 }
             }
             copy.put(modelId, state);
@@ -46,8 +41,7 @@ public final class ActivationSnapshot {
 
     public static ActivationSnapshot pending(RemotePublicationSnapshot publication) {
         var states = new LinkedHashMap<Hash256, State>();
-        publication.entries().forEach((modelId, entry) ->
-                states.put(modelId, new Pending(entry)));
+        publication.entries().forEach((modelId, entry) -> states.put(modelId, new Pending(entry)));
         return new ActivationSnapshot(publication, states);
     }
 
@@ -74,8 +68,7 @@ public final class ActivationSnapshot {
     }
 
     public List<Failed> failures() {
-        return entries.values().stream().filter(Failed.class::isInstance)
-                .map(Failed.class::cast).toList();
+        return entries.values().stream().filter(Failed.class::isInstance).map(Failed.class::cast).toList();
     }
 
     public sealed interface State permits Pending, Ready, Failed {
@@ -95,8 +88,7 @@ public final class ActivationSnapshot {
         }
     }
 
-    public record Failed(PublicationEntry publication,
-                         ActivationFailure failure) implements State {
+    public record Failed(PublicationEntry publication, ActivationFailure failure) implements State {
         public Failed {
             Objects.requireNonNull(publication, "publication");
             Objects.requireNonNull(failure, "failure");

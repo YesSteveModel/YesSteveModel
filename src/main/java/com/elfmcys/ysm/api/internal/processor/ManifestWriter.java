@@ -12,14 +12,13 @@ import javax.tools.StandardLocation;
 final class ManifestWriter {
     static final int VERSION = 1;
 
-    private ManifestWriter() {
-    }
+    private ManifestWriter() {}
 
     // 这里没有 GSON
     static void write(Filer filer, ExtensionPlan plan, PreparedSpec spec) throws IOException {
         var resource = filer.createResource(StandardLocation.CLASS_OUTPUT, "", plan.manifestPath());
-        try (var output = new BufferedWriter(new OutputStreamWriter(
-                resource.openOutputStream(), StandardCharsets.UTF_8))) {
+        try (var output =
+            new BufferedWriter(new OutputStreamWriter(resource.openOutputStream(), StandardCharsets.UTF_8))) {
             output.write("{\n  \"version\": ");
             output.write(Integer.toString(VERSION));
             output.write(",\n  \"canaryProbe\": ");
@@ -123,7 +122,7 @@ final class ManifestWriter {
                 default -> {
                     if (character < 0x20) {
                         output.write("\\u");
-                        output.write(String.format(Locale.ROOT, "%04x", (int) character));
+                        output.write(String.format(Locale.ROOT, "%04x", (int)character));
                     } else {
                         output.write(character);
                     }

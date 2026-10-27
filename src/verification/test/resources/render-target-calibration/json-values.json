@@ -1,0 +1,20 @@
+{
+  "valid": [
+    {"id":"scalar", "input":3, "ticks":[0], "pre":[[3]], "post":[null], "easing":["linear"]},
+    {"id":"one-component", "input":[2], "ticks":[0], "pre":[[2]], "post":[null], "easing":["linear"]},
+    {"id":"ordered-pre-post", "input":{"2":{"pre":[1,2,3],"post":[4,5,6],"lerp_mode":"catmullrom"},"0":[0,0,0],"1":{"post":[7,8,9]}}, "ticks":[0,20,40], "pre":[[0,0,0],[7,8,9],[1,2,3]], "post":[null,null,[4,5,6]], "easing":["linear","linear","catmullrom"]},
+    {"id":"numeric-string", "input":{"0":{"vector":[2,"2","query.anim_time"],"easing":"linear"}}, "ticks":[0], "pre":[[2,"2","query.anim_time"]], "post":[null], "easing":["linear"]},
+    {"id":"unknown-easing", "input":{"0":{"vector":5,"easing":"unsupported"}}, "ticks":[0], "pre":[[5]], "post":[null], "easing":["linear"]}
+  ],
+  "invalid": [
+    {"id":"empty-vector", "input":[]},
+    {"id":"two-components", "input":[1,2]},
+    {"id":"four-components", "input":[1,2,3,4]},
+    {"id":"boolean", "input":true},
+    {"id":"boolean-component", "input":[1,true,3]},
+    {"id":"null-component", "input":[1,null,3]},
+    {"id":"missing-pre-post", "input":{"0":{}}},
+    {"id":"null-frame", "input":{"0":null}},
+    {"id":"invalid-time", "input":{"not-a-time":[1,2,3]}}
+  ]
+}

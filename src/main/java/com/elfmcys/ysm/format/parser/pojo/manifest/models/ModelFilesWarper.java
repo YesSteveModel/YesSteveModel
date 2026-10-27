@@ -20,8 +20,7 @@ import java.util.List;
 public class ModelFilesWarper<T> {
     public List<T> list = new ArrayList<>();
 
-    public ModelFilesWarper() {
-    }
+    public ModelFilesWarper() {}
 
     public ModelFilesWarper(List<T> list) {
         this.list = list != null ? list : new ArrayList<>();
@@ -38,10 +37,10 @@ public class ModelFilesWarper<T> {
                 throw new JsonParseException("ModelFilesWarper requires a parameterized element type.");
             }
 
-            Type elementType = ((ParameterizedType) type.getType()).getActualTypeArguments()[0];
+            Type elementType = ((ParameterizedType)type.getType()).getActualTypeArguments()[0];
             TypeAdapter<?> elementAdapter = gson.getAdapter(TypeToken.get(elementType));
             TypeAdapter<?> listAdapter = gson.getAdapter(TypeToken.getParameterized(List.class, elementType));
-            return (TypeAdapter<T>) new Adapter<>(elementAdapter, listAdapter);
+            return (TypeAdapter<T>)new Adapter<>(elementAdapter, listAdapter);
         }
     }
 
@@ -51,8 +50,8 @@ public class ModelFilesWarper<T> {
 
         @SuppressWarnings("unchecked")
         private Adapter(TypeAdapter<?> elementAdapter, TypeAdapter<?> listAdapter) {
-            this.elementAdapter = (TypeAdapter<E>) elementAdapter;
-            this.listAdapter = (TypeAdapter<List<E>>) listAdapter;
+            this.elementAdapter = (TypeAdapter<E>)elementAdapter;
+            this.listAdapter = (TypeAdapter<List<E>>)listAdapter;
         }
 
         @Override

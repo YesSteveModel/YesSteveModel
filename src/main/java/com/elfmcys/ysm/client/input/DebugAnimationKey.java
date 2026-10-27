@@ -13,13 +13,11 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import org.lwjgl.glfw.GLFW;
 
-
 @Mod.EventBusSubscriber(value = Dist.CLIENT)
 public class DebugAnimationKey {
-    public static final KeyMapping DEBUG_ANIMATION_KEY = new KeyMapping("key.yes_steve_model.debug_animation.desc",
-            KeyConflictContext.IN_GAME, KeyModifier.ALT,
-            InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_B,
-            "key.category.yes_steve_model");
+    public static final KeyMapping DEBUG_ANIMATION_KEY =
+        new KeyMapping("key.yes_steve_model.debug_animation.desc", KeyConflictContext.IN_GAME, KeyModifier.ALT,
+            InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_B, "key.category.yes_steve_model");
 
     @SubscribeEvent
     public static void onKeyboardInput(InputEvent.Key event) {

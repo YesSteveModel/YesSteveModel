@@ -18,7 +18,7 @@
 		"player.parallel_0": {
 			"states": {
 				"default": {
-					"animations": ["parallel0", "parallel2", "parallel3", "parallel1", "parallel4", "parallel5", "parallel6", "parallel7"]
+					"animations": ["parallel0", "parallel2", "parallel3", "parallel1", "parallel5", "parallel6", "parallel7"]
 				}
 			}
 		},
@@ -144,7 +144,7 @@
 					"transitions": [
 						{"狐狐摇2-1": "(v.owo==5?1:0)&&(v.huhuyao==4?1:0)"},
 						{"三份麦霸1": "v.sf_m_b"},
-						{"狐狐单循环1-1": "(v.owo>0?1:0)&&(v.huhuyao==3?1:0)(v.huhuyao==3?1:0)"},
+						{"狐狐单循环1-1": "(v.owo>0?1:0)&&(v.huhuyao==3?1:0)"},
 						{"狐狐单循环2-1": "(v.owo>0?1:0)&&(v.huhuyao==2?1:0)"},
 						{"狐狐单循环3-1": "(v.owo>0?1:0)&&(v.huhuyao==1?1:0)"}
 					]

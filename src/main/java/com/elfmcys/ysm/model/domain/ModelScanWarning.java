@@ -5,8 +5,7 @@ import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import java.util.Objects;
 
 /** Non-fatal source-quality fact attached to one catalog build. */
-public record ModelScanWarning(CatalogRootKind rootKind, String source,
-                               Kind kind, int occurrences) {
+public record ModelScanWarning(CatalogRootKind rootKind, String source, Kind kind, int occurrences) {
     public ModelScanWarning {
         Objects.requireNonNull(rootKind, "rootKind");
         source = Objects.requireNonNullElse(source, "");
@@ -17,7 +16,6 @@ public record ModelScanWarning(CatalogRootKind rootKind, String source,
     }
 
     public enum Kind {
-        UNKNOWN_AUDIO,
-        INVALID_AUDIO
+        UNKNOWN_AUDIO, INVALID_AUDIO
     }
 }

@@ -19,8 +19,7 @@ public class MixinTweaker implements IMixinConfigPlugin {
     }
 
     @Override
-    public void onLoad(String mixinPackage) {
-    }
+    public void onLoad(String mixinPackage) {}
 
     @Override
     public String getRefMapperConfig() {
@@ -33,13 +32,16 @@ public class MixinTweaker implements IMixinConfigPlugin {
     }
 
     @Override
-    public void acceptTargets(Set<String> myTargets, Set<String> otherTargets) {
-    }
+    public void acceptTargets(Set<String> myTargets, Set<String> otherTargets) {}
 
     @Override
     public List<String> getMixins() {
         if (FMLEnvironment.dist == Dist.CLIENT) {
             List<String> list = Lists.newArrayList();
+
+            if (!FMLEnvironment.production) {
+                list.add("client.TextureManagerMixin");
+            }
 
             if (ParCoolCompat.isInstalled()) {
                 list.add("client.parcool.AnimationAccessor");
@@ -65,10 +67,8 @@ public class MixinTweaker implements IMixinConfigPlugin {
     }
 
     @Override
-    public void preApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
-    }
+    public void preApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {}
 
     @Override
-    public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
-    }
+    public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {}
 }

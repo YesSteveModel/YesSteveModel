@@ -7,9 +7,10 @@
   - 模型绑定与资源生存期: [DD.single-current-catalog](catalog-publication.md#ddsingle-current-catalog)
   - 单动画失败: [DD.local-failure-degradation](failure-isolation.md#ddlocal-failure-degradation)
 - Landing:
-  - [architecture](../../architecture/animation/entity-and-frame-state.md#实体级所有权)
-  - [architecture](../../architecture/animation/controllers-and-playback.md#副作用阶段)
-  - [design](../../architecture/animation/design-rationale.md)
+  - [implementation](../../architecture/animation/implementation/entity-and-frame-state.md#实体级所有权)
+  - [implementation](../../architecture/animation/controllers-and-playback.md#副作用阶段)
+  - [design](../../architecture/animation/overview.md)
+  - [design](../../architecture/animation/overview.md)
 
 ## DD.animation-state-is-entity-local
 
@@ -28,6 +29,10 @@
 ### BC.animation-effects-follow-logical-actions
 
 - Claim: 同一次逻辑推进的脚本动作、粒子、同步事件和声音不会因重复观察再次触发；此约束不把主时间线的推进频率或动作次数固定为帧率无关。
+
+### BC.expression-action-permission-is-fixed
+
+- Claim: 每条顶层表达式在入口固定本次动作许可；内部函数和 Java provider 调用沿用该许可。Provider 的声明 effect 只决定该次调用是否获准，不为嵌套调用建立收窄或恢复窗口。重复观察仍不产生新的动作，实体状态隔离和全部求值成功后才提交效果的边界保持有效。
 
 ### BC.animation-failure-is-local
 

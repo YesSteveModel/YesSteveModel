@@ -1,43 +1,55 @@
 package com.elfmcys.ysm.client.entity;
 
-import com.elfmcys.ysm.client.animation.molang.MolangEventWrapper;
-import com.elfmcys.ysm.client.controller.collections.PlayerControllerCollection;
-import com.elfmcys.ysm.geckolib3.core.AnimationState;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
-import com.elfmcys.ysm.geckolib3.geo.RenderContext;
-import com.elfmcys.ysm.molang.runtime.Struct;
+import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
+import com.elfmcys.ysm.config.ClientConfig;
+
+import com.elfmcys.ysm.client.controller.collections.PlayerControllerCollection;
+import dev.semaweave.RoamingRole;
+import com.elfmcys.ysm.geckolib3.core.AnimationState;
+import com.elfmcys.ysm.geckolib3.geo.RenderContext;
 import com.elfmcys.ysm.network.NetworkHandler;
 import com.elfmcys.ysm.network.forge.ClientProtocolGateway;
-import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.player.Player;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.List;
-
-public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> implements IRoamingEntity {
+public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> {
     protected final boolean localPlayer;
 
     protected boolean isPlayingExtraAnimation = false;
     protected String extraAnimationName = "idle";
     protected boolean isExtraAnimationDirty = false;
 
-    private List<IValue> syncHandler = null;
-
     public CustomPlayerEntity(Player player, boolean localPlayer, boolean asyncUpdate) {
         super(player, asyncUpdate);
         this.localPlayer = localPlayer;
         if (player instanceof LocalPlayer) {
-            setInitialized();
+            updateModelHash(null);
         }
     }
 
     @Override
-    protected void onSetupAnimationController() {
-        getModelRenderTarget().playerResources().playerControllerFactory().accept(this);
+    protected void prepareAnimationControllers(ModelRenderTarget target, AnimationData animations) {
+        target.playerResources().playerControllerFactory().accept(this, animations);
+    }
+
+    @Override
+    protected boolean isProducer() {
+        return localPlayer;
+    }
+
+    @Override
+    protected Class<?> resourceSubjectType() {
+        return net.minecraft.client.player.AbstractClientPlayer.class;
+    }
+
+    @Override
+    protected boolean presentationPermission() {
+        return super.presentationPermission() && (isFakePlayer()
+            || !(localPlayer ? ClientConfig.DISABLE_SELF_MODEL.get() : ClientConfig.DISABLE_OTHER_MODEL.get()));
     }
 
     @Override
@@ -47,12 +59,7 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> im
         }
         // 例外：local player 渲染 iris 阴影时应恒为第三人称，不能视为 immutable
         return !context.irisShadow() || !localPlayer
-                || Minecraft.getInstance().options.getCameraType() != CameraType.FIRST_PERSON;
-    }
-
-    @Nullable
-    public Struct getRoamingStruct() {
-        return null;
+            || Minecraft.getInstance().options.getCameraType() != CameraType.FIRST_PERSON;
     }
 
     public boolean isLocalPlayer() {
@@ -60,27 +67,32 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> im
     }
 
     @Override
-    protected void onModelRenderTargetLoaded(ModelRenderTarget newModel) {
-        super.onModelRenderTargetLoaded(newModel);
-        syncHandler = newModel.assets().eventHandlers().get(MolangEventWrapper.SYNC);
-    }
-
-    @Override
-    protected void resetModelRenderTarget() {
-        super.resetModelRenderTarget();
-        syncHandler = null;
-    }
-
-    @Override
-    protected void resetGeoModel() {
-        super.resetGeoModel();
+    protected void onModelEnded() {
+        super.onModelEnded();
+        if (hasInstalledModel())
+            return;
         isPlayingExtraAnimation = false;
         extraAnimationName = "idle";
         isExtraAnimationDirty = false;
     }
 
+    @Override
+    protected Runnable prepareRoleInstallation(ModelRenderTarget target,
+        com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.PreparedInstallation prepared) {
+        var humanoid = super.prepareRoleInstallation(target, prepared);
+        return () -> {
+            humanoid.run();
+            isPlayingExtraAnimation = false;
+            extraAnimationName = "idle";
+            isExtraAnimationDirty = false;
+        };
+    }
+
     public void playExtraAnimation(String animationName) {
-        if (getAnimation(animationName)!= null) {
+        rejectCandidateMutation();
+        if (!canAcceptPlayback())
+            return;
+        if (getAnimation(animationName) != null) {
             this.extraAnimationName = animationName;
             this.isPlayingExtraAnimation = true;
             this.isExtraAnimationDirty = true;
@@ -106,21 +118,21 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> im
     }
 
     public void stopExtraAnimation() {
+        rejectCandidateMutation();
         this.isPlayingExtraAnimation = false;
     }
 
     @Override
-    protected void preAnimationSetup(float seekTime, boolean shouldTick) {
-        super.preAnimationSetup(seekTime, shouldTick);
-        // 设置 roaming 变量
-        getAnimationProcessor().putRemoteStruct(getRoamingStruct());
+    protected RoamingRole roamingRole() {
+        return localPlayer ? RoamingRole.PRODUCER : RoamingRole.CONSUMER;
     }
 
     @Override
     protected void postAnimationSetup(float seekTime, boolean shouldTick) {
         super.postAnimationSetup(seekTime, shouldTick);
         if (localPlayer && shouldTick) {
-            if (isPlayingExtraAnimation() && getCodedAnimationStates(PlayerControllerCollection.CAP_CONTROLLER) == AnimationState.IDLE) {
+            if (isPlayingExtraAnimation()
+                && getCodedAnimationStates(PlayerControllerCollection.CAP_CONTROLLER) == AnimationState.IDLE) {
                 stopExtraAnimation();
                 if (NetworkHandler.isRemoteChannelPresent()) {
                     ClientProtocolGateway.stopSelfAnimation();
@@ -129,9 +141,4 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> im
         }
     }
 
-    public void molangSync(FloatArrayList args) {
-        if (syncHandler != null) {
-            executeMolangExp(MolangEventWrapper.wrap(syncHandler, args), true, false, null);
-        }
-    }
 }

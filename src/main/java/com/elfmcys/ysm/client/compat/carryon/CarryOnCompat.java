@@ -1,12 +1,11 @@
 package com.elfmcys.ysm.client.compat.carryon;
 
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
 import com.elfmcys.ysm.client.entity.CustomPlayerEntity;
 import com.elfmcys.ysm.geckolib3.core.controller.HybridAnimationController;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraftforge.fml.ModList;
-import org.apache.commons.lang3.StringUtils;
 
 import java.util.Optional;
 import java.util.function.BiFunction;
@@ -23,34 +22,37 @@ public class CarryOnCompat {
         return INSTALLED;
     }
 
-    public static Optional<BiFunction<String, CustomPlayerEntity, IAnimationController<CustomPlayerEntity>>> animationPredicate() {
+    public static Optional<BiFunction<String, CustomPlayerEntity, IAnimationController<CustomPlayerEntity>>>
+        animationPredicate() {
         if (INSTALLED) {
-            return Optional.of((name, entity) -> new HybridAnimationController<>(entity, name, 0.1f, new CarryOnPredicate()));
+            return Optional
+                .of((name, entity) -> new HybridAnimationController<>(entity, name, 0.1f, new CarryOnPredicate()));
         } else {
             return Optional.empty();
         }
     }
 
     public static boolean isCarryOnPrincess(Player player) {
+        return isCarryOnPrincess((LivingEntity)player);
+    }
+
+    public static boolean isCarryOnPrincess(LivingEntity entity) {
         if (INSTALLED) {
-            return CarryOnInnerCompat.isCarryOnPrincess(player);
+            return CarryOnInnerCompat.isCarryOnPrincess(entity);
         }
         return false;
     }
 
-    public static void addBinding(CtrlBinding binding) {
-        if (isInstalled()) {
-            CarryOnCtrlBinding.addInnerBinding(binding);
-        } else {
-            addEmptyBinding(binding);
-        }
+    /**
+     * Whether one borrowed entity is the Carry On princess, or {@code false} when this entity is not a living entity or
+     * the adapter is unavailable.
+     *
+     * <p>
+     * This is the capability-facing form: it owns the living-entity narrowing so a caller never has to reach the
+     * optional adapter itself.
+     */
+    public static boolean carryOnPrincess(net.minecraft.world.entity.Entity entity) {
+        return entity instanceof LivingEntity living && isCarryOnPrincess(living);
     }
 
-    /**
-     * 没有安装此模组时，这些 molang 应该存在，否则会报错
-     */
-    private static void addEmptyBinding(CtrlBinding binding) {
-        binding.livingEntityVar("carryon_type", ctx -> StringUtils.EMPTY);
-        binding.livingEntityVar("carryon_is_princess", ctx -> false);
-    }
 }

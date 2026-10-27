@@ -56,3 +56,8 @@ tasks.named('processTestResources') {
 idea.project.settings.taskTriggers {
     afterSync tasks.named('generateSchemaSources')
 }
+
+// Replacing handwritten roots must retain Protobuf's task-backed generated sources.
+sourceSets.configureEach { sourceSet ->
+    sourceSet.java.srcDirs(project.protobuf.sourceSets.named(sourceSet.name).map { it.output })
+}

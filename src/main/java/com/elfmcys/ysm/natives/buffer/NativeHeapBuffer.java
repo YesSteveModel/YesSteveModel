@@ -2,10 +2,11 @@ package com.elfmcys.ysm.natives.buffer;
 
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.util.CleanerUtil;
-import org.lwjgl.system.MemoryUtil;
+import io.netty.util.internal.PlatformDependent;
 
 import java.lang.ref.Cleaner;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -22,26 +23,50 @@ public class NativeHeapBuffer implements NativeBuffer {
         if (size > MAX_SIZE) {
             throw new IllegalArgumentException("Size too large");
         }
-        var ptr = nAlloc(size, alignment);
-        if (ptr == 0) {
+        var allocated = nAlloc(size, alignment);
+        if (allocated == null) {
             throw new OutOfMemoryError();
         }
-        headPtr = ptr;
-        data = MemoryUtil.memByteBuffer(ptr, size);
-        ownership = new Ownership(new Backing(ptr));
+        var adopted = adopt(allocated);
+        headPtr = adopted.headPtr;
+        data = adopted.data;
+        ownership = adopted.ownership;
     }
 
     /**
      * mimalloc cannot identify an arbitrary pointer's heap region; callers must pass its owning base view.
      */
     public NativeHeapBuffer(ByteBuffer ownedMem) {
+        var adopted = adopt(ownedMem);
+        headPtr = adopted.headPtr;
+        data = adopted.data;
+        ownership = adopted.ownership;
+    }
+
+    /** Consumes an owning base view, including when wrapper or Cleaner registration fails. */
+    public static NativeHeapBuffer adopt(ByteBuffer ownedMem) {
         if (!ownedMem.isDirect()) {
             throw new IllegalArgumentException("Buffer is not direct");
         }
-        var base = MemoryUtil.memAddressSafe(ownedMem) - ownedMem.position();
-        headPtr = base + ownedMem.position();
-        data = MemoryUtil.memByteBuffer(headPtr, ownedMem.remaining());
-        ownership = new Ownership(new Backing(base));
+        var base = PlatformDependent.directBufferAddress(ownedMem);
+        Backing backing = null;
+        State state = null;
+        try {
+            backing = new Backing(base);
+            state = new State(backing);
+            var ownership = new Ownership(backing, state);
+            return new NativeHeapBuffer(base + ownedMem.position(), ownedMem.slice().order(ByteOrder.nativeOrder()),
+                ownership);
+        } catch (RuntimeException | Error failure) {
+            if (state != null) {
+                state.clean();
+            } else if (backing != null) {
+                backing.release();
+            } else {
+                nFree(base);
+            }
+            throw failure;
+        }
     }
 
     private NativeHeapBuffer(long headPtr, ByteBuffer data, Ownership ownership) {
@@ -68,8 +93,8 @@ public class NativeHeapBuffer implements NativeBuffer {
         if (offset < 0 || size < 0 || offset > data.remaining() - size) {
             throw new IndexOutOfBoundsException();
         }
-        var slicePtr = headPtr + offset;
-        return new NativeHeapBuffer(slicePtr, MemoryUtil.memByteBuffer(slicePtr, size), ownership);
+        return new NativeHeapBuffer(headPtr + offset, data.slice(offset, size).order(ByteOrder.nativeOrder()),
+            ownership);
     }
 
     @Override
@@ -120,8 +145,12 @@ public class NativeHeapBuffer implements NativeBuffer {
         private final Cleaner.Cleanable cleanable;
 
         private Ownership(Backing backing) {
+            this(backing, new State(backing));
+        }
+
+        private Ownership(Backing backing, State state) {
             this.backing = backing;
-            state = new State(backing);
+            this.state = state;
             cleanable = CleanerUtil.ref(this, state, State::clean);
         }
 
@@ -154,7 +183,7 @@ public class NativeHeapBuffer implements NativeBuffer {
         }
     }
 
-    private static native long nAlloc(int size, int alignment);
+    private static native ByteBuffer nAlloc(int size, int alignment);
 
     private static native void nFree(long addr);
 }

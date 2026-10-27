@@ -1,92 +1,61 @@
 package com.elfmcys.ysm.geckolib3.core.processor;
 
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
-import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
-
-import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Objects;
 import java.util.function.BiConsumer;
 
-public class DebugInfo {
-    private static final DecimalFormat FORMATTER = new DecimalFormat("#.#####");
-    private final ReferenceArrayList<DebugItem> items = new ReferenceArrayList<>();
+/** User-visible watch definitions; compiled leases remain entity-runtime owned. */
+public final class DebugInfo {
+    private static final int MAX_WATCHES = 64;
+    private final LinkedHashMap<String, Entry> items = new LinkedHashMap<>();
+    private long revision;
 
-    public void add(Phase phase, String name, IValue exp) {
-        items.add(new DebugItem(name, exp, phase));
-    }
-
-    public void remove(String name) {
-        items.removeIf(item -> item.name.equals(name));
-    }
-
-    public void clear() {
-        items.clear();
-    }
-
-    public void evaluatePre(ExpressionEvaluator<?> evaluator) {
-        for (DebugItem item : items) {
-            if (item.phase == Phase.PRE_ANIMATION) {
-                item.eval(evaluator);
-            }
+    public synchronized void add(Phase phase, String name, String source) {
+        Objects.requireNonNull(phase, "phase");
+        if (Objects.requireNonNull(name, "name").isBlank()) {
+            throw new IllegalArgumentException("watch name must not be blank");
         }
+        if (!items.containsKey(name) && items.size() == MAX_WATCHES) {
+            throw new IllegalStateException("watch count exceeds " + MAX_WATCHES);
+        }
+        items.put(name, new Entry(name, Objects.requireNonNull(source, "source"), phase, ++revision, "Compiling..."));
     }
 
-    public void evaluatePost(ExpressionEvaluator<?> evaluator) {
-        for (DebugItem item : items) {
-            if (item.phase == Phase.POST_ANIMATION) {
-                item.eval(evaluator);
-            }
+    public synchronized void remove(String name) {
+        if (items.remove(name) != null) {
+            revision++;
         }
     }
 
-    public void enumerate(BiConsumer<String, String> enumerator) {
-        for (DebugItem item : items) {
-            enumerator.accept(item.name, item.result);
+    public synchronized void clear() {
+        if (!items.isEmpty()) {
+            items.clear();
+            revision++;
         }
     }
 
-    private static class DebugItem {
-        private final String name;
-        private final IValue value;
-        private final Phase phase;
-        private volatile String result;
+    synchronized List<Entry> entries() {
+        return List.copyOf(new ArrayList<>(items.values()));
+    }
 
-        public DebugItem(String name, IValue value, Phase phase) {
-            this.name = name;
-            this.value = value;
-            this.phase = phase;
+    synchronized void result(String name, long itemRevision, String result) {
+        var current = items.get(name);
+        if (current != null && current.revision() == itemRevision) {
+            items.put(name, new Entry(current.name(), current.source(), current.phase(), current.revision(),
+                Objects.requireNonNull(result, "result")));
         }
+    }
 
-        public void eval(ExpressionEvaluator<?> evaluator) {
-            try {
-                var ret = value.evalUnsafe(evaluator);
-                if (ret == null) {
-                    result = "null";
-                } else if (ret instanceof Number) {
-                    result = FORMATTER.format(ret);
-                } else {
-                    result = ret.toString();
-                }
-            } catch (Throwable e) {
-                result = "Error: " + e.getMessage();
-            }
-        }
+    public synchronized void enumerate(BiConsumer<String, String> enumerator) {
+        items.values().forEach(item -> enumerator.accept(item.name(), item.result()));
+    }
 
-        public String result() {
-            return result;
-        }
-
-        public String name() {
-            return name;
-        }
-
-        public Phase phase() {
-            return phase;
-        }
+    record Entry(String name, String source, Phase phase, long revision, String result) {
     }
 
     public enum Phase {
-        PRE_ANIMATION,
-        POST_ANIMATION
+        PRE_ANIMATION, POST_ANIMATION
     }
 }

@@ -9,5 +9,5 @@
 | 任务涉及 | 决策包 |
 |---|---|
 | Blockbench 创作体系、添加模型与热加载 | [authoring-input-and-reload](../decisions/authoring-input-and-reload.md) |
-| GUI 模型选择、模型列表与创作者署名 | [selection-and-attribution](../decisions/selection-and-attribution.md) |
+| GUI 模型选择、完整安装反馈与纹理入口、作者姿态保护、缺图指引与创作者署名 | [selection-and-attribution](../decisions/selection-and-attribution.md) |
 | 游戏内模型与动画调试反馈 | [creator-debugging](../decisions/creator-debugging.md) |

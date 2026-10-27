@@ -1,14 +1,16 @@
 package com.elfmcys.ysm.client.controller;
 
-import com.elfmcys.ysm.client.entity.CustomEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.model.resource.client.CommonAsset;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.BiConsumer;
+import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
 
-public class AnimationControllerCollection<T extends CustomEntity<?>, TModel> {
+public class AnimationControllerCollection<T extends AnimatableEntity<?>, TModel> {
     private final ReferenceArrayList<ControllerDiscovery<T, TModel>> discoveries = new ReferenceArrayList<>();
     private boolean initialized;
 
@@ -21,13 +23,18 @@ public class AnimationControllerCollection<T extends CustomEntity<?>, TModel> {
         initialized = true;
     }
 
-    public Consumer<T> build(TModel model, CommonAsset assets) {
+    public BiConsumer<T, AnimationData> build(TModel model, CommonAsset assets,
+        com.elfmcys.ysm.model.resource.client.AnimationStore source) {
         var factories = new ReferenceArrayList<ControllerFactory<T>>(discoveries.size());
-        for (var discovery : discoveries) {
-            factories.add(discovery.process(model, assets));
+        try (var phase = source.openReadPhase()) {
+            for (var discovery : discoveries) {
+                factories.add(discovery.process(model, assets, phase.animations()));
+            }
+        } catch (java.io.IOException failure) {
+            throw new java.io.UncheckedIOException(failure);
         }
-        return animatable -> {
-            Consumer<IAnimationController<T>> consumer = animatable::addAnimationController;
+        return (animatable, animations) -> {
+            Consumer<IAnimationController<T>> consumer = animations::addAnimationController;
             for (var factory : factories) {
                 factory.create(animatable, consumer);
             }

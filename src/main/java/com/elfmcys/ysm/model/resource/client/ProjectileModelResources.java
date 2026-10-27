@@ -7,14 +7,17 @@ import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceMap;
 
 import java.util.function.Consumer;
+import java.util.function.BiConsumer;
+import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
 
 public class ProjectileModelResources implements RenderTargetResources {
     private final GeoModel model;
     private final AnimationStore animations;
     private final Object2ReferenceMap<String, AnimationControllerData> controllers;
-    private final Consumer<CustomProjectileEntity> controllerFactory;
+    private final BiConsumer<CustomProjectileEntity, AnimationData> controllerFactory;
 
-    public ProjectileModelResources(GeoModel model, AnimationStore animations, Object2ReferenceMap<String, AnimationControllerData> controllers, CommonAsset assets) {
+    public ProjectileModelResources(GeoModel model, AnimationStore animations,
+        Object2ReferenceMap<String, AnimationControllerData> controllers, CommonAsset assets) {
         this.model = model;
         this.animations = animations;
         this.controllers = controllers;
@@ -33,7 +36,7 @@ public class ProjectileModelResources implements RenderTargetResources {
         return controllers;
     }
 
-    public Consumer<CustomProjectileEntity> controllerFactory() {
+    public BiConsumer<CustomProjectileEntity, AnimationData> controllerFactory() {
         return controllerFactory;
     }
 }

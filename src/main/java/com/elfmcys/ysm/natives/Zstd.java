@@ -12,11 +12,11 @@ public final class Zstd {
     private static final int OP_COMPRESS = 1;
     private static final int OP_DECOMPRESS = 2;
 
-    private Zstd() {
-    }
+    private Zstd() {}
 
     @Owned
-    public static UniBuffer compressAndHash(UniBuffer source, byte @Nullable [] hash, BufferType outputType, int level) {
+    public static UniBuffer compressAndHash(UniBuffer source, byte @Nullable [] hash, BufferType outputType,
+        int level) {
         var args = BufferArgument.packInput(source);
         final Object result;
         try {
@@ -31,7 +31,8 @@ public final class Zstd {
     }
 
     @Owned
-    public static UniBuffer decompressAndValidate(UniBuffer source, int outputSize, byte @Nullable [] hash, BufferType outputType) {
+    public static UniBuffer decompressAndValidate(UniBuffer source, int outputSize, byte @Nullable [] hash,
+        BufferType outputType) {
         var args = BufferArgument.packInput(source);
         final Object result;
         try {
@@ -45,5 +46,6 @@ public final class Zstd {
         return BufferArgument.unpackOutput(result);
     }
 
-    private static native Object nZstd(Object source, long sourceFlags, byte @Nullable [] hashResult, int outputParam, int outputType, int op);
+    private static native Object nZstd(Object source, long sourceFlags, byte @Nullable [] hashResult, int outputParam,
+        int outputType, int op);
 }

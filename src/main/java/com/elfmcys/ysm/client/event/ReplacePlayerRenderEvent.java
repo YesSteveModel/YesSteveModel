@@ -36,15 +36,13 @@ public class ReplacePlayerRenderEvent {
         }
         playerRender.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
             var ctx = RenderUtil.extractRenderContext();
-            if (cap.isInitializedAndEnabled()) {
-                if (!PersonView.isFirstPersonView(cap)
-                        || FirstPersonCompat.isRenderingPlayer()
-                        || RealCameraCompat.isActive()
-                        || (ClientConfig.DISABLE_EXTERNAL_FIRST_PERSON_ANIM.get() || !PlayerAnimatorCompat.hasThirdPersonModelAnim(playerSelf))) {
-                    event.setCanceled(true);
-                    RegisterEntityRenderersEvent.getPlayerRenderer().render(
-                            event.getEntity(), event.getEntity().getYRot(), event.getPartialTick(),
-                            event.getPoseStack(), event.getMultiBufferSource(), event.getPackedLight());
+            if (cap.isPresentationAllowed()) {
+                if (!PersonView.isFirstPersonView(cap) || FirstPersonCompat.isRenderingPlayer()
+                    || RealCameraCompat.isActive() || (ClientConfig.DISABLE_EXTERNAL_FIRST_PERSON_ANIM.get()
+                        || !PlayerAnimatorCompat.hasThirdPersonModelAnim(playerSelf))) {
+                    RegisterEntityRenderersEvent.getPlayerRenderer().renderReplacement(cap, event.getEntity().getYRot(),
+                        event.getPartialTick(), event.getPoseStack(), event.getMultiBufferSource(),
+                        event.getPackedLight(), () -> event.setCanceled(true));
                 }
             }
         });

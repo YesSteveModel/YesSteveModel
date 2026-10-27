@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: CC0-1.0
+syntax = "proto3";
+
+package expression.program;
+
+message EncodedProgram {
+  uint32 format = 1;
+  bytes payload = 2;
+}

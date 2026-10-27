@@ -1,8 +1,7 @@
 package com.elfmcys.ysm.buffer;
 
 public enum BufferType {
-    ARRAY(0),
-    NATIVE(1);
+    ARRAY(0), NATIVE(1);
 
     private final int id;
 

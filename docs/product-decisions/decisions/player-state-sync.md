@@ -7,8 +7,10 @@
   - 输入校验: [DD.validate-client-before-effect](trust-boundaries.md#ddvalidate-client-before-effect)
   - 游戏事实保护: [CON.visual-only-scope](../shared.md#convisual-only-scope)
 - Landing:
-  - [architecture](../../architecture/network/player-state.md)
-  - [architecture](../../architecture/animation/state-inputs-and-sync.md#输入分类)
+  - [implementation](../../architecture/network/player-state.md)
+  - [implementation](../../architecture/animation/implementation/state-inputs-and-sync.md#输入分类)
+  - [design](../../architecture/network/overview.md)
+  - [design](../../architecture/animation/overview.md)
 
 ## DD.tracking-scopes-state-sync
 

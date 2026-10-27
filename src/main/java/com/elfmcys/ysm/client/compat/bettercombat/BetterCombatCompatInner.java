@@ -1,8 +1,6 @@
 package com.elfmcys.ysm.client.compat.bettercombat;
 
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
 import com.elfmcys.ysm.client.compat.bettercombat.event.PlayerAttackEvent;
-import com.elfmcys.ysm.geckolib3.core.molang.context.IContext;
 import com.elfmcys.ysm.util.ReflectionUtil;
 import dev.kosmx.playerAnim.api.layered.IAnimation;
 import dev.kosmx.playerAnim.api.layered.KeyframeAnimationPlayer;
@@ -18,25 +16,22 @@ public class BetterCombatCompatInner {
     private static VarHandle FIELD_ATTACK_ANIM;
 
     static void innerInit() {
-        ReflectionUtil.getField(AbstractClientPlayer.class, "attackAnimation", AttackAnimationSubStack.class).ifPresent(field -> {
-            FIELD_ATTACK_ANIM = field;
-        });
+        ReflectionUtil.getField(AbstractClientPlayer.class, "attackAnimation", AttackAnimationSubStack.class)
+            .ifPresent(field -> {
+                FIELD_ATTACK_ANIM = field;
+            });
         if (FIELD_ATTACK_ANIM == null) {
             return;
         }
         BetterCombatClientEvents.ATTACK_START.register(new PlayerAttackEvent());
     }
 
-    static void addInnerBinding(CtrlBinding binding) {
-        binding.clientPlayerVar("bcombat_attack_animation", BetterCombatCompatInner::getAttackAnimation);
-    }
-
     private static AttackAnimationSubStack getAnimStack(AbstractClientPlayer player) {
-        return (AttackAnimationSubStack) FIELD_ATTACK_ANIM.get(player);
+        return (AttackAnimationSubStack)FIELD_ATTACK_ANIM.get(player);
     }
 
-    private static String getAttackAnimation(IContext<AbstractClientPlayer> context) {
-        AttackAnimationSubStack animStack = getAnimStack(context.entity());
+    static String getAttackAnimation(AbstractClientPlayer player) {
+        AttackAnimationSubStack animStack = getAnimStack(player);
         if (animStack == null) {
             return StringUtils.EMPTY;
         }

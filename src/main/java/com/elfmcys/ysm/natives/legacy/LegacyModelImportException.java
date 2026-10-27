@@ -8,10 +8,8 @@ public final class LegacyModelImportException extends RuntimeException {
         this(status, diagnostic, null);
     }
 
-    LegacyModelImportException(NativeLegacyStatus status, String diagnostic,
-                               Throwable cause) {
-        super(status.name() + (diagnostic == null || diagnostic.isBlank()
-                ? "" : ": " + diagnostic), cause);
+    LegacyModelImportException(NativeLegacyStatus status, String diagnostic, Throwable cause) {
+        super(status.name() + (diagnostic == null || diagnostic.isBlank() ? "" : ": " + diagnostic), cause);
         statusCode = status.code();
     }
 
@@ -19,9 +17,7 @@ public final class LegacyModelImportException extends RuntimeException {
         return statusCode;
     }
 
-    public static LegacyModelImportException publicationFailure(
-            String diagnostic, Throwable cause) {
-        return new LegacyModelImportException(
-                NativeLegacyStatus.PUBLICATION_FAILED, diagnostic, cause);
+    public static LegacyModelImportException publicationFailure(String diagnostic, Throwable cause) {
+        return new LegacyModelImportException(NativeLegacyStatus.PUBLICATION_FAILED, diagnostic, cause);
     }
 }

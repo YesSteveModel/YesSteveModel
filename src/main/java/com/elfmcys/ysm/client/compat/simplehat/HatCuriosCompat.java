@@ -12,10 +12,9 @@ public class HatCuriosCompat {
 
     @Nullable
     public static ItemStack getCuriosHead(LivingEntity livingEntity) {
-        return CuriosApi.getCuriosInventory(livingEntity)
-                .map(handler -> handler)
-                .flatMap(handler -> handler.getStacksHandler(SLOT_TYPE))
-                .map(curiosHandler -> CuriosCompatInner.searchCuriosHandler(curiosHandler, itemStack -> itemStack.getItem() instanceof HatItem))
-                .orElse(null);
+        return CuriosApi.getCuriosInventory(livingEntity).map(handler -> handler)
+            .flatMap(handler -> handler.getStacksHandler(SLOT_TYPE)).map(curiosHandler -> CuriosCompatInner
+                .searchCuriosHandler(curiosHandler, itemStack -> itemStack.getItem() instanceof HatItem))
+            .orElse(null);
     }
 }

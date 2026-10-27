@@ -10,7 +10,6 @@ public record ActivationFailure(Kind kind, String message) {
     }
 
     public enum Kind {
-        TRANSIENT_ACCESS,
-        DETERMINISTIC_CONTENT
+        TRANSIENT_ACCESS, DETERMINISTIC_CONTENT
     }
 }

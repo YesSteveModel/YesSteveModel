@@ -8,11 +8,11 @@ import net.minecraft.world.entity.projectile.Projectile;
 
 public class ProjectileRendererReplace {
     public static boolean renderInMixin(Projectile entity, float yaw, float partialTick, PoseStack poseStack,
-                                        MultiBufferSource bufferSource, int packedLight) {
+        MultiBufferSource bufferSource, int packedLight) {
         return entity.getCapability(ProjectileAnimatableCapabilityProvider.CAP).map(cap -> {
-            if (cap.isInitialized() && cap.isModelPresent()) {
-                RegisterEntityRenderersEvent.getProjectRenderer().render(cap, yaw, partialTick, poseStack, bufferSource, packedLight);
-                return false;
+            if (cap.isPresentationAllowed()) {
+                return !RegisterEntityRenderersEvent.getProjectRenderer().renderReplacement(cap, yaw, partialTick,
+                    poseStack, bufferSource, packedLight);
             }
             return true;
         }).orElse(true);

@@ -1,0 +1,46 @@
+sourceSets {
+    catalogLinksVerification {
+        java.setSrcDirs(['src/verification/catalog-links/java'])
+        compileClasspath += sourceSets.test.output + sourceSets.test.compileClasspath
+        runtimeClasspath += output + sourceSets.test.runtimeClasspath
+    }
+}
+
+dependencies {
+    catalogLinksVerificationImplementation 'org.junit.platform:junit-platform-launcher:1.11.4'
+    catalogLinksVerificationRuntimeOnly 'org.lwjgl:lwjgl:3.3.1:natives-linux'
+    catalogLinksVerificationRuntimeOnly 'org.lwjgl:lwjgl-stb:3.3.1:natives-linux'
+}
+
+def catalogLinksShadowLoader = plugins.getPlugin('com.gradleup.shadow').class.classLoader
+def catalogLinksShadowType = catalogLinksShadowLoader.loadClass(
+        'com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar')
+def catalogLinksLogTransformer = catalogLinksShadowLoader.loadClass(
+        'com.github.jengelman.gradle.plugins.shadow.transformers.Log4j2PluginsCacheFileTransformer')
+
+tasks.register('catalogLinksVerificationJar', catalogLinksShadowType) {
+    description = 'Packages the production catalog and its controlled cross-platform verification.'
+    group = 'verification'
+    dependsOn tasks.named('testClasses'), tasks.named('catalogLinksVerificationClasses')
+    archiveFileName = 'catalog-links-verification.jar'
+    destinationDirectory = layout.buildDirectory.dir('libs')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    zip64 = true
+    configurations = []
+    mergeServiceFiles()
+    transform(catalogLinksLogTransformer)
+    filesMatching(['META-INF/services/**', 'META-INF/org/apache/logging/log4j/core/config/plugins/Log4j2Plugins.dat']) {
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    }
+    manifest.attributes('Main-Class': 'com.elfmcys.ysm.verification.CatalogLinksVerification',
+            'Verification-Revision': providers.exec {
+                commandLine 'git', 'rev-parse', 'HEAD'
+            }.standardOutput.asText.get().trim())
+    from sourceSets.catalogLinksVerification.output
+    from {
+        sourceSets.catalogLinksVerification.runtimeClasspath.files.findAll { it.exists() }.collect {
+            it.isDirectory() ? it : zipTree(it)
+        }
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class'
+}

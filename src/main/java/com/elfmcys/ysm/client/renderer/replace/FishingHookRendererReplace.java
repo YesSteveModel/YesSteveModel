@@ -21,15 +21,17 @@ import org.spongepowered.asm.mixin.Unique;
 
 public class FishingHookRendererReplace {
     public static boolean renderInMixin(FishingHook entity, float yaw, float partialTick, PoseStack poseStack,
-                                        MultiBufferSource bufferSource, int packedLight) {
+        MultiBufferSource bufferSource, int packedLight) {
         return entity.getCapability(ProjectileAnimatableCapabilityProvider.CAP).map(cap -> {
-            if (cap.isInitialized() && cap.isModelPresent()) {
+            if (cap.isPresentationAllowed()) {
                 // 鱼漂会上下乱串，这里强制归0
                 entity.setXRot(0);
                 entity.xRotO = 0;
 
                 // 渲染鱼漂
-                RegisterEntityRenderersEvent.getProjectRenderer().render(cap, yaw, partialTick, poseStack, bufferSource, packedLight);
+                if (!RegisterEntityRenderersEvent.getProjectRenderer().renderReplacement(cap, yaw, partialTick,
+                    poseStack, bufferSource, packedLight))
+                    return true;
 
                 // 渲染鱼线
                 Player player = entity.getPlayerOwner();
@@ -45,7 +47,8 @@ public class FishingHookRendererReplace {
     }
 
     @SuppressWarnings("all")
-    private static void renderFishingLine(FishingHook hook, float partialTicks, PoseStack poseStack, MultiBufferSource bufferSource, Player player) {
+    private static void renderFishingLine(FishingHook hook, float partialTicks, PoseStack poseStack,
+        MultiBufferSource bufferSource, Player player) {
         // 确定钓竿持握方向
         int handDirection = player.getMainArm() == HumanoidArm.RIGHT ? 1 : -1;
         ItemStack mainHandItem = player.getMainHandItem();
@@ -71,7 +74,8 @@ public class FishingHookRendererReplace {
         if ((options != null && options.getCameraType().isFirstPerson()) && player == Minecraft.getInstance().player) {
             // 第一人称视角计算
             double fovScale = 960.0 / options.fov().get();
-            Vec3 cameraPlanePoint = dispatcher.camera.getNearPlane().getPointOnPlane((float) handDirection * 0.525F, -0.1F);
+            Vec3 cameraPlanePoint =
+                dispatcher.camera.getNearPlane().getPointOnPlane((float)handDirection * 0.525F, -0.1F);
             cameraPlanePoint = cameraPlanePoint.scale(fovScale);
             cameraPlanePoint = cameraPlanePoint.yRot(swingAnim * 0.5F);
             cameraPlanePoint = cameraPlanePoint.xRot(-swingAnim * 0.7F);
@@ -82,9 +86,11 @@ public class FishingHookRendererReplace {
             eyeHeightOffset = player.getEyeHeight();
         } else {
             // 第三人称视角计算
-            playerX = Mth.lerp(partialTicks, player.xo, player.getX()) - bodyRotCos * handOffset - bodyRotSin * armDistance;
+            playerX =
+                Mth.lerp(partialTicks, player.xo, player.getX()) - bodyRotCos * handOffset - bodyRotSin * armDistance;
             playerY = player.yo + player.getEyeHeight() + (player.getY() - player.yo) * partialTicks - 0.45;
-            playerZ = Mth.lerp(partialTicks, player.zo, player.getZ()) - bodyRotSin * handOffset + bodyRotCos * armDistance;
+            playerZ =
+                Mth.lerp(partialTicks, player.zo, player.getZ()) - bodyRotSin * handOffset + bodyRotCos * armDistance;
             eyeHeightOffset = player.isCrouching() ? -0.1875F : 0.0F;
         }
 
@@ -94,9 +100,9 @@ public class FishingHookRendererReplace {
         double hookZ = Mth.lerp(partialTicks, hook.zo, hook.getZ());
 
         // 计算钓线向量
-        float x = (float) (playerX - hookX);
-        float y = (float) (playerY - hookY) + eyeHeightOffset;
-        float z = (float) (playerZ - hookZ);
+        float x = (float)(playerX - hookX);
+        float y = (float)(playerY - hookY) + eyeHeightOffset;
+        float z = (float)(playerZ - hookZ);
 
         // 获取钓线颜色
         float[] color = getLineColor(hook);
@@ -105,9 +111,7 @@ public class FishingHookRendererReplace {
         VertexConsumer buffer = bufferSource.getBuffer(RenderType.lineStrip());
         PoseStack.Pose last = poseStack.last();
         for (int i = 0; i <= 16; ++i) {
-            stringVertex(x, y, z, buffer, last,
-                    fraction(i), fraction(i + 1),
-                    color[0], color[1], color[2]);
+            stringVertex(x, y, z, buffer, last, fraction(i), fraction(i + 1), color[0], color[1], color[2]);
         }
 
         // Iris 兼容性处理
@@ -118,16 +122,17 @@ public class FishingHookRendererReplace {
 
     @Unique
     private static float[] getLineColor(FishingHook fishingHook) {
-        return new float[]{0f, 0f, 0f};
+        return new float[] {0f, 0f, 0f};
     }
 
     @Unique
     private static float fraction(int numerator) {
-        return (float) numerator / (float) 16;
+        return (float)numerator / (float)16;
     }
 
     @Unique
-    private static void stringVertex(float pX, float pY, float pZ, VertexConsumer consumer, PoseStack.Pose pose, float fraction1, float fraction2, float r, float g, float b) {
+    private static void stringVertex(float pX, float pY, float pZ, VertexConsumer consumer, PoseStack.Pose pose,
+        float fraction1, float fraction2, float r, float g, float b) {
         float x = pX * fraction1;
         float y = pY * (fraction1 * fraction1 + fraction1) * 0.5F + 0.25F;
         float z = pZ * fraction1;
@@ -141,9 +146,6 @@ public class FishingHookRendererReplace {
         ny /= sqrt;
         nz /= sqrt;
 
-        consumer.vertex(pose.pose(), x, y, z)
-                .color(r, g, b, 1.0F)
-                .normal(pose.normal(), nx, ny, nz)
-                .endVertex();
+        consumer.vertex(pose.pose(), x, y, z).color(r, g, b, 1.0F).normal(pose.normal(), nx, ny, nz).endVertex();
     }
 }

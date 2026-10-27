@@ -20,7 +20,7 @@ public class BufferSourceMixin implements IExtendedBufferSource {
     @Unique
     public void endBatchFixedRenderType() {
         for (RenderType type : fixedBuffers.keySet()) {
-            ((MultiBufferSource.BufferSource) (Object) this).endBatch(type);
+            ((MultiBufferSource.BufferSource)(Object)this).endBatch(type);
         }
     }
 }

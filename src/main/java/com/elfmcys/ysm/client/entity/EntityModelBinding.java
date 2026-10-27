@@ -1,268 +1,256 @@
 package com.elfmcys.ysm.client.entity;
 
-import com.elfmcys.ysm.model.resource.client.AcquireResult;
-import com.elfmcys.ysm.model.service.ClientModelService;
-import com.elfmcys.ysm.client.demand.ContinuousDemand;
-import com.elfmcys.ysm.model.resource.client.ResourceLease;
-import com.elfmcys.ysm.model.resource.client.ResourceRequest;
+import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
+import com.elfmcys.ysm.client.demand.ModelResourceDemand;
+import com.elfmcys.ysm.expression.host.ExecutionFailure;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelFileIdentity;
+import com.elfmcys.ysm.model.resource.client.*;
+import com.elfmcys.ysm.model.service.ClientModelService;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.Objects;
-import java.util.Optional;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.lang.ref.WeakReference;
+import java.util.*;
 import java.util.function.LongSupplier;
 
+/** Owns complete installations and exact installation failures, never resource acquisition. */
 final class EntityModelBinding implements AutoCloseable {
     @FunctionalInterface
     interface ResourceFactory {
         @Nullable
-        CustomEntity.ResourceHolder create(ResourceLease lease, boolean fallback);
+        AnimatableEntity.ResourceHolder create(ResourceLease lease, boolean fallback);
     }
 
     interface ModelAccess {
         @Nullable
         ModelContent content(Hash256 modelId);
 
-        ResourceRequest resourceRequest(Hash256 modelId, String targetId,
-                                        String textureName);
+        ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName);
 
         ResourceRequest defaultResourceRequest(String targetId);
 
-        ResourceLease getOrStart(ResourceRequest request);
+        default ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName,
+            ModelResourcePurpose purpose, Class<?> subjectType) {
+            var request = resourceRequest(modelId, targetId, textureName);
+            return new ResourceRequest(request.modelId(), request.targetId(), request.requestedTexture(),
+                request.bakeProfile(), request.expressionBinding(), purpose);
+        }
 
-        CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request);
-
-        void reportActiveModelUse(ResourceRequest request);
+        default ResourceRequest defaultResourceRequest(String targetId, ModelResourcePurpose purpose,
+            Class<?> subjectType) {
+            return defaultResourceRequest(targetId);
+        }
 
         void reportActiveModelFailure(ModelContent content, boolean fallbackAvailable);
+
+        default @Nullable ClientDemandCoordinator coordinator(LongSupplier clock) {
+            return ClientModelService.current().map(ClientModelService::demands).orElse(null);
+        }
     }
 
     private final ModelAccess models;
     private final LongSupplier clock;
-    private final ContinuousDemand<ModelIntent> demand = new ContinuousDemand<>();
-    @Nullable
-    private Hash256 modelHash;
-    @Nullable
-    private ResourceRequest desiredRequest;
-    @Nullable
-    private ResourceLease desiredLease;
-    @Nullable
-    private ModelContent desiredContent;
-    @Nullable
-    private CustomEntity.ResourceHolder resourceHolder;
-    @Nullable
-    private Hash256 resourceModelId;
-    @Nullable
-    private CompletableFuture<Optional<ResourceLease>> offlineLoad;
-    private boolean offlineMiss;
-    private boolean onlineStarted;
-    private boolean terminalFailure;
-    private boolean failureReported;
+    private volatile boolean assigned;
+    private ModelIntent intent;
+    private AnimatableEntity.ResourceHolder resourceHolder;
+    private ResourceRequest installedRequest;
+    private ModelContent installedContent;
+    private boolean installedFull;
+    private final Map<ResourceRequest, ContentFailure> rejectedInstallations = new HashMap<>();
+    private Throwable installationFailure;
+    private ModelResourcePurpose purpose = ModelResourcePurpose.FULL;
+    private Class<?> subjectType;
 
     EntityModelBinding() {
-        this(new ClientModelAccess(), EntityModelBinding::monotonicMillis);
+        this(new ClientModelAccess());
     }
 
     EntityModelBinding(ModelAccess models) {
-        this(models, EntityModelBinding::monotonicMillis);
+        this(models, () -> System.nanoTime() / 1_000_000L);
     }
 
     EntityModelBinding(ModelAccess models, LongSupplier clock) {
-        this.models = Objects.requireNonNull(models, "models");
-        this.clock = Objects.requireNonNull(clock, "clock");
+        this.models = Objects.requireNonNull(models);
+        this.clock = Objects.requireNonNull(clock);
     }
 
-    void updateModelHash(@Nullable Hash256 modelHash) {
-        updateModelHash(modelHash, "player", "");
+    @Nullable
+    ClientDemandCoordinator coordinator() {
+        return models.coordinator(clock);
     }
 
-    void updateModelHash(@Nullable Hash256 modelHash, String renderTargetId,
-                         String textureName) {
-        var next = new ModelIntent(modelHash, renderTargetId, textureName);
-        if (!demand.isCurrent(next)) {
-            demand.observe(next, clock.getAsLong());
-            clearDesired();
+    void updateModelHash(@Nullable Hash256 hash) {
+        updateModelHash(hash, "player", "");
+    }
+
+    void updateModelHash(@Nullable Hash256 hash, String targetId, String texture) {
+        assigned = true;
+        var next = new ModelIntent(hash, targetId, texture);
+        if (!next.equals(intent)) {
+            intent = next;
+            installationFailure = null;
         }
-        this.modelHash = modelHash;
+    }
+
+    boolean isAssigned() {
+        return assigned;
+    }
+
+    void revokeAssignment() {
+        assigned = false;
+        intent = null;
     }
 
     @Nullable
     Hash256 modelHash() {
-        return modelHash;
+        return intent == null ? null : intent.modelId();
     }
 
     @Nullable
-    CustomEntity.ResourceHolder resourceHolder() {
+    AnimatableEntity.ResourceHolder resourceHolder() {
         return resourceHolder;
     }
 
-    void synchronize(@Nullable String renderTargetId, String textureName,
-                     @Nullable String fallbackRenderTargetId, ResourceFactory factory) {
-        revokeUnavailablePrimary();
-        var content = modelHash == null ? null : models.content(modelHash);
-        if (content == null || renderTargetId == null || renderTargetId.isBlank()) {
-            clearDesired();
-            releasePrimaryResource();
-            installFallback(fallbackRenderTargetId, factory);
-            return;
-        }
-
-        var request = models.resourceRequest(modelHash, renderTargetId, textureName);
-        if (installedPrimaryIsCurrent(request)) {
-            clearDesired();
-            models.reportActiveModelUse(request);
-            return;
-        }
-
-        if (desiredRequest != null && (!sameDesired(request, content)
-                || desiredLease != null && !desiredLease.isCurrent(request))) {
-            clearDesired();
-        }
-        if (desiredRequest == null) {
-            beginDesired(request, content);
-        }
-        if (terminalFailure) {
-            reportFailureOnce(content, fallbackRenderTargetId);
-        }
-
-        finishOffline(request, content, fallbackRenderTargetId);
-        if (offlineMiss && desiredLease == null && !onlineStarted && !terminalFailure
-                && demand.effectEligible(true, clock.getAsLong(),
-                ContinuousDemand.SWITCH_DWELL_MILLIS)) {
-            onlineStarted = true;
-            try {
-                desiredLease = models.getOrStart(request);
-            } catch (RuntimeException failure) {
-                terminalFailure = true;
-                reportFailureOnce(content, fallbackRenderTargetId);
-            }
-        }
-
-        var lease = desiredLease;
-        if (lease != null) {
-            var result = lease.poll();
-            if (result instanceof AcquireResult.Ready) {
-                desiredLease = null;
-                if (installReady(lease, request.modelId(), false, factory)) {
-                    terminalFailure = false;
-                    failureReported = false;
-                    models.reportActiveModelUse(request);
-                } else {
-                    terminalFailure = true;
-                    reportFailureOnce(content, fallbackRenderTargetId);
-                }
-            } else if (result instanceof AcquireResult.Failed failed) {
-                desiredLease = null;
-                terminalFailure = true;
-                reportFailureOnce(content, fallbackRenderTargetId);
-            }
-        }
-
-        if (resourceHolder == null) {
-            installFallback(fallbackRenderTargetId, factory);
-        }
+    ClientDemandCoordinator.Assignment assignment(String target, String texture, String fallback,
+        ModelResourceDemand.Mode mode, ModelResourcePurpose purpose, Class<?> subject) {
+        this.purpose = purpose;
+        this.subjectType = subject;
+        var defaultRequest =
+            fallback == null || fallback.isBlank() ? null : models.defaultResourceRequest(fallback, purpose, subject);
+        var hash = modelHash();
+        var request = intrinsicDefaultOnly() || hash == null ? defaultRequest
+            : target == null || target.isBlank() || models.content(hash) == null ? null
+                : models.resourceRequest(hash, target, texture, purpose, subject);
+        return new ClientDemandCoordinator.Assignment(request, defaultRequest, mode, assigned);
     }
 
-    void clearModel() {
-        modelHash = null;
-        demand.reset();
-        clearDesired();
+    boolean matches(ResourceRequest request, boolean full) {
+        return resourceHolder != null && (!full || installedFull) && resourceHolder.lease().isCurrent(request);
     }
 
-    void installReadyForPreview(ResourceRequest request, ResourceLease lease,
-                                ResourceFactory factory) {
-        Objects.requireNonNull(request, "request");
-        Objects.requireNonNull(lease, "lease");
-        Objects.requireNonNull(factory, "factory");
-        clearDesired();
-        replaceResourceHolder(null, null);
-        modelHash = request.modelId();
-        demand.observe(new ModelIntent(request.modelId(), request.targetId(),
-                request.requestedTexture()), clock.getAsLong());
-        if (!lease.isCurrent(request)) {
+    boolean matchesSelection(ClientDemandCoordinator.Target target) {
+        var request =
+            target.modelId() == null ? models.defaultResourceRequest("player", ModelResourcePurpose.FULL, null)
+                : models.resourceRequest(target.modelId(), "player", target.texture(), ModelResourcePurpose.FULL,
+                    net.minecraft.client.player.AbstractClientPlayer.class);
+        return matches(request, true);
+    }
+
+    @Nullable
+    Throwable failure(ResourceRequest request) {
+        var rejected = rejectedInstallations.get(request);
+        if (rejected == null)
+            return null;
+        if (rejected.content().get() == models.content(request.modelId()))
+            return rejected.cause();
+        rejectedInstallations.remove(request);
+        return null;
+    }
+
+    ClientDemandCoordinator.InstallationResult accept(ResourceRequest request, ResourceLease lease, boolean fallback,
+        boolean full, ResourceFactory factory) {
+        if (!assigned || !lease.isCurrent(request)) {
             lease.close();
-            throw new IllegalArgumentException("Preview resource lease is not current");
+            return ClientDemandCoordinator.InstallationResult.STALE;
         }
-        if (!installReady(lease, request.modelId(), false, factory)) {
-            throw new IllegalArgumentException("Preview resource lease is not ready and current");
-        }
-    }
-
-    void releaseRenderTarget() {
-        clearDesired();
-        replaceResourceHolder(null, null);
-    }
-
-    private void beginDesired(ResourceRequest request, ModelContent content) {
-        desiredRequest = request;
-        desiredContent = content;
-        offlineMiss = false;
-        onlineStarted = false;
-        terminalFailure = false;
-        failureReported = false;
-        try {
-            offlineLoad = models.getOrStartOffline(request);
-        } catch (RuntimeException failure) {
-            terminalFailure = true;
-        }
-    }
-
-    private void finishOffline(ResourceRequest request, ModelContent content,
-                               @Nullable String fallbackRenderTargetId) {
-        var current = offlineLoad;
-        if (current == null || !current.isDone()) {
-            return;
-        }
-        offlineLoad = null;
-        try {
-            var acquired = current.join();
-            var lease = acquired.orElse(null);
-            if (lease == null) {
-                offlineMiss = true;
-            } else if (!sameDesired(request, content) || !lease.isCurrent(request)) {
-                lease.cancelPending();
-            } else {
-                desiredLease = lease;
-            }
-        } catch (CancellationException failure) {
-            terminalFailure = true;
-            reportFailureOnce(content, fallbackRenderTargetId);
-        } catch (CompletionException failure) {
-            terminalFailure = true;
-            reportFailureOnce(content, fallbackRenderTargetId);
-        }
-    }
-
-    private void installFallback(@Nullable String renderTargetId,
-                                 ResourceFactory factory) {
-        if (resourceHolder != null || renderTargetId == null || renderTargetId.isBlank()) {
-            return;
-        }
-        var request = models.defaultResourceRequest(renderTargetId);
-        var lease = models.getOrStart(request);
-        try {
-            if (lease.poll() instanceof AcquireResult.Ready) {
-                installReady(lease, request.modelId(), true, factory);
-            } else {
-                lease.cancelPending();
-            }
-        } catch (RuntimeException | Error error) {
+        var preparedFull = lease.purpose() == ModelResourcePurpose.FULL;
+        if (full && !preparedFull) {
             lease.close();
-            throw error;
+            return ClientDemandCoordinator.InstallationResult.STALE;
+        }
+        var content = models.content(request.modelId());
+        if (failure(request) != null) {
+            lease.close();
+            return ClientDemandCoordinator.InstallationResult.REJECTED;
+        }
+        var previous = resourceHolder;
+        try {
+            if (!installReady(lease, request, content, fallback, factory)) {
+                installationFailure = new IllegalStateException("Resource installation was rejected");
+                rejectedInstallations.put(request,
+                    new ContentFailure(new WeakReference<>(content), installationFailure));
+                return ClientDemandCoordinator.InstallationResult.REJECTED;
+            }
+            installedFull = preparedFull;
+            installationFailure = null;
+            return ClientDemandCoordinator.InstallationResult.INSTALLED;
+        } catch (RuntimeException | OutOfMemoryError failure) {
+            if (failure instanceof java.util.concurrent.CancellationException)
+                return ClientDemandCoordinator.InstallationResult.STALE;
+            // Publication is the commit; a later observer failure cannot turn it into a rejection.
+            if (resourceHolder != previous && resourceHolder != null && resourceHolder.lease() == lease) {
+                installedFull = preparedFull;
+                return ClientDemandCoordinator.InstallationResult.INSTALLED;
+            }
+            installationFailure = failure;
+            if (failure instanceof OutOfMemoryError) {
+                if (request.modelId().equals(models.defaultResourceRequest("player").modelId()))
+                    throw failure;
+                return ClientDemandCoordinator.InstallationResult.REJECTED;
+            }
+            rejectedInstallations.put(request, new ContentFailure(new WeakReference<>(content), failure));
+            if (request.modelId().equals(models.defaultResourceRequest("player").modelId()))
+                throw failure;
+            return ClientDemandCoordinator.InstallationResult.REJECTED;
         }
     }
 
-    private boolean installReady(ResourceLease lease, Hash256 modelId,
-                                 boolean fallback, ResourceFactory factory) {
-        final CustomEntity.ResourceHolder next;
+    void failExpression(ExecutionFailure failure, @Nullable String fallback, ResourceFactory factory) {
+        if (failure.reason() != ExecutionFailure.Reason.NON_NULL_RETURN || resourceHolder == null
+            || isIntrinsicDefault())
+            throw failure;
+        var notice = rejectActiveInstallation(resourceHolder, failure);
+        reportFailure(notice, fallback != null);
+        replaceResourceHolder(null, null, null);
+    }
+
+    @Nullable
+    FailureNotice rejectActiveInstallation(AnimatableEntity.ResourceHolder exact, RuntimeException failure) {
+        if (exact == null || resourceHolder != exact)
+            return null;
+        var notice = new FailureNotice(failure, installedRequest, installedContent, isIntrinsicDefault());
+        installationFailure = failure;
+        if (installedRequest != null)
+            rejectedInstallations.put(installedRequest,
+                new ContentFailure(new WeakReference<>(installedContent), failure));
+        return notice;
+    }
+
+    void reportFailure(@Nullable FailureNotice notice, boolean fallbackAvailable) {
+        if (notice != null && notice.content() != null && !notice.intrinsicDefault())
+            models.reportActiveModelFailure(notice.content(), fallbackAvailable);
+    }
+
+    record FailureNotice(RuntimeException cause, @Nullable ResourceRequest request,
+        @Nullable ModelContent content, boolean intrinsicDefault) {}
+
+    void installReadyForPreview(ResourceRequest request, ResourceLease lease, ResourceFactory factory) {
+        updateModelHash(request.modelId(), request.targetId(), request.requestedTexture());
+        if (accept(request, lease, false, request.purpose() == ModelResourcePurpose.FULL,
+            factory) != ClientDemandCoordinator.InstallationResult.INSTALLED)
+            throw new IllegalArgumentException("Preview resource lease was rejected");
+    }
+
+    private boolean installReady(ResourceLease lease, ResourceRequest request, @Nullable ModelContent content,
+        boolean fallback, ResourceFactory factory) {
+        final Object revision = intent;
+        final AnimatableEntity.ResourceHolder next;
         try {
             next = factory.create(lease, fallback);
         } catch (RuntimeException | Error error) {
-            lease.close();
+            try {
+                lease.close();
+            } catch (RuntimeException | Error cleanupFailure) {
+                if ((cleanupFailure instanceof VirtualMachineError && !(cleanupFailure instanceof OutOfMemoryError)
+                    || cleanupFailure instanceof ThreadDeath)
+                    && !(error instanceof VirtualMachineError || error instanceof ThreadDeath)) {
+                    cleanupFailure.addSuppressed(error);
+                    throw cleanupFailure;
+                }
+                if (cleanupFailure != error)
+                    error.addSuppressed(cleanupFailure);
+            }
             throw error;
         }
         if (next == null) {
@@ -274,91 +262,157 @@ final class EntityModelBinding implements AutoCloseable {
             lease.close();
             throw new IllegalStateException("Resource factory did not transfer the supplied lease");
         }
-        replaceResourceHolder(next, modelId);
+        if (revision != intent || !lease.isCurrent(request)) {
+            next.close();
+            throw new java.util.concurrent.CancellationException("Installation candidate is no longer current");
+        }
+        var previous = resourceHolder;
+        var previousRequest = installedRequest;
+        var previousContent = contentIdentity(installedContent);
+        var candidateContent = contentIdentity(content);
+        try {
+            next.activate(() -> {
+                resourceHolder = next;
+                installedRequest = request;
+                installedContent = content;
+            }, () -> revision == intent && lease.isCurrent(request));
+        } catch (RuntimeException | Error failure) {
+            try {
+                if (next.sharedStateActivationStarted()) {
+                    if (!(failure instanceof java.util.concurrent.CancellationException)) {
+                        failure.addSuppressed(new ActivationProvenance(previousRequest, previousContent, request,
+                            candidateContent));
+                        installationFailure = failure;
+                        rejectedInstallations.put(request, new ContentFailure(new WeakReference<>(content), failure));
+                    }
+                    next.abortSharedStateActivation();
+                }
+            } catch (RuntimeException | Error cleanupFailure) {
+                if (cleanupFailure != failure)
+                    failure.addSuppressed(cleanupFailure);
+            }
+            if (resourceHolder != next) {
+                try {
+                    next.close();
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (cleanupFailure != failure)
+                        failure.addSuppressed(cleanupFailure);
+                }
+            }
+            throw failure;
+        }
+        if (previous != null && previous != next) {
+            try {
+                previous.close();
+            } catch (RuntimeException | LinkageError failure) {
+                com.elfmcys.ysm.YesSteveModel.LOGGER.warn("Previous entity installation cleanup failed", failure);
+            }
+        }
         return true;
     }
 
-    private void replaceResourceHolder(@Nullable CustomEntity.ResourceHolder next,
-                                       @Nullable Hash256 nextModelId) {
+    private static @Nullable ModelFileIdentity contentIdentity(@Nullable ModelContent content) {
+        var representation = content == null ? null : content.representation();
+        return representation == null ? null : representation.identity();
+    }
+
+    static final class ActivationProvenance extends RuntimeException {
+        private final ResourceRequest previousRequest;
+        private final ModelFileIdentity previousContent;
+        private final ResourceRequest candidateRequest;
+        private final ModelFileIdentity candidateContent;
+
+        private ActivationProvenance(@Nullable ResourceRequest previousRequest,
+            @Nullable ModelFileIdentity previousContent, ResourceRequest candidateRequest,
+            @Nullable ModelFileIdentity candidateContent) {
+            super("Shared installation activation failed: previousRequest=" + previousRequest + " previousContent="
+                + previousContent + " candidateRequest=" + candidateRequest + " candidateContent=" + candidateContent,
+                null, false, false);
+            this.previousRequest = previousRequest;
+            this.previousContent = previousContent;
+            this.candidateRequest = candidateRequest;
+            this.candidateContent = candidateContent;
+        }
+
+        @Nullable ResourceRequest previousRequest() { return previousRequest; }
+        @Nullable ModelFileIdentity previousContent() { return previousContent; }
+        ResourceRequest candidateRequest() { return candidateRequest; }
+        @Nullable ModelFileIdentity candidateContent() { return candidateContent; }
+    }
+
+    private void replaceResourceHolder(@Nullable AnimatableEntity.ResourceHolder next,
+        @Nullable ResourceRequest request, @Nullable ModelContent content) {
         var previous = resourceHolder;
         resourceHolder = next;
-        resourceModelId = nextModelId;
-        if (previous != null && previous != next) {
+        installedRequest = request;
+        installedContent = content;
+        installedFull = false;
+        if (previous != null && previous != next)
             previous.close();
+    }
+
+    void releaseRenderTarget() {
+        replaceResourceHolder(null, null, null);
+    }
+
+    void retryRejectedInstallations() {
+        rejectedInstallations.clear();
+        installationFailure = null;
+    }
+
+    @Nullable
+    Throwable failure() {
+        if (intent != null && intent.modelId() != null && !intent.targetId().isBlank()) {
+            var request =
+                models.resourceRequest(intent.modelId(), intent.targetId(), intent.textureName(), purpose, subjectType);
+            var rejected = failure(request);
+            if (rejected != null)
+                return rejected;
         }
+        return installationFailure;
     }
 
-    private boolean installedPrimaryIsCurrent(ResourceRequest request) {
-        return resourceHolder != null && !resourceHolder.fallback
-                && request.modelId().equals(resourceModelId)
-                && resourceHolder.lease().isCurrent(request);
+    boolean permitsCurrentUse() {
+        return resourceHolder != null && (!intrinsicDefaultOnly() || isIntrinsicDefault());
     }
 
-    private void revokeUnavailablePrimary() {
-        if (resourceHolder != null && !resourceHolder.fallback
-                && resourceModelId != null && models.content(resourceModelId) == null) {
-            replaceResourceHolder(null, null);
-        }
+    static boolean intrinsicDefaultOnly() {
+        return com.elfmcys.ysm.network.forge.ClientSessionRuntime.state()
+            .orElse(null) == com.elfmcys.ysm.model.session.client.ClientModelSession.State.INTRINSIC_DEFAULT_ONLY;
     }
 
-    private boolean sameDesired(ResourceRequest request, ModelContent content) {
-        return desiredContent == content && request.equals(desiredRequest);
+    private boolean isIntrinsicDefault() {
+        return installedRequest != null
+            && installedRequest.modelId().equals(models.defaultResourceRequest("player").modelId());
     }
 
-    private void reportFailureOnce(ModelContent content,
-                                   @Nullable String fallbackRenderTargetId) {
-        if (!failureReported) {
-            models.reportActiveModelFailure(content, hasFallback(fallbackRenderTargetId));
-            failureReported = true;
-        }
+    AnimatableEntity.InstallationRelation relation(String target, String texture) {
+        return relation(target, texture, purpose, subjectType);
     }
 
-    private void clearDesired() {
-        var previous = desiredLease;
-        desiredLease = null;
-        if (offlineLoad != null) {
-            offlineLoad.whenComplete((acquired, failure) -> {
-                if (acquired != null) {
-                    acquired.ifPresent(ResourceLease::cancelPending);
-                }
-            });
-            offlineLoad.cancel(false);
-            offlineLoad = null;
-        }
-        desiredRequest = null;
-        desiredContent = null;
-        offlineMiss = false;
-        onlineStarted = false;
-        terminalFailure = false;
-        failureReported = false;
-        if (previous != null) {
-            previous.cancelPending();
-        }
-    }
-
-    private void releasePrimaryResource() {
-        if (resourceHolder != null && !resourceHolder.fallback) {
-            replaceResourceHolder(null, null);
-        }
-    }
-
-    private static boolean hasFallback(@Nullable String renderTargetId) {
-        return renderTargetId != null && !renderTargetId.isBlank();
+    AnimatableEntity.InstallationRelation relation(String target, String texture, ModelResourcePurpose purpose,
+        Class<?> subject) {
+        if (resourceHolder == null)
+            return AnimatableEntity.InstallationRelation.UNBOUND;
+        var request = modelHash() == null ? models.defaultResourceRequest(target, purpose, subject)
+            : target == null ? null : models.resourceRequest(modelHash(), target, texture, purpose, subject);
+        if (request != null && matches(request, false))
+            return AnimatableEntity.InstallationRelation.MATCHING;
+        return isIntrinsicDefault() ? AnimatableEntity.InstallationRelation.DEFAULT_SUBSTITUTE
+            : AnimatableEntity.InstallationRelation.RETAINED;
     }
 
     @Override
     public void close() {
-        modelHash = null;
-        demand.reset();
+        revokeAssignment();
         releaseRenderTarget();
+        rejectedInstallations.clear();
     }
 
-    private static long monotonicMillis() {
-        return System.nanoTime() / 1_000_000L;
+    private record ContentFailure(WeakReference<ModelContent> content, Throwable cause) {
     }
 
-    private record ModelIntent(@Nullable Hash256 modelId, String targetId,
-                               String textureName) {
+    private record ModelIntent(@Nullable Hash256 modelId, String targetId, String textureName) {
         private ModelIntent {
             targetId = Objects.requireNonNullElse(targetId, "");
             textureName = Objects.requireNonNullElse(textureName, "");
@@ -376,8 +430,7 @@ final class EntityModelBinding implements AutoCloseable {
         }
 
         @Override
-        public ResourceRequest resourceRequest(Hash256 modelId, String targetId,
-                                               String textureName) {
+        public ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName) {
             return service().resourceRequest(modelId, targetId, textureName);
         }
 
@@ -387,19 +440,15 @@ final class EntityModelBinding implements AutoCloseable {
         }
 
         @Override
-        public ResourceLease getOrStart(ResourceRequest request) {
-            return service().getOrStart(request);
+        public ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName,
+            ModelResourcePurpose purpose, Class<?> subjectType) {
+            return service().resourceRequest(modelId, targetId, textureName, purpose, subjectType);
         }
 
         @Override
-        public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(
-                ResourceRequest request) {
-            return service().getOrStartOffline(request);
-        }
-
-        @Override
-        public void reportActiveModelUse(ResourceRequest request) {
-            service().reportActiveModelUse(request);
+        public ResourceRequest defaultResourceRequest(String targetId, ModelResourcePurpose purpose,
+            Class<?> subjectType) {
+            return service().defaultResourceRequest(targetId, purpose, subjectType);
         }
 
         @Override

@@ -17,7 +17,7 @@ public class AnimationEntry {
     public static final class Adapter implements JsonDeserializer<AnimationEntry> {
         @Override
         public AnimationEntry deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
-                throws JsonParseException {
+            throws JsonParseException {
             var entry = new AnimationEntry();
             if (json == null || json.isJsonNull()) {
                 return entry;

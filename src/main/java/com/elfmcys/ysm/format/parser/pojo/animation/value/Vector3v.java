@@ -21,34 +21,31 @@ public class Vector3v {
         components = List.of(x, y, z);
     }
 
+    public static Vector3v fromJson(JsonElement json) {
+        if (json == null || json.isJsonNull()) {
+            throw new JsonParseException("Invalid vector: null");
+        }
+        if (json.isJsonArray()) {
+            var array = json.getAsJsonArray();
+            if (array.size() == 3) {
+                return new Vector3v(UnionValue.fromJson(array.get(0)), UnionValue.fromJson(array.get(1)),
+                    UnionValue.fromJson(array.get(2)));
+            }
+            if (array.size() == 1) {
+                var value = array.get(0);
+                return new Vector3v(UnionValue.fromJson(value));
+            }
+        } else if (json.isJsonPrimitive()) {
+            return new Vector3v(UnionValue.fromJson(json));
+        }
+        throw new JsonParseException("Invalid vector: " + json);
+    }
+
     public static final class Adapter implements JsonDeserializer<Vector3v> {
         @Override
         public Vector3v deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
-                throws JsonParseException {
-            if (json == null || json.isJsonNull()) {
-                throw new JsonParseException("Invalid vector: null");
-            }
-            if (json.isJsonArray()) {
-                var array = json.getAsJsonArray();
-                if (array.size() == 3) {
-                    return new Vector3v(
-                            context.deserialize(array.get(0), UnionValue.class),
-                            context.deserialize(array.get(1), UnionValue.class),
-                            context.deserialize(array.get(2), UnionValue.class)
-                    );
-                }
-                if (array.size() == 1) {
-                    var value = array.get(0);
-                    return new Vector3v(
-                            context.deserialize(value, UnionValue.class)
-                    );
-                }
-            } else if (json.isJsonPrimitive()) {
-                return new Vector3v(
-                        context.deserialize(json, UnionValue.class)
-                );
-            }
-            throw new JsonParseException("Invalid vector: " + json);
+            throws JsonParseException {
+            return fromJson(json);
         }
     }
 }

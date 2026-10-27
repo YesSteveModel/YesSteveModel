@@ -5,8 +5,9 @@
 - Needs:
   - 考虑扩大宿主管线侵入: [DD.intrusive-change-needs-adjudication](integration-risk.md#ddintrusive-change-needs-adjudication)
 - Landing:
-  - [architecture](../../architecture/rendering/vertex-output.md#顶点输出区间与-translucent-排序)
+  - [implementation](../../architecture/rendering/implementation/vertex-output.md#顶点输出区间与-translucent-排序)
   - [status](../../status/known-issues/rendering.md#视觉与接入)
+  - [design](../../architecture/rendering/overview.md)
 
 ## DD.transparency-stops-at-model-boundary
 

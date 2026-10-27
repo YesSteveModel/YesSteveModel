@@ -42,11 +42,11 @@ message SessionDeltaFragment {
 }
 
 enum CollectionOperationType {
-  COLLECTION_OPERATION_UNSPECIFIED = 0;
-  COLLECTION_OPERATION_FULL = 1;
-  COLLECTION_OPERATION_ADD = 2;
-  COLLECTION_OPERATION_REMOVE = 3;
-  COLLECTION_OPERATION_CLEAR = 4;
+  COLLECTION_OPERATION_TYPE_UNSPECIFIED = 0;
+  COLLECTION_OPERATION_TYPE_FULL = 1;
+  COLLECTION_OPERATION_TYPE_ADD = 2;
+  COLLECTION_OPERATION_TYPE_REMOVE = 3;
+  COLLECTION_OPERATION_TYPE_CLEAR = 4;
 }
 
 message CatalogCollectionOperation {
@@ -82,6 +82,58 @@ message ModelChunkRequest {
   bytes model_id = 2;
   bytes container_id = 3;
   repeated ChunkMember chunks = 4;
+  ModelChunkPurpose purpose = 5;
+}
+
+enum ModelChunkPurpose {
+  MODEL_CHUNK_PURPOSE_ORDINARY = 0;
+  MODEL_CHUNK_PURPOSE_GEN_PREVIEW_MAIN = 1;
+}
+
+message GenPreviewStart {}
+
+message MissingPreviewQuery { uint64 data_transfer_id = 1; }
+
+message MissingPreviewEntry {
+  bytes model_id = 1;
+  bytes container_id = 2;
+  string hierarchy_path = 3;
+  ResourceFailureReason probe_failure = 4;
+}
+
+message MissingPreviewFragment {
+  uint64 data_transfer_id = 1;
+  uint32 sequence = 2;
+  bool final_fragment = 3;
+  repeated MissingPreviewEntry entries = 4;
+}
+
+message PreviewUploadRequest {
+  uint64 data_transfer_id = 1;
+  bytes model_id = 2;
+  bytes container_id = 3;
+  uint32 encoded_size = 4;
+}
+
+message PreviewUploadAdmission { uint64 data_transfer_id = 1; }
+
+message PreviewUploadFragment {
+  uint64 data_transfer_id = 1;
+  uint64 offset = 2;
+  bool final_fragment = 3;
+}
+
+message PreviewRepairResult {
+  uint64 data_transfer_id = 1;
+  PreviewRepairStatus status = 2;
+}
+
+enum PreviewRepairStatus {
+  PREVIEW_REPAIR_STATUS_UNSPECIFIED = 0;
+  PREVIEW_REPAIR_STATUS_COMMITTED = 1;
+  PREVIEW_REPAIR_STATUS_ALREADY_AVAILABLE = 2;
+  PREVIEW_REPAIR_STATUS_STALE = 3;
+  PREVIEW_REPAIR_STATUS_NOT_FOUND = 4;
 }
 
 message ChunkMember {
@@ -136,13 +188,13 @@ message ResourceTransferFailure {
 }
 
 enum ResourceFailureReason {
-  RESOURCE_FAILURE_UNSPECIFIED = 0;
-  RESOURCE_FAILURE_UNAUTHORIZED = 1;
-  RESOURCE_FAILURE_NOT_FOUND = 2;
-  RESOURCE_FAILURE_BUSY = 3;
-  RESOURCE_FAILURE_INVALID_REQUEST = 4;
-  RESOURCE_FAILURE_ITEM_TOO_LARGE = 5;
-  RESOURCE_FAILURE_UNAVAILABLE = 6;
+  RESOURCE_FAILURE_REASON_UNSPECIFIED = 0;
+  RESOURCE_FAILURE_REASON_UNAUTHORIZED = 1;
+  RESOURCE_FAILURE_REASON_NOT_FOUND = 2;
+  RESOURCE_FAILURE_REASON_BUSY = 3;
+  RESOURCE_FAILURE_REASON_INVALID_REQUEST = 4;
+  RESOURCE_FAILURE_REASON_ITEM_TOO_LARGE = 5;
+  RESOURCE_FAILURE_REASON_UNAVAILABLE = 6;
 }
 
 message SelectModelRequest {
@@ -151,10 +203,12 @@ message SelectModelRequest {
     bool intrinsic_default = 2;
   }
   string texture_id = 3;
+  uint64 intent_id = 4;
 }
 
 message SelectModelResult {
   SelectionStatus status = 1;
+  uint64 intent_id = 2;
 }
 
 enum SelectionStatus {
@@ -184,6 +238,12 @@ enum PresentationDelivery {
   PRESENTATION_DELIVERY_UNSPECIFIED = 0;
   PRESENTATION_DELIVERY_DATA = 1;
   PRESENTATION_DELIVERY_UNAVAILABLE = 2;
+  PRESENTATION_DELIVERY_ABSENT = 3;
+}
+
+message PreviewAvailable {
+  bytes model_id = 1;
+  bytes container_id = 2;
 }
 
 message PreviewFragment {
@@ -215,6 +275,7 @@ message CatalogPublication {
   bytes container_id = 2;
   string hierarchy_path = 3;
   CatalogAccess access = 4;
+  bool runtime_content_allowed = 5;
 }
 
 enum CatalogAccess {

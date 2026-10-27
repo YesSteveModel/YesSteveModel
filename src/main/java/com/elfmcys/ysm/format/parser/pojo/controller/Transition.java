@@ -17,7 +17,7 @@ public class Transition {
     public static final class Adapter implements JsonDeserializer<Transition> {
         @Override
         public Transition deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
-                throws JsonParseException {
+            throws JsonParseException {
             var transition = new Transition();
             if (json == null || json.isJsonNull() || !json.isJsonObject()) {
                 return transition;

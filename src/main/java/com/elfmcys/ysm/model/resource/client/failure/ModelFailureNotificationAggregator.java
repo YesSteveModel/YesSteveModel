@@ -32,8 +32,7 @@ public final class ModelFailureNotificationAggregator implements AutoCloseable {
         if (closed || emitted.contains(new EmissionKey(identity, outcome))) {
             return;
         }
-        pending.merge(identity, outcome,
-                (left, right) -> left.ordinal() >= right.ordinal() ? left : right);
+        pending.merge(identity, outcome, (left, right) -> left.ordinal() >= right.ordinal() ? left : right);
         if (scheduled == null) {
             scheduled = scheduler.schedule(this::flush, DELAY_MILLIS, TimeUnit.MILLISECONDS);
         }
@@ -54,14 +53,12 @@ public final class ModelFailureNotificationAggregator implements AutoCloseable {
             batch = new HashMap<>(pending);
             pending.clear();
             scheduled = null;
-            batch.forEach((identity, outcome) -> emitted.add(
-                    new EmissionKey(identity, outcome)));
+            batch.forEach((identity, outcome) -> emitted.add(new EmissionKey(identity, outcome)));
         }
         if (batch.isEmpty()) {
             return;
         }
-        var worst = batch.values().stream()
-                .max(Comparator.comparingInt(Enum::ordinal)).orElseThrow();
+        var worst = batch.values().stream().max(Comparator.comparingInt(Enum::ordinal)).orElseThrow();
         Minecraft.getInstance().execute(() -> {
             var player = Minecraft.getInstance().player;
             if (player != null) {

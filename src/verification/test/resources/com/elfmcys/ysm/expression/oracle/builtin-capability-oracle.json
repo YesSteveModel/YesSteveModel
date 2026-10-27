@@ -1,0 +1,1054 @@
+{
+  "capabilities": [
+    {
+      "source_spelling": "roaming",
+      "stable_id": "ysm:roaming",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.attacked",
+      "stable_id": "ctrl:attacked",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.bcombat_attack_animation",
+      "stable_id": "ctrl:bcombat_attack_animation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "BETTER_COMBAT",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.carryon_is_princess",
+      "stable_id": "ctrl:carryon_is_princess",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "CARRY_ON",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.death",
+      "stable_id": "ctrl:death",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.elytra_fly",
+      "stable_id": "ctrl:elytra_fly",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.fly",
+      "stable_id": "ctrl:fly",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.has_sophisticated_backpack",
+      "stable_id": "ctrl:has_sophisticated_backpack",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "SOPHISTICATED_BACKPACKS",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.idle",
+      "stable_id": "ctrl:idle",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.im_delta",
+      "stable_id": "ctrl:im_delta",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "IMMERSIVE_MELODIES",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.im_pitch",
+      "stable_id": "ctrl:im_pitch",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "IMMERSIVE_MELODIES",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.im_time",
+      "stable_id": "ctrl:im_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "IMMERSIVE_MELODIES",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.jump",
+      "stable_id": "ctrl:jump",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.ladder_down",
+      "stable_id": "ctrl:ladder_down",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.ladder_stillness",
+      "stable_id": "ctrl:ladder_stillness",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.ladder_up",
+      "stable_id": "ctrl:ladder_up",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.parcool_state",
+      "stable_id": "ctrl:parcool_state",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "PARCOOL",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.playing_extra_animation",
+      "stable_id": "ctrl:playing_extra_animation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.run",
+      "stable_id": "ctrl:run",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.slashblade_animation",
+      "stable_id": "ctrl:slashblade_animation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "SLASH_BLADE",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.sleep",
+      "stable_id": "ctrl:sleep",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.sneak",
+      "stable_id": "ctrl:sneak",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.sneaking",
+      "stable_id": "ctrl:sneaking",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.state_bypass",
+      "stable_id": "ctrl:state_bypass",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.state_continue",
+      "stable_id": "ctrl:state_continue",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.state_stop",
+      "stable_id": "ctrl:state_stop",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.swim_stand",
+      "stable_id": "ctrl:swim_stand",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.swim",
+      "stable_id": "ctrl:swim",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_hold_gun",
+      "stable_id": "ctrl:tac_hold_gun",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.walk",
+      "stable_id": "ctrl:walk",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "o",
+      "stable_id": "global:o",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.armor_value",
+      "stable_id": "ysm:armor_value",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.elytra_rot_z",
+      "stable_id": "ysm:elytra_rot_z",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.food_level",
+      "stable_id": "ysm:food_level",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.fps",
+      "stable_id": "ysm:fps",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.ground_speed2",
+      "stable_id": "ysm:ground_speed2",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_boots",
+      "stable_id": "ysm:has_boots",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_chest_plate",
+      "stable_id": "ysm:has_chest_plate",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_elytra",
+      "stable_id": "ysm:has_elytra",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_helmet",
+      "stable_id": "ysm:has_helmet",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_leggings",
+      "stable_id": "ysm:has_leggings",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_mainhand",
+      "stable_id": "ysm:has_mainhand",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_offhand",
+      "stable_id": "ysm:has_offhand",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.head_pitch",
+      "stable_id": "ysm:head_pitch",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.head_yaw",
+      "stable_id": "ysm:head_yaw",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.in_shield_block_cooldown",
+      "stable_id": "ysm:in_shield_block_cooldown",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.input_horizontal",
+      "stable_id": "ysm:input_horizontal",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.input_vertical",
+      "stable_id": "ysm:input_vertical",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_close_eyes",
+      "stable_id": "ysm:is_close_eyes",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_fishing",
+      "stable_id": "ysm:is_fishing",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_open_air",
+      "stable_id": "ysm:is_open_air",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.mainhand_charged_crossbow",
+      "stable_id": "ysm:mainhand_charged_crossbow",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.offhand_charged_crossbow",
+      "stable_id": "ysm:offhand_charged_crossbow",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.rendering_in_inventory",
+      "stable_id": "ysm:rendering_in_inventory",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.shoot_item_id",
+      "stable_id": "ysm:shoot_item_id",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.texture_name",
+      "stable_id": "ysm:texture_name",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.weather",
+      "stable_id": "ysm:weather",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.yya",
+      "stable_id": "ysm:yya",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.all_animations_finished",
+      "stable_id": "query:all_animations_finished",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.anim_time",
+      "stable_id": "query:anim_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.any_animation_finished",
+      "stable_id": "query:any_animation_finished",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.body_y_rotation",
+      "stable_id": "query:body_y_rotation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.cardinal_facing_2d",
+      "stable_id": "query:cardinal_facing_2d",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.eye_target_y_rotation",
+      "stable_id": "query:eye_target_y_rotation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.ground_speed",
+      "stable_id": "query:ground_speed",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.head_x_rotation",
+      "stable_id": "query:head_x_rotation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.head_y_rotation",
+      "stable_id": "query:head_y_rotation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.health",
+      "stable_id": "query:health",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_eating",
+      "stable_id": "query:is_eating",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_in_water",
+      "stable_id": "query:is_in_water",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_jumping",
+      "stable_id": "query:is_jumping",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_on_ground",
+      "stable_id": "query:is_on_ground",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_sneaking",
+      "stable_id": "query:is_sneaking",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_swimming",
+      "stable_id": "query:is_swimming",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.life_time",
+      "stable_id": "query:life_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.max_health",
+      "stable_id": "query:max_health",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.time_stamp",
+      "stable_id": "query:time_stamp",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.vertical_speed",
+      "stable_id": "query:vertical_speed",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.yaw_speed",
+      "stable_id": "query:yaw_speed",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.armor",
+      "stable_id": "ctrl:armor",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.hold",
+      "stable_id": "ctrl:hold",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.indicate_reload",
+      "stable_id": "ctrl:indicate_reload",
+      "access": "INVOKE",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ctrl.set_animation",
+      "stable_id": "ctrl:set_animation",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 2,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ctrl.set_beginning_transition_length",
+      "stable_id": "ctrl:set_beginning_transition_length",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ctrl.swing",
+      "stable_id": "ctrl:swing",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.use",
+      "stable_id": "ctrl:use",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.random_integer",
+      "stable_id": "math:random_integer",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 2,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.random",
+      "stable_id": "math:random",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.bone_pivot_abs",
+      "stable_id": "ysm:bone_pivot_abs",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.bone_rot",
+      "stable_id": "ysm:bone_rot",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_any_curios",
+      "stable_id": "ysm:has_any_curios",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": "CURIOS",
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.keyboard",
+      "stable_id": "ysm:keyboard",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.mod_version",
+      "stable_id": "ysm:mod_version",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.particle",
+      "stable_id": "ysm:particle",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.play_sound",
+      "stable_id": "ysm:play_sound",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 5,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.second_order",
+      "stable_id": "ysm:second_order",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.stop_sound",
+      "stable_id": "ysm:stop_sound",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 2,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.sync",
+      "stable_id": "ysm:sync",
+      "access": "INVOKE",
+      "minimum": 0,
+      "maximum": 16,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "query.is_item_name_any",
+      "stable_id": "query:is_item_name_any",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.position_delta",
+      "stable_id": "query:position_delta",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.position",
+      "stable_id": "query:position",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.relative_block_has_any_tag",
+      "stable_id": "query:relative_block_has_any_tag",
+      "access": "INVOKE",
+      "minimum": 4,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.reset",
+      "stable_id": "ctrl:reset",
+      "access": "INVOKE",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.abs_particle",
+      "stable_id": "ysm:abs_particle",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.bone_color",
+      "stable_id": "ysm:bone_color",
+      "access": "INVOKE",
+      "minimum": 4,
+      "maximum": 4,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.bone_glow",
+      "stable_id": "ysm:bone_glow",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 2,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.bone_transparency",
+      "stable_id": "ysm:bone_transparency",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 2,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.defer",
+      "stable_id": "ysm:defer",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": true
+    },
+    {
+      "source_spelling": "ysm.first_order",
+      "stable_id": "ysm:first_order",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.stop_all_sounds",
+      "stable_id": "ysm:stop_all_sounds",
+      "access": "INVOKE",
+      "minimum": 0,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": true
+    }
+  ],
+  "families": [
+    {
+      "family": "better_combat",
+      "mod_id": "bettercombat",
+      "expected_keys": [
+        "ctrl.bcombat_attack_animation"
+      ]
+    },
+    {
+      "family": "carry_on",
+      "mod_id": "carryon",
+      "expected_keys": [
+        "ctrl.carryon_is_princess"
+      ]
+    },
+    {
+      "family": "sophisticated_backpacks",
+      "mod_id": "sophisticatedbackpacks",
+      "expected_keys": [
+        "ctrl.has_sophisticated_backpack"
+      ]
+    },
+    {
+      "family": "immersive_melodies",
+      "mod_id": "immersive_melodies",
+      "expected_keys": [
+        "ctrl.im_pitch",
+        "ctrl.im_delta",
+        "ctrl.im_time"
+      ]
+    },
+    {
+      "family": "parcool",
+      "mod_id": "parcool",
+      "expected_keys": [
+        "ctrl.parcool_state"
+      ]
+    },
+    {
+      "family": "slash_blade",
+      "mod_id": "slashblade",
+      "expected_keys": [
+        "ctrl.slashblade_animation"
+      ]
+    },
+    {
+      "family": "tacz",
+      "mod_id": "tacz",
+      "expected_keys": [
+        "ctrl.tac_hold_gun"
+      ]
+    },
+    {
+      "family": "curios",
+      "mod_id": "curios",
+      "expected_keys": [
+        "ysm.has_any_curios"
+      ]
+    }
+  ]
+}

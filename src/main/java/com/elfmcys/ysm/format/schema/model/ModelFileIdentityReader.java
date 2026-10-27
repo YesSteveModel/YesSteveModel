@@ -16,21 +16,19 @@ import java.util.Objects;
 
 /** Reads the exact model/container identity from the verified container preamble only. */
 public final class ModelFileIdentityReader {
-    private ModelFileIdentityReader() {
-    }
+    private ModelFileIdentityReader() {}
 
     public static ModelFileIdentity read(SeekableByteChannel file) throws IOException {
         return read(readContainer(file));
     }
 
-    static AssetContainerView readContainer(SeekableByteChannel file) throws IOException {
+    public static AssetContainerView readContainer(SeekableByteChannel file) throws IOException {
         return AssetContainerReader.read(classifyAccess(file));
     }
 
     static SeekableByteChannel classifyAccess(SeekableByteChannel file) {
         Objects.requireNonNull(file, "file");
-        return file instanceof AccessClassifyingChannel ? file
-                : new AccessClassifyingChannel(file);
+        return file instanceof AccessClassifyingChannel ? file : new AccessClassifyingChannel(file);
     }
 
     static ModelFileIdentity read(AssetContainerView assetView) throws IOException {
@@ -46,11 +44,9 @@ public final class ModelFileIdentityReader {
         if (versionText == null) {
             throw new IOException("Version property not found");
         }
-        if (!VersionCompatibility.isCompatible(ModelFileConstant.CURRENT_VERSION.toString(),
-                versionText, (current, candidate) -> new DefaultArtifactVersion(current)
-                        .equals(new DefaultArtifactVersion(candidate)))) {
-            throw new UnsupportedEncodingException(String.format(
-                    "Unsupported model version: \"%s\". Exported by \"%s\"", versionText, vendor));
+        if (!supportsVersion(ModelFileConstant.CURRENT_VERSION.toString(), versionText)) {
+            throw new UnsupportedEncodingException(
+                String.format("Unsupported model version: \"%s\". Exported by \"%s\"", versionText, vendor));
         }
 
         var encodedModelId = assetView.getSchemaProperty(ModelFileConstant.PROP_MODEL_ID);
@@ -60,14 +56,22 @@ public final class ModelFileIdentityReader {
         return new ModelFileIdentity(Hash256.parse(encodedModelId), assetView.getContainerId());
     }
 
+    static boolean supportsVersion(String currentText, String candidateText) {
+        return VersionCompatibility.isCompatible(currentText, candidateText, (current, candidate) -> {
+            var supported = new DefaultArtifactVersion(current);
+            var version = new DefaultArtifactVersion(candidate);
+            return version.getMajorVersion() <= supported.getMajorVersion()
+                && version.getMinorVersion() <= supported.getMinorVersion();
+        });
+    }
+
     private static boolean isLowerHexModelId(String value) {
         if (value == null || value.length() != Hash256.SIZE * 2) {
             return false;
         }
         for (var index = 0; index < value.length(); index++) {
             var character = value.charAt(index);
-            if (!((character >= '0' && character <= '9')
-                    || (character >= 'a' && character <= 'f'))) {
+            if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'))) {
                 return false;
             }
         }

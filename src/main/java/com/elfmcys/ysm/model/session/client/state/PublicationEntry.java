@@ -8,8 +8,8 @@ import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import java.util.Objects;
 
 /** Lean server authority for one exact representation. */
-public record PublicationEntry(ModelFileIdentity identity,
-                               HierarchyPath path, CatalogAccess access) {
+public record PublicationEntry(ModelFileIdentity identity, HierarchyPath path, CatalogAccess access,
+    boolean runtimeContentAllowed) {
     public PublicationEntry {
         Objects.requireNonNull(identity, "identity");
         Objects.requireNonNull(path, "path");
@@ -22,5 +22,9 @@ public record PublicationEntry(ModelFileIdentity identity,
 
     public Hash256 containerId() {
         return identity.containerId();
+    }
+
+    public boolean sameContent(PublicationEntry other) {
+        return other != null && identity.equals(other.identity) && path.equals(other.path) && access == other.access;
     }
 }

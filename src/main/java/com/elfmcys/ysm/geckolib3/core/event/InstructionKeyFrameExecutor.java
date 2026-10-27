@@ -1,45 +1,40 @@
 package com.elfmcys.ysm.geckolib3.core.event;
 
 import com.elfmcys.ysm.geckolib3.core.keyframe.event.EventKeyFrame;
-import com.elfmcys.ysm.geckolib3.core.molang.context.MolangContext;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
+import com.elfmcys.ysm.expression.aot.VoidProgram;
 
 import java.util.List;
 
 public class InstructionKeyFrameExecutor {
-    private final List<EventKeyFrame<IValue[]>> list;
+    private final List<EventKeyFrame<VoidProgram[]>> list;
     private int nextIndex = 0;
 
-    public InstructionKeyFrameExecutor(List<EventKeyFrame<IValue[]>> list) {
+    public InstructionKeyFrameExecutor(List<EventKeyFrame<VoidProgram[]>> list) {
         this.list = list;
     }
 
-    private void evalValues(ExpressionEvaluator<?> evaluator, IValue[] values) {
-        for (IValue value : values) {
-            value.eval(evaluator);
+    private void evalValues(EntityExpressionRuntime.Evaluation evaluation, VoidProgram[] values) {
+        for (VoidProgram value : values) {
+            evaluation.execute(value);
         }
     }
 
-    public void executeTo(ExpressionEvaluator<MolangContext<?>> evaluator, float currentTick, boolean allowEmitting) {
-        evaluator.entity().setAllowEmitting(allowEmitting);
+    public void executeTo(EntityExpressionRuntime.Evaluation evaluation, float currentTick) {
         while (!reachEnd()) {
-            EventKeyFrame<IValue[]> keyFrame = list.get(nextIndex);
+            EventKeyFrame<VoidProgram[]> keyFrame = list.get(nextIndex);
             if (keyFrame.getStartTick() > currentTick) {
                 break;
             }
-            evalValues(evaluator, keyFrame.getEventData());
+            evalValues(evaluation, keyFrame.getEventData());
             nextIndex++;
         }
-        evaluator.entity().setAllowEmitting(false);
     }
 
-    public void executeRemaining(ExpressionEvaluator<MolangContext<?>> evaluator, boolean allowEmitting) {
-        evaluator.entity().setAllowEmitting(allowEmitting);
+    public void executeRemaining(EntityExpressionRuntime.Evaluation evaluation) {
         for (int i = nextIndex; i < list.size(); i++) {
-            evalValues(evaluator, list.get(i).getEventData());
+            evalValues(evaluation, list.get(i).getEventData());
         }
-        evaluator.entity().setAllowEmitting(false);
         nextIndex = list.size();
     }
 

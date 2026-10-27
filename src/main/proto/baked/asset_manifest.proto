@@ -13,4 +13,5 @@ message BakedAnimationEntry {
   string name = 1;
   string chunk_name = 2;
   bytes source_hash = 3;
+  string source_file = 4;
 }

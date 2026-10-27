@@ -1,24 +1,22 @@
 package com.elfmcys.ysm.client.entity;
 
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.model.service.ClientModelService;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.model.resource.client.PlayerModelVariant;
 import com.elfmcys.ysm.model.resource.client.ResourceLease;
 
 import com.elfmcys.ysm.client.animation.condition.ConditionManager;
-import com.elfmcys.ysm.client.animation.molang.MolangEventWrapper;
 import com.elfmcys.ysm.client.model.locator.PlayerLocator;
 import com.elfmcys.ysm.geckolib3.core.builder.Animation;
 import com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
 import com.elfmcys.ysm.geckolib3.geo.GeoRenderData;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
 import com.elfmcys.ysm.model.domain.Hash256;
-import it.unimi.dsi.fastutil.booleans.BooleanArrayList;
-import it.unimi.dsi.fastutil.booleans.BooleanList;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.LivingEntity;
@@ -32,15 +30,12 @@ import java.util.Objects;
 /**
  * 使用玩家模型的实体
  */
-public abstract class CustomHumanoidEntity<T extends LivingEntity> extends CustomEntity<T> {
+public abstract class CustomHumanoidEntity<T extends LivingEntity> extends AnimatableEntity<T> {
     protected String textureName;
-    @Nullable
-    private PlayerModelVariant modelVariant;
 
     private final FloatArrayList headRotBackup = new FloatArrayList(2);
+    private AnimatedGeoModel headOwner;
     private boolean fireInitEvent = false;
-    private IValue wrappedUpdateHandler = null;
-    private final BooleanList updateHandlerArgs = new BooleanArrayList(1);
 
     /**
      * 用于禁用 YSM 模型，因为有玩家想强制显示原版玩家模型
@@ -58,13 +53,13 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Custo
 
     CustomHumanoidEntity(T entity, boolean asyncUpdate, EntityModelBinding modelBinding) {
         super(entity, asyncUpdate, modelBinding);
-        updateHandlerArgs.size(1);
     }
 
     @Override
     protected void codeAnimation(AnimationEvent<? extends AnimatableEntity<T>> animationEvent, boolean shouldUpdate) {
         var model = getLoadedGeoModel();
         if (model != null) {
+            prepareHeadHistory(model);
             // 更新头部旋转
             var heads = model.locatorGroup(PlayerLocator.get().head);
             var headRotBak = headRotBackup;
@@ -91,15 +86,16 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Custo
     }
 
     @Override
-    protected void extractRenderData(AnimationEvent<?> event, GeoRenderData data) {
-        super.extractRenderData(event, data);
+    protected void updateRenderData(AnimationEvent<?> event, GeoRenderData data) {
+        super.updateRenderData(event, data);
         data.renderLayersFirst = renderLayersFirst();
     }
 
     @Override
-    protected void recoverLastCodedAnimation(boolean lastFrameUpdated) {
+    protected void recoverLastCodedAnimation() {
         var model = getLoadedGeoModel();
         if (model != null) {
+            prepareHeadHistory(model);
             var heads = model.locatorGroup(PlayerLocator.get().head);
             var headRotBak = headRotBackup;
             for (var i = 0; i < heads.size(); i++) {
@@ -116,25 +112,31 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Custo
     }
 
     @Override
+    protected AnimationStore animationSource() {
+        return getModelRenderTarget().playerResources().animations();
+    }
+
+    @Override
     public HumanoidStateTracker<T> getStateTracker() {
-        return (HumanoidStateTracker<T>) super.getStateTracker();
+        return (HumanoidStateTracker<T>)super.getStateTracker();
     }
 
     public void updateTextureName(String textureName) {
+        rejectCandidateMutation();
         this.textureName = textureName;
-        updateTexture(true);
+        if (isAssigned())
+            updateModelHash(getModelHash());
     }
 
     public void updateModelAndTexture(Hash256 modelHash, String textureName) {
-        setInitialized();
+        rejectCandidateMutation();
         this.textureName = textureName;
         updateModelHash(modelHash);
-        updateTexture(true);
     }
 
     public void updateModelAndTexture(String modelPath, String textureName) {
         ClientModelService.instance().resolvePath(modelPath)
-                .ifPresent(hash -> updateModelAndTexture(hash, textureName));
+            .ifPresent(hash -> updateModelAndTexture(hash, textureName));
     }
 
     @Override
@@ -143,39 +145,24 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Custo
     }
 
     public void setDisabled(boolean disabled) {
+        rejectCandidateMutation();
         this.disabled = disabled;
+        restrictionsChanged();
     }
 
     public boolean isDisabled() {
         return disabled;
     }
 
-    public boolean isInitializedAndEnabled() {
-        return isInitialized() && !disabled;
+    @Override
+    protected boolean presentationPermission() {
+        return !disabled;
     }
 
-    @Override
-    protected void onModelRenderTargetLoaded(ModelRenderTarget newModel) {
-        super.onModelRenderTargetLoaded(newModel);
-        updateTexture(false);
-        var updateHandlers = newModel.assets().eventHandlers().get(MolangEventWrapper.PLAYER_UPDATE);
-        if (updateHandlers != null) {
-            wrappedUpdateHandler = MolangEventWrapper.wrap(updateHandlers, updateHandlerArgs);
-        } else {
-            wrappedUpdateHandler = null;
-        }
-    }
-
-    @Override
-    protected void resetModelRenderTarget() {
-        super.resetModelRenderTarget();
-        modelVariant = null;
-        wrappedUpdateHandler = null;
-    }
-
-    @Override
-    protected void onLoadGeoModel(AnimatedGeoModel model) {
-        super.onLoadGeoModel(model);
+    private void prepareHeadHistory(AnimatedGeoModel model) {
+        if (headOwner == model)
+            return;
+        headOwner = model;
         var heads = model.locatorGroup(PlayerLocator.get().head);
         var headRot = headRotBackup;
         headRot.size(heads.size() * 2);
@@ -188,68 +175,56 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Custo
     }
 
     @Override
-    protected void resetGeoModel() {
-        super.resetGeoModel();
+    protected void onModelEnded() {
+        super.onModelEnded();
+        if (hasInstalledModel())
+            return;
         headRotBackup.clear();
+        headOwner = null;
         tacGunAnimationNeedReload = false;
-        fireInitEvent = true;
+        fireInitEvent = false;
     }
 
     @Override
-    public void reset() {
-        super.reset();
-        textureName = null;
-        disabled = false;
+    protected Runnable prepareRoleInstallation(ModelRenderTarget target,
+        EntityExpressionRuntime.PreparedInstallation prepared) {
+        return () -> {
+            headRotBackup.clear();
+            headOwner = null;
+            tacGunAnimationNeedReload = false;
+            fireInitEvent = true;
+        };
     }
 
     @Override
-    protected void preAnimationSetup(float seekTime, boolean shouldTick) {
-        super.preAnimationSetup(seekTime, shouldTick);
+    protected void dispatchPersistentEvents(EntityExpressionRuntime.Evaluation evaluation, boolean shouldUpdate) {
         if (fireInitEvent) {
             fireInitEvent = false;
-            var initEvent = getEventHandler(MolangEventWrapper.PLAYER_INIT);
-            if (initEvent != null) {
-                executeMolangExp(MolangEventWrapper.wrap(initEvent), true, true, null);
-            }
+            evaluation.dispatchPlayerInit();
         }
-        if (wrappedUpdateHandler != null) {
-            updateHandlerArgs.set(0, shouldTick);
-            executeMolangExp(wrappedUpdateHandler, true, true, null);
-        }
+        evaluation.dispatchPlayerUpdate(shouldUpdate);
     }
 
     public ConditionManager getConditionManager() {
         return getModelRenderTarget().playerResources().conditionManager();
     }
 
-    @SuppressWarnings("unchecked")
-    private void updateTexture(boolean replaceModel) {
-        if (getModelRenderTarget() == null) {
-            return;
-        }
-        var playerResources = getModelRenderTarget().playerResources();
-        var variant = isModelPresent() ? playerResources.variants().get(textureName) : null;
-        if (variant == null) {
-            variant = playerResources.defaultVariant();
-        }
-        if (variant != modelVariant) {
-            waitForAsyncUpdate();
-            modelVariant = variant;
-            if (replaceModel) {
-                setGeoModelInplace(variant.mainModel());
-            }
-        }
+    @Override
+    protected GeoModel resolveGeoModel(ModelRenderTarget target, String texture) {
+        var resources = Objects.requireNonNull(target.playerResources(), "humanoid resources");
+        var variant = resources.variants().get(texture);
+        return (variant == null ? resources.defaultVariant() : variant).mainModel();
     }
 
     @Override
-    public GeoModel getYsmGeoModel() {
-        return Objects.requireNonNull(modelVariant, "modelVariant").mainModel();
+    protected AnimationControllerData resolveControllerData(ModelRenderTarget target, String name) {
+        return target.playerResources().animationControllers().get(name);
     }
 
     @Nullable
     @Override
     public Animation getAnimation(String name) {
-        return getModelRenderTarget().playerResources().animations().get(name);
+        return readAnimation(getModelRenderTarget().playerResources().animations(), name);
     }
 
     @Override
@@ -258,7 +233,16 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Custo
     }
 
     public String getTextureName() {
-        return isModelPresent() ? textureName : getModelRenderTarget().playerResources().defaultTextureName();
+        var target = getModelRenderTarget();
+        if (target == null)
+            return "";
+        var resources = target.playerResources();
+        var loaded = getLoadedGeoModel().getModel();
+        for (var entry : resources.variants().entrySet()) {
+            if (entry.getValue().mainModel() == loaded)
+                return entry.getKey();
+        }
+        return resources.defaultTextureName();
     }
 
     @Override
@@ -270,7 +254,8 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Custo
 
     @Nullable
     public PlayerModelVariant getModelVariant() {
-        return modelVariant;
+        var target = getModelRenderTarget();
+        return target == null ? null : target.playerResources().variants().get(getTextureName());
     }
 
     @Override
@@ -293,12 +278,6 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Custo
 
     public void setTacGunAnimationNeedReload(boolean tacGunAnimationNeedReload) {
         this.tacGunAnimationNeedReload = tacGunAnimationNeedReload;
-    }
-
-    protected class HumanoidResourceHolder extends ResourceHolder {
-        public HumanoidResourceHolder(ResourceLease lease, boolean fallback) {
-            super(lease, fallback);
-        }
     }
 
 }

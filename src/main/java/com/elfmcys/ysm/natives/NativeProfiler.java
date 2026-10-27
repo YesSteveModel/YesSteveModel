@@ -3,25 +3,18 @@ package com.elfmcys.ysm.natives;
 import java.io.Closeable;
 
 public final class NativeProfiler {
-    private NativeProfiler() {
-    }
+    private NativeProfiler() {}
 
     public static Scope beginAnimatableUpdate() {
-        return NativeRuntime.isTracyEnabled()
-                ? beginZone(JavaZone.ANIMATABLE_UPDATE)
-                : Scope.NOOP;
+        return NativeRuntime.isTracyEnabled() ? beginZone(JavaZone.ANIMATABLE_UPDATE) : Scope.NOOP;
     }
 
     public static Scope beginRenderer() {
-        return NativeRuntime.isTracyEnabled()
-                ? beginZone(JavaZone.RENDERER)
-                : Scope.NOOP;
+        return NativeRuntime.isTracyEnabled() ? beginZone(JavaZone.RENDERER) : Scope.NOOP;
     }
 
     public static Scope beginFallbackVertexWrite() {
-        return NativeRuntime.isTracyEnabled()
-                ? beginZone(JavaZone.FALLBACK_VERTEX_WRITER)
-                : Scope.NOOP;
+        return NativeRuntime.isTracyEnabled() ? beginZone(JavaZone.FALLBACK_VERTEX_WRITER) : Scope.NOOP;
     }
 
     public static boolean beginFrame() {
@@ -40,26 +33,17 @@ public final class NativeProfiler {
     }
 
     private enum JavaZone {
-        ANIMATABLE_UPDATE(
-                "YSM/Java/AnimatableEntity.update",
-                "AnimatableEntity.update",
-                "AnimatableEntity.java"),
-        RENDERER(
-                "YSM/Java/NativeRenderer.render",
-                "NativeRenderer.render",
-                "NativeRenderer.java"),
-        FALLBACK_VERTEX_WRITER(
-                "YSM/Java/FallbackVertexWriter.write",
-                "FallbackVertexWriter.write",
-                "FallbackVertexWriter.java");
+        ANIMATABLE_UPDATE("YSM/Java/AnimatableEntity.update", "AnimatableEntity.update", "AnimatableEntity.java"),
+        RENDERER("YSM/Java/NativeRenderer.render", "NativeRenderer.render", "NativeRenderer.java"),
+        FALLBACK_VERTEX_WRITER("YSM/Java/FallbackVertexWriter.write", "FallbackVertexWriter.write",
+            "FallbackVertexWriter.java");
 
         private final long sourceLocation;
 
         JavaZone(String name, String function, String file) {
             sourceLocation = nCreateSourceLocation(name, function, file, 0);
             if (sourceLocation == 0) {
-                throw new IllegalStateException(
-                        "Failed to create native profile source location: " + name);
+                throw new IllegalStateException("Failed to create native profile source location: " + name);
             }
         }
     }

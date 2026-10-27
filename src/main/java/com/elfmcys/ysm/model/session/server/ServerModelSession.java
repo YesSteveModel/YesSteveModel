@@ -6,11 +6,14 @@ import com.elfmcys.ysm.model.catalog.snapshot.CatalogRecord;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelFileIdentity;
+import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.session.server.state.Selection;
 import com.elfmcys.ysm.network.protocol.PlayerStateReportPolicy;
-import com.elfmcys.ysm.proto.network.PlayerStateReport;
+import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
 import com.elfmcys.ysm.proto.network.StateWriteMode;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -30,13 +33,13 @@ public final class ServerModelSession {
     private boolean publicationIdExhausted;
     private boolean publicationCommitted;
     private boolean playerStateFullAccepted;
+    private Map<ModelFileIdentity, Object> memberIncarnations = Map.of();
 
     public ServerModelSession(Supplier<CatalogSnapshot> offeredCatalog, boolean syncRoaming) {
         this(offeredCatalog, syncRoaming, 1);
     }
 
-    ServerModelSession(Supplier<CatalogSnapshot> offeredCatalog, boolean syncRoaming,
-                       long firstPublicationId) {
+    ServerModelSession(Supplier<CatalogSnapshot> offeredCatalog, boolean syncRoaming, long firstPublicationId) {
         this.offeredCatalog = Objects.requireNonNull(offeredCatalog, "offeredCatalog");
         this.syncRoaming = syncRoaming;
         playerStateReportPolicy = PlayerStateReportPolicy.gameServer(syncRoaming);
@@ -50,9 +53,8 @@ public final class ServerModelSession {
         if (state != NegotiationState.PENDING) {
             return false;
         }
-        authority = buildAuthority(Objects.requireNonNull(
-                offeredCatalog.get(), "offered catalog"), Set.of(),
-                new Selection.IntrinsicDefault(), false);
+        authority = buildAuthority(Objects.requireNonNull(offeredCatalog.get(), "offered catalog"), Set.of(),
+            new Selection.IntrinsicDefault(), false, false);
         state = NegotiationState.ACTIVE;
         return true;
     }
@@ -81,12 +83,9 @@ public final class ServerModelSession {
         return playerStateReportPolicy;
     }
 
-    public synchronized boolean acceptsPlayerStateReport(
-            PlayerStateReport report) {
-        var full = report.mode()
-                == StateWriteMode.STATE_WRITE_MODE_FULL;
-        return active() && playerStateReportPolicy.acceptsProjection(report)
-                && (full || playerStateFullAccepted);
+    public synchronized boolean acceptsPlayerStateReport(PlayerStateReportProto report) {
+        var full = report.mode() == StateWriteMode.FULL;
+        return active() && playerStateReportPolicy.acceptsProjection(report) && (full || playerStateFullAccepted);
     }
 
     public synchronized void commitPlayerStateReport(boolean full) {
@@ -134,14 +133,13 @@ public final class ServerModelSession {
         }
         var nextSelection = current.selection();
         var nextIgnoreGrants = current.ignoreGrants();
-        if (nextSelection instanceof Selection.Model model
-                && !canSelect(model.modelId(), current.catalog(), next)
-                && !ignoresGrantsFor(model.modelId(), current)) {
+        if (nextSelection instanceof Selection.Model model && !canSelect(model.modelId(), current.catalog(), next)
+            && !ignoresGrantsFor(model.modelId(), current)) {
             nextSelection = new Selection.IntrinsicDefault();
             nextIgnoreGrants = false;
         }
-        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), next,
-                nextSelection, nextIgnoreGrants));
+        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), next, nextSelection,
+            nextIgnoreGrants, current.restrictedAuth()));
     }
 
     public synchronized SelectionResult select(Selection requested) {
@@ -154,14 +152,14 @@ public final class ServerModelSession {
             selectIntrinsicDefault(current);
             return SelectionResult.ACCEPTED;
         }
-        var selected = (Selection.Model) requested;
+        var selected = (Selection.Model)requested;
         var record = current.catalog().byModelId().get(selected.modelId());
         if (record == null) {
             selectIntrinsicDefault(current);
             return SelectionResult.NOT_FOUND;
         }
         if (!canSelect(selected.modelId(), current.catalog(), current.grants())
-                && !ignoresGrantsFor(selected.modelId(), current)) {
+            && !ignoresGrantsFor(selected.modelId(), current)) {
             selectIntrinsicDefault(current);
             return SelectionResult.UNAUTHORIZED;
         }
@@ -170,17 +168,15 @@ public final class ServerModelSession {
             return SelectionResult.INVALID_REQUEST;
         }
         var nextIgnoreGrants = current.ignoreGrants();
-        if (current.selection() instanceof Selection.Model previous
-                && !previous.modelId().equals(selected.modelId())) {
+        if (current.selection() instanceof Selection.Model previous && !previous.modelId().equals(selected.modelId())) {
             nextIgnoreGrants = false;
         }
-        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(),
-                current.grants(), requested, nextIgnoreGrants));
+        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), current.grants(), requested,
+            nextIgnoreGrants, current.restrictedAuth()));
         return SelectionResult.ACCEPTED;
     }
 
-    public synchronized SelectionResult selectForced(Selection.Model requested,
-                                                       boolean ignoreGrants) {
+    public synchronized SelectionResult selectForced(Selection.Model requested, boolean ignoreGrants) {
         Objects.requireNonNull(requested, "requested");
         if (!active()) {
             return SelectionResult.INVALID_REQUEST;
@@ -190,20 +186,18 @@ public final class ServerModelSession {
         if (record == null) {
             return SelectionResult.NOT_FOUND;
         }
-        if (!ignoreGrants && !canSelect(requested.modelId(), current.catalog(),
-                current.grants())) {
+        if (!ignoreGrants && !canSelect(requested.modelId(), current.catalog(), current.grants())) {
             return SelectionResult.UNAUTHORIZED;
         }
         if (!hasTexture(record, requested.textureId())) {
             return SelectionResult.INVALID_REQUEST;
         }
-        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(),
-                current.grants(), requested, ignoreGrants));
+        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), current.grants(), requested,
+            ignoreGrants, current.restrictedAuth()));
         return SelectionResult.ACCEPTED;
     }
 
-    public synchronized boolean canRequest(Hash256 modelId, AssetRef.Kind kind,
-                                           boolean restrictedAuth) {
+    public synchronized boolean canRequest(Hash256 modelId, AssetRef.Kind kind, boolean restrictedAuth) {
         if (!active() || !publicationCommitted) {
             return false;
         }
@@ -212,12 +206,26 @@ public final class ServerModelSession {
         if (record == null) {
             return false;
         }
-        if (record.entry().access() == CatalogAccess.PUBLIC
-                || current.grants().contains(modelId) || !restrictedAuth) {
+        if (record.entry().access() == CatalogAccess.PUBLIC || current.grants().contains(modelId) || !restrictedAuth) {
             return true;
         }
         return kind == AssetRef.Kind.PREVIEW || kind == AssetRef.Kind.ICON
-                || kind == AssetRef.Kind.CHUNK && ignoresGrantsFor(modelId, current);
+            || kind == AssetRef.Kind.CHUNK && runtimeContentAllowed(modelId, current, restrictedAuth);
+    }
+
+    public synchronized boolean updateContentPolicy(boolean restrictedAuth) {
+        var current = authority();
+        if (current.restrictedAuth() == restrictedAuth)
+            return false;
+        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), current.grants(),
+            current.selection(), current.ignoreGrants(), restrictedAuth));
+        return true;
+    }
+
+    private static boolean runtimeContentAllowed(Hash256 modelId, AuthoritySnapshot current, boolean restrictedAuth) {
+        var record = current.catalog().byModelId().get(modelId);
+        return record != null && (record.entry().access() == CatalogAccess.PUBLIC || current.grants().contains(modelId)
+            || !restrictedAuth || ignoresGrantsFor(modelId, current));
     }
 
     /** Used while the initial authority is being assembled as well as after publication. */
@@ -228,22 +236,20 @@ public final class ServerModelSession {
     /** Asset lookup never falls back to the live global catalog. */
     public synchronized Optional<CatalogRecord> findModel(Hash256 modelId) {
         return !publicationCommitted ? Optional.empty()
-                : Optional.ofNullable(authority().catalog().byModelId().get(modelId));
+            : Optional.ofNullable(authority().catalog().byModelId().get(modelId));
     }
 
     /** Metadata lookup is exact and private to committed server authority. */
     public synchronized Optional<CatalogRecord> findPublished(Hash256 containerId) {
         return !publicationCommitted ? Optional.empty()
-                : Optional.ofNullable(authority().byContainer().get(containerId));
+            : Optional.ofNullable(authority().byContainer().get(containerId));
     }
 
-    public synchronized Optional<ModelPackDescriptor> findPack(
-            String hierarchy) {
+    public synchronized Optional<ModelPackDescriptor> findPack(String hierarchy) {
         if (!publicationCommitted) {
             return Optional.empty();
         }
-        return authority().catalog().packs().stream()
-                .filter(pack -> pack.hierarchy().equals(hierarchy)).findFirst();
+        return authority().catalog().packs().stream().filter(pack -> pack.hierarchy().equals(hierarchy)).findFirst();
     }
 
     /** Atomically commits server authority before any matching notification is attempted. */
@@ -252,16 +258,23 @@ public final class ServerModelSession {
     }
 
     /** Atomically commits server authority before any matching notification is attempted. */
-    public synchronized CatalogTransition commitCatalog(
-            CatalogSnapshot catalog, Set<Hash256> requestedGrants) {
+    public synchronized CatalogTransition commitCatalog(CatalogSnapshot catalog, Set<Hash256> requestedGrants) {
         Objects.requireNonNull(catalog, "catalog");
         Objects.requireNonNull(requestedGrants, "requestedGrants");
         var previous = authority();
-        var nextGrants = requestedGrants.stream()
-                .filter(catalog.byModelId()::containsKey)
-                .collect(Collectors.toUnmodifiableSet());
-        var next = buildAuthority(catalog, nextGrants, previous.selection(),
-                previous.ignoreGrants());
+        var nextGrants =
+            requestedGrants.stream().filter(catalog.byModelId()::containsKey).collect(Collectors.toUnmodifiableSet());
+        var next = buildAuthority(catalog, nextGrants, previous.selection(), previous.ignoreGrants(),
+            previous.restrictedAuth());
+        var incarnations = new LinkedHashMap<ModelFileIdentity, Object>();
+        next.catalog().byModelId().values().forEach(record -> {
+            var representation = record.binding().content().representation();
+            if (representation == null)
+                return;
+            var identity = representation.identity();
+            incarnations.put(identity, memberIncarnations.getOrDefault(identity, new Object()));
+        });
+        memberIncarnations = Map.copyOf(incarnations);
         replaceAuthority(next);
         publicationCommitted = true;
         return new CatalogTransition(previous, next);
@@ -276,17 +289,64 @@ public final class ServerModelSession {
         publicationCommitted = false;
         playerStateFullAccepted = false;
         authority = null;
+        memberIncarnations = Map.of();
+    }
+
+    public synchronized Optional<Effect> effect(ModelFileIdentity identity) {
+        var incarnation = memberIncarnations.get(identity);
+        return active() && publicationCommitted && incarnation != null ? Optional.of(new Effect(identity, incarnation))
+            : Optional.empty();
+    }
+
+    /** A request's effect retires with the exact connection/member, independently of grants. */
+    public final class Effect implements AtomicSharedCache.CommitGate {
+        private final ModelFileIdentity identity;
+        private final Object incarnation;
+        private boolean cancelled;
+        private boolean committed;
+
+        private Effect(ModelFileIdentity identity, Object incarnation) {
+            this.identity = identity;
+            this.incarnation = incarnation;
+        }
+
+        public void cancel() {
+            synchronized (ServerModelSession.this) {
+                cancelled = true;
+            }
+        }
+
+        public boolean current() {
+            synchronized (ServerModelSession.this) {
+                return !cancelled && !committed && active() && memberIncarnations.get(identity) == incarnation;
+            }
+        }
+
+        @Override
+        public void commit(AtomicSharedCache.AtomicReplacement replacement) throws java.io.IOException {
+            synchronized (ServerModelSession.this) {
+                if (cancelled || committed || !active() || memberIncarnations.get(identity) != incarnation) {
+                    throw new StaleEffectException();
+                }
+                replacement.run();
+                committed = true;
+            }
+        }
+    }
+
+    public static final class StaleEffectException extends java.io.IOException {
+        public StaleEffectException() {
+            super("Request connection or catalog member retired");
+        }
     }
 
     private CatalogSnapshot authorityCatalog() {
-        return authority == null ? Objects.requireNonNull(
-                offeredCatalog.get(), "offered catalog") : authority.catalog();
+        return authority == null ? Objects.requireNonNull(offeredCatalog.get(), "offered catalog")
+            : authority.catalog();
     }
 
-    private static AuthoritySnapshot buildAuthority(CatalogSnapshot catalog,
-                                                    Set<Hash256> grants,
-                                                    Selection selection,
-                                                    boolean ignoreGrants) {
+    private static AuthoritySnapshot buildAuthority(CatalogSnapshot catalog, Set<Hash256> grants, Selection selection,
+        boolean ignoreGrants, boolean restrictedAuth) {
         var byContainer = new LinkedHashMap<Hash256, CatalogRecord>();
         catalog.byModelId().values().forEach(record -> {
             var representation = record.binding().content().representation();
@@ -295,105 +355,88 @@ public final class ServerModelSession {
             }
             var containerId = representation.containerId();
             if (byContainer.putIfAbsent(containerId, record) != null) {
-                throw new IllegalArgumentException(
-                        "Published catalog reuses a container identity");
+                throw new IllegalArgumentException("Published catalog reuses a container identity");
             }
         });
         var nextSelection = selection;
         var nextIgnoreGrants = ignoreGrants;
         if (nextSelection instanceof Selection.Model selected) {
             var record = catalog.byModelId().get(selected.modelId());
-            if (record == null
-                    || !canSelect(selected.modelId(), catalog, grants) && !nextIgnoreGrants
-                    || !hasTexture(record, selected.textureId())) {
+            if (record == null || !canSelect(selected.modelId(), catalog, grants) && !nextIgnoreGrants
+                || !hasTexture(record, selected.textureId())) {
                 nextSelection = new Selection.IntrinsicDefault();
                 nextIgnoreGrants = false;
             }
         }
-        return new AuthoritySnapshot(catalog, byContainer, grants, nextSelection,
-                nextIgnoreGrants);
+        return new AuthoritySnapshot(catalog, byContainer, grants, nextSelection, nextIgnoreGrants, restrictedAuth);
     }
 
-    private static boolean canSelect(Hash256 modelId, CatalogSnapshot catalog,
-                                     Set<Hash256> grants) {
+    private static boolean canSelect(Hash256 modelId, CatalogSnapshot catalog, Set<Hash256> grants) {
         var record = catalog.byModelId().get(modelId);
-        return record != null && (record.entry().access() == CatalogAccess.PUBLIC
-                || grants.contains(modelId));
+        return record != null && (record.entry().access() == CatalogAccess.PUBLIC || grants.contains(modelId));
     }
 
     private static boolean hasTexture(CatalogRecord record, String textureId) {
         if (record == null || record.binding().content().modelFile() == null) {
             return true;
         }
-        return record.binding().content().modelFile().getPlayer().getTextureNames()
-                .contains(textureId);
+        return record.binding().content().modelFile().getPlayer().getTextureNames().contains(textureId);
     }
 
     private static boolean ignoresGrantsFor(Hash256 modelId, AuthoritySnapshot authority) {
-        return authority.ignoreGrants()
-                && authority.selection() instanceof Selection.Model selected
-                && selected.modelId().equals(modelId);
+        return authority.ignoreGrants() && authority.selection() instanceof Selection.Model selected
+            && selected.modelId().equals(modelId);
     }
 
     private void selectIntrinsicDefault(AuthoritySnapshot current) {
-        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(),
-                current.grants(), new Selection.IntrinsicDefault(), false));
+        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), current.grants(),
+            new Selection.IntrinsicDefault(), false, current.restrictedAuth()));
     }
 
     private void replaceAuthority(AuthoritySnapshot next) {
-        if (authority != null
-                && !reportAuthority(authority).equals(reportAuthority(next))) {
+        if (authority != null && !Objects.equals(reportModelId(authority), reportModelId(next))) {
             playerStateFullAccepted = false;
         }
         authority = next;
     }
 
-    private static ReportAuthority reportAuthority(AuthoritySnapshot snapshot) {
+    private static Hash256 reportModelId(AuthoritySnapshot snapshot) {
         if (snapshot.selection() instanceof Selection.Model selected) {
-            return new ReportAuthority(selected.modelId(), selected.textureId());
+            return selected.modelId();
         }
-        var intrinsicDefault = snapshot.catalog().byModelId().values().stream()
-                .filter(record -> record.location().rootKind()
-                        == CatalogRootKind.BUILTIN)
-                .filter(record -> record.location().path().value().equals("default"))
-                .map(record -> record.entry().modelId())
-                .findFirst().orElse(null);
-        return new ReportAuthority(intrinsicDefault, "");
+        return snapshot.catalog().byModelId().values().stream()
+            .filter(record -> record.location().rootKind() == CatalogRootKind.BUILTIN)
+            .filter(record -> record.location().path().value().equals("default"))
+            .map(record -> record.entry().modelId()).findFirst().orElse(null);
     }
 
-    private record ReportAuthority(Hash256 modelId, String textureId) {
-    }
+    public record AuthoritySnapshot(CatalogSnapshot catalog, Map<Hash256, CatalogRecord> byContainer,
+        Set<Hash256> grants, Selection selection, boolean ignoreGrants, boolean restrictedAuth) {
+        public boolean runtimeContentAllowed(Hash256 modelId) {
+            return ServerModelSession.runtimeContentAllowed(modelId, this, restrictedAuth);
+        }
 
-    public record AuthoritySnapshot(CatalogSnapshot catalog,
-                                    Map<Hash256, CatalogRecord> byContainer,
-                                    Set<Hash256> grants,
-                                    Selection selection,
-                                    boolean ignoreGrants) {
         public AuthoritySnapshot {
             Objects.requireNonNull(catalog, "catalog");
             byContainer = Map.copyOf(byContainer);
             grants = Set.copyOf(grants);
             Objects.requireNonNull(selection, "selection");
             if (!catalog.byModelId().keySet().containsAll(grants)) {
-                throw new IllegalArgumentException(
-                        "Grant references a missing publication entry");
+                throw new IllegalArgumentException("Grant references a missing publication entry");
             }
             if (selection instanceof Selection.Model selected) {
                 var record = catalog.byModelId().get(selected.modelId());
                 if (record == null || record.entry().access() == CatalogAccess.AUTHORIZED
-                        && !grants.contains(selected.modelId()) && !ignoreGrants) {
-                    throw new IllegalArgumentException(
-                            "Selection is not eligible in server authority");
+                    && !grants.contains(selected.modelId()) && !ignoreGrants) {
+                    throw new IllegalArgumentException("Selection is not eligible in server authority");
                 }
             } else if (ignoreGrants) {
-                throw new IllegalArgumentException(
-                        "Intrinsic default cannot ignore grants");
+                throw new IllegalArgumentException("Intrinsic default cannot ignore grants");
             }
         }
     }
 
-    public record CatalogTransition(AuthoritySnapshot previous,
-                                    AuthoritySnapshot current) {
+    public record CatalogTransition(AuthoritySnapshot previous, AuthoritySnapshot current) {
         public CatalogTransition {
             Objects.requireNonNull(previous, "previous");
             Objects.requireNonNull(current, "current");
@@ -401,16 +444,10 @@ public final class ServerModelSession {
     }
 
     public enum SelectionResult {
-        ACCEPTED,
-        UNAUTHORIZED,
-        NOT_FOUND,
-        INVALID_REQUEST
+        ACCEPTED, UNAUTHORIZED, NOT_FOUND, INVALID_REQUEST
     }
 
     private enum NegotiationState {
-        PENDING,
-        ACTIVE,
-        DECLINED,
-        CLOSED
+        PENDING, ACTIVE, DECLINED, CLOSED
     }
 }

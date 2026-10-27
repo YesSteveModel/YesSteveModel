@@ -1,8 +1,8 @@
 package com.elfmcys.ysm.capability;
 
-import com.elfmcys.ysm.client.animation.molang.roaming.RemoteRoamingStruct;
 import com.elfmcys.ysm.client.entity.CustomProjectileEntity;
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
 import it.unimi.dsi.fastutil.ints.Int2FloatOpenHashMap;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraftforge.api.distmarker.Dist;
@@ -11,7 +11,7 @@ import org.jetbrains.annotations.Nullable;
 
 @OnlyIn(Dist.CLIENT)
 public class ProjectileAnimatableCapability extends CustomProjectileEntity {
-    private @Nullable RemoteRoamingStruct roamingStruct;
+    private @Nullable Int2FloatOpenHashMap roamingValues;
 
     public ProjectileAnimatableCapability(Projectile projectile) {
         super(projectile);
@@ -19,21 +19,26 @@ public class ProjectileAnimatableCapability extends CustomProjectileEntity {
 
     public void init(Hash256 ownerModelHash) {
         updateModelHash(ownerModelHash);
-        setInitialized();
     }
 
     public void initRoamingVars(Int2FloatOpenHashMap vars) {
         if (vars != null) {
             // 无条件同步服务端数据
-            roamingStruct = new RemoteRoamingStruct(vars);
+            roamingValues = new Int2FloatOpenHashMap(vars);
         } else {
-            roamingStruct = null;
+            roamingValues = null;
+        }
+        if (getExpressionRuntime().module().isPresent()) {
+            getExpressionRuntime().applyRoamingFull(
+                RoamingPayloads.fromNetwork(roamingValues == null ? new Int2FloatOpenHashMap() : roamingValues));
         }
     }
 
     @Override
-    protected void preAnimationSetup(float seekTime, boolean shouldTick) {
-        super.preAnimationSetup(seekTime, shouldTick);
-        getAnimationProcessor().putRemoteStruct(roamingStruct);
+    protected @Nullable Runnable prepareRoleInstallation(com.elfmcys.ysm.model.resource.client.ModelRenderTarget target,
+        com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.PreparedInstallation prepared) {
+        prepared.initializeRoaming(
+            RoamingPayloads.fromNetwork(roamingValues == null ? new Int2FloatOpenHashMap() : roamingValues));
+        return null;
     }
 }

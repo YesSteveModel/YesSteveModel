@@ -22,7 +22,8 @@ import com.elfmcys.ysm.network.forge.MinecraftStateHandler;
 import com.elfmcys.ysm.network.forge.PlayerStateHandler;
 import com.elfmcys.ysm.network.forge.SessionProtocolHandler;
 import com.elfmcys.ysm.network.protocol.StarredModelSnapshots;
-import com.elfmcys.ysm.proto.network.PlayerStateUpdate;
+import com.elfmcys.ysm.proto.network.PlayerStateUpdateProto;
+
 import java.util.Optional;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.resources.ResourceLocation;
@@ -44,13 +45,17 @@ import net.minecraftforge.fml.loading.FMLEnvironment;
 @SuppressWarnings("removal")
 public final class CapabilityEvent {
     private static final ResourceLocation MODEL_INFO_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "model_id");
-    private static final ResourceLocation PROJECTILE_MODEL_INFO_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "projectile_model_id");
-    private static final ResourceLocation VEHICLE_MODEL_INFO_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "vehicle_model_id");
+    private static final ResourceLocation PROJECTILE_MODEL_INFO_CAP =
+        new ResourceLocation(YesSteveModel.MOD_ID, "projectile_model_id");
+    private static final ResourceLocation VEHICLE_MODEL_INFO_CAP =
+        new ResourceLocation(YesSteveModel.MOD_ID, "vehicle_model_id");
     private static final ResourceLocation AUTH_MODELS_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "own_models");
     private static final ResourceLocation STAR_MODELS_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "star_models");
     private static final ResourceLocation ANIMATABLE_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "animatable");
-    private static final ResourceLocation PROJECTILE_ANIMATABLE_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "projectile_animatable");
-    private static final ResourceLocation VEHICLE_ANIMATABLE_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "vehicle_animatable");
+    private static final ResourceLocation PROJECTILE_ANIMATABLE_CAP =
+        new ResourceLocation(YesSteveModel.MOD_ID, "projectile_animatable");
+    private static final ResourceLocation VEHICLE_ANIMATABLE_CAP =
+        new ResourceLocation(YesSteveModel.MOD_ID, "vehicle_animatable");
     private static final ResourceLocation CLIENT_LAZY_CAP = new ResourceLocation(YesSteveModel.MOD_ID, "client_lazy");
 
     @SubscribeEvent
@@ -62,21 +67,29 @@ public final class CapabilityEvent {
 
         Entity entity = event.getObject();
         if (entity instanceof Player player) {
-            if (!entity.level().isClientSide() && !player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).isPresent() && !event.getCapabilities().containsKey(MODEL_INFO_CAP)) {
+            if (!entity.level().isClientSide()
+                && !player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).isPresent()
+                && !event.getCapabilities().containsKey(MODEL_INFO_CAP)) {
                 event.addCapability(MODEL_INFO_CAP, new ModelInfoCapabilityProvider());
             }
-            if (!player.getCapability(AuthModelsCapabilityProvider.AUTH_MODELS_CAP).isPresent() && !event.getCapabilities().containsKey(AUTH_MODELS_CAP)) {
+            if (!player.getCapability(AuthModelsCapabilityProvider.AUTH_MODELS_CAP).isPresent()
+                && !event.getCapabilities().containsKey(AUTH_MODELS_CAP)) {
                 event.addCapability(AUTH_MODELS_CAP, new AuthModelsCapabilityProvider());
             }
-            if (!player.getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).isPresent() && !event.getCapabilities().containsKey(STAR_MODELS_CAP)) {
+            if (!player.getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).isPresent()
+                && !event.getCapabilities().containsKey(STAR_MODELS_CAP)) {
                 event.addCapability(STAR_MODELS_CAP, new StarModelsCapabilityProvider());
             }
         } else if (entity instanceof Projectile) {
-            if (!entity.level().isClientSide() && !entity.getCapability(ProjectileModelInfoCapabilityProvider.CAP).isPresent() && !event.getCapabilities().containsKey(PROJECTILE_MODEL_INFO_CAP)) {
+            if (!entity.level().isClientSide()
+                && !entity.getCapability(ProjectileModelInfoCapabilityProvider.CAP).isPresent()
+                && !event.getCapabilities().containsKey(PROJECTILE_MODEL_INFO_CAP)) {
                 event.addCapability(PROJECTILE_MODEL_INFO_CAP, new ProjectileModelInfoCapabilityProvider());
             }
         } else {
-            if (!entity.level().isClientSide() && !entity.getCapability(VehicleModelInfoCapabilityProvider.CAP).isPresent() && !event.getCapabilities().containsKey(VEHICLE_MODEL_INFO_CAP)) {
+            if (!entity.level().isClientSide()
+                && !entity.getCapability(VehicleModelInfoCapabilityProvider.CAP).isPresent()
+                && !event.getCapabilities().containsKey(VEHICLE_MODEL_INFO_CAP)) {
                 event.addCapability(VEHICLE_MODEL_INFO_CAP, new VehicleModelInfoCapabilityProvider());
             }
         }
@@ -92,7 +105,7 @@ public final class CapabilityEvent {
 
             // 客户端懒加载 cap
             if (!entity.getCapability(ClientLazyCapabilityProvider.CAP).isPresent()
-                    && !event.getCapabilities().containsKey(CLIENT_LAZY_CAP)) {
+                && !event.getCapabilities().containsKey(CLIENT_LAZY_CAP)) {
                 var vehicleAnimatable = new VehicleAnimatableCapabilityProvider(entity);
                 event.addCapability(VEHICLE_ANIMATABLE_CAP, vehicleAnimatable);
 
@@ -102,7 +115,8 @@ public final class CapabilityEvent {
                     event.addCapability(PROJECTILE_ANIMATABLE_CAP, projectileAnimatable);
                 }
 
-                event.addCapability(CLIENT_LAZY_CAP, new ClientLazyCapabilityProvider(vehicleAnimatable, projectileAnimatable));
+                event.addCapability(CLIENT_LAZY_CAP,
+                    new ClientLazyCapabilityProvider(vehicleAnimatable, projectileAnimatable));
             }
         }
     }
@@ -145,15 +159,15 @@ public final class CapabilityEvent {
         } else if (event.getTarget() instanceof Projectile projectile) {
             projectile.getCapability(ProjectileModelInfoCapabilityProvider.CAP).ifPresent(cap -> {
                 if (cap.isInitialized()) {
-                    NetworkHandler.sendToClientPlayer(
-                            MinecraftStateHandler.projectile(projectile.getId(), cap), event.getEntity());
+                    NetworkHandler.sendToClientPlayer(MinecraftStateHandler.projectile(projectile.getId(), cap),
+                        event.getEntity());
                 }
             });
         } else if (event.getTarget() != null) {
             event.getTarget().getCapability(VehicleModelInfoCapabilityProvider.CAP).ifPresent(cap -> {
                 if (cap.isInitialized()) {
-                    NetworkHandler.sendToClientPlayer(
-                            MinecraftStateHandler.vehicle(event.getTarget().getId(), cap), event.getEntity());
+                    NetworkHandler.sendToClientPlayer(MinecraftStateHandler.vehicle(event.getTarget().getId(), cap),
+                        event.getEntity());
                 }
             });
         }
@@ -174,12 +188,12 @@ public final class CapabilityEvent {
                 modelInfoCap.consumeDirty();
             });
 
-            getAuthModelsCap(serverPlayer).ifPresent(authModelsCap ->
-                    SessionProtocolHandler.refreshGrants(serverPlayer));
+            getAuthModelsCap(serverPlayer)
+                .ifPresent(authModelsCap -> SessionProtocolHandler.refreshGrants(serverPlayer));
 
             getStarModelsCap(serverPlayer).ifPresent(starModelCap -> {
-                NetworkHandler.sendToClientPlayer(
-                        StarredModelSnapshots.create(starModelCap.getStarModels()), serverPlayer);
+                NetworkHandler.sendToClientPlayer(StarredModelSnapshots.create(starModelCap.getStarModels()),
+                    serverPlayer);
             });
         }
     }
@@ -215,8 +229,7 @@ public final class CapabilityEvent {
                 });
             }
             ServerModelService.current().ifPresent(service -> {
-                if (FMLEnvironment.dist
-                        == Dist.DEDICATED_SERVER) {
+                if (FMLEnvironment.dist == Dist.DEDICATED_SERVER) {
                     var system = ModelRuntime.system();
                     system.tickCatalog();
                     system.tickServerRuntime();
@@ -234,8 +247,8 @@ public final class CapabilityEvent {
             projectile.getCapability(ProjectileModelInfoCapabilityProvider.CAP).ifPresent(cap -> {
                 ownerCap.executeWithMolangVars(molangVars -> {
                     cap.init(ownerCap.getModelId(), molangVars);
-                    NetworkHandler.broadcastToVisiblePlayers(
-                            MinecraftStateHandler.projectile(projectile.getId(), cap), projectile);
+                    NetworkHandler.broadcastToVisiblePlayers(MinecraftStateHandler.projectile(projectile.getId(), cap),
+                        projectile);
                 });
             });
         });
@@ -250,8 +263,8 @@ public final class CapabilityEvent {
                 // 失败就丢弃
                 ownerCap.getMolangVars().ifPresent(molangVars -> {
                     cap.update(ownerCap.getModelId(), molangVars);
-                    NetworkHandler.broadcastToVisiblePlayers(
-                            MinecraftStateHandler.vehicle(vehicle.getId(), cap), vehicle);
+                    NetworkHandler.broadcastToVisiblePlayers(MinecraftStateHandler.vehicle(vehicle.getId(), cap),
+                        vehicle);
                 });
             });
         });
@@ -261,11 +274,10 @@ public final class CapabilityEvent {
         return player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP);
     }
 
-    private static Optional<PlayerStateUpdate> buildModelInfoPacket(
-            ServerPlayer player, ModelInfoCapability capability) {
+    private static Optional<PlayerStateUpdateProto> buildModelInfoPacket(ServerPlayer player,
+        ModelInfoCapability capability) {
         return ServerModelService.current().flatMap(ServerModelService::catalog)
-                .flatMap(snapshot -> ModelInfoSyncAssembler.build(
-                        player, capability, snapshot));
+            .flatMap(snapshot -> ModelInfoSyncAssembler.build(player, capability, snapshot));
     }
 
     private static LazyOptional<AuthModelsCapability> getAuthModelsCap(Player player) {

@@ -40,7 +40,7 @@ public final class PlayerId {
 
     private static void writeLong(byte[] target, int offset, long value) {
         for (var index = Long.BYTES - 1; index >= 0; index--) {
-            target[offset + index] = (byte) value;
+            target[offset + index] = (byte)value;
             value >>>= Byte.SIZE;
         }
     }

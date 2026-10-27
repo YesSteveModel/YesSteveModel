@@ -3,21 +3,22 @@ package com.elfmcys.ysm.model.resource.client;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
 
 import java.util.Objects;
+import org.jetbrains.annotations.Nullable;
 
 public final class PlayerModelVariant {
     private final GeoModel mainModel;
-    private final GeoModel armModel;
+    private final @Nullable GeoModel armModel;
 
-    public PlayerModelVariant(GeoModel mainModel, GeoModel armModel) {
+    public PlayerModelVariant(GeoModel mainModel, @Nullable GeoModel armModel) {
         this.mainModel = Objects.requireNonNull(mainModel, "mainModel");
-        this.armModel = Objects.requireNonNull(armModel, "armModel");
+        this.armModel = armModel;
     }
 
     public GeoModel mainModel() {
         return mainModel;
     }
 
-    public GeoModel armModel() {
+    public @Nullable GeoModel armModel() {
         return armModel;
     }
 

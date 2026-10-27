@@ -1,0 +1,45 @@
+gradle.projectsEvaluated {
+    def project = rootProject
+    def forge = project.extensions.findByName('legacyForge')
+    if (forge == null) return
+    def game = System.getenv('YSM_MEASUREMENT_GAME')
+    if (game != null) {
+        def recording = System.getenv('YSM_MEASUREMENT_JFR')
+        def settings = System.getenv('YSM_MEASUREMENT_JFC')
+        if (recording == null || settings == null) throw new GradleException('Missing JFR inputs')
+        forge.runs.named('client') {
+            gameDirectory = project.file(game)
+            jvmArguments.add("-XX:StartFlightRecording=name=ysmStartup,settings=${settings},filename=${recording},dumponexit=true")
+            jvmArguments.add('-XX:FlightRecorderOptions=stackdepth=128')
+        }
+        project.tasks.named('runClient') {
+            doFirst { task ->
+                def digest = { File input ->
+                    def sha = java.security.MessageDigest.getInstance('SHA-256')
+                    input.withInputStream { stream ->
+                        byte[] buffer = new byte[65536]
+                        for (int count; (count = stream.read(buffer)) != -1;) sha.update(buffer, 0, count)
+                    }
+                    java.util.HexFormat.of().formatHex(sha.digest())
+                }
+                def files = [:]
+                task.inputs.files.files.each { input ->
+                    if (input.isFile()) files[input.absolutePath] = digest(input)
+                    else if (input.isDirectory()) project.fileTree(input).files.each { nested ->
+                        files[nested.absolutePath] = digest(nested)
+                    }
+                }
+                def launchFiles = [:]
+                project.fileTree(project.layout.buildDirectory.dir('moddev')) {
+                    include 'client*.txt', 'client*.xml'
+                }.files.each { input ->
+                    files[input.absolutePath] = digest(input)
+                    launchFiles[input.name] = input.getText('UTF-8')
+                }
+                def receipt = [taskClass: task.getClass().name, files: files, launchFiles: launchFiles]
+                new File(game, 'startup-launch-inputs.json').setText(
+                        groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(receipt)), 'UTF-8')
+            }
+        }
+    }
+}

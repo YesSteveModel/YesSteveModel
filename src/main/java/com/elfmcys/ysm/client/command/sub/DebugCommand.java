@@ -15,7 +15,8 @@ public class DebugCommand {
     private static final String TARGET_NAME = "target";
 
     public static LiteralArgumentBuilder<CommandSourceStack> get() {
-        return Commands.literal(DEBUG_NAME).then(Commands.argument(TARGET_NAME, EntityArgument.entity()).executes(DebugCommand::enableDebugging));
+        return Commands.literal(DEBUG_NAME)
+            .then(Commands.argument(TARGET_NAME, EntityArgument.entity()).executes(DebugCommand::enableDebugging));
     }
 
     @SuppressWarnings("DataFlowIssue")

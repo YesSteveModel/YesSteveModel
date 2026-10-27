@@ -19,17 +19,13 @@ import org.spongepowered.asm.mixin.injection.At;
 
 @Mixin(EntityRenderDispatcher.class)
 public class EntityRenderDispatcherMixin {
-    @WrapWithCondition(
-            method = "render",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/entity/EntityRenderer;" +
-                             "render(Lnet/minecraft/world/entity/Entity;FFLcom/mojang/blaze3d/vertex/PoseStack;" +
-                             "Lnet/minecraft/client/renderer/MultiBufferSource;I)V"
-            )
-    )
+    @WrapWithCondition(method = "render",
+        at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/client/renderer/entity/EntityRenderer;"
+                + "render(Lnet/minecraft/world/entity/Entity;FFLcom/mojang/blaze3d/vertex/PoseStack;"
+                + "Lnet/minecraft/client/renderer/MultiBufferSource;I)V"))
     private boolean replaceRender(EntityRenderer<?> renderer, Entity entity, float rotationYaw, float partialTicks,
-                                  PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
+        PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
         if (!YesSteveModel.isAvailable()) {
             return true;
         }
@@ -37,15 +33,18 @@ public class EntityRenderDispatcherMixin {
         if (entity instanceof Projectile projectile && !ClientConfig.DISABLE_PROJECTILE_MODEL.get()) {
             // 鱼漂比较特殊
             if (projectile instanceof FishingHook hook) {
-                return FishingHookRendererReplace.renderInMixin(hook, rotationYaw, partialTicks, poseStack, buffer, packedLight);
+                return FishingHookRendererReplace.renderInMixin(hook, rotationYaw, partialTicks, poseStack, buffer,
+                    packedLight);
             } else {
-                return ProjectileRendererReplace.renderInMixin(projectile, rotationYaw, partialTicks, poseStack, buffer, packedLight);
+                return ProjectileRendererReplace.renderInMixin(projectile, rotationYaw, partialTicks, poseStack, buffer,
+                    packedLight);
             }
         }
 
         if (!ClientConfig.DISABLE_VEHICLE_MODEL.get()) {
             RenderUtil.adjustPassengerPosition(entity, poseStack, partialTicks);
-            return EntityRendererReplace.renderInMixin(entity, rotationYaw, partialTicks, poseStack, buffer, packedLight);
+            return EntityRendererReplace.renderInMixin(entity, rotationYaw, partialTicks, poseStack, buffer,
+                packedLight);
         }
 
         return true;

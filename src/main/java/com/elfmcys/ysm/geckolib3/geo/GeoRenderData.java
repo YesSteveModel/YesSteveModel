@@ -7,6 +7,8 @@ import net.minecraft.resources.ResourceLocation;
 public class GeoRenderData {
     public final GeoModelState modelState = new GeoModelState();
 
+    public Object owner;
+    public Object installation;
     public ResourceLocation texture;
     public float widthScale;
     public float heightScale;

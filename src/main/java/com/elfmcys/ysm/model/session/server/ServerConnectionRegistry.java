@@ -33,12 +33,10 @@ public final class ServerConnectionRegistry<T extends AutoCloseable> implements 
 
     public synchronized Optional<T> current(UUID playerId, Object connection) {
         var entry = entries.get(playerId);
-        return entry != null && entry.connection == connection
-                ? Optional.of(entry.state) : Optional.empty();
+        return entry != null && entry.connection == connection ? Optional.of(entry.state) : Optional.empty();
     }
 
-    public synchronized boolean runIfCurrent(UUID playerId, Object connection,
-                                      T expected, Runnable action) {
+    public synchronized boolean runIfCurrent(UUID playerId, Object connection, T expected, Runnable action) {
         Objects.requireNonNull(action, "action");
         var entry = entries.get(playerId);
         if (entry == null || entry.connection != connection || entry.state != expected) {

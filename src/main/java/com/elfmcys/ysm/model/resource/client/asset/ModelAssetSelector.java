@@ -7,9 +7,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /** Closed, transport-independent set of asset selectors understood by every model source. */
-public sealed interface ModelAssetSelector permits ModelAssetSelector.ModelPreview,
-        ModelAssetSelector.RenderTarget, ModelAssetSelector.ModelPresentation,
-        ModelAssetSelector.PackCover {
+public sealed interface ModelAssetSelector permits ModelAssetSelector.ModelPreview, ModelAssetSelector.RenderTarget, ModelAssetSelector.ModelPresentation, ModelAssetSelector.PackCover {
     ModelAssetKind kind();
 
     static ModelAssetSelector preview() {
@@ -17,7 +15,7 @@ public sealed interface ModelAssetSelector permits ModelAssetSelector.ModelPrevi
     }
 
     static ModelAssetSelector renderTarget(String renderTargetId, String textureName,
-                                           Set<RenderTargetComponent> components) {
+        Set<RenderTargetComponent> components) {
         return new RenderTarget(renderTargetId, textureName, components);
     }
 
@@ -37,7 +35,7 @@ public sealed interface ModelAssetSelector permits ModelAssetSelector.ModelPrevi
     }
 
     record RenderTarget(String renderTargetId, String textureName,
-                        Set<RenderTargetComponent> components) implements ModelAssetSelector {
+        Set<RenderTargetComponent> components) implements ModelAssetSelector {
         public RenderTarget {
             renderTargetId = normalize(renderTargetId, "renderTargetId");
             textureName = Objects.requireNonNullElse(textureName, "").trim();
@@ -82,16 +80,11 @@ public sealed interface ModelAssetSelector permits ModelAssetSelector.ModelPrevi
     }
 
     enum RenderTargetComponent {
-        DEFINITION,
-        TEXTURE_SET,
-        COMMON_BEHAVIOR
+        DEFINITION, TEXTURE_SET, COMMON_BEHAVIOR
     }
 
     enum PresentationAsset {
-        MODEL_ICON,
-        AUTHOR_AVATAR,
-        GUI_FOREGROUND,
-        GUI_BACKGROUND
+        MODEL_ICON, AUTHOR_AVATAR, GUI_FOREGROUND, GUI_BACKGROUND
     }
 
     private static String normalize(String value, String name) {

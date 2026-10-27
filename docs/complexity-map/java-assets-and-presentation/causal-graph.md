@@ -22,10 +22,10 @@ flowchart LR
 | 候选 | 影响的本地机制 | 局部解释 |
 |---|---|---|
 | `D-SOURCE` | AP-06/07/08 | 转换交付、direct 准入和独立 preview/export 分别保留 owner |
-| `D-JOIN/D-CHUNKS/D-META/D-VERIFY` | AP-02/05 | 分层内容可用性与浏览不下载模型共同来自按需内容边界 |
+| `D-JOIN/D-CHUNKS/D-META/D-VERIFY` | AP-02/05 | 分层内容可用性约束本地与远端取得；模型卡片按资格准备 GUI，选择独立准备 FULL |
 | `D-FREEZE` | AP-01/06/08 | 输入、staging 与 export 分别闭合语义冻结 |
 | `D-SOUND/D-MIGRATION` | AP-09 | Raw 与 legacy 通过同一 current 音频 profile 交付，metadata 与完整内容分阶段验证 |
-| `A-CONTINUOUS-DEMAND` | AP-04/05 | 页面与 hover 共享短命意图原则，但拥有独立门槛和终态 |
+| `A-CONTINUOUS-DEMAND` | AP-04/05 | 同一 Coordinator 为页面、hover、选择和实体保存独立门槛与终态 |
 | `A-PREVIEW` / `A-PREVIEW-CACHE` | AP-05/08 | 3D 探测和图片取得是两个可分别替换的展示选择 |
 | `A-ARCHIVE` | AP-01 | Native 借用协议把“下次读取前复制”加入 capture 约束 |
 
@@ -36,7 +36,7 @@ flowchart LR
 | `A-CAPTURE → P-RAW-DRIFT → AP-01`；`NR-11 → P-BORROW → AP-01` | 分阶段解析需要固定输入，archive 借用又要求及时复制。同一个 capture 同时承接两个来源 | 改 owning archive 只消除“下次读取前复制”的时间耦合，不消除 scan/compile 的来源一致性 |
 | `A-ONE-ARTIFACT → P-STAGED-ARTIFACT → AP-06`；AP-06 使用 AP-02 | 转换后统一为当前容器，需要独立产物交接与可读性验证；调整交付表示可减少 staging I/O | NR-13 的跨语言 payload owner、内容投影保真、MN-05 的存储提交和 MN-01 的目录发布各有失败边界 |
 | `A-PAGE → P-PAGE-LATE → AP-04`；AP-04 使用 MN-17 | 页面离开不等于共享后台工作完成，需撤需求并处置迟到结果 | 更换页面加载策略不能关闭其他消费者的 Ready lease；standalone GUI texture 与 model texture 发布 owner 不同 |
-| `A-CONTINUOUS-DEMAND → P-SHORT-LIVED → AP-04/AP-05` | 页面、hover 和实体只保留当前意图及起点；取消门槛可删除这些短期状态 | 已命中内容及时交付、各流独立和页面关闭终态仍需保持 |
+| `A-CONTINUOUS-DEMAND → P-SHORT-LIVED → AP-04/AP-05` | Coordinator 为页面、hover、选择和实体只保留当前意图及起点；取消门槛可删除这些短期状态 | 完整 Ready 及时交付、各流独立和页面关闭终态仍需保持 |
 | `A-PREVIEW → P-PREVIEW-MISS → AP-05/AP-08` | Preview-first 与独立 cache 分别承接展示 miss；取消 3D hover 可缩 AP-05，但不能删除图片取得 | 浏览不得驱动全量模型下载；AP-08 的弱关联、export 和 AP-03 raw 输入策略仍独立 |
 | `A-DIRECT-ADMISSION → AP-07`；`A-PREVIEW-CACHE → AP-08` | 改变来源政策或图片存储选择后可分别替换 | Schema 合法性、模型内容验证、作者图保留和来源只读不随实现一起消失 |
 
@@ -48,7 +48,7 @@ flowchart LR
 
 | From | Type | To | Basis |
 |---|---|---|---|
-| D-JOIN | requires | AP-05 | AP-05：保留 3D 卡片时不因浏览取模型 |
+| D-JOIN | requires | AP-05 | AP-05：自动卡片最多离线，合资格 hover 仍受页面准入约束 |
 | D-VERIFY | requires | AP-02 | AP-02 |
 | P-PAGE-LATE | addresses | AP-04 | AP-04 |
 | D-FREEZE | requires | AP-01, AP-08 | AP-01：身份与产物消费同份输入；AP-08：export 冻结完整输出 |
@@ -61,7 +61,7 @@ flowchart LR
 | A-IMAGE | creates | P-CODEC-FAIL | AP-03：raw 图片重编码可能失败 |
 | P-CODEC-FAIL | addresses | AP-03 | AP-03：可处理 codec I/O 失败保留原图 |
 | A-PAGE | creates | P-PAGE-LATE | AP-04 |
-| A-PREVIEW | creates | P-PREVIEW-MISS | AP-05/08：离线缺失不能污染正常加载，图片可独立取得 |
+| A-PREVIEW | creates | P-PREVIEW-MISS | AP-05/08：离线 miss 不污染后续 FULL 取得，图片可独立取得 |
 | P-PREVIEW-MISS | addresses | AP-05, AP-08 | AP-05/08 |
 | A-DIRECT-ADMISSION | requires | AP-07 | AP-07：实际来源准入与 schema 合法性分层 |
 | A-PREVIEW-CACHE | requires | AP-08 | AP-08：弱关联独立图片不回写容器 |

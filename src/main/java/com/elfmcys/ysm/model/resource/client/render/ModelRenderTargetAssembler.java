@@ -13,27 +13,27 @@ import com.elfmcys.ysm.model.resource.client.data.PlayerModelData;
 import com.elfmcys.ysm.model.resource.client.data.ProjectileModelData;
 import com.elfmcys.ysm.model.resource.client.data.VehicleModelData;
 import com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
+import com.elfmcys.ysm.expression.aot.UserFunctionProgram;
 import com.elfmcys.ysm.geckolib3.file.AnimationControllerFile;
 import com.elfmcys.ysm.format.schema.model.views.ModelInfoView;
 import com.elfmcys.ysm.model.domain.Hash256;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceMap;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceMaps;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceOpenHashMap;
-import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import org.apache.commons.lang3.StringUtils;
 
-import java.util.List;
-
 public final class ModelRenderTargetAssembler {
-    private ModelRenderTargetAssembler() {
-    }
+    private ModelRenderTargetAssembler() {}
 
     public static ModelRenderTarget build(Hash256 modelHash, ModelRenderTargetBuildInput data) {
         var assets = buildCommonAssets(data);
+        var armAssets = data.armAssets() == null ? null
+            : new CommonAsset(data.armAssets().sounds(), data.armAssets().soundResources(),
+                new Object2ReferenceOpenHashMap<>(data.armAssets().userFunctions()),
+                new Object2ReferenceOpenHashMap<>(data.armAssets().eventHandlers()), false);
         final RenderTargetResources targetResources;
         if (data.target() instanceof PlayerModelData player) {
-            targetResources = buildPlayerModel(player, data.info(), assets);
+            targetResources = buildPlayerModel(player, data.info(), assets, armAssets == null ? assets : armAssets);
         } else if (data.target() instanceof ProjectileModelData projectile) {
             targetResources = buildProjectileModel(projectile, assets);
         } else if (data.target() instanceof VehicleModelData vehicle) {
@@ -41,10 +41,13 @@ public final class ModelRenderTargetAssembler {
         } else {
             throw new IllegalArgumentException("Unsupported model render target data: " + data.target().getClass());
         }
-        return new ModelRenderTarget(modelHash, data.renderTargetId(), targetResources, assets, data.info());
+        return new ModelRenderTarget(modelHash, data.renderTargetId(), targetResources, assets, data.expressions(),
+            data.info(), armAssets, data.armExpressions(), data.preparedOwner(), data.defaultSources(),
+            data.stateIdentity());
     }
 
-    private static PlayerModelResources buildPlayerModel(PlayerModelData player, ModelInfoView info, CommonAsset assets) {
+    private static PlayerModelResources buildPlayerModel(PlayerModelData player, ModelInfoView info, CommonAsset assets,
+        CommonAsset armAssets) {
         var variants = player.variants();
         if (variants.isEmpty()) {
             throw new IllegalArgumentException("Player model has no variants");
@@ -63,16 +66,17 @@ public final class ModelRenderTargetAssembler {
         for (var file : player.animationControllerFiles()) {
             animationControllers.putAll(file.animationControllers());
         }
+        var armControllers = new Object2ReferenceOpenHashMap<String, AnimationControllerData>();
+        for (var file : player.fpArmAnimationControllerFiles())
+            armControllers.putAll(file.animationControllers());
 
         var configuredTexture = info.getSettings().defaultTexture().orElse("");
-        var defaultTexture = !StringUtils.isEmpty(configuredTexture)
-                && variants.containsKey(configuredTexture)
-                ? configuredTexture : variants.getKeyAt(0);
+        var defaultTexture = !StringUtils.isEmpty(configuredTexture) && variants.containsKey(configuredTexture)
+            ? configuredTexture : variants.getKeyAt(0);
 
         return new PlayerModelResources(variants, animations, fpArmAnimations, conditionManager, fpArmConditionManager,
-                animationControllers, defaultTexture, assets);
+            animationControllers, armControllers, defaultTexture, assets, armAssets);
     }
-
 
     private static ProjectileModelResources buildProjectileModel(ProjectileModelData projectile, CommonAsset assets) {
         AnimationControllerFile controllerFile = projectile.controllerFile();
@@ -95,37 +99,14 @@ public final class ModelRenderTargetAssembler {
     private static CommonAsset buildCommonAssets(ModelRenderTargetBuildInput data) {
         var sounds = data.assets().sounds();
         var userFunctions = buildUserFunctionMap(data);
-        var eventHandlers = buildEventHandlers(data);
-
-        return new CommonAsset(sounds, userFunctions, eventHandlers);
+        return new CommonAsset(sounds, data.assets().soundResources(), userFunctions,
+            new Object2ReferenceOpenHashMap<>(data.assets().eventHandlers()));
     }
 
-    private static Object2ReferenceOpenHashMap<String, IValue> buildUserFunctionMap(ModelRenderTargetBuildInput data) {
-        var map = new Object2ReferenceOpenHashMap<String, IValue>(data.assets().userFunctions().size());
-        for (var entry : data.assets().userFunctions().entrySet()) {
-            var name = entry.getKey();
-            var splitterIndex = name.indexOf('@');
-            if (splitterIndex == 0) {
-                continue;
-            } else if (splitterIndex != -1) {
-                name = name.substring(0, splitterIndex);
-            }
-            map.put(name, entry.getValue());
-        }
+    private static Object2ReferenceOpenHashMap<String, UserFunctionProgram>
+        buildUserFunctionMap(ModelRenderTargetBuildInput data) {
+        var map = new Object2ReferenceOpenHashMap<String, UserFunctionProgram>(data.assets().userFunctions().size());
+        map.putAll(data.assets().userFunctions());
         return map;
     }
-
-    private static Object2ReferenceOpenHashMap<String, List<IValue>> buildEventHandlers(ModelRenderTargetBuildInput data) {
-        var map = new Object2ReferenceOpenHashMap<String, List<IValue>>();
-        for (var entry : data.assets().userFunctions().entrySet()) {
-            var splitterIndex = entry.getKey().indexOf('@');
-            if (splitterIndex != -1 && splitterIndex + 1 < entry.getKey().length()) {
-                var eventTypeName = entry.getKey().substring(splitterIndex + 1);
-                var eventType = eventTypeName.toLowerCase();
-                map.computeIfAbsent(eventType, k -> new ReferenceArrayList<>()).add(entry.getValue());
-            }
-        }
-        return map;
-    }
-
 }

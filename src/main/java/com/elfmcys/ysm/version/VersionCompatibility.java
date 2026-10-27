@@ -12,11 +12,10 @@ public final class VersionCompatibility {
     private static final Pattern VERSION_TEXT = Pattern.compile("[0-9][0-9A-Za-z._+\\-]*");
     private static final String[] DEVELOPMENT_MARKERS = {"unstable", "dev", "snapshot"};
 
-    private VersionCompatibility() {
-    }
+    private VersionCompatibility() {}
 
     public static boolean isCompatible(String currentText, String candidateText,
-                                       BiPredicate<String, String> releasePolicy) {
+        BiPredicate<String, String> releasePolicy) {
         Objects.requireNonNull(releasePolicy, "releasePolicy");
         var current = parse(currentText);
         var candidate = parse(candidateText);

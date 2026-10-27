@@ -110,13 +110,11 @@ public abstract class BuiltinModelToolTask extends DefaultTask {
         }).assertNormalExitValue();
 
         if (!Files.isRegularFile(output)) {
-            throw new GradleException("Builtin model tool did not produce its declared output: "
-                    + output);
+            throw new GradleException("Builtin model tool did not produce its declared output: " + output);
         }
     }
 
-    private List<String> arguments(Path output,
-                                   Path workDirectory) {
+    private List<String> arguments(Path output, Path workDirectory) {
         var arguments = new ArrayList<String>();
         var command = getCommand().get();
         arguments.add(command);

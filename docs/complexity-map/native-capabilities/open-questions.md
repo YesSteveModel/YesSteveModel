@@ -12,7 +12,7 @@
 
 ## Q-03
 
-**Baked cache 的 option 身份依赖隐含调用前提。** [派生 cache](../../architecture/model-management/storage-and-cache.md)要求精确实际输入、选项和 ABI/profile 隔离。`BakedModelCache.bakeHash` 当前直接覆盖 container、resource name、texture hash，路径/profile 再区分平台、SIMD、bake version 与 cache ABI；`originVersion`、`forceCulling`、`forceTranslucent`、`hasPbr` 没有逐一进入 hash。当前生产调用有常量或容器派生来源，因此未证明日常路径存在错误复用。
+**Baked cache 的 option 身份依赖隐含调用前提。** [派生 cache](../../architecture/model-management/storage/derived-artifacts.md#独立身份与原子集合)要求精确实际输入、选项和 ABI/profile 隔离。`BakedModelCache.bakeHash` 当前直接覆盖 container、resource name、texture hash，路径/profile 再区分平台、SIMD、bake version 与 cache ABI；`originVersion`、`forceCulling`、`forceTranslucent`、`hasPbr` 没有逐一进入 hash。当前生产调用有常量或容器派生来源，因此未证明日常路径存在错误复用。
 
 - 待明确的接口前提：这些 option 是否永久被限定为 container/resource/profile 的函数，还是调用者可独立改变它们。
 - 可选支点：收窄入口并固定推导，可减少外部自由组合；若需独立选项，则显式加入 cache identity 并承担缓存失效迁移。只改文档宣称“已覆盖”不解决前提缺口。

@@ -10,7 +10,8 @@ import java.util.EnumMap;
 import java.util.Locale;
 
 public class SwemCompatInner {
-    private static final EnumMap<SWEMHorseEntityBase.Gait, String> CACHE = Maps.newEnumMap(SWEMHorseEntityBase.Gait.class);
+    private static final EnumMap<SWEMHorseEntityBase.Gait, String> CACHE =
+        Maps.newEnumMap(SWEMHorseEntityBase.Gait.class);
 
     @Nullable
     @SuppressWarnings("all")

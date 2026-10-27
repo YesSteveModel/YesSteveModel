@@ -2,8 +2,7 @@ package com.elfmcys.ysm.client.animation.predicate;
 
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 
 public class ParallelPredicate<T extends AnimatableEntity<?>> implements IAnimationPredicate<T> {
     private final String animationName;
@@ -13,7 +12,7 @@ public class ParallelPredicate<T extends AnimatableEntity<?>> implements IAnimat
     }
 
     @Override
-    public PlayState test(AnimationEvent<T> event, ExpressionEvaluator<?> evaluator) {
+    public PlayState test(AnimationEvent<T> event) {
         return IAnimationPredicate.playLoopAnimation(event, animationName);
     }
 }

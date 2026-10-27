@@ -33,7 +33,8 @@ public class DisclaimerScreen extends Screen {
 
         MutableComponent readCheckboxText = Component.translatable("gui.yes_steve_model.disclaimer.read");
         int readTextWidth = font.width(readCheckboxText);
-        readCheckbox = new Checkbox((width - readTextWidth) / 2, y + totalHeight - 50, readTextWidth, 20, readCheckboxText, !ClientConfig.DISCLAIMER_SHOW.get());
+        readCheckbox = new Checkbox((width - readTextWidth) / 2, y + totalHeight - 50, readTextWidth, 20,
+            readCheckboxText, !ClientConfig.DISCLAIMER_SHOW.get());
         addRenderableWidget(readCheckbox);
         addRenderableWidget(new Button.Builder(Component.translatable("gui.yes_steve_model.disclaimer.close"), b -> {
             if (readCheckbox.selected()) {
@@ -48,7 +49,8 @@ public class DisclaimerScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int pMouseX, int pMouseY, float pPartialTick) {
         renderBackground(graphics);
-        graphics.drawWordWrap(font, Component.translatable("gui.yes_steve_model.disclaimer.text"), x, y, 400, 0xffffffff);
+        graphics.drawWordWrap(font, Component.translatable("gui.yes_steve_model.disclaimer.text"), x, y, 400,
+            0xffffffff);
         super.render(graphics, pMouseX, pMouseY, pPartialTick);
     }
 }

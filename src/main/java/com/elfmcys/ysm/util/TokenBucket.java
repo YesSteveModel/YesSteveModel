@@ -10,7 +10,7 @@ public class TokenBucket {
     public TokenBucket(int capacity, float outputPerSecond) {
         this.lastRequestTime = new LongArrayList(capacity);
         this.interval = Math.round(1000 / outputPerSecond);
-        for(int i = 0; i < capacity; i++) {
+        for (int i = 0; i < capacity; i++) {
             this.lastRequestTime.add(0);
         }
     }

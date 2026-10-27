@@ -9,8 +9,7 @@ import com.elfmcys.ysm.model.domain.ModelRepresentation;
 import java.util.Objects;
 
 /** Client presentation plus an internal content lease; representation identity is not exposed. */
-public record ClientCatalogEntry(CatalogEntry entry, ModelContent content,
-                                 Origin origin) {
+public record ClientCatalogEntry(CatalogEntry entry, ModelContent content, Origin origin) {
     public ClientCatalogEntry {
         Objects.requireNonNull(entry, "entry");
         Objects.requireNonNull(content, "content");
@@ -45,9 +44,6 @@ public record ClientCatalogEntry(CatalogEntry entry, ModelContent content,
     }
 
     public enum Origin {
-        BUILTIN,
-        CUSTOM,
-        AUTH,
-        SERVER
+        BUILTIN, CUSTOM, AUTH, SERVER
     }
 }

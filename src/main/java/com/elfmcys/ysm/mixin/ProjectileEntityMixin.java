@@ -1,7 +1,6 @@
 package com.elfmcys.ysm.mixin;
 
 import com.elfmcys.ysm.YesSteveModel;
-import com.elfmcys.ysm.client.compat.touhoulittlemaid.TlmCommonCompat;
 import com.elfmcys.ysm.event.CapabilityEvent;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -19,14 +18,12 @@ public class ProjectileEntityMixin {
             return;
         }
         // 仅在服务端执行
-        Projectile projectile = (Projectile) (Object) this;
+        Projectile projectile = (Projectile)(Object)this;
         if (projectile == null || projectile.level() == null || projectile.level().isClientSide()) {
             return;
         }
         if (owner instanceof ServerPlayer) {
-            CapabilityEvent.onProjectileSetOwner(projectile, (ServerPlayer) owner);
-        } else if (TlmCommonCompat.isMaid(owner)) {
-            TlmCommonCompat.onProjectileSetOwner(projectile, owner);
+            CapabilityEvent.onProjectileSetOwner(projectile, (ServerPlayer)owner);
         }
     }
 }

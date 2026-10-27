@@ -8,6 +8,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface NativeImageAccessor {
     @Accessor("pixels")
     long ysm$pixels();
+
     @Accessor("size")
     long ysm$size();
 }

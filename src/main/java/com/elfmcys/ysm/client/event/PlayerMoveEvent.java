@@ -59,8 +59,8 @@ public class PlayerMoveEvent {
 
     public static boolean isMoveKey(LocalPlayer player) {
         Input input = player.input;
-        return input != null && (hasImpulse(input.leftImpulse) || hasImpulse(input.forwardImpulse)
-               || input.jumping || input.shiftKeyDown);
+        return input != null && (hasImpulse(input.leftImpulse) || hasImpulse(input.forwardImpulse) || input.jumping
+            || input.shiftKeyDown);
     }
 
     private static boolean hasImpulse(float impulse) {

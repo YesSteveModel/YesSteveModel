@@ -47,7 +47,7 @@ final class LegacyManifestBuilder {
         }
 
         source.collectFileNames("", ".png", false, (name, path) -> {
-            if (!name.equals(ARROW_TEXTURE_FILE_NAME)) {
+            if (!path.equals(ARROW_TEXTURE_FILE_NAME)) {
                 manifest.files.player.texture.add(new PBRTextureSet(path));
             } else {
                 if (arrow) {
@@ -70,7 +70,7 @@ final class LegacyManifestBuilder {
         }
 
         source.readJson(INFO_FILE_NAME, "info", gson, ExtraInfo.class, false)
-                .ifPresent(info -> applyLegacyInfo(manifest, info));
+            .ifPresent(info -> applyLegacyInfo(manifest, info));
 
         return manifest;
     }

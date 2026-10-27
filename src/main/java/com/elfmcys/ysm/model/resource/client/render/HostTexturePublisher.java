@@ -28,8 +28,7 @@ interface HostTexturePublisher {
         private final List<ResourceLocation> mappings;
         private final AtomicBoolean released = new AtomicBoolean();
 
-        PublishedTextureBinding(ResourceLocation base, TextureManager textureManager,
-                                List<ResourceLocation> mappings) {
+        PublishedTextureBinding(ResourceLocation base, TextureManager textureManager, List<ResourceLocation> mappings) {
             this.base = Objects.requireNonNull(base, "base");
             this.textureManager = Objects.requireNonNull(textureManager, "textureManager");
             this.mappings = List.copyOf(mappings);
@@ -67,8 +66,7 @@ final class MinecraftHostTexturePublisher implements HostTexturePublisher {
     static final MinecraftHostTexturePublisher INSTANCE = new MinecraftHostTexturePublisher();
     private long nextId;
 
-    private MinecraftHostTexturePublisher() {
-    }
+    private MinecraftHostTexturePublisher() {}
 
     @Override
     public PublishedTextureBinding publish(PreparedTextureSet prepared) {
@@ -122,8 +120,7 @@ final class MinecraftHostTexturePublisher implements HostTexturePublisher {
     }
 
     private void registerComponent(TextureManager manager, List<ResourceLocation> mappings,
-                                   List<AbstractTexture> hostOwned,
-                                   AbstractTexture texture, String component) {
+        List<AbstractTexture> hostOwned, AbstractTexture texture, String component) {
         if (texture == null) {
             return;
         }
@@ -133,8 +130,7 @@ final class MinecraftHostTexturePublisher implements HostTexturePublisher {
         hostOwned.add(texture);
     }
 
-    private static void register(TextureManager manager, ResourceLocation id,
-                                 AbstractTexture texture) {
+    private static void register(TextureManager manager, ResourceLocation id, AbstractTexture texture) {
         manager.register(id, texture);
         try {
             if (manager.getTexture(id) == texture) {
@@ -167,7 +163,6 @@ final class MinecraftHostTexturePublisher implements HostTexturePublisher {
 
     @SuppressWarnings("removal")
     private ResourceLocation nextId(String component) {
-        return new ResourceLocation(YesSteveModel.MOD_ID,
-                "model-textures/" + ++nextId + "/" + component);
+        return new ResourceLocation(YesSteveModel.MOD_ID, "model-textures/" + ++nextId + "/" + component);
     }
 }

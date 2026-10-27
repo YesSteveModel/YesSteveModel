@@ -167,7 +167,7 @@ public final class NativeLibUtil {
         var lifetime = new CountDownLatch(1);
         var thread = new Thread(() -> {
             try {
-                System.load(libPath);
+                NativeRuntime.load(libPath);
                 NativeRuntime.initialize(NativeRuntime.JavaConfig.fromLog4j(YesSteveModel.LOGGER.getLevel()));
             } catch (Throwable failure) {
                 initialized.complete(failure);
@@ -216,11 +216,7 @@ public final class NativeLibUtil {
 
         // 准备提取目录
         Path extractPath = prepareExtractPath(config.targetDir);
-        String libPath = extractPath
-                .resolve(config.outputFileName)
-                .toAbsolutePath()
-                .normalize()
-                .toString();
+        String libPath = extractPath.resolve(config.outputFileName).toAbsolutePath().normalize().toString();
 
         // 写入库文件
         writeLibData(libPath, libData);
@@ -256,11 +252,8 @@ public final class NativeLibUtil {
             return null;
         }
 
-        return new PlatformConfig(
-                WINDOWS_LIB_NAME,
-                "ysm-core-" + modVersion + ".dll",
-                Path.of(System.getProperty("java.io.tmpdir"), "ysm", "unstable")
-        );
+        return new PlatformConfig(WINDOWS_LIB_NAME, "ysm-core-" + modVersion + ".dll",
+            Path.of(System.getProperty("java.io.tmpdir"), "ysm", "unstable"));
     }
 
     /**
@@ -290,11 +283,8 @@ public final class NativeLibUtil {
             return null;
         }
 
-        return new PlatformConfig(
-                LINUX_LIB_NAME,
-                "libysm-core-" + modVersion + ".so",
-                Path.of(System.getProperty("user.home"), ".ysm", "unstable")
-        );
+        return new PlatformConfig(LINUX_LIB_NAME, "libysm-core-" + modVersion + ".so",
+            Path.of(System.getProperty("user.home"), ".ysm", "unstable"));
     }
 
     /**
@@ -314,11 +304,8 @@ public final class NativeLibUtil {
         }
 
         MOBILE_PLATFORM = true;
-        return new PlatformConfig(
-                ANDROID_LIB_NAME,
-                "libysm-core.so",
-                Path.of(modAndroidRuntimeDir).resolve("unstable")
-        );
+        return new PlatformConfig(ANDROID_LIB_NAME, "libysm-core.so",
+            Path.of(modAndroidRuntimeDir).resolve("unstable"));
     }
 
     /**
@@ -332,29 +319,20 @@ public final class NativeLibUtil {
             return preferredPath;
         } catch (Throwable t) {
             YesSteveModel.LOGGER.warn("Failed to create preferred directory, using fallback", t);
-            return FMLPaths.GAMEDIR.get()
-                    .resolve(YesSteveModel.MOD_ID)
-                    .resolve("cache")
-                    .resolve("unstable");
+            return FMLPaths.GAMEDIR.get().resolve(YesSteveModel.MOD_ID).resolve("cache").resolve("unstable");
         }
     }
 
     private static String getModVersion() {
-        return ModList.get()
-                .getModFileById(YesSteveModel.MOD_ID)
-                .getFile()
-                .getModInfos()
-                .get(0)
-                .getVersion()
-                .toString();
+        return ModList.get().getModFileById(YesSteveModel.MOD_ID).getFile().getModInfos().get(0).getVersion()
+            .toString();
     }
 
     /**
      * 检查是否为 x86-64 架构
      */
     private static boolean isX64Architecture() {
-        return SystemUtils.OS_ARCH.equals(AMD64_ARCH_1) ||
-               SystemUtils.OS_ARCH.equals(AMD64_ARCH_2);
+        return SystemUtils.OS_ARCH.equals(AMD64_ARCH_1) || SystemUtils.OS_ARCH.equals(AMD64_ARCH_2);
     }
 
     /**
@@ -398,7 +376,7 @@ public final class NativeLibUtil {
     /**
      * 检测 Linux 系统的 C 库类型
      */
-    private static LibcType detectLibc() {
+    public static LibcType detectLibc() {
         try {
             NativeLibrary lib = NativeLibrary.getInstance(Platform.C_LIBRARY_NAME);
             if (lib != null) {
@@ -434,14 +412,14 @@ public final class NativeLibUtil {
         }
         UNSUPPORTED_MSG = Component.translatable("error.yes_steve_model.unsupported_platform", hint);
         UNSUPPORTED_MSG_KEY = "error.yes_steve_model.unsupported_platform_ext";
-        UNSUPPORTED_MSG_CTX = new Object[]{hint};
+        UNSUPPORTED_MSG_CTX = new Object[] {hint};
         UNSUPPORTED_MSG_STR = "[YSM] Current platform is unsupported: " + hint;
     }
 
     private static void setUnsatisfiedRuntimeEnvironmentMsg(@NotNull String hint) {
         UNSUPPORTED_MSG = Component.translatable("error.yes_steve_model.unsatisfied_runtime_env", hint);
         UNSUPPORTED_MSG_KEY = "error.yes_steve_model.unsatisfied_runtime_env_ext";
-        UNSUPPORTED_MSG_CTX = new Object[]{hint};
+        UNSUPPORTED_MSG_CTX = new Object[] {hint};
         UNSUPPORTED_MSG_STR = "[YSM] Unsatisfied runtime environment: " + hint;
     }
 
@@ -449,7 +427,7 @@ public final class NativeLibUtil {
         String hint = SystemUtils.OS_NAME + " " + SystemUtils.OS_ARCH;
         UNSUPPORTED_MSG = Component.translatable("error.yes_steve_model.unsatisfied_build", hint);
         UNSUPPORTED_MSG_KEY = "error.yes_steve_model.unsatisfied_build_ext";
-        UNSUPPORTED_MSG_CTX = new Object[]{hint};
+        UNSUPPORTED_MSG_CTX = new Object[] {hint};
         UNSUPPORTED_MSG_STR = "[YSM] This build does not support current platform: " + hint;
     }
 
@@ -459,7 +437,7 @@ public final class NativeLibUtil {
         if (StringUtils.isNotBlank(fclVersion)) {
             UNSUPPORTED_MSG = Component.translatable("error.yes_steve_model.old_launcher", "FCL", "1.2.6.7");
             UNSUPPORTED_MSG_KEY = "error.yes_steve_model.old_launcher_ext";
-            UNSUPPORTED_MSG_CTX = new Object[]{"FCL", "1.2.6.7"};
+            UNSUPPORTED_MSG_CTX = new Object[] {"FCL", "1.2.6.7"};
             UNSUPPORTED_MSG_STR = "[YSM] Current FCL launcher is old version";
             return;
         }
@@ -471,12 +449,13 @@ public final class NativeLibUtil {
             if (version < ZALITH_2_MIN_VERSION) {
                 UNSUPPORTED_MSG = Component.translatable("error.yes_steve_model.old_launcher", "Zalith 1", "1.4.1.1");
                 UNSUPPORTED_MSG_KEY = "error.yes_steve_model.old_launcher_ext";
-                UNSUPPORTED_MSG_CTX = new Object[]{"Zalith 1", "1.4.1.1"};
+                UNSUPPORTED_MSG_CTX = new Object[] {"Zalith 1", "1.4.1.1"};
                 UNSUPPORTED_MSG_STR = "[YSM] Current Zalith 1 launcher is old version";
             } else {
-                UNSUPPORTED_MSG = Component.translatable("error.yes_steve_model.old_launcher", "Zalith 2", "2.0.0_beta-20251118a");
+                UNSUPPORTED_MSG =
+                    Component.translatable("error.yes_steve_model.old_launcher", "Zalith 2", "2.0.0_beta-20251118a");
                 UNSUPPORTED_MSG_KEY = "error.yes_steve_model.old_launcher_ext";
-                UNSUPPORTED_MSG_CTX = new Object[]{"Zalith 2", "2.0.0_beta-20251118a"};
+                UNSUPPORTED_MSG_CTX = new Object[] {"Zalith 2", "2.0.0_beta-20251118a"};
                 UNSUPPORTED_MSG_STR = "[YSM] Current Zalith 2 launcher is old version";
             }
             return;
@@ -488,18 +467,16 @@ public final class NativeLibUtil {
 
     @SuppressWarnings("removal")
     public static ModLoadingWarning getUnavailableWarning() {
-        return new ModLoadingWarning(
-                ModLoadingContext.get().getActiveContainer().getModInfo(),
-                ModLoadingStage.SIDED_SETUP,
-                UNSUPPORTED_MSG_KEY, UNSUPPORTED_MSG_CTX);
+        return new ModLoadingWarning(ModLoadingContext.get().getActiveContainer().getModInfo(),
+            ModLoadingStage.SIDED_SETUP, UNSUPPORTED_MSG_KEY, UNSUPPORTED_MSG_CTX);
     }
 
     /**
      * 平台配置信息
      *
-     * @param libFileName    JAR 内的库文件名
+     * @param libFileName JAR 内的库文件名
      * @param outputFileName 输出的库文件名
-     * @param targetDir      目标目录
+     * @param targetDir 目标目录
      */
     private record PlatformConfig(String libFileName, String outputFileName, Path targetDir) {
     }
@@ -507,7 +484,7 @@ public final class NativeLibUtil {
     /**
      * C 库类型枚举
      */
-    private enum LibcType {
+    public enum LibcType {
         /**
          * 不支持的类型
          */

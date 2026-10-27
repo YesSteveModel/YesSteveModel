@@ -12,17 +12,15 @@ import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 
 final class DescriptorUtil {
-    private DescriptorUtil() {
-    }
+    private DescriptorUtil() {}
 
     static String methodDescriptor(ExecutableElement method, Types types, Elements elements) {
         StringBuilder descriptor = new StringBuilder("(");
         for (var parameter : method.getParameters()) {
             descriptor.append(typeDescriptor(types.erasure(parameter.asType()), types, elements));
         }
-        return descriptor.append(')')
-                .append(typeDescriptor(types.erasure(method.getReturnType()), types, elements))
-                .toString();
+        return descriptor.append(')').append(typeDescriptor(types.erasure(method.getReturnType()), types, elements))
+            .toString();
     }
 
     static String typeDescriptor(TypeMirror type, Types types, Elements elements) {
@@ -36,13 +34,12 @@ final class DescriptorUtil {
             case FLOAT -> "F";
             case DOUBLE -> "D";
             case VOID -> "V";
-            case ARRAY -> "[" + typeDescriptor(((ArrayType) type).getComponentType(), types, elements);
+            case ARRAY -> "[" + typeDescriptor(((ArrayType)type).getComponentType(), types, elements);
             case DECLARED -> {
-                TypeElement element = (TypeElement) ((DeclaredType) type).asElement();
+                TypeElement element = (TypeElement)((DeclaredType)type).asElement();
                 yield "L" + elements.getBinaryName(element).toString().replace('.', '/') + ";";
             }
-            case TYPEVAR, WILDCARD, INTERSECTION, ERROR ->
-                    typeDescriptor(types.erasure(type), types, elements);
+            case TYPEVAR, WILDCARD, INTERSECTION, ERROR -> typeDescriptor(types.erasure(type), types, elements);
             default -> throw new IllegalArgumentException("Unsupported type in descriptor: " + type);
         };
     }

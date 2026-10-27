@@ -1,20 +1,14 @@
 package com.elfmcys.ysm.model.storage;
 
-import com.elfmcys.ysm.AssetPaths;
-
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
-import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.Comparator;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /** Process-lifetime converted consumer registration and one-shot prune admission. */
 public final class ConvertedCacheCoordinator implements AutoCloseable {
@@ -24,17 +18,29 @@ public final class ConvertedCacheCoordinator implements AutoCloseable {
     /** Cross-process registration directory for live converted consumers. */
     private static final String CONSUMER_DIRECTORY = "converted-consumers";
 
-    private final Path gameCacheRoot;
+    private final Path objectsRoot;
+    private final AtomicSharedCache cache;
     private final Path coordinationRoot;
     private final Path gateFile;
     private FileChannel registrationChannel;
     private FileLock registrationLock;
     private Path registrationFile;
+    private CacheDirectoryGuard.Observation registrationObservation;
+    private Object registrationIdentity;
     private boolean pruneAttempted;
 
     public ConvertedCacheCoordinator(Path gameCacheRoot) {
-        this.gameCacheRoot = Objects.requireNonNull(gameCacheRoot, "gameCacheRoot");
+        this.objectsRoot =
+            Objects.requireNonNull(gameCacheRoot).resolve("converted/objects").toAbsolutePath().normalize();
+        cache = new AtomicSharedCache(gameCacheRoot);
         coordinationRoot = AtomicSharedCache.locksRoot(gameCacheRoot).resolve(CONSUMER_DIRECTORY);
+        gateFile = coordinationRoot.resolve(GATE_FILE);
+    }
+
+    public ConvertedCacheCoordinator(ConvertedScope scope, AtomicSharedCache cache) {
+        objectsRoot = scope.root().resolve("objects");
+        this.cache = Objects.requireNonNull(cache);
+        coordinationRoot = scope.root().resolve("locks").resolve(CONSUMER_DIRECTORY);
         gateFile = coordinationRoot.resolve(GATE_FILE);
     }
 
@@ -43,25 +49,40 @@ public final class ConvertedCacheCoordinator implements AutoCloseable {
         if (registrationLock != null) {
             return;
         }
-        Files.createDirectories(coordinationRoot);
-        try (var gate = FileChannel.open(gateFile,
-                StandardOpenOption.CREATE, StandardOpenOption.READ,
-                StandardOpenOption.WRITE);
-             var ignored = gate.lock(0, Long.MAX_VALUE, true)) {
-            var file = coordinationRoot.resolve(UUID.randomUUID() + CONSUMER_SUFFIX);
-            var channel = FileChannel.open(file, StandardOpenOption.CREATE_NEW,
-                    StandardOpenOption.READ, StandardOpenOption.WRITE);
+        var gateObservation = cache.observe(gateFile, true);
+        SharedCacheLocks.withLock(gateObservation, () -> {
+            gateObservation.verify();
+            var file = gateObservation.target().getParent().resolve(UUID.randomUUID() + CONSUMER_SUFFIX);
+            var observation = cache.observe(file, true);
+            var channel = observation
+                .open(Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.READ, StandardOpenOption.WRITE));
+            Object identity = null;
             try {
+                identity = observation.fileIdentity();
                 var lock = channel.lock();
-                registrationFile = file;
+                SharedCacheLocks.registerConsumer(observation.target());
+                registrationObservation = observation;
+                registrationIdentity = identity;
+                registrationFile = observation.target();
                 registrationChannel = channel;
                 registrationLock = lock;
             } catch (IOException | RuntimeException | Error failure) {
-                channel.close();
-                Files.deleteIfExists(file);
+                try {
+                    channel.close();
+                } catch (Throwable cleanup) {
+                    failure.addSuppressed(cleanup);
+                }
+                try {
+                    gateObservation.verify();
+                    if (identity != null)
+                        observation.deleteIfExists(identity);
+                } catch (Throwable cleanup) {
+                    failure.addSuppressed(cleanup);
+                }
                 throw failure;
             }
-        }
+            return null;
+        });
     }
 
     public synchronized boolean registered() {
@@ -69,8 +90,8 @@ public final class ConvertedCacheCoordinator implements AutoCloseable {
     }
 
     /**
-     * Tries the only legal prune opportunity. Active peer consumers make the attempt a
-     * permanent skip; stale registrations are removed while admission is closed.
+     * Tries the only legal prune opportunity. Active peer consumers make the attempt a permanent skip; stale
+     * registrations are removed while admission is closed.
      */
     public synchronized PruneResult pruneOnce(Set<Path> retainedObjects) {
         Objects.requireNonNull(retainedObjects, "retainedObjects");
@@ -81,83 +102,86 @@ public final class ConvertedCacheCoordinator implements AutoCloseable {
             throw new IllegalStateException("Converted prune opportunity was already consumed");
         }
         pruneAttempted = true;
-        var retained = retainedObjects.stream()
-                .map(path -> path.toAbsolutePath().normalize())
-                .collect(Collectors.toUnmodifiableSet());
         try {
-            Files.createDirectories(coordinationRoot);
-            try (var gate = FileChannel.open(gateFile,
-                    StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-                 var ignored = gate.lock()) {
+            var retained = new java.util.HashSet<Path>();
+            for (var path : retainedObjects)
+                retained.add(cache.observe(path, false).target());
+            var gateObservation = cache.observe(gateFile, true);
+            return SharedCacheLocks.withLock(gateObservation, () -> {
+                gateObservation.verify();
                 if (hasActivePeer()) {
                     return PruneResult.SKIPPED_ACTIVE_CONSUMER;
                 }
                 pruneObjects(retained);
                 return PruneResult.COMPLETED;
-            }
+            });
         } catch (IOException | RuntimeException failure) {
             return PruneResult.FAILED;
         }
     }
 
     private boolean hasActivePeer() throws IOException {
-        try (var registrations = Files.list(coordinationRoot)) {
-            for (var file : registrations
-                    .filter(path -> path.getFileName().toString()
-                            .endsWith(CONSUMER_SUFFIX))
-                    .sorted().toList()) {
-                if (file.equals(registrationFile)) {
+        var observation = cache.observe(coordinationRoot.resolve(".guard"), false);
+        try (var directory = observation.acquire()) {
+            for (var name : directory.names().stream().filter(n -> n.endsWith(CONSUMER_SUFFIX)).sorted().toList()) {
+                if (directory.label().resolve(name).equals(registrationFile))
                     continue;
-                }
-                try (var channel = FileChannel.open(file,
-                        StandardOpenOption.READ, StandardOpenOption.WRITE)) {
-                    FileLock lock = null;
+                observation.verify();
+                // POSIX may release all process locks when any channel for the file is closed.
+                if (SharedCacheLocks.isLocalConsumer(directory.label().resolve(name))) return true;
+                var identity = directory.fileIdentity(name);
+                try (var channel = directory.file(name, true, false, false)) {
+                    FileLock lock;
                     try {
                         lock = channel.tryLock();
                     } catch (OverlappingFileLockException activeInThisJvm) {
                         return true;
                     }
-                    if (lock == null) {
+                    if (lock == null)
                         return true;
-                    }
                     lock.close();
                 }
-                Files.deleteIfExists(file);
+                observation.verify();
+                directory.delete(name, identity, false);
             }
         }
         return false;
     }
 
     private void pruneObjects(Set<Path> retained) throws IOException {
-        var root = AssetPaths.convertedRoot(gameCacheRoot).toAbsolutePath().normalize();
-        if (!Files.isDirectory(root)) {
+        final CacheDirectoryGuard.Observation observation;
+        try {
+            observation = cache.observe(objectsRoot.resolve(".guard"), false);
+        } catch (java.nio.file.NoSuchFileException absent) {
             return;
         }
-        var convertedTemporary = root.resolve(ConvertedObjectStore.TEMPORARY_DIRECTORY);
-        try (var modelDirectories = Files.list(root)) {
-            for (var directory : modelDirectories
-                    .filter(path -> Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
-                    .sorted(Comparator.comparing(Path::toString)).toList()) {
-                if (directory.equals(convertedTemporary)) {
+        try (var root = observation.acquire()) {
+            for (var name : root.names().stream().sorted().toList()) {
+                final com.elfmcys.ysm.util.DirectoryAccess directory;
+                try {
+                    directory = root.directory(name, false);
+                } catch (IOException inaccessibleOrLink) {
                     continue;
                 }
-                try (var objects = Files.list(directory)) {
-                    for (var object : objects
-                            .filter(path -> Files.isRegularFile(
-                                    path, LinkOption.NOFOLLOW_LINKS))
-                            .filter(path -> path.getFileName().toString()
-                                    .endsWith(ConvertedObjectStore.CONTAINER_SUFFIX))
-                            .sorted(Comparator.comparing(Path::toString)).toList()) {
-                        var checked = object.toAbsolutePath().normalize();
-                        if (checked.getParent().getParent().equals(root)
-                                && !retained.contains(checked)) {
-                            Files.deleteIfExists(checked);
+                try (directory) {
+                    var identity = directory.identity();
+                    for (var file : directory.names().stream()
+                        .filter(n -> n.endsWith(ConvertedObjectStore.CONTAINER_SUFFIX)).sorted().toList()) {
+                        var path = directory.label().resolve(file);
+                        if (retained.contains(path))
+                            continue;
+                        observation.verify();
+                        final Object fileIdentity;
+                        try {
+                            fileIdentity = directory.fileIdentity(file);
+                        } catch (IOException inaccessibleOrLink) {
+                            continue;
                         }
+                        directory.delete(file, fileIdentity, false);
                     }
-                }
-                try (var remaining = Files.list(directory)) {
-                    if (remaining.findAny().isEmpty()) {
-                        Files.deleteIfExists(directory);
+                    if (directory.names().isEmpty()) {
+                        observation.verify();
+                        root.delete(name, identity, true);
                     }
                 }
             }
@@ -169,6 +193,10 @@ public final class ConvertedCacheCoordinator implements AutoCloseable {
         var lock = registrationLock;
         var channel = registrationChannel;
         var file = registrationFile;
+        var observation = registrationObservation;
+        var identity = registrationIdentity;
+        registrationObservation = null;
+        registrationIdentity = null;
         registrationLock = null;
         registrationChannel = null;
         registrationFile = null;
@@ -184,17 +212,16 @@ public final class ConvertedCacheCoordinator implements AutoCloseable {
             }
         } catch (IOException ignored) {
         }
+        if (file != null) SharedCacheLocks.unregisterConsumer(file);
         try {
             if (file != null) {
-                Files.deleteIfExists(file);
+                observation.deleteIfExists(identity);
             }
         } catch (IOException ignored) {
         }
     }
 
     public enum PruneResult {
-        COMPLETED,
-        SKIPPED_ACTIVE_CONSUMER,
-        FAILED
+        COMPLETED, SKIPPED_ACTIVE_CONSUMER, SKIPPED_INCOMPLETE_SCOPE, FAILED
     }
 }

@@ -6,8 +6,9 @@
   - 默认动画可用性: [DD.default-model-is-reliability-baseline](model-fallback.md#dddefault-model-is-reliability-baseline)
   - 区分默认动画 best-effort 与明确支持的求值语义: [DD.explicit-support-is-stable](model-compatibility.md#ddexplicit-support-is-stable)
 - Landing:
-  - [architecture](../../architecture/animation/controllers-and-playback.md)
-  - [architecture](../../architecture/animation/processor-and-bone-output.md)
+  - [implementation](../../architecture/animation/controllers-and-playback.md)
+  - [implementation](../../architecture/animation/implementation/processor-and-bone-output.md)
+  - [design](../../architecture/animation/overview.md)
 
 ## DD.hierarchical-bone-animation
 

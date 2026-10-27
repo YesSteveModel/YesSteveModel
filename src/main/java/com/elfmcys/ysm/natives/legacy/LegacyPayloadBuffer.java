@@ -3,7 +3,7 @@ package com.elfmcys.ysm.natives.legacy;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.NativeBuffer;
-import org.lwjgl.system.MemoryUtil;
+import io.netty.util.internal.PlatformDependent;
 
 import java.lang.ref.Reference;
 import java.nio.ByteBuffer;
@@ -11,22 +11,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 final class LegacyPayloadBuffer implements NativeBuffer {
     private final ByteBuffer data;
-    private final NativeLegacyOwnership publicOwner;
-    private final NativeLegacyOwnership.Lease lease;
+    private final NativeLegacyImportResult publicOwner;
+    private final NativeLegacyImportResult lease;
     private final AtomicBoolean localOpen;
     private final boolean closesLease;
 
-    static LegacyPayloadBuffer publicView(ByteBuffer data,
-                                          NativeLegacyOwnership owner) {
-        return new LegacyPayloadBuffer(data, owner, null,
-                new AtomicBoolean(true), false);
+    static LegacyPayloadBuffer publicView(ByteBuffer data, NativeLegacyImportResult owner) {
+        return new LegacyPayloadBuffer(data, owner, null, new AtomicBoolean(true), false);
     }
 
-    private LegacyPayloadBuffer(ByteBuffer data,
-                                NativeLegacyOwnership publicOwner,
-                                NativeLegacyOwnership.Lease lease,
-                                AtomicBoolean localOpen,
-                                boolean closesLease) {
+    private LegacyPayloadBuffer(ByteBuffer data, NativeLegacyImportResult publicOwner, NativeLegacyImportResult lease,
+        AtomicBoolean localOpen, boolean closesLease) {
         this.data = data.duplicate();
         this.publicOwner = publicOwner;
         this.lease = lease;
@@ -39,9 +34,9 @@ final class LegacyPayloadBuffer implements NativeBuffer {
             throw new IllegalStateException("Legacy payload view is closed");
         }
         if (lease != null) {
-            lease.requireOpen();
+            lease.get();
         } else {
-            publicOwner.requirePublicOpen();
+            publicOwner.get();
         }
     }
 
@@ -49,8 +44,12 @@ final class LegacyPayloadBuffer implements NativeBuffer {
     public LegacyPayloadBuffer acquire() {
         requireOpen();
         var acquired = lease == null ? publicOwner.acquire() : lease.acquire();
-        return new LegacyPayloadBuffer(data, null, acquired,
-                new AtomicBoolean(true), true);
+        try {
+            return new LegacyPayloadBuffer(data, null, acquired, new AtomicBoolean(true), true);
+        } catch (RuntimeException | Error failure) {
+            acquired.close();
+            throw failure;
+        }
     }
 
     @Override
@@ -60,15 +59,13 @@ final class LegacyPayloadBuffer implements NativeBuffer {
         if (offset < 0 || size < 0 || offset > currentSize - size) {
             throw new IndexOutOfBoundsException();
         }
-        return new LegacyPayloadBuffer(data.slice(offset, size), publicOwner,
-                lease, localOpen, closesLease);
+        return new LegacyPayloadBuffer(data.slice(offset, size), publicOwner, lease, localOpen, closesLease);
     }
 
     @Override
     public LegacyPayloadBuffer borrow() {
         requireOpen();
-        return new LegacyPayloadBuffer(data, publicOwner, lease,
-                new AtomicBoolean(true), false);
+        return new LegacyPayloadBuffer(data, publicOwner, lease, new AtomicBoolean(true), false);
     }
 
     @Override
@@ -96,7 +93,7 @@ final class LegacyPayloadBuffer implements NativeBuffer {
     public long ptr() {
         requireOpen();
         try {
-            return MemoryUtil.memAddress(data);
+            return PlatformDependent.directBufferAddress(data) + data.position();
         } finally {
             Reference.reachabilityFence(this);
         }

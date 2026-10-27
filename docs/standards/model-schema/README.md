@@ -1,4 +1,4 @@
-# 模型 Schema 0.1.0-unstable
+# 模型 Schema 0.1.1-unstable
 
 模型 Schema 定义 `.mxc` 模型的逻辑内容与 Protobuf wire，不定义 raw 目录、旧容器、转换缓存、网络投影或 baked 数据。当前标准尚未冻结。
 
@@ -9,14 +9,14 @@
 | 项目 | 规则 |
 |---|---|
 | schema id | `mixel/character` |
-| property 0 | schema version；生产者必须写字面值 `0.1.0-unstable` |
-| property 1 | 非空白 producer/vendor 标识 |
+| property 0 | schema version；生产者必须写字面值 `0.1.1-unstable` |
+| property 1 | 非空白 producer/vendor 标识；当前 producer 写入 `模组名称(ID) v版本` |
+| property 3 | producer 的模组签名指纹；未签名时为 `(unsigned)` |
 | 必需 chunk | `manifest` |
 | 可选命名图像 | `thumb-button`、`thumb-icon` |
-| 编号 blob | `blob-N`，`N` 从 1 开始 |
-| 编号 stream | `stream-N`；按[音频 profile](assets-and-validation.md#common-stringssettings-与音频)保存完整 Ogg Vorbis/Opus logical stream |
+| 编号 blob | `blob-N`，`N` 从 1 开始；definition、字符串、图像与声音块共用该命名空间 |
 
-符合本标准的 consumer 必须接受字面值 `0.1.0-unstable`。当前实现只接受该精确值，不进行 major、minor 或 qualifier 兼容推断，也不读取旧 Model Schema，不维护双读或迁移分支。Schema 准入先应用共享开发版本门禁：当前或候选 qualifier 大小写不敏感地包含 `unstable`、`dev` 或 `snapshot` 时，必须按完整原始版本字符串严格相等；只有两侧均不含这些标记时才委托 schema 自己的稳定版策略。其他实现可以额外接受别的拼写，但这些输入不具备可移植的一致性保证。
+符合本标准的 consumer 必须接受字面值 `0.1.1-unstable`。Schema 准入先应用共享开发版本门禁：当前或候选 qualifier 大小写不敏感地包含 `unstable`、`dev` 或 `snapshot` 时，必须按完整原始版本字符串严格相等。两侧均不含这些标记时，当前实现拒绝 major 或 minor 任一大于支持值的版本，patch 不参与稳定版准入。拒绝提示从 property 1 取得导出模组名称与版本，不依赖 Manifest 可解析。其他实现可以额外接受别的拼写，但这些输入不具备可移植的一致性保证。
 
 `manifest` 是非空 Proto3 `Manifest` payload。Proto 语法遵循 [Proto3 Language Guide](https://protobuf.dev/programming-guides/proto3/)，二进制表示遵循 [Protocol Buffer Encoding](https://protobuf.dev/programming-guides/encoding/)；随本标准发布的 `.proto` 快照进一步冻结本 schema 的实际 wire。生产者直接存储 Manifest；consumer 仍须先完成容器级 payload 验证再解析。容器 summary 可以复制模型显示名，但不是 schema 的权威数据。
 
@@ -34,7 +34,7 @@
 
 当前实现 profile 把未标 `optional` 的 ordinary singular 字段视为完整 message 的必需值；producer 必须显式赋值，consumer 必须拒绝缺失，不能用 partial parse 或通用默认注入绕过。显式 `optional` 字段允许缺省，并区分 absent、present-default 与 present-nondefault；各状态的业务含义由相邻语义页定义。Repeated/map 用 empty 表达无元素，real oneof 用 case 表达分支，不按 ordinary singular 规则机械增加 `optional`。
 
-Presence 审计只采用正向证据：历史 wire 的显式 optional/nullable、source adapter 的明确省略分支，或 FULL/DELTA 契约中已经定义的 absence。C++ 普通成员和嵌套聚合初始化会把缺省输入物化为默认对象，因此未见 nullable 不能推出 non-null。全部 source Proto 已按该规则扫描；仍有实现差异和不属于 presence 标记的历史语义缺口，见[格式与 Schema 问题](../../status/known-issues/format-and-schema.md#proto-presence)。
+Presence 审计只采用正向证据：历史 wire 的显式 optional/nullable、source adapter 的明确省略分支，或 FULL/DELTA 契约中已经定义的 absence。C++ 普通成员和嵌套聚合初始化会把缺省输入物化为默认对象，因此未见 nullable 不能推出 non-null。实现缺口见[格式与 Schema 问题](../../status/known-issues/format-and-schema.md)。
 
 当前 unstable profile 不承诺保留或 round-trip 未知 Proto 字段。声明某个 schema version 的 producer 只能写该版本快照已知的字段和 enum 值；consumer 可以跳过未知字段，但不得把未知 enum 解释为已知策略。新增字段或 enum 值必须先裁决版本，再同步快照、语义和 fixtures。
 
@@ -46,17 +46,17 @@ Manifest
 │   └── textures{} ────> blob-N: Image payload
 ├── common_assets
 │   ├── strings_blob_id -> blob-N: StringData
-│   └── sounds[] ───────> stream-N (validated Ogg Vorbis / Opus)
+│   └── sounds[] ───────> first OpusHead page + ordered blob-N chunks
 └── info
     ├── metadata / language / settings / properties
     └── image references -> blob-N
 ```
 
 - Manifest 是可先行读取的 descriptor，声明身份、展示信息、render target 和资源引用。
-- Blob 是按正整数 ID 命名的不可变 payload，可存放 definition、字符串或图像。
+- Blob 是按正整数 ID 命名的不可变 payload，可存放 definition、字符串、图像或声音块。
 - 命名图像用于模型列表的 thumbnail 与 icon；格式和尺寸由 chunk descriptor 描述。
 
-M2 完整模型的全部引用必须形成闭包：每个正 blob ID 都解析到 `blob-N`，引用双方对 payload 类型和用途一致，资源通过容器 hash 与 schema 校验。
+M2 完整模型的全部引用必须形成闭包：每个正 blob ID（含声音块 ID）都解析到 `blob-N`，引用双方对 payload 类型和用途一致，资源通过容器 hash 与 schema 校验。
 
 ## 文档划分
 
@@ -73,4 +73,4 @@ Source 只由客户端在加载与运行时用本地 Molang 引擎解析和求�
 
 Source 在加载时按字段角色解析为 expression：`ExpressionValue` 未选择 oneof case 时退化为常数 `0`，`Program.source` 解析失败时记录诊断并退化为常数 `0`，不阻断其余动画或模型。常量 fallback 只保证 reader 不因单个表达式失败而拒绝整个模型；表达式本身的正确性仍属于 authoring 与模型兼容义务。
 
-模型音频使用既有 `Common.sounds` 与 `stream-N` wire；普通 current producer 与 legacy compatibility producer 都可以按[同一音频 profile](assets-and-validation.md#common-stringssettings-与音频)写出完整、已验证的单一 Ogg Vorbis/Opus logical stream。M1 只证明 descriptor 结构，M2 还要求全部声音引用与内容闭包通过验证。运行时按需取得和播放不改变 Schema 的内容有效性定义。
+模型音频使用 `Common.sounds` 的 Opus-only wire：descriptor 内嵌首个 OpusHead Ogg 页，并以有序 `chunk_ids` 引用其余 `blob-N` bytes；两部分拼接后才是一个完整 logical stream。Raw 与 legacy producer 都必须先投影为该表示，current export 只复制已经获选的表示。M1 证明 descriptor、首页和块定位结构；M2 还要求按序读取全部块并完成 codec EOF 验证。运行时按需取得和播放不改变 Schema 的内容有效性定义。

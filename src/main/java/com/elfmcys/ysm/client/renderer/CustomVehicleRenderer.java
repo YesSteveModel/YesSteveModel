@@ -18,7 +18,8 @@ public class CustomVehicleRenderer extends GeoEntityRenderer<Entity, CustomVehic
     }
 
     @Override
-    public void render(Entity entity, float yaw, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight) {
+    public void render(Entity entity, float yaw, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource,
+        int packedLight) {
         if (Minecraft.getInstance().player == null || entity.isInvisibleTo(Minecraft.getInstance().player)) {
             return;
         }
@@ -31,6 +32,7 @@ public class CustomVehicleRenderer extends GeoEntityRenderer<Entity, CustomVehic
     @Override
     @NotNull
     public ResourceLocation getTextureLocation(Entity entity) {
-        return entity.getCapability(VehicleAnimatableCapabilityProvider.CAP).map(CustomVehicleEntity::getTextureLocation).orElse(MissingTextureAtlasSprite.getLocation());
+        return entity.getCapability(VehicleAnimatableCapabilityProvider.CAP)
+            .map(CustomVehicleEntity::getTextureLocation).orElse(MissingTextureAtlasSprite.getLocation());
     }
 }

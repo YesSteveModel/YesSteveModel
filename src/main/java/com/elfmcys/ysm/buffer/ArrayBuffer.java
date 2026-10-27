@@ -26,8 +26,7 @@ public interface ArrayBuffer extends UniBuffer {
         try (var bufScope = allocateWithScope(size)) {
             var target = bufScope.get();
             try {
-                System.arraycopy(array(), arrayOffset(), target.array(),
-                        target.arrayOffset(), size);
+                System.arraycopy(array(), arrayOffset(), target.array(), target.arrayOffset(), size);
             } finally {
                 Reference.reachabilityFence(this);
                 Reference.reachabilityFence(target);
@@ -94,8 +93,8 @@ public interface ArrayBuffer extends UniBuffer {
         var result = allocate(data.remaining());
         try {
             if (data.hasArray()) {
-                System.arraycopy(data.array(), data.arrayOffset() + data.position(),
-                        result.array(), result.arrayOffset(), result.size());
+                System.arraycopy(data.array(), data.arrayOffset() + data.position(), result.array(),
+                    result.arrayOffset(), result.size());
             } else {
                 result.nio().put(data.duplicate());
             }

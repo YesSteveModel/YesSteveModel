@@ -1,17 +1,16 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
 import com.elfmcys.ysm.model.catalog.builtin.BuiltinModelIndex;
-import com.elfmcys.ysm.model.resource.client.AnimationStore;
-import com.elfmcys.ysm.proto.mixel.asset.model.data.Animation;
-import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTarget;
+import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationProto;
+import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetProto;
+
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Objects;
 
 /** Published only after a default target has fully bound its animations. */
 public final class DefaultAnimationRuntime {
-    private volatile Map<String, AnimationStore> stores = Map.of();
+    private volatile Map<String, Source> sources = Map.of();
     private final CurrentAnimationValidator validator;
 
     public DefaultAnimationRuntime(BuiltinModelIndex contract) {
@@ -19,47 +18,45 @@ public final class DefaultAnimationRuntime {
     }
 
     DefaultAnimationRuntime() {
-        validator = (target, animationSet, animation) -> { };
+        validator = (target, animationSet, animation) -> {
+        };
     }
 
-    public synchronized void publish(String domain, AnimationStore store) {
-        publishAll(Map.of(domain, store));
-    }
-
-    public synchronized void publishAll(Map<String, AnimationStore> additions) {
-        Objects.requireNonNull(additions, "additions");
-        var next = new LinkedHashMap<>(stores);
-        for (var entry : additions.entrySet()) {
-            var domain = Objects.requireNonNull(entry.getKey(), "domain");
-            var store = Objects.requireNonNull(entry.getValue(), "store");
-            var previous = next.putIfAbsent(domain, store);
-            if (previous != null && previous != store
-                    && !previous.keySet().equals(store.keySet())) {
-                throw new IllegalStateException(
-                        "Conflicting default animation domain: " + domain);
+    public synchronized void publishSources(Map<String, Source> additions) {
+        var next = new LinkedHashMap<>(sources);
+        additions.forEach((domain, source) -> {
+            var previous = next.putIfAbsent(domain, source);
+            if (previous != null && !previous.equals(source)) {
+                throw new IllegalStateException("Conflicting default source domain: " + domain);
             }
-        }
-        stores = Map.copyOf(next);
+        });
+        sources = Map.copyOf(next);
     }
 
-    public AnimationStore fallback(String domain) {
-        return stores.get(domain);
+    public Source source(String domain) {
+        return sources.get(domain);
     }
 
-    public void requireCurrent(RenderTarget target,
-                               String animationSet,
-                               Animation animation) throws IOException {
+    public void requireCurrent(RenderTargetProto target, String animationSet, AnimationProto animation)
+        throws IOException {
         validator.requireCurrent(target, animationSet, animation);
     }
 
     public synchronized void clear() {
-        stores = Map.of();
+        sources = Map.of();
+    }
+
+    public record Source(com.elfmcys.ysm.model.domain.Hash256 containerId, String targetId,
+        com.elfmcys.ysm.expression.inventory.ExpressionSet set,
+        com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto definition,
+        com.elfmcys.ysm.proto.mixel.asset.strings.StringDataProto strings) {
+        String prefix() {
+            return "fallback/" + containerId + '/' + targetId + '/' + set.id() + '/';
+        }
     }
 
     @FunctionalInterface
     private interface CurrentAnimationValidator {
-        void requireCurrent(RenderTarget target,
-                            String animationSet,
-                            Animation animation) throws IOException;
+        void requireCurrent(RenderTargetProto target, String animationSet, AnimationProto animation) throws IOException;
     }
 }

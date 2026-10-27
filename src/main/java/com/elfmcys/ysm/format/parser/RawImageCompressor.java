@@ -38,8 +38,7 @@ final class RawImageCompressor {
     }
 
     enum Mode {
-        LOSSLESS,
-        LOSSY
+        LOSSLESS, LOSSY
     }
 
     record Policy(Mode mode, int maxWidth, int maxHeight) {

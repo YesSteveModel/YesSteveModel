@@ -17,7 +17,7 @@ public class VectorUtils {
     }
 
     public static Vector3f convertDoubleToFloat(Vec3 vector) {
-        return new Vector3f((float) vector.x, (float) vector.y, (float) vector.z);
+        return new Vector3f((float)vector.x, (float)vector.y, (float)vector.z);
     }
 
     public static Vec3 convertFloatToDouble(Vector3f vector) {

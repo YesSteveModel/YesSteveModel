@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.client.compat.immersivemelodies;
 
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraftforge.fml.ModList;
 
@@ -12,29 +11,14 @@ public class ImmersiveMelodiesCompat {
         IS_LOADED = ModList.get().isLoaded(IMMERSIVE_MELODIES);
     }
 
+    public static boolean isLoaded() {
+        return IS_LOADED;
+    }
+
     public static void updateMelodyProgress(LivingEntity entity, ImmersiveMelodiesCompat.ImmersiveMelodiesData imData) {
         if (IS_LOADED) {
             ImmersiveMelodiesCompatInner.updateMelodyProgress(entity, imData);
         }
-    }
-
-    public static void addBinding(CtrlBinding binding) {
-        if (IS_LOADED) {
-            ImmersiveMelodiesCompatInner.addInnerBinding(binding);
-        } else {
-            addEmptyBinding(binding);
-        }
-    }
-
-    /**
-     * 没有安装此模组时，这些 molang 应该存在，否则会报错
-     */
-    private static void addEmptyBinding(CtrlBinding binding) {
-        binding.livingEntityVar("im_pitch", ctx -> 0f);
-        binding.livingEntityVar("im_volume", ctx -> 0f);
-        binding.livingEntityVar("im_current", ctx -> 0f);
-        binding.livingEntityVar("im_delta", ctx -> 0L);
-        binding.livingEntityVar("im_time", ctx -> 0L);
     }
 
     /**

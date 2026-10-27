@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2020.
- * Author: Bernie G. (Gecko)
+ * Copyright (c) 2020. Author: Bernie G. (Gecko)
  */
 
 package com.elfmcys.ysm.geckolib3.core.snapshot;
@@ -25,12 +24,11 @@ public class BoneSnapshot {
 
     public void copyFrom(BoneView bone) {
         position.set(bone.getPositionX(), bone.getPositionY(), bone.getPositionZ());
-        rotation.set(bone.getRotationX() - bone.getInitialRotationX(),
-                bone.getRotationY() - bone.getInitialRotationY(),
-                bone.getRotationZ() - bone.getInitialRotationZ());
+        rotation.set(bone.getRotationX() - bone.getInitialRotationX(), bone.getRotationY() - bone.getInitialRotationY(),
+            bone.getRotationZ() - bone.getInitialRotationZ());
         scale.set(bone.getScaleX(), bone.getScaleY(), bone.getScaleZ());
 
-        hidden = bone.areChildrenHidden();  // TODO
+        hidden = bone.areChildrenHidden(); // TODO
         childrenHidden = bone.areChildrenHidden();
     }
 
@@ -48,8 +46,8 @@ public class BoneSnapshot {
         if (this == o) {
             return true;
         }
-        if(o instanceof BoneSnapshot) {
-            BoneSnapshot that = (BoneSnapshot) o;
+        if (o instanceof BoneSnapshot) {
+            BoneSnapshot that = (BoneSnapshot)o;
             return name == that.name;
         }
         return false;

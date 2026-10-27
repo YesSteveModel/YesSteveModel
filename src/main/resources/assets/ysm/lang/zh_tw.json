@@ -354,5 +354,17 @@
   "key.yes_steve_model.extra_animation.6.desc": "播放額外動畫 6",
   "key.yes_steve_model.extra_animation.7.desc": "播放額外動畫 7",
   "key.yes_steve_model.debug_animation.desc": "打開動畫除錯",
-  "key.yes_steve_model.open_extra_player_render.desc": "打開額外玩家渲染配置"
+  "key.yes_steve_model.open_extra_player_render.desc": "打開額外玩家渲染配置",
+  "gui.yes_steve_model.catalog.tooltip.preview_absent": "伺服器尚無此模型的預覽圖。",
+  "gui.yes_steve_model.catalog.tooltip.preview_repair_command": "產生預覽圖：/ysm model gen-preview",
+  "gui.yes_steve_model.catalog.tooltip.preview_repair_export": "也可在用戶端匯出 .mxc 後加入伺服器。",
+  "gui.yes_steve_model.catalog.tooltip.preview_contact_admin": "請聯絡伺服器管理員補充預覽圖。",
+  "message.yes_steve_model.gen_preview.busy": "預覽圖生成正在進行。",
+  "message.yes_steve_model.gen_preview.no_client": "請以具有 level 2 權限和有效模型會話的線上玩家執行。",
+  "message.yes_steve_model.gen_preview.item": "%s：%s（%s）",
+  "message.yes_steve_model.gen_preview.summary": "預覽圖生成：共 %s 項，成功 %s，失敗 %s，跳過 %s，未處理 %s。",
+  "message.yes_steve_model.gen_preview.query_failed": "缺圖查詢失敗：%s",
+  "message.yes_steve_model.gen_preview.success": "成功",
+  "message.yes_steve_model.gen_preview.failed": "失敗",
+  "message.yes_steve_model.gen_preview.skipped": "跳過"
 }

@@ -29,7 +29,8 @@ public class CubeUv {
 
     public static final class Adapter implements JsonDeserializer<CubeUv>, JsonSerializer<CubeUv> {
         @Override
-        public CubeUv deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+        public CubeUv deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
+            throws JsonParseException {
             if (json == null || json.isJsonNull()) {
                 return null;
             }

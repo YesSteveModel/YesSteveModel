@@ -25,13 +25,12 @@ final class PreparedTextureSet implements BakedModelCache.TexturePixelsSupplier,
     private NativeImage specular;
     private boolean transferred;
 
-    PreparedTextureSet(PBRImageSources sources, String resourcePrefix,
-                       ModelResourceFailures failures) {
+    PreparedTextureSet(PBRImageSources sources, String resourcePrefix, ModelResourceFailures failures) {
         this(sources, resourcePrefix, failures, PreparedTextureSet::decodeSource);
     }
 
-    PreparedTextureSet(PBRImageSources sources, String resourcePrefix,
-                       ModelResourceFailures failures, Decoder decoder) {
+    PreparedTextureSet(PBRImageSources sources, String resourcePrefix, ModelResourceFailures failures,
+        Decoder decoder) {
         this.sources = Objects.requireNonNull(sources, "sources");
         Objects.requireNonNull(resourcePrefix, "resourcePrefix");
         Objects.requireNonNull(failures, "failures");
@@ -67,11 +66,10 @@ final class PreparedTextureSet implements BakedModelCache.TexturePixelsSupplier,
     CustomPBRTextureSet transfer() {
         requireOwned();
         if (uv == null || (sources.normal() != null && normal == null)
-                || (sources.specular() != null && specular == null)) {
+            || (sources.specular() != null && specular == null)) {
             throw new IllegalStateException("Model texture set is not completely prepared");
         }
-        var result = new CustomPBRTextureSet(sources, uv, normal, specular,
-                uvFailure, normalFailure, specularFailure);
+        var result = new CustomPBRTextureSet(sources, uv, normal, specular, uvFailure, normalFailure, specularFailure);
         uv = null;
         normal = null;
         specular = null;
@@ -79,20 +77,20 @@ final class PreparedTextureSet implements BakedModelCache.TexturePixelsSupplier,
         return result;
     }
 
-    private NativeImage decode(ImageSource source, ModelResourceFailureGate failureGate,
-                               String component) throws IOException {
+    private NativeImage decode(ImageSource source, ModelResourceFailureGate failureGate, String component)
+        throws IOException {
         var previous = failureGate.failure().orElse(null);
         if (previous != null) {
-            throw AssetLoadException.content(
-                    "Model texture component previously failed: " + component, previous);
+            throw AssetLoadException.content("Model texture component previously failed: " + component, previous);
         }
         try {
             return decoder.decode(source);
+        } catch (CancellationException cancelled) {
+            throw cancelled;
         } catch (IOException | RuntimeException error) {
             failureGate.fail(error);
             if (error instanceof IOException io) {
-                throw AssetLoadException.content(
-                        "Failed to decode model texture component: " + component, io);
+                throw AssetLoadException.content("Failed to decode model texture component: " + component, io);
             }
             throw error;
         }

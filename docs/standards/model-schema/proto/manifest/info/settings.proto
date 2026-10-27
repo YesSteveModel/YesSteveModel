@@ -5,34 +5,34 @@ package mixel.manifest.info;
 
 import "common/string_pair.proto";
 import "common/image.proto";
-import "common/program.proto";
+import "expression/program.proto";
 
 message Settings {
-  repeated common.StringPair extra_animation = 1;
+  repeated mixel.common.StringPair extra_animation = 1;
   repeated ExtraAnimationButton extra_animation_buttons = 2;
   repeated ExtraAnimationClassify extra_animation_classify = 3;
-  optional string default_texture = 4;
-  optional string preview_animation = 5;
+  string default_texture = 4;
+  string preview_animation = 5;
   bool disable_preview_rotation = 6;
-  optional common.Image gui_foreground = 7;
-  optional common.Image gui_background = 8;
+  mixel.common.Image gui_foreground = 7;
+  mixel.common.Image gui_background = 8;
 }
 
 message ConfigForms {
   string type = 1;
   string title = 2;
   string description = 3;
-  common.Program read_program = 4;
+  expression.program.EncodedProgram read_program = 4;
   float step = 5;
   float min = 6;
   float max = 7;
   repeated ConfigLabel labels = 8;
-  common.Program write_program = 9;
+  expression.program.EncodedProgram write_program = 9;
 }
 
 message ConfigLabel {
   string name = 1;
-  common.Program action_program = 2;
+  expression.program.EncodedProgram action_program = 2;
 }
 
 message ExtraAnimationButton {
@@ -44,5 +44,5 @@ message ExtraAnimationButton {
 
 message ExtraAnimationClassify {
   string id = 1;
-  repeated common.StringPair extra_animation = 2;
+  repeated mixel.common.StringPair extra_animation = 2;
 }

@@ -4,13 +4,13 @@ import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
 import com.elfmcys.ysm.capability.VehicleAnimatableCapabilityProvider;
 import com.elfmcys.ysm.client.compat.FirstPersonCompat;
 import com.elfmcys.ysm.client.compat.IrisCompat;
-import com.elfmcys.ysm.client.compat.touhoulittlemaid.client.TlmClientCompat;
 import com.elfmcys.ysm.client.entity.CustomHumanoidEntity;
 import com.elfmcys.ysm.client.entity.IPreviewEntity;
+import com.elfmcys.ysm.client.gui.GuiModelFraming;
 import com.elfmcys.ysm.client.renderer.replace.EntityRendererReplace;
 import com.elfmcys.ysm.geckolib3.geo.GeoReplacedEntityRenderer;
 import com.elfmcys.ysm.geckolib3.geo.RenderContext;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
 import com.mojang.blaze3d.platform.Lighting;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -56,21 +56,16 @@ public final class RenderUtil {
 
     public static RenderContext extractRenderContext() {
         RenderSystem.assertOnRenderThread();
-        return new RenderContext(
-                renderingLevel && !FirstPersonCompat.isRenderingPlayer(),
-                IrisCompat.isRenderingShadow(),
-                FirstPersonCompat.isRenderingPlayer(),
-                renderingInInventory,
-                renderingInPaperDoll,
-                false,
-                false);
+        return new RenderContext(renderingLevel && !FirstPersonCompat.isRenderingPlayer(),
+            IrisCompat.isRenderingShadow(), FirstPersonCompat.isRenderingPlayer(), renderingInInventory,
+            renderingInPaperDoll, false, false);
     }
 
     public static void adjustPassengerPosition(Entity entity, PoseStack poseStack, float partialTicks) {
         Entity vehicle = entity.getVehicle();
         if (vehicle != null) {
             vehicle.getCapability(VehicleAnimatableCapabilityProvider.CAP).ifPresent(vehicleCap -> {
-                if (!vehicleCap.isInitialized() || !vehicleCap.isModelPresent()) {
+                if (!vehicleCap.isAssigned() || !vehicleCap.hasMatchingInstallation()) {
                     return;
                 }
                 int index = vehicle.getPassengers().indexOf(entity);
@@ -79,24 +74,25 @@ public final class RenderUtil {
                 }
                 AnimatedGeoModel loadedGeoModel = vehicleCap.getLoadedGeoModel();
                 // TODO
-//                if (loadedGeoModel == null || loadedGeoModel.passengerBones().isEmpty() || index >= loadedGeoModel.passengerBones().size()) {
-//                    return;
-//                }
-//                var bone = loadedGeoModel.passengerBones().get(index);
-//                if (bone == null) {
-//                    return;
-//                }
+                // if (loadedGeoModel == null || loadedGeoModel.passengerBones().isEmpty() || index >=
+                // loadedGeoModel.passengerBones().size()) {
+                // return;
+                // }
+                // var bone = loadedGeoModel.passengerBones().get(index);
+                // if (bone == null) {
+                // return;
+                // }
                 float rawVehicleYaw = Mth.lerp(partialTicks, vehicle.yRotO, vehicle.getYRot());
                 float vehicleYaw = EntityRendererReplace.getYaw(vehicle, rawVehicleYaw, partialTicks);
                 poseStack.mulPose(Axis.YP.rotationDegrees(180 - vehicleYaw));
                 // TODO
-               // RenderUtils.prepMatrixForLocator(poseStack, bone);
+                // RenderUtils.prepMatrixForLocator(poseStack, bone);
                 poseStack.mulPose(Axis.YN.rotationDegrees(180 - vehicleYaw));
 
                 double yOffset = -vehicle.getPassengersRidingOffset() - entity.getMyRidingOffset();
-                // 如果乘客带有玩家 cap 或者女仆 cap，那么不扣除 0.5 偏移
-                boolean playerHasCap = entity instanceof Player player && player.getCapability(PlayerAnimatableCapabilityProvider.CAP).isPresent();
-                if (playerHasCap || TlmClientCompat.hasMaidCap(entity)) {
+                boolean playerHasCap = entity instanceof Player player
+                    && player.getCapability(PlayerAnimatableCapabilityProvider.CAP).isPresent();
+                if (playerHasCap) {
                     yOffset = yOffset - 0.5;
                 }
                 poseStack.translate(0, yOffset, 0);
@@ -104,7 +100,9 @@ public final class RenderUtil {
         }
     }
 
-    public static <T extends LivingEntity, TAnimatable extends AnimatableEntity<T> & IPreviewEntity> void renderTextureScreenEntity(float pPosX, float pPosY, float pScale, float pitch, float yaw, float partialTicks, TAnimatable entity, GeoReplacedEntityRenderer<T, ? super TAnimatable> renderer, boolean showGround) {
+    public static <T extends LivingEntity, TAnimatable extends AnimatableEntity<T> & IPreviewEntity> void
+        renderTextureScreenEntity(float pPosX, float pPosY, float pScale, float pitch, float yaw, float partialTicks,
+            TAnimatable entity, GeoReplacedEntityRenderer<T, ? super TAnimatable> renderer, boolean showGround) {
         setRenderingInInventory(true);
         var living = entity.getEntity();
 
@@ -218,7 +216,8 @@ public final class RenderUtil {
 
         poseStack.mulPose(Axis.YP.rotationDegrees(yaw + 180));
         poseStack.translate(-0.5, 0, 0.5);
-        Minecraft.getInstance().getBlockRenderer().renderSingleBlock(Blocks.RED_BED.defaultBlockState(), poseStack, bufferSource, 0xf000f0, OverlayTexture.NO_OVERLAY);
+        Minecraft.getInstance().getBlockRenderer().renderSingleBlock(Blocks.RED_BED.defaultBlockState(), poseStack,
+            bufferSource, 0xf000f0, OverlayTexture.NO_OVERLAY);
     }
 
     private static void renderGround(float scale, float pitch, float yaw, MultiBufferSource.BufferSource bufferSource) {
@@ -236,72 +235,89 @@ public final class RenderUtil {
         for (int i = 0; i < 3; i++) {
             for (int j = 0; j < 3; j++) {
                 poseStack.translate(0, 0, 1);
-                Minecraft.getInstance().getBlockRenderer().renderSingleBlock(Blocks.GRASS_BLOCK.defaultBlockState(), poseStack, bufferSource, 0xf000f0, OverlayTexture.NO_OVERLAY);
+                Minecraft.getInstance().getBlockRenderer().renderSingleBlock(Blocks.GRASS_BLOCK.defaultBlockState(),
+                    poseStack, bufferSource, 0xf000f0, OverlayTexture.NO_OVERLAY);
             }
             poseStack.translate(1, 0, -3);
         }
         poseStack.translate(-1, 1, 1);
-        Minecraft.getInstance().getBlockRenderer().renderSingleBlock(Blocks.GRASS.defaultBlockState(), poseStack, bufferSource, 0xf000f0, OverlayTexture.NO_OVERLAY);
+        Minecraft.getInstance().getBlockRenderer().renderSingleBlock(Blocks.GRASS.defaultBlockState(), poseStack,
+            bufferSource, 0xf000f0, OverlayTexture.NO_OVERLAY);
         poseStack.translate(0, 0, 1);
-        Minecraft.getInstance().getBlockRenderer().renderSingleBlock(Blocks.RED_TULIP.defaultBlockState(), poseStack, bufferSource, 0xf000f0, OverlayTexture.NO_OVERLAY);
+        Minecraft.getInstance().getBlockRenderer().renderSingleBlock(Blocks.RED_TULIP.defaultBlockState(), poseStack,
+            bufferSource, 0xf000f0, OverlayTexture.NO_OVERLAY);
     }
 
-    private static <TAnimatable extends AnimatableEntity<?> & IPreviewEntity> void renderExtraEntity(float yaw, TAnimatable animatableEntity, float partialTicks, PoseStack poseStack, EntityRenderDispatcher dispatcher, MultiBufferSource.BufferSource bufferSource) throws ExecutionException {
+    private static <TAnimatable extends AnimatableEntity<?> & IPreviewEntity> void renderExtraEntity(float yaw,
+        TAnimatable animatableEntity, float partialTicks, PoseStack poseStack, EntityRenderDispatcher dispatcher,
+        MultiBufferSource.BufferSource bufferSource) throws ExecutionException {
+        if (Minecraft.getInstance().level == null) {
+            return;
+        }
+
         var player = animatableEntity.getEntity();
         var guiAnim = animatableEntity.getPreviewInfo();
 
         if (guiAnim.hasPreview("ride")) {
-            Entity entity = AnimatableCacheUtil.ENTITIES_CACHE.get(EntityType.getKey(EntityType.HORSE), () -> EntityType.HORSE.create(player.level()));
+            Entity entity = AnimatableCacheUtil.ENTITIES_CACHE.get(EntityType.getKey(EntityType.HORSE),
+                () -> EntityType.HORSE.create(player.level()));
             renderExtraEntity(yaw, player, poseStack, dispatcher, bufferSource, entity, partialTicks);
             return;
         }
         if (guiAnim.hasPreview("ride_pig")) {
-            Entity entity = AnimatableCacheUtil.ENTITIES_CACHE.get(EntityType.getKey(EntityType.PIG), () -> EntityType.PIG.create(player.level()));
+            Entity entity = AnimatableCacheUtil.ENTITIES_CACHE.get(EntityType.getKey(EntityType.PIG),
+                () -> EntityType.PIG.create(player.level()));
             renderExtraEntity(yaw, player, poseStack, dispatcher, bufferSource, entity, partialTicks);
             return;
         }
         if (guiAnim.hasPreview("boat")) {
-            Entity entity = AnimatableCacheUtil.ENTITIES_CACHE.get(EntityType.getKey(EntityType.BOAT), () -> EntityType.BOAT.create(player.level()));
+            Entity entity = AnimatableCacheUtil.ENTITIES_CACHE.get(EntityType.getKey(EntityType.BOAT),
+                () -> EntityType.BOAT.create(player.level()));
             renderExtraEntity(yaw, player, poseStack, dispatcher, bufferSource, entity, partialTicks);
             return;
         }
     }
 
-    private static void renderExtraEntity(float yaw, Entity player, PoseStack poseStack, EntityRenderDispatcher dispatcher, MultiBufferSource.BufferSource bufferSource, Entity entity, float partialTicks) {
+    private static void renderExtraEntity(float yaw, Entity player, PoseStack poseStack,
+        EntityRenderDispatcher dispatcher, MultiBufferSource.BufferSource bufferSource, Entity entity,
+        float partialTicks) {
         poseStack.pushPose();
         poseStack.mulPose(Axis.YP.rotationDegrees(yaw));
-        dispatcher.render(entity, 0, -entity.getPassengersRidingOffset() - player.getMyRidingOffset(), 0, 0, partialTicks, poseStack, bufferSource, 0xf000f0);
+        dispatcher.render(entity, 0, -entity.getPassengersRidingOffset() - player.getMyRidingOffset(), 0, 0,
+            partialTicks, poseStack, bufferSource, 0xf000f0);
         poseStack.popPose();
     }
 
     public static <T extends LivingEntity, TAnimatable extends CustomHumanoidEntity<T>> void renderModelInGui(
-            float pPosX,
-            float pPosY,
-            float pScale,
-            float partialTicks,
-            TAnimatable animatableEntity,
-            GeoReplacedEntityRenderer<T, TAnimatable> renderer,
-            boolean disablePreviewRotation,
-            boolean disableEquipments) {
+        float pPosX, float pPosY, float pScale, float partialTicks, TAnimatable animatableEntity,
+        GeoReplacedEntityRenderer<T, TAnimatable> renderer, boolean disablePreviewRotation, boolean disableEquipments) {
         setRenderingInInventory(true);
         try {
-            renderModelInGuiStateful(pPosX, pPosY, pScale, partialTicks,
-                    animatableEntity, renderer, disablePreviewRotation, disableEquipments);
+            renderModelInGuiStateful(pPosX, pPosY, pScale, partialTicks, animatableEntity, renderer,
+                disablePreviewRotation, disableEquipments, null, 0, 0);
         } finally {
             setRenderingInInventory(false);
         }
     }
 
-    private static <T extends LivingEntity,
-            TAnimatable extends CustomHumanoidEntity<T>> void renderModelInGuiStateful(
-            float pPosX,
-            float pPosY,
-            float pScale,
-            float partialTicks,
-            TAnimatable animatableEntity,
-            GeoReplacedEntityRenderer<T, TAnimatable> renderer,
-            boolean disablePreviewRotation,
-            boolean disableEquipments) {
+    public static <T extends LivingEntity, TAnimatable extends CustomHumanoidEntity<T>> void renderFramedModelInGui(
+        float left, float top, float width, float height, float partialTicks, TAnimatable animatableEntity,
+        GeoReplacedEntityRenderer<T, TAnimatable> renderer, boolean disablePreviewRotation, boolean disableEquipments,
+        GuiModelFraming framing) {
+        setRenderingInInventory(true);
+        try {
+            renderModelInGuiStateful(left + width / 2, top + height / 2, 1, partialTicks, animatableEntity, renderer,
+                disablePreviewRotation, disableEquipments, framing, width, height);
+        } finally {
+            framing.end();
+            setRenderingInInventory(false);
+        }
+    }
+
+    private static <T extends LivingEntity, TAnimatable extends CustomHumanoidEntity<T>> void renderModelInGuiStateful(
+        float pPosX, float pPosY, float pScale, float partialTicks, TAnimatable animatableEntity,
+        GeoReplacedEntityRenderer<T, TAnimatable> renderer, boolean disablePreviewRotation, boolean disableEquipments,
+        GuiModelFraming framing, float width, float height) {
         var living = animatableEntity.getEntity();
 
         PoseStack viewStack = RenderSystem.getModelViewStack();
@@ -333,59 +349,61 @@ public final class RenderUtil {
             zp.mul(xp);
             poseStack.mulPose(zp);
 
-        if (disableEquipments && living instanceof Player player) {
-            itemStacks = new ItemStack[EquipmentSlot.values().length];
-            int i = 0;
-            for (EquipmentSlot slot : EquipmentSlot.values()) {
-                if (slot == EquipmentSlot.MAINHAND) {
-                    itemStacks[i] = player.getItemBySlot(slot);
-                    player.getInventory().items.set(player.getInventory().selected, ItemStack.EMPTY);
-                } else if (slot == EquipmentSlot.OFFHAND) {
-                    itemStacks[i] = player.getItemBySlot(slot);
-                    player.getInventory().offhand.set(0, ItemStack.EMPTY);
-                } else {
-                    var armor = player.getInventory().armor;
-                    if (armor.size() <= slot.getIndex()) {
-                        continue;
+            if (disableEquipments && living instanceof Player player) {
+                itemStacks = new ItemStack[EquipmentSlot.values().length];
+                int i = 0;
+                for (EquipmentSlot slot : EquipmentSlot.values()) {
+                    if (slot == EquipmentSlot.MAINHAND) {
+                        itemStacks[i] = player.getItemBySlot(slot);
+                        player.getInventory().items.set(player.getInventory().selected, ItemStack.EMPTY);
+                    } else if (slot == EquipmentSlot.OFFHAND) {
+                        itemStacks[i] = player.getItemBySlot(slot);
+                        player.getInventory().offhand.set(0, ItemStack.EMPTY);
+                    } else {
+                        var armor = player.getInventory().armor;
+                        if (armor.size() <= slot.getIndex()) {
+                            continue;
+                        }
+                        itemStacks[i] = player.getItemBySlot(slot);
+                        armor.set(slot.getIndex(), ItemStack.EMPTY);
                     }
-                    itemStacks[i] = player.getItemBySlot(slot);
-                    armor.set(slot.getIndex(), ItemStack.EMPTY);
+                    i++;
                 }
-                i++;
+            } else {
+                itemStacks = null;
             }
-        } else {
-            itemStacks = null;
-        }
 
-        float yRotGui = disablePreviewRotation ? 180 : 200;
-        living.yBodyRot = yRotGui;
-        living.yBodyRotO = yRotGui;
-        living.setYRot(yRotGui);
-        living.yRotO = yRotGui;
-        living.setXRot(0);
-        living.xRotO = 0;
-        living.yHeadRot = living.getYRot();
-        living.yHeadRotO = living.getYRot();
+            float yRotGui = disablePreviewRotation ? 180 : 200;
+            living.yBodyRot = yRotGui;
+            living.yBodyRotO = yRotGui;
+            living.setYRot(yRotGui);
+            living.yRotO = yRotGui;
+            living.setXRot(0);
+            living.xRotO = 0;
+            living.yHeadRot = living.getYRot();
+            living.yHeadRotO = living.getYRot();
 
-        // 修正骑乘时 GUI 界面歪头的 bug
-        if (living.getVehicle() instanceof LivingEntity vehicle) {
-            float vehicleYRot = vehicle.getYRot();
-            poseStack.mulPose(Axis.YP.rotationDegrees(vehicleYRot - yRotGui));
-            living.yHeadRot = vehicleYRot;
-            living.yHeadRotO = vehicleYRot;
-        }
+            // 修正骑乘时 GUI 界面歪头的 bug
+            if (living.getVehicle() instanceof LivingEntity vehicle) {
+                float vehicleYRot = vehicle.getYRot();
+                poseStack.mulPose(Axis.YP.rotationDegrees(vehicleYRot - yRotGui));
+                living.yHeadRot = vehicleYRot;
+                living.yHeadRotO = vehicleYRot;
+            }
 
-        Lighting.setupForEntityInInventory();
-        dispatcher = Minecraft.getInstance().getEntityRenderDispatcher();
-        xp.conjugate();
-        dispatcher.overrideCameraOrientation(xp);
-        dispatcher.setRenderShadow(false);
-        shadowDisabled = true;
-        bufferSource = Minecraft.getInstance().renderBuffers().bufferSource();
-        var drawBuffer = bufferSource;
-        RenderSystem.runAsFancy(() -> {
-            renderer.renderAnimatableEntity(animatableEntity, 0, partialTicks, poseStack, drawBuffer, 0xf000f0);
-        });
+            Lighting.setupForEntityInInventory();
+            dispatcher = Minecraft.getInstance().getEntityRenderDispatcher();
+            xp.conjugate();
+            dispatcher.overrideCameraOrientation(xp);
+            dispatcher.setRenderShadow(false);
+            shadowDisabled = true;
+            bufferSource = Minecraft.getInstance().renderBuffers().bufferSource();
+            if (framing != null)
+                framing.begin(bufferSource, width, height);
+            MultiBufferSource drawBuffer = framing == null ? bufferSource : framing;
+            RenderSystem.runAsFancy(() -> {
+                renderer.renderAnimatableEntity(animatableEntity, 0, partialTicks, poseStack, drawBuffer, 0xf000f0);
+            });
         } finally {
             try {
                 if (bufferSource != null) {
@@ -407,13 +425,12 @@ public final class RenderUtil {
                     living.yHeadRot = yHeadRot;
                     try {
                         if (itemStacks != null) {
-                            Player player = (Player) living;
+                            Player player = (Player)living;
                             int i = 0;
                             for (EquipmentSlot slot : EquipmentSlot.values()) {
                                 ItemStack itemStack = itemStacks[i];
                                 if (slot == EquipmentSlot.MAINHAND) {
-                                    player.getInventory().items.set(
-                                            player.getInventory().selected, itemStack);
+                                    player.getInventory().items.set(player.getInventory().selected, itemStack);
                                 } else if (slot == EquipmentSlot.OFFHAND) {
                                     player.getInventory().offhand.set(0, itemStack);
                                 } else {
@@ -441,7 +458,8 @@ public final class RenderUtil {
         }
     }
 
-    public static void renderExtraPlayerEntity(GuiGraphics pGuiGraphics, LocalPlayer player, double posX, double posY, float scale, float yawOffset, int z, float partialTicks) {
+    public static void renderExtraPlayerEntity(GuiGraphics pGuiGraphics, LocalPlayer player, double posX, double posY,
+        float scale, float yawOffset, int z, float partialTicks) {
         RenderUtil.setRenderingInPaperDoll(true);
         PoseStack viewStack = RenderSystem.getModelViewStack();
         viewStack.pushPose();
@@ -452,7 +470,8 @@ public final class RenderUtil {
         pGuiGraphics.pose().translate(0, 0, -z);
         pGuiGraphics.pose().scale(scale, scale, scale);
         Quaternionf zRot = Axis.ZP.rotationDegrees(180.1F);
-        Quaternionf yRot = Axis.YP.rotationDegrees(Mth.lerp(partialTicks, player.yBodyRotO, player.yBodyRot) + yawOffset - 180);
+        Quaternionf yRot =
+            Axis.YP.rotationDegrees(Mth.lerp(partialTicks, player.yBodyRotO, player.yBodyRot) + yawOffset - 180);
         zRot.mul(yRot);
         pGuiGraphics.pose().mulPose(zRot);
         Lighting.setupForEntityInInventory();
@@ -460,7 +479,8 @@ public final class RenderUtil {
         yRot.conjugate();
         renderDispatcher.overrideCameraOrientation(yRot);
         renderDispatcher.setRenderShadow(false);
-        RenderSystem.runAsFancy(() -> renderDispatcher.render(player, 0, 0, 0.0D, 0.0F, partialTicks, pGuiGraphics.pose(), pGuiGraphics.bufferSource(), 15728880));
+        RenderSystem.runAsFancy(() -> renderDispatcher.render(player, 0, 0, 0.0D, 0.0F, partialTicks,
+            pGuiGraphics.pose(), pGuiGraphics.bufferSource(), 15728880));
         pGuiGraphics.flush();
         renderDispatcher.setRenderShadow(true);
         pGuiGraphics.pose().popPose();

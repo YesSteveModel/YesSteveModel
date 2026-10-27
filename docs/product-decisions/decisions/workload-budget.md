@@ -5,13 +5,17 @@
 - Needs:
   - 比较设备表现: [DD.high-end-quality-with-basic-availability](device-quality.md#ddhigh-end-quality-with-basic-availability)
 - Landing:
-  - [design](../../governance/verification-policy.md#性能验证)
-  - [architecture](../../architecture/rendering/frame-execution.md#低延迟同步与并发边界)
-  - [architecture](../../architecture/model-management/reload-and-publication.md)
-  - [architecture](../../architecture/runtime-model.md#工作线程与发布线程)
-  - [architecture](../../architecture/network/asset-transfer.md#分发负载保护)
-  - [design](../../architecture/network/design-rationale.md#资产分发保护复用既有-owner)
+  - [governance](../../governance/verification-policy.md#性能验证)
+  - [implementation](../../architecture/rendering/implementation/frame-execution.md#任务发布与并发边界)
+  - [implementation](../../architecture/model-management/catalog/overview.md#实现与验证入口)
+  - [implementation](../../architecture/runtime/implementation/execution.md#工作线程与发布线程)
+  - [implementation](../../architecture/network/implementation/asset-transfer.md#分发负载保护)
+  - [design](../../architecture/network/overview.md#分发所有权与负载保护)
   - [status](../../status/known-issues/rendering.md#并发与性能)
+  - [design](../../architecture/rendering/overview.md)
+  - [design](../../architecture/model-management/catalog/overview.md#逐项发布与替换)
+  - [design](../../architecture/runtime/overview.md)
+  - [design](../../architecture/network/overview.md)
 
 ## DD.main-loop-has-priority
 
@@ -20,7 +24,9 @@
 
 ### BC.no-main-loop-starvation
 
-- Claim: 正常模型工作不得阻塞 tick/render 线程等待异步结果，也不得以无界主线程任务或过量后台并发挤占游戏主循环；无法承受的工作应局部拒绝或降级。Catalog 与 runtime resource 的重负载容量必须相互独立。每个后台任务连续完成一条输入已齐全、worker-safe、有界且不等待其他 worker、网络或 host callback 的处理链；长期业务状态只由对应 owner 在 tick 中消费不可变完成事实后提交。Host 完成可以触发新的独立工作，但不能让原 worker 挂起等待交接。
+- Claim: 正常模型工作不得阻塞 tick/render 线程等待异步结果，也不得以无界主线程任务或过量后台并发挤占游戏主循环；无法承受的工作应局部拒绝或降级。Catalog 与 runtime resource 的重负载容量必须相互独立。每个有限计算 worker 连续完成一条输入已齐全、worker-safe、有界且不等待其他 worker、网络或 host callback 的处理链。Catalog 扫描协调线程可以等待本次 worker，但必须具备独立容量、无环依赖、取消唤醒与 owner 关闭协议，且不得等待主线程消费结果。公开业务状态只由对应 owner 在 tick 中接纳完整不可变结果后提交。Host 完成可以触发新的独立工作，但不能让原 worker 挂起等待交接。
+
+客户端非音频工作不按内存字节额度拒绝、等待、淘汰或禁止持久写入。条目数、工作数、并发和主循环发布预算继续成立；音频活动／保留额度、服务端独有额度及格式、解码和 compiler limits 继续按各自责任执行。Integrated 同进程不合并两侧政策。数量上限不承诺 RSS 上界；实际分配失败按[失败隔离](failure-isolation.md)终结所属操作。
 
 ## DD.gameplay-traffic-precedes-asset-distribution
 

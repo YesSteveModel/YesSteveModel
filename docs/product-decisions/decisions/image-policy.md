@@ -10,7 +10,8 @@
 - Landing:
   - [standard](../../standards/model-schema/assets-and-validation.md#image-与-pbr-texture)
   - [status](../../status/known-issues/format-and-schema.md#codec导入与平台)
-  - [architecture](../../architecture/asset-pipeline/conversion-and-export.md#图像处理的位置)
+  - [implementation](../../architecture/asset-pipeline/implementation/conversion-and-export.md#图像处理的位置)
+  - [design](../../architecture/asset-pipeline/overview.md)
 
 ## DD.compression-preserves-model-meaning
 

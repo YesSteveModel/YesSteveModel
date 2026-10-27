@@ -75,6 +75,7 @@ public class ConditionalPassenger {
         if (tags == null) {
             return EMPTY;
         }
-        return tagTest.stream().filter(tag -> passenger.getType().is(tag)).findFirst().map(itemTagKey -> tagPre + itemTagKey.location()).orElse(EMPTY);
+        return tagTest.stream().filter(tag -> passenger.getType().is(tag)).findFirst()
+            .map(itemTagKey -> tagPre + itemTagKey.location()).orElse(EMPTY);
     }
 }

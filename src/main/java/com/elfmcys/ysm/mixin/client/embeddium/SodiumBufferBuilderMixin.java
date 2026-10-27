@@ -25,18 +25,18 @@ public class SodiumBufferBuilderMixin implements VertexBufferAccessor {
     @Unique
     @Override
     public VertexFormat ysm$vertexFormat() {
-        return ((VertexBufferAccessor) builder).ysm$vertexFormat();
+        return ((VertexBufferAccessor)builder).ysm$vertexFormat();
     }
 
     @Unique
     @Override
     public NativeBuffer ysm$reserve(int vertexCount) {
-        return ((VertexBufferAccessor) builder).ysm$reserve(vertexCount);
+        return ((VertexBufferAccessor)builder).ysm$reserve(vertexCount);
     }
 
     @Unique
     @Override
     public void ysm$advance(int vertexCount) {
-        ((VertexBufferAccessor) builder).ysm$advance(vertexCount);
+        ((VertexBufferAccessor)builder).ysm$advance(vertexCount);
     }
 }

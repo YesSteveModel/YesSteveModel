@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.network.dispatch;
 
 import com.elfmcys.ysm.buffer.ArrayBuffer;
-import com.elfmcys.ysm.model.resource.server.ServerChunkRuntime;
+import com.elfmcys.ysm.model.resource.server.ServerResourceRuntime;
 import com.elfmcys.ysm.network.ProtocolBuffer;
 import com.elfmcys.ysm.network.frame.FrameCodec;
 import com.elfmcys.ysm.network.frame.OutboundFrame;
@@ -32,50 +32,45 @@ final class RangePacket implements CancellablePacket {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     static RangePacket bytes(byte[] bytes, FragmentFactory fragments, Runnable closeHook,
-                             Consumer<RuntimeException> productionFailure) {
+        Consumer<RuntimeException> productionFailure) {
         Objects.requireNonNull(bytes, "bytes");
         if (bytes.length == 0) {
             throw new IllegalArgumentException("Byte range packet is empty");
         }
-        return new RangePacket(new BytesSource(bytes.clone()), fragments, closeHook,
-                productionFailure);
+        return new RangePacket(new BytesSource(bytes.clone()), fragments, closeHook, productionFailure);
     }
 
-    static RangePacket chunk(ServerChunkRuntime.ChunkLease lease, FragmentFactory fragments,
-                             Runnable closeHook,
-                             Consumer<RuntimeException> productionFailure) {
+    static RangePacket lease(ServerResourceRuntime.BytesLease lease, FragmentFactory fragments, Runnable closeHook,
+        Consumer<RuntimeException> productionFailure) {
         Objects.requireNonNull(lease, "lease");
         Objects.requireNonNull(fragments, "fragments");
         Objects.requireNonNull(closeHook, "closeHook");
         Objects.requireNonNull(productionFailure, "productionFailure");
         var size = lease.size();
         if (size <= 0) {
-            throw new IllegalArgumentException("Chunk range packet is empty");
+            throw new IllegalArgumentException("Leased byte range packet is empty");
         }
-        return new RangePacket(new ChunkSource(lease, size), fragments, closeHook,
-                productionFailure);
+        return new RangePacket(new LeaseSource(lease, size), fragments, closeHook, productionFailure);
     }
 
-    static RangePacket file(Object sourceLease, Path path, long fileOffset, int size,
-                            FragmentFactory fragments, Runnable closeHook,
-                            Consumer<RuntimeException> productionFailure) {
+    static RangePacket file(Object sourceLease, Path path, long fileOffset, int size, FragmentFactory fragments,
+        Runnable closeHook, Consumer<RuntimeException> productionFailure) {
         if (fileOffset < 0 || size <= 0) {
             throw new IllegalArgumentException("Invalid file-range packet bounds");
         }
         Math.addExact(fileOffset, size);
-        return new RangePacket(new FileSource(sourceLease, path, fileOffset, size), fragments,
-                closeHook, productionFailure);
+        return new RangePacket(new FileSource(sourceLease, path, fileOffset, size), fragments, closeHook,
+            productionFailure);
     }
 
     private RangePacket(Source source, FragmentFactory fragments, Runnable closeHook,
-                        Consumer<RuntimeException> productionFailure) {
+        Consumer<RuntimeException> productionFailure) {
         this.source = Objects.requireNonNull(source, "source");
         size = source.size();
         this.fragments = Objects.requireNonNull(fragments, "fragments");
         this.closeHook = Objects.requireNonNull(closeHook, "closeHook");
-        this.productionFailure = Objects.requireNonNull(productionFailure,
-                "productionFailure");
-        fragmentCount = Math.toIntExact((size + (long) FRAGMENT_BYTES - 1) / FRAGMENT_BYTES);
+        this.productionFailure = Objects.requireNonNull(productionFailure, "productionFailure");
+        fragmentCount = Math.toIntExact((size + (long)FRAGMENT_BYTES - 1) / FRAGMENT_BYTES);
     }
 
     @Override
@@ -96,10 +91,9 @@ final class RangePacket implements CancellablePacket {
         var relativeOffset = Math.multiplyExact(index, FRAGMENT_BYTES);
         var length = fragmentSize(index);
         var message = fragments.message(relativeOffset, relativeOffset + length == size);
-        try (var attachment = source.read(relativeOffset, length);
-             var protobuf = ProtocolBuffer.serialize(message)) {
-            var spec = ProtocolMessages.REGISTRY.find(message.getClass()).orElseThrow(() ->
-                    new IllegalArgumentException("Unregistered resource fragment message"));
+        try (var attachment = source.read(relativeOffset, length); var protobuf = ProtocolBuffer.serialize(message)) {
+            var spec = ProtocolMessages.REGISTRY.find(message.getClass())
+                .orElseThrow(() -> new IllegalArgumentException("Unregistered resource fragment message"));
             return FrameCodec.encode(spec.id(), protobuf, attachment);
         }
     }
@@ -200,11 +194,11 @@ final class RangePacket implements CancellablePacket {
         }
     }
 
-    private static final class ChunkSource implements Source {
-        private ServerChunkRuntime.ChunkLease lease;
+    private static final class LeaseSource implements Source {
+        private ServerResourceRuntime.BytesLease lease;
         private final int size;
 
-        private ChunkSource(ServerChunkRuntime.ChunkLease lease, int size) {
+        private LeaseSource(ServerResourceRuntime.BytesLease lease, int size) {
             this.lease = lease;
             this.size = size;
         }
@@ -235,9 +229,9 @@ final class RangePacket implements CancellablePacket {
             }
         }
 
-        private ServerChunkRuntime.ChunkLease requireOpen() {
+        private ServerResourceRuntime.BytesLease requireOpen() {
             if (lease == null) {
-                throw new IllegalStateException("Chunk range source is closed");
+                throw new IllegalStateException("Leased byte range source is closed");
             }
             return lease;
         }

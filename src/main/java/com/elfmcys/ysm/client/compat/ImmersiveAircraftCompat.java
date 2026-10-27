@@ -30,8 +30,8 @@ public class ImmersiveAircraftCompat {
             Vector3f effect = planeEntity.onGround() ? new Vector3f(0.0f, 0.0f, 0.0f) : planeEntity.getWindEffect();
             var rot = new Vector3f();
             MathUtil.getEulerAnglesZYX(Axis.XP.rotationDegrees(effect.z).rotateZ(MathUtil.degreesToRadians(effect.x))
-                    .rotateX(-MathUtil.degreesToRadians(planeEntity.getViewXRot(event.getPartialTick())))
-                    .rotateZ(-MathUtil.degreesToRadians(planeEntity.getRoll(event.getPartialTick()))), rot);
+                .rotateX(-MathUtil.degreesToRadians(planeEntity.getViewXRot(event.getPartialTick())))
+                .rotateZ(-MathUtil.degreesToRadians(planeEntity.getRoll(event.getPartialTick()))), rot);
             return Optional.of(rot);
         }
         return Optional.empty();

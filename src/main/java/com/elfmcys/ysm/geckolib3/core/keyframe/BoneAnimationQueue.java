@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2020.
- * Author: Bernie G. (Gecko)
+ * Copyright (c) 2020. Author: Bernie G. (Gecko)
  */
 
 package com.elfmcys.ysm.geckolib3.core.keyframe;
@@ -18,7 +17,7 @@ public class BoneAnimationQueue {
     public final BoneTopLevelSnapshot topLevelSnapshot;
     public final BoneSnapshot transitionOffset;
 
-    @Nullable 
+    @Nullable
     public OrderedSegmentSearcher<BoneKeyFrame> rotationKeyFrames;
     @Nullable
     public OrderedSegmentSearcher<BoneKeyFrame> positionKeyFrames;
@@ -109,7 +108,7 @@ public class BoneAnimationQueue {
     }
 
     public void setBlendWeight(float blendWeight) {
-        this.blendWeight = blendWeight > 0 ? blendWeight : 0;   // bb 里就是这样的
+        this.blendWeight = blendWeight > 0 ? blendWeight : 0; // bb 里就是这样的
     }
 
     public void resetQueues() {

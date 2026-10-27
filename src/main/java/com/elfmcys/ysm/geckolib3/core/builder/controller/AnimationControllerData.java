@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.geckolib3.core.builder.controller;
 
-import com.elfmcys.ysm.geckolib3.core.molang.util.StringPool;
+import com.elfmcys.ysm.util.StringPool;
 import it.unimi.dsi.fastutil.ints.Int2ReferenceMap;
 import it.unimi.dsi.fastutil.ints.Int2ReferenceMaps;
 import it.unimi.dsi.fastutil.ints.Int2ReferenceOpenHashMap;
@@ -14,8 +14,8 @@ public class AnimationControllerData {
 
     public AnimationControllerData(String initialState, AnimationControllerState[] states) {
         this.initialState = StringPool.computeIfAbsent(initialState);
-        this.states = Int2ReferenceMaps.unmodifiable(new Int2ReferenceOpenHashMap<>(Arrays.stream(states)
-                .collect(Collectors.toMap(AnimationControllerState::pooledName, state -> state))));
+        this.states = Int2ReferenceMaps.unmodifiable(new Int2ReferenceOpenHashMap<>(
+            Arrays.stream(states).collect(Collectors.toMap(AnimationControllerState::pooledName, state -> state))));
     }
 
     public int initialState() {

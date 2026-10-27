@@ -3,9 +3,7 @@ package com.elfmcys.ysm.geckolib3.core.builder;
 import com.google.gson.JsonElement;
 
 public enum LoopType {
-    LOOP,
-    PLAY_ONCE,
-    HOLD_ON_LAST_FRAME;
+    LOOP, PLAY_ONCE, HOLD_ON_LAST_FRAME;
 
     public static LoopType fromJson(JsonElement json) {
         if (json == null || json.isJsonNull()) {

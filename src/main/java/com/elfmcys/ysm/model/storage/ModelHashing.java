@@ -12,8 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 public final class ModelHashing {
-    private ModelHashing() {
-    }
+    private ModelHashing() {}
 
     public static Hash256 blake3(byte[] data) {
         return new Hash256(Blake3.computeHash(ArrayBuffer.borrow(data)));
@@ -35,7 +34,7 @@ public final class ModelHashing {
             throw new IOException("File is too large to hash: " + file);
         }
         try (var source = NativeBuffer.allocate(Math.toIntExact(size));
-             var channel = Files.newByteChannel(file, StandardOpenOption.READ)) {
+            var channel = Files.newByteChannel(file, StandardOpenOption.READ)) {
             var target = source.nio();
             while (target.hasRemaining()) {
                 if (channel.read(target) < 0) {

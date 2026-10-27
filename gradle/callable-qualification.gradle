@@ -1,0 +1,59 @@
+def packagedGameStubs = layout.buildDirectory.dir('packaged-expression-smoke/game-stubs')
+def packagedExpressionSmokeClasses = layout.buildDirectory.dir('packaged-expression-smoke/classes')
+def packagedHostLibraries = configurations.compileClasspath.filter {
+    it.name.startsWith('gson-') || it.name.startsWith('maven-artifact-') || it.name.startsWith('log4j-api-') || it.name.startsWith('commons-lang3-') || it.name.startsWith('fastutil-')
+}
+def optionalDependencyJars = ['a', 'b', 'broken-b'].collectEntries { name -> [(name): tasks.named("packageExpressionDependency_${name.replace('-', '_')}")] }
+// Independent publication inputs keep source attribution observable.
+def compositionJars = [:]
+['Provider', 'Conflict'].each { kind ->
+    def classes = layout.buildDirectory.dir("packaged-composition/${kind}-classes")
+    def compile = tasks.register("compilePackagedComposition${kind}", JavaCompile) {
+        dependsOn tasks.named('shadowJar'), tasks.named('compilePackagedGameStubs')
+        source = fileTree("src/verification/molang/packagedComposition${kind}/java") { include '**/*.java' }
+        classpath = files(packagedGameStubs, tasks.named('shadowJar').flatMap { it.archiveFile }, packagedHostLibraries)
+        options.annotationProcessorPath = files(tasks.named('shadowJar').flatMap { it.archiveFile })
+        destinationDirectory = classes
+        options.release = 17
+        options.encoding = 'UTF-8'
+    }
+    compositionJars[kind] = tasks.register("packagePackagedComposition${kind}", Jar) {
+        dependsOn compile
+        archiveClassifier = "packaged-composition-${kind.toLowerCase()}"
+        from classes
+    }
+}
+tasks.register('verifyPackagedCallableComposition', JavaExec) {
+    group = 'verification'
+    description = 'Checks shared namespace, views, missing, permissions and disk-warm execution in published JARs.'
+    dependsOn tasks.named('compilePackagedExpressionSmoke'), compositionJars.values(), optionalDependencyJars.values()
+    classpath = files(packagedExpressionSmokeClasses, packagedGameStubs, packagedHostLibraries,
+            tasks.named('shadowJar').flatMap { it.archiveFile })
+    mainClass = 'com.elfmcys.ysm.verification.PackagedDeclarationMatrix'
+    systemProperty 'matrix.composition', 'true'
+    doFirst {
+        args layout.buildDirectory.dir('verification/callable-composition').get().asFile.absolutePath,
+                compositionJars['Provider'].get().archiveFile.get().asFile.absolutePath,
+                optionalDependencyJars['a'].get().archiveFile.get().asFile.absolutePath,
+                optionalDependencyJars['b'].get().archiveFile.get().asFile.absolutePath,
+                optionalDependencyJars['broken-b'].get().archiveFile.get().asFile.absolutePath,
+                compositionJars['Conflict'].get().archiveFile.get().asFile.absolutePath
+    }
+}
+
+[0, 1].each { fork ->
+    tasks.register("verifyMolangPayloadAllocation${fork}", JavaExec) {
+        group = 'verification'
+        dependsOn tasks.named('compilePackagedExpressionSmoke')
+        classpath = files(packagedExpressionSmokeClasses, packagedGameStubs, packagedHostLibraries,
+                tasks.named('packagePackagedExpressionProvider').flatMap { it.archiveFile },
+                tasks.named('shadowJar').flatMap { it.archiveFile })
+        mainClass = 'com.elfmcys.ysm.verification.PackagedExpressionRuntimeSmoke'
+        systemProperty 'ysm.payloadAllocation', 'true'
+        systemProperty 'ysm.payloadReport', layout.buildDirectory.file("reports/molang-payload/fork-${fork}.json").get().asFile.absolutePath
+    }
+}
+tasks.register('verifyMolangPayloadAllocation') {
+    group = 'verification'
+    dependsOn tasks.named('verifyMolangPayloadAllocation0'), tasks.named('verifyMolangPayloadAllocation1')
+}

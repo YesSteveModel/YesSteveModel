@@ -12,7 +12,7 @@
 
 ## Q-10
 
-**共享派生 cache 的 writer 协调收益尚不能整体归约。** MN-23 的 JVM key lock、进程文件锁、取锁后重验和临时对象提交都有源码依据；当前只有 NR-05 baked cache 使用这条 seam，原 expression artifact 消费者已随 AOT 引擎一起移除。Converted 已改由 MN-24 的活跃消费者登记和一次保守 prune 管理，remote、preview、direct source 也不使用同一 shared-writer 协议；相同物理目录不能据此合并生命周期、key 或删除条件。
+**共享派生 cache 的 writer 协调收益尚不能整体归约。** MN-23 的 JVM key lock、进程文件锁、取锁后重验和临时对象提交都有源码依据；NR-05 几何 baked cache 与 MN-27 的 animation-set cache 都使用这条 seam。后者将动画 chunks 与 expression artifact 原子提交到同一文件，仍以自身 specialization/ABI identity 管理；Converted 已改由 MN-24 的活跃消费者登记和一次保守 prune 管理，remote、preview、direct source 也不使用该协议。相同物理目录不能据此合并生命周期、key 或删除条件。
 
 - 待补证据：baked 现在与 remote 同处用户级 cache root，同一用户的多个实例可以命中同一 key 与同一锁目录；串行 materialize 减少的重复生产是否抵偿锁、重验与文件管理成本仍未测量。GitNexus 的有界邻接仅帮助选入口，缺边不证明没有消费者。
 - 归约候选：比较保持共享、按进程隔离、或复用更小的同 key materialization owner。允许新增统一 owner 来承接重复协调，但要计入第二套缓存、文件量、重复编译与迁移成本，不能只比较锁数量；MN-24 的 consumer/prune authority 不随之合并。

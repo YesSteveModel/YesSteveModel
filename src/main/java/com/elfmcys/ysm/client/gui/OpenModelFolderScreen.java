@@ -4,14 +4,13 @@ import com.elfmcys.ysm.model.catalog.source.ModelCatalogSources;
 import net.minecraft.Util;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
-public class OpenModelFolderScreen extends Screen {
+public class OpenModelFolderScreen extends ModelScreen {
     private final PlayerModelScreen screen;
 
     protected OpenModelFolderScreen(PlayerModelScreen screen) {
-        super(Component.literal("Open Model Folder"));
+        super(Component.literal("Open Model Folder"), screen);
         this.screen = screen;
     }
 
@@ -20,11 +19,12 @@ public class OpenModelFolderScreen extends Screen {
         int x = (width - 310) / 2;
         int y = height / 2 + 60;
         this.clearWidgets();
-        this.addRenderableWidget(Button.builder(Component.translatable("gui.yes_steve_model.open_model_folder.open"), b -> {
-            Util.getPlatform().openFile(ModelCatalogSources.customPath().toFile());
-        }).bounds(x, y, 150, 20).build());
+        this.addRenderableWidget(
+            Button.builder(Component.translatable("gui.yes_steve_model.open_model_folder.open"), b -> {
+                Util.getPlatform().openFile(ModelCatalogSources.customPath().toFile());
+            }).bounds(x, y, 150, 20).build());
         this.addRenderableWidget(Button.builder(Component.translatable("gui.yes_steve_model.model.return"), b -> {
-            getMinecraft().setScreen(this.screen);
+            showScreen(this.screen);
         }).bounds(x + 160, y, 150, 20).build());
     }
 
@@ -32,7 +32,7 @@ public class OpenModelFolderScreen extends Screen {
     public void render(GuiGraphics graphics, int pMouseX, int pMouseY, float pPartialTick) {
         renderBackground(graphics);
         graphics.drawWordWrap(font, Component.translatable("gui.yes_steve_model.open_model_folder.tips"),
-                (width - 400) / 2, height / 2 - 80, 400, 0XFFFFFF);
+            (width - 400) / 2, height / 2 - 80, 400, 0XFFFFFF);
         super.render(graphics, pMouseX, pMouseY, pPartialTick);
     }
 }

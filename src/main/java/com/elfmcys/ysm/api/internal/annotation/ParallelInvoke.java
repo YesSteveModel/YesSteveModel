@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.api.internal.annotation;
 
-
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;

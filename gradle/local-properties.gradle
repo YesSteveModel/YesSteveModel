@@ -11,6 +11,8 @@ ysm.native_path=
 ysm.fast_run=false
 # Comma-separated group:artifact entries to keep on the runtime classpath while fast run is enabled.
 ysm.fast_run_whitelist=
+# Enable resource diagnostics for Forge development runs.
+ysm.resource_debug=false
 '''
     try {
         java.nio.file.Files.writeString(

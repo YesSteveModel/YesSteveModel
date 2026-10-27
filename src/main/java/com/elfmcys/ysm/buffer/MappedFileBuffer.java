@@ -2,7 +2,7 @@ package com.elfmcys.ysm.buffer;
 
 import com.elfmcys.ysm.util.CleanerUtil;
 import com.elfmcys.ysm.util.UnsafeUtil;
-import org.lwjgl.system.MemoryUtil;
+import io.netty.util.internal.PlatformDependent;
 
 import java.io.IOException;
 import java.lang.ref.Cleaner;
@@ -21,7 +21,7 @@ class MappedFileBuffer implements NativeBuffer {
     MappedFileBuffer(FileChannel file, long offset, long size) throws IOException {
         var mapped = file.map(FileChannel.MapMode.READ_ONLY, offset, size);
         data = mapped.duplicate();
-        headPtr = MemoryUtil.memAddress(mapped);
+        headPtr = PlatformDependent.directBufferAddress(mapped);
         ownership = new Ownership(new Backing(mapped));
     }
 
@@ -51,7 +51,7 @@ class MappedFileBuffer implements NativeBuffer {
             throw new IndexOutOfBoundsException();
         }
         var sliced = data.slice(offset, size);
-        return new MappedFileBuffer(sliced, MemoryUtil.memAddress(sliced), ownership);
+        return new MappedFileBuffer(sliced, PlatformDependent.directBufferAddress(sliced), ownership);
     }
 
     @Override

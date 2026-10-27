@@ -1,7 +1,6 @@
 package com.elfmcys.ysm.client.animation.condition;
 
 import com.elfmcys.ysm.client.compat.slashblade.SlashBladeCompat;
-import com.elfmcys.ysm.client.compat.touhoulittlemaid.client.TlmClientCompat;
 import com.elfmcys.ysm.init.ModItemTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
@@ -27,9 +26,6 @@ public class InnerClassify {
         }
         if (item instanceof SwordItem || itemInHand.is(ModItemTags.SWORDS)) {
             return "sword";
-        }
-        if (TlmClientCompat.isGohei(item)) {
-            return "gohei";
         }
         if (item instanceof AxeItem || itemInHand.is(ModItemTags.AXES)) {
             return "axe";

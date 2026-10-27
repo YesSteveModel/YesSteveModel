@@ -2,7 +2,6 @@ package com.elfmcys.ysm.client.gui;
 
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
-import com.elfmcys.ysm.client.animation.molang.CustomMolangParser;
 import com.elfmcys.ysm.client.event.PlayerMoveEvent;
 import com.elfmcys.ysm.client.gui.button.*;
 import com.elfmcys.ysm.client.input.AnimationRouletteKey;
@@ -10,10 +9,8 @@ import com.elfmcys.ysm.client.input.ExtraAnimationKey;
 import com.elfmcys.ysm.client.lang.LanguageManager;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.config.ClientConfig;
-import com.elfmcys.ysm.config.ServerConfig;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
-import com.elfmcys.ysm.molang.parser.ParseException;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
+import com.elfmcys.ysm.info.roulette.forms.ConfigActionRoute;
 import com.elfmcys.ysm.network.NetworkHandler;
 import com.elfmcys.ysm.network.forge.ClientProtocolGateway;
 import com.google.common.collect.Lists;
@@ -21,10 +18,10 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
 import it.unimi.dsi.fastutil.objects.ObjectList;
-import com.elfmcys.ysm.proto.mixel.common.StringPair;
-import com.elfmcys.ysm.proto.mixel.manifest.info.ConfigForms;
-import com.elfmcys.ysm.proto.mixel.manifest.info.ExtraAnimationButton;
-import com.elfmcys.ysm.proto.mixel.manifest.info.ExtraAnimationClassify;
+import com.elfmcys.ysm.proto.mixel.common.StringPairProto;
+import com.elfmcys.ysm.proto.mixel.manifest.info.ConfigFormsProto;
+import com.elfmcys.ysm.proto.mixel.manifest.info.ExtraAnimationButtonProto;
+import com.elfmcys.ysm.proto.mixel.manifest.info.ExtraAnimationClassifyProto;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.GuiGraphics;
@@ -40,22 +37,17 @@ import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
-import org.apache.commons.lang3.BooleanUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.math.NumberUtils;
 import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
 
-import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Consumer;
 
 public class AnimationRouletteScreen extends Screen {
     private static final String SPEC_PREFIX = "#";
@@ -83,7 +75,7 @@ public class AnimationRouletteScreen extends Screen {
     private int y;
     private int selectId = -1;
     private int hoverConfigId = -1;
-    private ExtraAnimationButton configButtons = null;
+    private ExtraAnimationButtonProto configButtons = null;
     private Pair<String, Integer> current;
 
     /**
@@ -101,20 +93,22 @@ public class AnimationRouletteScreen extends Screen {
     private FlatColorButton scrollConfigUpBtn;
     @Nullable
     private FlatColorButton scrollConfigDownBtn;
-    private List<ConfigReadBinding> configReadBindings = List.of();
 
-    private final ObjectList<StringPair> extraAnimations;
-    private final Map<String, ExtraAnimationButton> buttonMap;
-    private final Map<String, ExtraAnimationClassify> classifyMap;
+    private final ObjectList<StringPairProto> extraAnimations;
+    private final Map<String, ExtraAnimationButtonProto> buttonMap;
+    private final Map<String, ExtraAnimationClassifyProto> classifyMap;
     private final AnimatableEntity<?> animatableEntity;
     private final ModelRenderTarget model;
+    private final long expressionGeneration;
+    private final List<Runnable> configRefreshers = new LinkedList<>();
 
-    public AnimationRouletteScreen(Map<String, ExtraAnimationButton> buttonMap,
-                                   Map<String, ExtraAnimationClassify> classifyMap,
-                                   ModelRenderTarget clientModel, AnimatableEntity<?> animatableEntity) {
+    public AnimationRouletteScreen(Map<String, ExtraAnimationButtonProto> buttonMap,
+        Map<String, ExtraAnimationClassifyProto> classifyMap, ModelRenderTarget clientModel,
+        AnimatableEntity<?> animatableEntity) {
         super(Component.literal("Animation Roulette GUI"));
         this.model = clientModel;
         this.animatableEntity = animatableEntity;
+        this.expressionGeneration = animatableEntity.getExpressionRuntime().generation();
         this.classifyMap = classifyMap;
         this.buttonMap = buttonMap;
 
@@ -134,6 +128,7 @@ public class AnimationRouletteScreen extends Screen {
         super(Component.literal("Animation Roulette GUI"));
         this.model = model;
         this.animatableEntity = animatableEntity;
+        this.expressionGeneration = animatableEntity.getExpressionRuntime().generation();
         this.classifyMap = model.info().getExtraAnimationClassifications();
         this.buttonMap = model.info().getExtraAnimationButtons();
 
@@ -160,8 +155,12 @@ public class AnimationRouletteScreen extends Screen {
     @Override
     protected void init() {
         this.clearWidgets();
-        var ownerBindings = new ArrayList<ConfigReadBinding>();
-        this.configReadBindings = ownerBindings;
+        this.configRefreshers.clear();
+
+        if (expressionGeneration <= 0 || animatableEntity.getExpressionRuntime().generation() != expressionGeneration) {
+            onClose();
+            return;
+        }
 
         this.x = width / 2 - 70;
         this.y = height / 2 - 8;
@@ -174,7 +173,8 @@ public class AnimationRouletteScreen extends Screen {
 
         if (this.animatableEntity.getEntity() instanceof Player) {
             // 如果是玩家，那么添加锁定按钮
-            this.addRenderableWidget(new FlatColorButton(this.x - 20, this.y - 10, 40, 20, Component.empty(), b -> PlayerMoveEvent.switchLock()) {
+            this.addRenderableWidget(new FlatColorButton(this.x - 20, this.y - 10, 40, 20, Component.empty(),
+                b -> PlayerMoveEvent.switchLock()) {
                 @Override
                 @NotNull
                 public Component getMessage() {
@@ -184,112 +184,84 @@ public class AnimationRouletteScreen extends Screen {
                     return Component.translatable("gui.yes_steve_model.roulette.lock_off");
                 }
             });
-        } else {
-            // 否则是停止播放轮盘动画按钮
-            this.addRenderableWidget(new FlatColorButton(this.x - 20, this.y - 10, 40, 20, Component.translatable("gui.yes_steve_model.roulette.stop"), b -> {
-                Entity entity = this.animatableEntity.getEntity();
-                if (entity instanceof Player) ClientProtocolGateway.stopSelfAnimation();
-                else ClientProtocolGateway.stopMaidAnimation(entity.getId());
-                this.onClose();
-            }));
         }
 
         // 翻页按钮
-        this.addRenderableWidget(new FlatColorButton(this.x + 125, this.y - 102, 30, 30, Component.literal("<"), b -> this.pageUp()));
-        this.addRenderableWidget(new FlatColorButton(this.x + 240, this.y - 102, 30, 30, Component.literal(">"), b -> this.pageDown()));
+        this.addRenderableWidget(
+            new FlatColorButton(this.x + 125, this.y - 102, 30, 30, Component.literal("<"), b -> this.pageUp()));
+        this.addRenderableWidget(
+            new FlatColorButton(this.x + 240, this.y - 102, 30, 30, Component.literal(">"), b -> this.pageDown()));
 
         // 添加返回按钮
         Component name = Component.translatable("gui.yes_steve_model.model.return");
-        this.addRenderableWidget(new FlatColorButton(this.x + 125, this.y - 70, 145, 22, name, b -> this.clickReturn()));
+        this.addRenderableWidget(
+            new FlatColorButton(this.x + 125, this.y - 70, 145, 22, name, b -> this.clickReturn()));
 
         // 配置按钮
         if (configButtons != null) {
             // 配置上下滚动按钮
-            this.scrollConfigUpBtn = new FlatColorButton(this.x + 242, this.y - 46, 28, 60, Component.literal("↑"), b -> {
-                this.configScrollUp(50);
-                if (this.configScrollY == 0 && this.scrollConfigUpBtn != null) {
-                    this.scrollConfigUpBtn.active = false;
-                }
-                if (this.scrollConfigDownBtn != null) {
-                    this.scrollConfigDownBtn.active = true;
-                }
-            });
-            this.scrollConfigDownBtn = new FlatColorButton(this.x + 242, this.y + 50, 28, 60, Component.literal("↓"), b -> {
-                this.configScrollDown(50);
-                if (this.configScrollY == this.maxScrollY && this.scrollConfigDownBtn != null) {
-                    this.scrollConfigDownBtn.active = false;
-                }
-                if (this.scrollConfigUpBtn != null) {
-                    this.scrollConfigUpBtn.active = true;
-                }
-            });
+            this.scrollConfigUpBtn =
+                new FlatColorButton(this.x + 242, this.y - 46, 28, 60, Component.literal("↑"), b -> {
+                    this.configScrollUp(50);
+                    if (this.configScrollY == 0 && this.scrollConfigUpBtn != null) {
+                        this.scrollConfigUpBtn.active = false;
+                    }
+                    if (this.scrollConfigDownBtn != null) {
+                        this.scrollConfigDownBtn.active = true;
+                    }
+                });
+            this.scrollConfigDownBtn =
+                new FlatColorButton(this.x + 242, this.y + 50, 28, 60, Component.literal("↓"), b -> {
+                    this.configScrollDown(50);
+                    if (this.configScrollY == this.maxScrollY && this.scrollConfigDownBtn != null) {
+                        this.scrollConfigDownBtn.active = false;
+                    }
+                    if (this.scrollConfigUpBtn != null) {
+                        this.scrollConfigUpBtn.active = true;
+                    }
+                });
             this.addRenderableWidget(this.scrollConfigUpBtn);
             this.addRenderableWidget(this.scrollConfigDownBtn);
 
             final int[] yOffset = {-46};
             final int[] index = {0};
-            for (ConfigForms configForm : configButtons.configForms()) {
-                this.addConfigForms(configForm, yOffset, index, ownerBindings);
+            for (ConfigFormsProto configForm : configButtons.configForms()) {
+                this.addConfigForms(configForm, yOffset, index);
             }
         }
     }
 
-    private void addConfigForms(ConfigForms configForm, int[] yOffset, int[] index,
-                                List<ConfigReadBinding> ownerBindings) {
+    private void addConfigForms(ConfigFormsProto configForm, int[] yOffset, int[] index) {
+        var route = new ConfigActionRoute(configButtons.id(), index[0]);
         if (configForm.type().equals("checkbox")) {
-            this.executeMolang(configForm.readProgram().source(), result -> {
-                minecraft.execute(() -> {
-                    if (this.configReadBindings != ownerBindings) {
-                        return;
-                    }
-                    FlatCheckbox checkbox = getFlatCheckbox(configForm, result, yOffset, index);
-                    this.addRenderableWidget(checkbox);
-                    ownerBindings.add(new ConfigReadBinding(configForm.readProgram().source(),
-                            next -> updateCheckbox(checkbox, next)));
-                    yOffset[0] += 14;
-                    index[0]++;
-                    // 最终和 110 的差就是最大滚动高度
-                    this.maxScrollY = Math.max(0, yOffset[0] - 110);
-                });
-            });
+            var result = animatableEntity.readConfigBoolean(expressionGeneration, route);
+            this.addRenderableWidget(getFlatCheckbox(configForm, route, result, yOffset, index));
+            yOffset[0] += 14;
+            index[0]++;
+            this.maxScrollY = Math.max(0, yOffset[0] - 110);
         }
 
         if (configForm.type().equals("range")) {
-            this.executeMolang(configForm.readProgram().source(), result -> {
-                minecraft.execute(() -> {
-                    if (this.configReadBindings != ownerBindings) {
-                        return;
-                    }
-                    FlatSlider slider = getFlatSlider(configForm, result, yOffset, index);
-                    this.addRenderableWidget(slider);
-                    ownerBindings.add(new ConfigReadBinding(configForm.readProgram().source(),
-                            next -> updateSlider(slider, next)));
-                    yOffset[0] += 17;
-                    index[0]++;
-                    // 最终和 110 的差就是最大滚动高度
-                    this.maxScrollY = Math.max(0, yOffset[0] - 110);
-                });
-            });
+            var result = animatableEntity.readConfigFloat(expressionGeneration, route);
+            this.addRenderableWidget(getFlatSlider(configForm, route, result, yOffset, index));
+            yOffset[0] += 17;
+            index[0]++;
+            this.maxScrollY = Math.max(0, yOffset[0] - 110);
         }
 
         if (configForm.type().equals("radio")) {
-            this.executeMolang(configForm.readProgram().source(), result -> {
-                minecraft.execute(() -> {
-                    if (this.configReadBindings != ownerBindings) {
-                        return;
-                    }
-                    addRatioButtons(configForm, result, yOffset, index, ownerBindings);
-                });
-            });
+            var result = animatableEntity.readConfigFloat(expressionGeneration, route);
+            addRatioButtons(configForm, route, result, yOffset, index);
         }
     }
 
-    private void addRatioButtons(ConfigForms radioForms, String result, int[] yOffset, int[] index,
-                                 List<ConfigReadBinding> ownerBindings) {
+    private void addRatioButtons(ConfigFormsProto radioForms, ConfigActionRoute route, float result, int[] yOffset,
+        int[] index) {
+        int selectedIndex = Math.round(result);
         var labels = radioForms.labels();
-        var selectedIndex = radioIndex(result, labels.size());
-        var committedIndex = new int[]{selectedIndex};
-        var radioButtons = new ArrayList<FlatCheckbox>(labels.size());
+        if (selectedIndex < 0 || labels.size() <= selectedIndex) {
+            selectedIndex = 0;
+        }
 
         // 动态改变单选框每行个数
         // 遍历获取最长的行的长度
@@ -297,7 +269,7 @@ public class AnimationRouletteScreen extends Screen {
         int labelsIndex = 0;
         for (var label : labels) {
             String labelStr = LanguageManager.getI18n(this.model,
-                    CONFIG_LABELS.formatted(this.configButtons.id(), index[0], labelsIndex), label.name());
+                CONFIG_LABELS.formatted(this.configButtons.id(), index[0], labelsIndex), label.name());
             lineMaxWidth = Math.max(lineMaxWidth, font.width(labelStr) + 16);
             labelsIndex++;
         }
@@ -306,8 +278,10 @@ public class AnimationRouletteScreen extends Screen {
         }
         int countPerLine = Math.max(1, 115 / lineMaxWidth);
 
-        String titleStr = LanguageManager.getI18n(this.model, CONFIG_TITLE.formatted(this.configButtons.id(), index[0]), radioForms.title());
-        String descStr = LanguageManager.getI18n(this.model, CONFIG_DESC.formatted(this.configButtons.id(), index[0]), radioForms.description());
+        String titleStr = LanguageManager.getI18n(this.model, CONFIG_TITLE.formatted(this.configButtons.id(), index[0]),
+            radioForms.title());
+        String descStr = LanguageManager.getI18n(this.model, CONFIG_DESC.formatted(this.configButtons.id(), index[0]),
+            radioForms.description());
 
         Component title = Component.literal(titleStr);
         Tooltip description = Tooltip.create(Component.literal(descStr));
@@ -317,30 +291,45 @@ public class AnimationRouletteScreen extends Screen {
         this.addRenderableOnly(ratioBox);
 
         // 遍历添加每个 label
+        var buttons = new java.util.ArrayList<FlatCheckbox>();
+        Runnable refresh = () -> {
+            int selected = Math.round(animatableEntity.readConfigFloat(expressionGeneration, route));
+            if (selected < 0 || selected >= labels.size()) {
+                selected = 0;
+            }
+            for (int button = 0; button < buttons.size(); button++) {
+                buttons.get(button).setStateTriggered(button == selected);
+            }
+        };
+        configRefreshers.add(refresh);
         int tempYOffset = yOffset[0] + 14;
         for (int i = 0; i < labels.size(); i++) {
             var label = labels.get(i);
             String labelStr = LanguageManager.getI18n(this.model,
-                    CONFIG_LABELS.formatted(this.configButtons.id(), index[0], i), label.name());
+                CONFIG_LABELS.formatted(this.configButtons.id(), index[0], i), label.name());
 
             Component labelName = Component.literal(labelStr);
-            String labelValue = label.actionProgram().source();
+            int labelIndex = i;
+            String labelValue = label.name();
+            boolean isSelected = selectedIndex == i;
 
             int perWidth = Math.round(110f / countPerLine);
             int xOffset = this.x + 127 + perWidth * (i % countPerLine);
 
             FlatCheckbox checkbox = new FlatCheckbox(xOffset, this.y + tempYOffset, perWidth, labelName, data -> {
-                applyRadioSelection(radioButtons, committedIndex[0]);
-                executeMolang(labelValue, ignored -> minecraft.execute(this::refreshConfigValues));
-                if (!CustomMolangParser.hasOnlyRoamingAssignment(labelValue) && NetworkHandler.isRemoteChannelPresent() && !ServerConfig.LOW_BANDWIDTH_USAGE.get()) {
-                    // 同步到周围的玩家
-                    ClientProtocolGateway.submitRouletteExpression(this.animatableEntity.getEntity(), labelValue);
+                try {
+                    ClientProtocolGateway.submitConfigLabel(animatableEntity, expressionGeneration, route, labelValue,
+                        labelIndex);
+                } catch (RuntimeException exception) {
+                    YesSteveModel.LOGGER.error(exception);
+                } finally {
+                    refresh.run();
                 }
             });
-            checkbox.setStateTriggered(selectedIndex == i);
+            checkbox.setStateTriggered(isSelected);
+            buttons.add(checkbox);
 
             this.addRenderableWidget(checkbox);
-            radioButtons.add(checkbox);
 
             // 每满 countPerLine 个时，换行
             if (i % countPerLine == (countPerLine - 1)) {
@@ -354,128 +343,71 @@ public class AnimationRouletteScreen extends Screen {
 
         // 最终和 110 的差就是最大滚动高度
         this.maxScrollY = Math.max(0, yOffset[0] - 110);
-
-        ownerBindings.add(new ConfigReadBinding(radioForms.readProgram().source(), next -> {
-            int nextIndex = radioIndex(next, labels.size());
-            if (nextIndex < 0) {
-                return;
-            }
-            committedIndex[0] = nextIndex;
-            applyRadioSelection(radioButtons, nextIndex);
-        }));
     }
 
     @NotNull
-    private FlatSlider getFlatSlider(ConfigForms rangeForms, String result, int[] yOffset, int[] index) {
-        String titleStr = LanguageManager.getI18n(this.model, CONFIG_TITLE.formatted(this.configButtons.id(), index[0]), rangeForms.title());
-        String descStr = LanguageManager.getI18n(this.model, CONFIG_DESC.formatted(this.configButtons.id(), index[0]), rangeForms.description());
+    private FlatSlider getFlatSlider(ConfigFormsProto rangeForms, ConfigActionRoute route, float result, int[] yOffset,
+        int[] index) {
+        String titleStr = LanguageManager.getI18n(this.model, CONFIG_TITLE.formatted(this.configButtons.id(), index[0]),
+            rangeForms.title());
+        String descStr = LanguageManager.getI18n(this.model, CONFIG_DESC.formatted(this.configButtons.id(), index[0]),
+            rangeForms.description());
 
         Component title = Component.literal(titleStr);
         Tooltip description = Tooltip.create(Component.literal(descStr));
-        Float number = transformNumber(result);
-
-        FlatSlider slider = new FlatSlider(this.x + 125, this.y + yOffset[0], title,
-                number == null ? 0 : number,
-                this.animatableEntity, rangeForms.readProgram().source(), rangeForms.step(),
-                rangeForms.min(), rangeForms.max());
+        FlatSlider slider = new FlatSlider(this.x + 125, this.y + yOffset[0], title, result, this.animatableEntity,
+            expressionGeneration, route, rangeForms.step(), rangeForms.min(), rangeForms.max());
         slider.setTooltip(description);
 
         return slider;
     }
 
     @NotNull
-    private FlatCheckbox getFlatCheckbox(ConfigForms checkboxForms, String result, int[] yOffset, int[] index) {
-        String titleStr = LanguageManager.getI18n(this.model, CONFIG_TITLE.formatted(this.configButtons.id(), index[0]), checkboxForms.title());
-        String descStr = LanguageManager.getI18n(this.model, CONFIG_DESC.formatted(this.configButtons.id(), index[0]), checkboxForms.description());
+    private FlatCheckbox getFlatCheckbox(ConfigFormsProto checkboxForms, ConfigActionRoute route, boolean result,
+        int[] yOffset, int[] index) {
+        String titleStr = LanguageManager.getI18n(this.model, CONFIG_TITLE.formatted(this.configButtons.id(), index[0]),
+            checkboxForms.title());
+        String descStr = LanguageManager.getI18n(this.model, CONFIG_DESC.formatted(this.configButtons.id(), index[0]),
+            checkboxForms.description());
 
         Component title = Component.literal(titleStr);
         Tooltip description = Tooltip.create(Component.literal(descStr));
 
-        Float number = transformNumber(result);
-
         FlatCheckbox checkbox = new FlatCheckbox(this.x + 125, this.y + yOffset[0], title, data -> {
-            // 手动拼接 molang 字符串进行赋值操作
-            String value = data ? "1" : "0";
-            String molang = checkboxForms.readProgram().source() + "=" + value;
-            executeMolang(molang, null);
-            if (!CustomMolangParser.hasOnlyRoamingAssignment(molang) && NetworkHandler.isRemoteChannelPresent() && !ServerConfig.LOW_BANDWIDTH_USAGE.get()) {
-                // 同步到周围的玩家
-                ClientProtocolGateway.submitRouletteExpression(this.animatableEntity.getEntity(), molang);
+            try {
+                ClientProtocolGateway.submitConfigBoolean(animatableEntity, expressionGeneration, route, data);
+            } catch (RuntimeException exception) {
+                YesSteveModel.LOGGER.error(exception);
             }
         }) {
             // 给单选框加上背景
             @Override
             public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTicks) {
-                graphics.fill(this.getX(), this.getY(), this.getX() + this.getWidth(), this.getY() + getHeight(), 0xef_434242);
+                graphics.fill(this.getX(), this.getY(), this.getX() + this.getWidth(), this.getY() + getHeight(),
+                    0xef_434242);
                 super.renderWidget(graphics, mouseX, mouseY, partialTicks);
             }
         };
-        checkbox.setStateTriggered(number != null && number > 0);
+        checkbox.setStateTriggered(result);
         checkbox.setTooltip(description);
 
         return checkbox;
     }
 
-    @Nullable
-    static Float transformNumber(String result) {
-        if ("null".equals(result)) {
-            return 0f;
-        } else if (NumberUtils.isParsable(result)) {
-            float number = Float.parseFloat(result);
-            return Float.isFinite(number) ? number : null;
-        } else if (BooleanUtils.toBooleanObject(result) != null) {
-            return BooleanUtils.toBoolean(result) ? 1f : 0f;
-        }
-        return null;
-    }
-
-    static int radioIndex(String result, int labelCount) {
-        Float number = transformNumber(result);
-        if (number == null) {
-            return -1;
-        }
-        int selectedIndex = Math.round(number);
-        return 0 <= selectedIndex && selectedIndex < labelCount ? selectedIndex : -1;
-    }
-
-    private static void applyRadioSelection(List<FlatCheckbox> radioButtons, int selectedIndex) {
-        for (int i = 0; i < radioButtons.size(); i++) {
-            radioButtons.get(i).setStateTriggered(i == selectedIndex);
-        }
-    }
-
-    private static void updateCheckbox(FlatCheckbox checkbox, String result) {
-        Float number = transformNumber(result);
-        if (number != null) {
-            checkbox.setStateTriggered(number > 0);
-        }
-    }
-
-    private static void updateSlider(FlatSlider slider, String result) {
-        Float number = transformNumber(result);
-        if (number != null) {
-            slider.setDisplayedValue(number);
-        }
-    }
-
-    private void refreshConfigValues() {
-        if (minecraft.screen != this) {
+    @Override
+    public void tick() {
+        if (animatableEntity.getExpressionRuntime().generation() != expressionGeneration) {
+            onClose();
             return;
         }
-        var ownerBindings = this.configReadBindings;
-        for (var binding : ownerBindings) {
-            executeMolang(binding.expression(), result -> minecraft.execute(() -> {
-                if (minecraft.screen == this && this.configReadBindings == ownerBindings) {
-                    binding.applyResult().accept(result);
-                }
-            }));
-        }
+        configRefreshers.forEach(Runnable::run);
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         String patText = StringUtils.joinWith(" > ", CACHE.stream().map(Pair::getLeft).toArray());
-        graphics.drawCenteredString(font, Component.translatable("gui.yes_steve_model.roulette.path", patText), this.x + 195, this.y - 100, 0xFFFFFF);
+        graphics.drawCenteredString(font, Component.translatable("gui.yes_steve_model.roulette.path", patText),
+            this.x + 195, this.y - 100, 0xFFFFFF);
 
         this.drawRouletteBg(graphics.pose(), mouseX, mouseY);
         this.drawRouletteText(graphics);
@@ -521,18 +453,10 @@ public class AnimationRouletteScreen extends Screen {
         }
     }
 
-    private void executeMolang(String molang, @Nullable Consumer<String> resultConsumer) {
-        try {
-            IValue parsed = CustomMolangParser.parseSingleExpressionUnsafe(molang);
-            this.animatableEntity.executeMolangExp(parsed, true, false, resultConsumer);
-        } catch (ParseException exception) {
-            YesSteveModel.LOGGER.error(exception);
-        }
-    }
-
     private void drawPageText(GuiGraphics graphics) {
         graphics.fill(this.x + 157, this.y - 87, this.x + 238, this.y - 72, 0, 0xCF000000);
-        String pageText = String.format("%d/%d", current.getRight() + 1, (this.extraAnimations.size() - 1) / MAX_ROULETTE_COUNT + 1);
+        String pageText =
+            String.format("%d/%d", current.getRight() + 1, (this.extraAnimations.size() - 1) / MAX_ROULETTE_COUNT + 1);
         graphics.drawCenteredString(font, pageText, this.x + 197, this.y - 83, ChatFormatting.AQUA.getColor());
     }
 
@@ -645,22 +569,14 @@ public class AnimationRouletteScreen extends Screen {
     private void clickDefault(String selectKey) {
         LocalPlayer player = this.getMinecraft().player;
         if (NetworkHandler.isRemoteChannelPresent()) {
-            var peekLast = CACHE.peekLast();
-            String classifyId = "";
-            if (peekLast != null && StringUtils.isNotBlank(peekLast.getLeft())) {
-                classifyId = peekLast.getLeft();
-            }
-            Entity entity = animatableEntity.getEntity();
-            if (entity instanceof Player) {
-                ClientProtocolGateway.playSelfAnimation(selectKey);
-            } else {
-                ClientProtocolGateway.playMaidAnimation(entity.getId(), selectId, classifyId);
-            }
+            ClientProtocolGateway.playSelfAnimation(selectKey);
         } else if (player != null) {
-            player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> cap.playExtraAnimation(selectKey));
+            player.getCapability(PlayerAnimatableCapabilityProvider.CAP)
+                .ifPresent(cap -> cap.playExtraAnimation(selectKey));
         }
         if (player != null && ClientConfig.PRINT_ANIMATION_ROULETTE_MSG.get()) {
-            MutableComponent component = Component.translatable("message.yes_steve_model.model.animation_roulette.play", selectKey);
+            MutableComponent component =
+                Component.translatable("message.yes_steve_model.model.animation_roulette.play", selectKey);
             player.sendSystemMessage(component);
         }
         this.getMinecraft().setScreen(null);
@@ -678,7 +594,8 @@ public class AnimationRouletteScreen extends Screen {
         String key = selectKey.substring(SPEC_PREFIX.length());
         if (classifyMap.containsKey(key)) {
             CACHE.addLast(MutablePair.of(key, 0));
-            AnimationRouletteScreen screen = new AnimationRouletteScreen(this.buttonMap, this.classifyMap, this.model, this.animatableEntity);
+            AnimationRouletteScreen screen =
+                new AnimationRouletteScreen(this.buttonMap, this.classifyMap, this.model, this.animatableEntity);
             this.getMinecraft().setScreen(screen);
         }
     }
@@ -686,7 +603,8 @@ public class AnimationRouletteScreen extends Screen {
     private void clickReturn() {
         if (CACHE.size() > 1) {
             CACHE.removeLast();
-            AnimationRouletteScreen screen = new AnimationRouletteScreen(this.buttonMap, this.classifyMap, this.model, this.animatableEntity);
+            AnimationRouletteScreen screen =
+                new AnimationRouletteScreen(this.buttonMap, this.classifyMap, this.model, this.animatableEntity);
             this.getMinecraft().setScreen(screen);
         } else {
             this.getMinecraft().setScreen(null);
@@ -704,9 +622,6 @@ public class AnimationRouletteScreen extends Screen {
         return false;
     }
 
-    private record ConfigReadBinding(String expression, Consumer<String> applyResult) {
-    }
-
     private void drawRouletteText(GuiGraphics graphics) {
         float startDeg = Mth.PI / MAX_ROULETTE_COUNT;
         int remainSize = extraAnimations.size() - current.getRight() * MAX_ROULETTE_COUNT;
@@ -714,8 +629,8 @@ public class AnimationRouletteScreen extends Screen {
 
         for (int i = 0; i < Math.min(MAX_ROULETTE_COUNT, remainSize); i++) {
             int index = i + current.getRight() * 8;
-            int xPos = (int) (x + radius * Mth.cos(startDeg));
-            int yPos = (int) (y + radius * Mth.sin(startDeg) - font.lineHeight / 2f);
+            int xPos = (int)(x + radius * Mth.cos(startDeg));
+            int yPos = (int)(y + radius * Mth.sin(startDeg) - font.lineHeight / 2f);
             var animation = extraAnimations.get(index);
             String animationValue = animation.value_();
 
@@ -726,25 +641,27 @@ public class AnimationRouletteScreen extends Screen {
             if (hasConfig) {
                 String configValue = animationValue.substring(SPEC_PREFIX.length());
                 if (buttonMap.containsKey(configValue)) {
-                    ExtraAnimationButton button = buttonMap.get(configValue);
+                    ExtraAnimationButtonProto button = buttonMap.get(configValue);
                     animationValue = button.name();
 
                     int configR = 35;
-                    int configIconX = (int) (x + configR * Mth.cos(startDeg));
-                    int configIconY = (int) (y + configR * Mth.sin(startDeg) - font.lineHeight / 2f);
-                    graphics.drawCenteredString(font, Component.literal("⚙").withStyle(ChatFormatting.BOLD, ChatFormatting.GOLD), configIconX, configIconY, 0xFFFFFF);
+                    int configIconX = (int)(x + configR * Mth.cos(startDeg));
+                    int configIconY = (int)(y + configR * Mth.sin(startDeg) - font.lineHeight / 2f);
+                    graphics.drawCenteredString(font,
+                        Component.literal("⚙").withStyle(ChatFormatting.BOLD, ChatFormatting.GOLD), configIconX,
+                        configIconY, 0xFFFFFF);
                 }
             }
 
             // 绘制文本
             if (StringUtils.isNoneBlank(animationValue)) {
                 String key = LanguageManager.getI18n(this.model,
-                        "properties.extra_animation.%s".formatted(animation.key()), animationValue);
+                    "properties.extra_animation.%s".formatted(animation.key()), animationValue);
                 MutableComponent name = Component.literal(key);
                 this.drawAnimationName(graphics, name, xPos, yPos, isClassify);
             } else {
                 String key = LanguageManager.getI18n(this.model,
-                        "properties.extra_animation.%s".formatted(animation.key()), String.valueOf(index));
+                    "properties.extra_animation.%s".formatted(animation.key()), String.valueOf(index));
                 MutableComponent name = Component.literal(key);
                 graphics.drawCenteredString(font, name, xPos, yPos - 8, 0xF3EFE0);
             }
@@ -769,7 +686,8 @@ public class AnimationRouletteScreen extends Screen {
         graphics.drawCenteredString(font, keyText, xPos, yPos + 4, 0xF3EFE0);
     }
 
-    private void drawAnimationName(GuiGraphics graphics, MutableComponent name, int xPos, int yPos, boolean isClassify) {
+    private void drawAnimationName(GuiGraphics graphics, MutableComponent name, int xPos, int yPos,
+        boolean isClassify) {
         int maxLength = 50;
         int lineHeight = font.lineHeight;
 
@@ -805,7 +723,7 @@ public class AnimationRouletteScreen extends Screen {
         Matrix4f pMatrix = pPoseStack.last().pose();
 
         int count = 8;
-        float theta = (float) Mth.atan2(mouseY - y, mouseX - x);
+        float theta = (float)Mth.atan2(mouseY - y, mouseX - x);
         if (theta < 0) {
             theta = Mth.PI * 2 + theta;
         }
@@ -844,7 +762,8 @@ public class AnimationRouletteScreen extends Screen {
         RenderSystem.disableBlend();
     }
 
-    private boolean onDrawFan(float startDeg, float theta, float endDeg, float distance, boolean isSelected, boolean hasConfig, int i, BufferBuilder bufferbuilder, Matrix4f pMatrix) {
+    private boolean onDrawFan(float startDeg, float theta, float endDeg, float distance, boolean isSelected,
+        boolean hasConfig, int i, BufferBuilder bufferbuilder, Matrix4f pMatrix) {
         boolean hovered = startDeg < theta && theta < endDeg && 50 < distance && distance < 100;
         if (hovered) {
             isSelected = true;
@@ -864,14 +783,19 @@ public class AnimationRouletteScreen extends Screen {
         return isSelected;
     }
 
-    private void drawFan(BufferBuilder builder, Matrix4f matrix4f, float rIn, float rOut, float startDeg, float endDeg, int color) {
+    private void drawFan(BufferBuilder builder, Matrix4f matrix4f, float rIn, float rOut, float startDeg, float endDeg,
+        int color) {
         float alpha = (color >> 24 & 255) / 255.0F;
         float red = (color >> 16 & 255) / 255.0F;
         float green = (color >> 8 & 255) / 255.0F;
         float blue = (color & 255) / 255.0F;
-        builder.vertex(matrix4f, x + rOut * Mth.cos(startDeg), y + rOut * Mth.sin(startDeg), 0).color(red, green, blue, alpha).endVertex();
-        builder.vertex(matrix4f, x + rIn * Mth.cos(startDeg), y + rIn * Mth.sin(startDeg), 0).color(red, green, blue, alpha).endVertex();
-        builder.vertex(matrix4f, x + rIn * Mth.cos(endDeg), y + rIn * Mth.sin(endDeg), 0).color(red, green, blue, alpha).endVertex();
-        builder.vertex(matrix4f, x + rOut * Mth.cos(endDeg), y + rOut * Mth.sin(endDeg), 0).color(red, green, blue, alpha).endVertex();
+        builder.vertex(matrix4f, x + rOut * Mth.cos(startDeg), y + rOut * Mth.sin(startDeg), 0)
+            .color(red, green, blue, alpha).endVertex();
+        builder.vertex(matrix4f, x + rIn * Mth.cos(startDeg), y + rIn * Mth.sin(startDeg), 0)
+            .color(red, green, blue, alpha).endVertex();
+        builder.vertex(matrix4f, x + rIn * Mth.cos(endDeg), y + rIn * Mth.sin(endDeg), 0).color(red, green, blue, alpha)
+            .endVertex();
+        builder.vertex(matrix4f, x + rOut * Mth.cos(endDeg), y + rOut * Mth.sin(endDeg), 0)
+            .color(red, green, blue, alpha).endVertex();
     }
 }

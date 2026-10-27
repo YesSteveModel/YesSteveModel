@@ -9,7 +9,8 @@ import tschipp.carryon.common.carry.CarryOnDataManager;
 public class CarryOnInnerCompat {
     static boolean isCarryOnPrincess(LivingEntity entity) {
         Entity vehicle = entity.getVehicle();
-        return vehicle instanceof Player playerVehicle && getCarryOnType(playerVehicle) == CarryOnInnerCompat.Type.PLAYER;
+        return vehicle instanceof Player playerVehicle
+            && getCarryOnType(playerVehicle) == CarryOnInnerCompat.Type.PLAYER;
     }
 
     static CarryOnInnerCompat.Type getCarryOnType(Player player) {

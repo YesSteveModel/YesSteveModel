@@ -7,7 +7,8 @@
   - 按需验证表示: [DD.catalog-before-model-body](model-distribution.md#ddcatalog-before-model-body)
 - Landing:
   - [standard](../../standards/model-schema/manifest-and-identity.md#exact-tuple-与-representation-激活)
-  - [architecture](../../architecture/model-management/catalog-and-sources.md#身份与-representation-对象)
+  - [implementation](../../architecture/model-management/overview.md#实现与验证入口)
+  - [design](../../architecture/model-management/overview.md#身份与来源)
 
 ## DD.model-and-representation-identities
 
@@ -24,4 +25,4 @@
 
 ### BC.verified-local-representation-may-substitute
 
-- Claim: 完整验证且 ModelId 相同的本地模型可以满足同源需求，无需与远端容器字节相同；本地内容与远端要求的真实身份不能互相冒充。
+- Claim: 完整验证且 ModelId 相同的本地模型可以满足同源需求，无需与远端容器字节相同；本地内容与远端要求的真实身份不能互相冒充。本地替代保留实际来源及派生产物归属；服务端发布的位置、身份与权限保持独立。

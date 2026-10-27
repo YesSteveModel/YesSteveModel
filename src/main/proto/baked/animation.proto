@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package ysm.baked.asset;
+
+import "asset/model/data/animation.proto";
+
+message BakedAnimation {
+  string name = 1;
+  float length = 2;
+  optional mixel.asset.model.data.LoopType loop = 3;
+  optional BakedExpressionValue blend_weight = 4;
+  repeated BakedBoneAnimation bone_animations = 5;
+  repeated BakedInstructionKeyFrame instruction_keyframes = 6;
+  repeated mixel.asset.model.data.EventKeyFrame sound_keyframes = 7;
+}
+
+message BakedExpressionValue {
+  oneof value {
+    float num = 1;
+    uint32 program_id = 2;
+  }
+}
+
+message BakedBoneKeyFrame {
+  float start_tick = 1;
+  mixel.asset.model.data.EasingType easing_type = 2;
+  repeated BakedExpressionValue pre = 3;
+  repeated BakedExpressionValue post = 4;
+}
+
+message BakedBoneAnimation {
+  string bone_name = 1;
+  repeated BakedBoneKeyFrame rotation = 2;
+  repeated BakedBoneKeyFrame position = 3;
+  repeated BakedBoneKeyFrame scale = 4;
+}
+
+message BakedInstructionKeyFrame {
+  uint32 program_id = 1;
+  float start_tick = 2;
+}

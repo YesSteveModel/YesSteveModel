@@ -6,7 +6,6 @@ import com.elfmcys.ysm.client.entity.IPreviewEntity;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.builder.LoopType;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
 import com.elfmcys.ysm.util.EquipmentUtil;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -23,7 +22,7 @@ public class FPArmArmorPredicate implements IAnimationPredicate<CustomFirstPerso
     }
 
     @Override
-    public PlayState test(AnimationEvent<CustomFirstPersonArmEntity> event, ExpressionEvaluator<?> evaluator) {
+    public PlayState test(AnimationEvent<CustomFirstPersonArmEntity> event) {
         LocalPlayer localPlayer = event.getAnimatableEntity().getEntity();
         if (localPlayer == null || event.getAnimatableEntity() instanceof IPreviewEntity) {
             return PlayState.STOP;

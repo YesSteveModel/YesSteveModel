@@ -21,7 +21,8 @@ public class PingCommand {
 
     private static int ping(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         var player = ctx.getSource().getPlayerOrException();
-        player.sendSystemMessage(Component.translatable("message.yes_steve_model.client.ping_result", ModList.get().getModFileById(YesSteveModel.MOD_ID).versionString()));
+        player.sendSystemMessage(Component.translatable("message.yes_steve_model.client.ping_result",
+            ModList.get().getModFileById(YesSteveModel.MOD_ID).versionString()));
         SessionProtocolHandler.sendServerHello(player);
         return Command.SINGLE_SUCCESS;
     }

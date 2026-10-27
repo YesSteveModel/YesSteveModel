@@ -1,0 +1,418 @@
+def declarationProcessorJar = tasks.named('declarationProcessorJar', Jar)
+
+def expressionRuntimeReport = layout.buildDirectory.file(
+        'verification/expression-runtime/dependencies.sha256')
+
+tasks.register('writeExpressionRuntimeDependencyHashes') {
+    group = 'verification'
+    description = 'Records bundled expression dependencies and content hashes.'
+    inputs.files(configurations.ysmImplementation)
+            .withPropertyName('expressionRuntimeClasspath')
+            .withNormalizer(ClasspathNormalizer)
+    outputs.file(expressionRuntimeReport)
+    doLast {
+        def digestFile = { File file ->
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            file.withInputStream { input ->
+                byte[] buffer = new byte[8192]
+                for (int count; (count = input.read(buffer)) != -1;) {
+                    digest.update(buffer, 0, count)
+                }
+            }
+            java.util.HexFormat.of().formatHex(digest.digest())
+        }
+        def receipts = []
+        def coordinates = configurations.ysmImplementation.resolvedConfiguration.resolvedArtifacts
+                .collectEntries { artifact -> [(artifact.file): artifact.moduleVersion.id.toString()] }
+        ysmBundledExpressionLibraries.each { coordinate, library -> coordinates[library] = coordinate }
+        def lines = configurations.ysmImplementation.files
+                .collect { library ->
+                    def coordinate = coordinates[library] ?: "file:${library.name}"
+                    if(coordinate.startsWith('dev.semaweave:')) {
+                        def receipt=new Properties()
+                        new java.util.jar.JarFile(library).withCloseable { jar ->
+                            def entry=jar.getJarEntry('META-INF/semaweave/build-receipt.properties')
+                            if(entry==null)throw new GradleException("Missing Semaweave source receipt: ${library}")
+                            jar.getInputStream(entry).withCloseable { receipt.load(it) }
+                        }
+                        if(!(receipt['source-revision']==~ /[0-9a-f]{40}/)
+                                ||!(receipt['source-tree-sha256']==~ /[0-9a-f]{64}/)
+                                ||!(receipt['source-dirty'] in ['true','false']))
+                            throw new GradleException("Invalid Semaweave source receipt: ${library}")
+                        receipts.add(receipt)
+                    }
+                    "${coordinate}\t${library.name}\t${digestFile(library)}"
+                }
+                .sort()
+        def output = expressionRuntimeReport.get().asFile
+        output.parentFile.mkdirs()
+        if(receipts.size()!=2||receipts[0]!=receipts[1])
+            throw new GradleException('Engine/backend source receipts do not identify one build input')
+        output.setText(([
+                "semaweave-revision\t${receipts[0]['source-revision']}",
+                "semaweave-source-dirty\t${receipts[0]['source-dirty']}",
+                "semaweave-source-tree-sha256\t${receipts[0]['source-tree-sha256']}"
+        ] + lines).join('\n') + '\n', 'UTF-8')
+    }
+}
+
+def packagedExpressionProviderClasses = layout.buildDirectory.dir(
+        'packaged-expression-smoke/provider-classes')
+def packagedExpressionSmokeClasses = layout.buildDirectory.dir(
+        'packaged-expression-smoke/classes')
+
+def packagedGameStubs = layout.buildDirectory.dir('packaged-expression-smoke/game-stubs')
+def packagedHostAsm = configurations.compileClasspath.filter {
+    it.name.startsWith('asm-')
+}
+def packagedHostLibraries = configurations.compileClasspath.filter {
+    it.name.startsWith('gson-') || it.name.startsWith('maven-artifact-')
+            || it.name.startsWith('log4j-api-') || it.name.startsWith('commons-lang3-')
+            || it.name.startsWith('fastutil-')
+} + packagedHostAsm
+
+def packagedMixinSmokeClasses = layout.buildDirectory.dir('packaged-mixin-smoke/classes')
+tasks.register('compilePackagedMixinPluginAbi', JavaCompile) {
+    source = fileTree('src/verification/mixin/java') { include '**/*.java' }
+    classpath = files()
+    destinationDirectory = packagedMixinSmokeClasses
+    options.compilerArgs += ['-proc:none']
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('verifyPackagedMixinPluginAbi', JavaExec) {
+    group = 'verification'
+    description = 'Checks packaged Mixin plugin callbacks against the Forge-provided interface and ASM.'
+    dependsOn tasks.named('shadowJar'), tasks.named('compilePackagedMixinPluginAbi')
+    classpath = files(packagedMixinSmokeClasses, packagedHostAsm,
+            configurations.compileClasspath.filter { it.name.startsWith('mixin-') },
+            tasks.named('shadowJar').flatMap { it.archiveFile })
+    mainClass = 'com.elfmcys.ysm.verification.PackagedMixinPluginAbiSmoke'
+}
+tasks.register('compilePackagedGameStubs', JavaCompile) {
+    source = fileTree('src/verification/molang/packagedExpressionSmoke/java') {
+        include 'net/**/*.java', 'com/elfmcys/ysm/YesSteveModel.java',
+                'com/elfmcys/ysm/client/entity/AnimatableEntity.java'
+    }
+    classpath = files(packagedHostLibraries)
+    destinationDirectory = packagedGameStubs
+    options.compilerArgs += ['-proc:none']
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('compilePackagedExpressionProvider', JavaCompile) {
+    dependsOn tasks.named('shadowJar'), tasks.named('compilePackagedGameStubs')
+    source = fileTree('src/verification/molang/packagedExpressionProvider/java') { include '**/*.java' }
+    classpath = files(packagedGameStubs, tasks.named('shadowJar').flatMap { it.archiveFile },
+            packagedHostLibraries)
+    options.annotationProcessorPath = files(tasks.named('shadowJar').flatMap { it.archiveFile })
+    destinationDirectory = packagedExpressionProviderClasses
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+
+def packagedExpressionProviderJar = tasks.register('packagePackagedExpressionProvider', Jar) {
+    dependsOn tasks.named('compilePackagedExpressionProvider')
+    archiveClassifier = 'packaged-expression-provider-smoke'
+    from packagedExpressionProviderClasses
+}
+
+tasks.register('compilePackagedExpressionSmoke', JavaCompile) {
+    dependsOn packagedExpressionProviderJar
+    source = fileTree('src/verification/molang/packagedExpressionSmoke/java') { include 'com/elfmcys/ysm/verification/**/*.java' }
+    classpath = files(packagedGameStubs, tasks.named('shadowJar').flatMap { it.archiveFile },
+            packagedExpressionProviderJar.flatMap { it.archiveFile }, packagedHostLibraries)
+    options.compilerArgs += ['-proc:none']
+    destinationDirectory = packagedExpressionSmokeClasses
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('runPackagedExpressionSmoke', JavaExec) {
+    group = 'verification'
+    description = 'Compiles, verifies, loads and executes through the relocated packaged runtime.'
+    dependsOn tasks.named('compilePackagedExpressionSmoke')
+    classpath = files(packagedExpressionSmokeClasses, packagedGameStubs, packagedHostLibraries,
+            packagedExpressionProviderJar.flatMap { it.archiveFile },
+            tasks.named('shadowJar').flatMap { it.archiveFile })
+    mainClass = 'com.elfmcys.ysm.verification.PackagedExpressionRuntimeSmoke'
+}
+
+def expressionArtifactWarmFixture = layout.buildDirectory.dir(
+        'verification/expression-artifact-warm')
+
+def optionalDependencyJars = [:]
+['a', 'b', 'broken-b'].each { dependency ->
+    def suffix = dependency.replace('-', '_')
+    def classes = layout.buildDirectory.dir("packaged-expression-matrix/${dependency}-classes")
+    def compile = tasks.register("compileExpressionDependency_${suffix}", JavaCompile) {
+        dependsOn tasks.named('compilePackagedGameStubs')
+        source = fileTree("src/verification/molang/packagedExpressionDependencies/${dependency}") { include '**/*.java' }
+        classpath = files(packagedGameStubs)
+        destinationDirectory = classes
+        options.compilerArgs += ['-proc:none']
+        options.release = 17
+    }
+    optionalDependencyJars[dependency] = tasks.register("packageExpressionDependency_${suffix}", Jar) {
+        dependsOn compile
+        archiveClassifier = "expression-dependency-${dependency}"
+        from classes
+    }
+}
+def optionalProviderClasses = layout.buildDirectory.dir('packaged-expression-matrix/provider-classes')
+def compileOptionalProvider = tasks.register('compilePackagedOptionalProvider', JavaCompile) {
+    dependsOn tasks.named('shadowJar'), optionalDependencyJars.values()
+    source = fileTree('src/verification/molang/packagedOptionalProvider/java') { include '**/*.java' }
+    classpath = files(packagedGameStubs, tasks.named('shadowJar').flatMap { it.archiveFile },
+            optionalDependencyJars['a'].flatMap { it.archiveFile },
+            optionalDependencyJars['b'].flatMap { it.archiveFile }, packagedHostLibraries)
+    options.annotationProcessorPath = files(tasks.named('shadowJar').flatMap { it.archiveFile })
+    destinationDirectory = optionalProviderClasses
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+def optionalProviderJar = tasks.register('packagePackagedOptionalProvider', Jar) {
+    dependsOn compileOptionalProvider
+    archiveClassifier = 'packaged-optional-provider'
+    from optionalProviderClasses
+}
+def brokenOptionalProviderJar = tasks.register('packageBrokenPackagedOptionalProvider', Jar) {
+    dependsOn compileOptionalProvider
+    archiveClassifier = 'packaged-optional-provider-broken-binding'
+    from(optionalProviderClasses) { exclude 'independent/CombinedMolangBindings.class' }
+}
+tasks.register('verifyPackagedDeclarationMatrix', JavaExec) {
+    group = 'verification'
+    description = 'Runs isolated JVM admission, missing JAR, precheck and cold/warm publication oracles.'
+    dependsOn tasks.named('compilePackagedExpressionSmoke'), optionalProviderJar, brokenOptionalProviderJar
+    classpath = files(packagedExpressionSmokeClasses, packagedGameStubs, packagedHostLibraries,
+            tasks.named('shadowJar').flatMap { it.archiveFile })
+    mainClass = 'com.elfmcys.ysm.verification.PackagedDeclarationMatrix'
+    doFirst {
+        args layout.buildDirectory.dir('verification/declaration-matrix').get().asFile.absolutePath,
+                optionalProviderJar.get().archiveFile.get().asFile.absolutePath,
+                optionalDependencyJars['a'].get().archiveFile.get().asFile.absolutePath,
+                optionalDependencyJars['b'].get().archiveFile.get().asFile.absolutePath,
+                optionalDependencyJars['broken-b'].get().archiveFile.get().asFile.absolutePath,
+                brokenOptionalProviderJar.get().archiveFile.get().asFile.absolutePath
+    }
+}
+
+tasks.register('runExpressionArtifactColdFixture', JavaExec) {
+    group = 'verification'
+    description = 'Cold-compiles and persists the complete expression target fixture.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.expression.aot.ExpressionArtifactWarmProcessFixture'
+    doFirst {
+        delete expressionArtifactWarmFixture
+        args expressionArtifactWarmFixture.get().asFile.absolutePath, 'COLD'
+    }
+}
+
+tasks.register('runExpressionArtifactWarmFixture', JavaExec) {
+    group = 'verification'
+    description = 'Loads and executes the complete expression target in a second JVM.'
+    dependsOn tasks.named('runExpressionArtifactColdFixture')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.expression.aot.ExpressionArtifactWarmProcessFixture'
+    doFirst {
+        args expressionArtifactWarmFixture.get().asFile.absolutePath, 'DISK'
+    }
+}
+
+tasks.register('verifyExpressionArtifactWarmLoad') {
+    group = 'verification'
+    description = 'Verifies cold persistence and complete-target warm loading across JVMs.'
+    dependsOn tasks.named('runExpressionArtifactWarmFixture')
+}
+
+tasks.withType(JavaExec).matching { it.name in [
+        'runExpressionArtifactColdFixture', 'runExpressionArtifactWarmFixture',
+        'runWeddingControllerColdFixture', 'verifyWeddingControllerWarmLoad'
+] }.configureEach {
+    inputs.file(ysmNativeLibraryFile).withPropertyName('ysmNativeLibrary')
+            .withPathSensitivity(PathSensitivity.NONE)
+    doFirst { environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get() }
+}
+
+def weddingControllerFixture = layout.buildDirectory.dir('verification/wedding-controller')
+tasks.register('runWeddingControllerColdFixture', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.expression.aot.ExpressionArtifactPipelineTest'
+    doFirst {
+        delete weddingControllerFixture
+        args weddingControllerFixture.get().asFile.absolutePath, 'COLD'
+    }
+}
+tasks.register('verifyWeddingControllerWarmLoad', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('runWeddingControllerColdFixture')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.expression.aot.ExpressionArtifactPipelineTest'
+    doFirst { args weddingControllerFixture.get().asFile.absolutePath, 'DISK' }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyExpressionArtifactWarmLoad')
+}
+
+tasks.register('verifyExpressionRuntimeBundle') {
+    group = 'verification'
+    description = 'Checks packaged metadata, relocation, services, expression execution and Mixin callbacks.'
+    dependsOn tasks.named('shadowJar')
+    dependsOn tasks.named('writeExpressionRuntimeDependencyHashes')
+    dependsOn tasks.named('runPackagedExpressionSmoke')
+    dependsOn tasks.named('verifyPackagedMixinPluginAbi')
+    doLast {
+        def providerArchive = packagedExpressionProviderJar.get().archiveFile.get().asFile
+        def providerZip = new java.util.zip.ZipFile(providerArchive)
+        try {
+            def providerEntries = providerZip.entries().findAll { !it.directory }
+                    .collect { it.name }.sort()
+            if (!providerEntries.contains(
+                    'independent/PackagedMolangProviderMolangBindings.class')) {
+                throw new GradleException(
+                        "Packaged provider is missing generated Molang bindings: ${providerEntries}")
+            }
+            for (def entry : providerEntries) {
+                if (!entry.endsWith('.class')) continue
+                def pool = providerZip.getInputStream(providerZip.getEntry(entry)).bytes
+                if (new String(pool, java.nio.charset.StandardCharsets.ISO_8859_1)
+                        .contains('semaweave')) {
+                    throw new GradleException(
+                            "Independent provider leaked an engine reference: ${entry}")
+                }
+            }
+        } finally {
+            providerZip.close()
+        }
+        def archive = tasks.named('shadowJar').get().archiveFile.get().asFile
+        def zip = new java.util.zip.ZipFile(archive)
+        try {
+            def counts = [:].withDefault { 0 }
+            zip.entries().each { entry -> counts[entry.name]++ }
+            def duplicates = counts.findAll { name, count -> count > 1 }.keySet().sort()
+            if (!duplicates.isEmpty()) {
+                throw new GradleException("Duplicate packaged entries: ${duplicates.take(20)}")
+            }
+            def names = counts.keySet()
+            def manifest = zip.getInputStream(zip.getEntry('META-INF/MANIFEST.MF')).withCloseable {
+                new java.util.jar.Manifest(it)
+            }
+            def multiRelease = 'true'.equalsIgnoreCase(
+                    manifest.mainAttributes.getValue('Multi-Release'))
+            def versionedEntries = names.findAll {
+                it.startsWith('META-INF/versions/') && !it.endsWith('/')
+            }
+            if (multiRelease != !versionedEntries.isEmpty()) {
+                throw new GradleException(
+                        "Packaged Multi-Release metadata does not match versioned entries: " +
+                                "Multi-Release=${multiRelease}, entries=${versionedEntries.take(20)}")
+            }
+            def required = [
+                    'com/elfmcys/ysm/api/internal/processor/UnifiedDeclarationProcessor.class',
+                    'com/elfmcys/ysm/api/molang/DeclarationSchema.class',
+                    'com/elfmcys/ysm/api/molang/MolangContextView.class',
+                    'com/elfmcys/ysm/api/molang/MolangActionView.class',
+                    'com/elfmcys/ysm/api/annotation/MolangFunction.class',
+                    'com/elfmcys/ysm/api/annotation/YsmExtension.class',
+                    'com/elfmcys/ysm/api/annotation/YsmEventHandler.class',
+                    'com/elfmcys/ysm/api/annotation/YsmEntityComponent.class',
+                    'com/elfmcys/ysm/internal/expression/semaweave/compilation/DefaultExpressionAotCompiler.class',
+                    'com/elfmcys/ysm/internal/expression/semaweave/backend/janino/JaninoJavaCompilerBackend.class',
+                    'com/elfmcys/ysm/internal/expression/janino/Compiler.class',
+                    'com/elfmcys/ysm/internal/expression/commonscompiler/CompileException.class',
+                    'com/elfmcys/ysm/api/internal/processor/asm/ClassReader.class',
+                    'com/elfmcys/ysm/api/internal/processor/asm/tree/ClassNode.class'
+            ]
+            def missing = required.findAll { !names.contains(it) }
+            if (!missing.isEmpty()) {
+                throw new GradleException("Missing packaged runtime classes: ${missing}")
+            }
+            def forbidden = [
+                    'dev/semaweave/', 'org/codehaus/janino/',
+                    'org/codehaus/commons/compiler/', 'com/palantir/javapoet/',
+                    'com/elfmcys/ysm/internal/expression/javapoet/',
+                    'org/objectweb/asm/', 'com/elfmcys/ysm/internal/expression/asm/'
+            ]
+            def leaked = names.findAll { name -> forbidden.any { name.startsWith(it) } }.sort()
+            if (!leaked.isEmpty()) {
+                throw new GradleException("Unexpected expression runtime classes: ${leaked.take(20)}")
+            }
+            def legacyRuntime = [
+                    'com/elfmcys/ysm/api/molang/MolangInvocationContext.class',
+                    'com/elfmcys/ysm/api/molang/MolangContextLinkage.class',
+                    'com/elfmcys/ysm/api/annotation/MolangVariable.class',
+                    'com/elfmcys/ysm/api/annotation/YsmMolangExtension.class',
+                    'com/elfmcys/ysm/expression/host/builtin/BuiltinVariable.class',
+                    'com/elfmcys/ysm/api/internal/processor/MolangDeclarationProcessor',
+                    'com/elfmcys/ysm/api/molang/MolangContext.class',
+                    'com/elfmcys/ysm/api/molang/MolangDeclaration.class',
+                    'com/elfmcys/ysm/api/molang/YsmInvocationContext.class',
+                    'com/elfmcys/ysm/api/annotation/YsmMolangFunction.class',
+                    'com/elfmcys/ysm/api/annotation/YsmMolangVariable.class',
+                    'com/elfmcys/ysm/api/internal/processor/YsmExtensionProcessor.class',
+                    'com/elfmcys/ysm/expression/host/Ysm',
+                    'com/elfmcys/ysm/expression/host/builtin/Ysm',
+                    'com/elfmcys/ysm/molang/',
+                    'com/elfmcys/ysm/geckolib3/core/molang/',
+                    'com/elfmcys/ysm/client/animation/molang/',
+                    'com/elfmcys/ysm/expression/aot/BoundProgramValue.class',
+                    'com/elfmcys/ysm/geckolib3/util/MolangUtils.class',
+                    'com/elfmcys/ysm/geckolib3/util/json/JsonAnimationUtils.class',
+                    'com/elfmcys/ysm/geckolib3/util/json/JsonKeyFrameUtils.class',
+                    'com/elfmcys/ysm/client/compat/backpack/sophisticated/SophisticatedCtrlBinding.class',
+                    'com/elfmcys/ysm/client/compat/carryon/CarryOnCtrlBinding.class',
+                    'com/elfmcys/ysm/client/compat/parcool/ParCoolCtrlBinding.class',
+                    'com/elfmcys/ysm/client/compat/slashblade/SlashBladeBinding.class',
+                    'com/elfmcys/ysm/client/compat/swem/SwemCtrlBinding.class',
+                    'com/elfmcys/ysm/client/compat/tacz/TacCtrlBinding.class'
+            ]
+            def legacyEntries = names.findAll { name ->
+                legacyRuntime.any { legacy -> name.startsWith(legacy) }
+            }.sort()
+            if (!legacyEntries.isEmpty()) {
+                throw new GradleException("Legacy expression runtime entries: ${legacyEntries.take(20)}")
+            }
+            def processors = zip.getInputStream(zip.getEntry(
+                    'META-INF/services/javax.annotation.processing.Processor')).withCloseable {
+                it.getText('UTF-8').readLines().findAll { !it.isBlank() }.toSet()
+            }
+            if (processors != [
+                    'com.elfmcys.ysm.api.internal.processor.UnifiedDeclarationProcessor',
+                    'com.elfmcys.ysm.api.internal.processor.ExtensionCompatibilityProcessor'].toSet()) {
+                throw new GradleException("Unexpected published processors: ${processors}")
+            }
+            new java.util.zip.ZipFile(declarationProcessorJar.get().archiveFile.get().asFile).withCloseable { bootstrap ->
+                bootstrap.entries().each { entry ->
+                    if (!entry.directory && entry.name.endsWith('.class')) {
+                        def published = zip.getEntry(entry.name)
+                        if (published == null || !Arrays.equals(
+                                bootstrap.getInputStream(entry).withCloseable { it.readAllBytes() },
+                                zip.getInputStream(published).withCloseable { it.readAllBytes() })) {
+                            throw new GradleException("Published declaration core differs from bootstrap: ${entry.name}")
+                        }
+                    }
+                }
+            }
+            zip.entries().each { entry ->
+                if (!entry.directory && entry.name.startsWith('META-INF/services/')) {
+                    def text = zip.getInputStream(entry).getText('UTF-8')
+                    if (forbidden.any { prefix -> text.contains(prefix.replace('/', '.')) }) {
+                        throw new GradleException("Unrelocated service descriptor: ${entry.name}")
+                    }
+                    if (legacyRuntime.any { legacy -> text.contains(legacy.replace('/', '.')) }) {
+                        throw new GradleException("Legacy expression runtime service descriptor: ${entry.name}")
+                    }
+                }
+            }
+        } finally {
+            zip.close()
+        }
+    }
+}

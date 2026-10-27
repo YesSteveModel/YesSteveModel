@@ -8,7 +8,6 @@ import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
-
 @Mod.EventBusSubscriber(value = Dist.CLIENT)
 public class ClientLoggedEvent {
     private static Connection loggedIn;
@@ -35,6 +34,7 @@ public class ClientLoggedEvent {
             return;
         }
         loggedIn = null;
+        RegisterEntityRenderersEvent.releaseFirstPersonArm();
         if (YesSteveModel.isAvailable()) {
             ClientSessionRuntime.disconnect(connection);
         }

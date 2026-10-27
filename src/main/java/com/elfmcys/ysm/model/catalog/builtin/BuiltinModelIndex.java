@@ -5,9 +5,9 @@ import com.elfmcys.ysm.model.catalog.content.DefaultAnimationKey;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.storage.ModelHashing;
-import com.elfmcys.ysm.proto.mixel.asset.model.data.Animation;
-import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationFile;
-import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTarget;
+import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationProto;
+import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationFileProto;
+import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetProto;
 import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -35,11 +35,11 @@ import java.util.regex.Pattern;
 public final class BuiltinModelIndex implements DefaultAnimationFilter {
     public static final int FORMAT_VERSION = 1;
     private static final Pattern HASH_PATTERN = Pattern.compile("[0-9a-f]{64}");
-    private static final Set<String> ROOT_FIELDS = Set.of(
-            "formatVersion", "models", "defaultAnimations", "dedupProfileHash");
+    private static final Set<String> ROOT_FIELDS =
+        Set.of("formatVersion", "models", "defaultAnimations", "dedupProfileHash");
     private static final Set<String> MODEL_FIELDS = Set.of("path", "modelHash");
-    private static final Set<String> ANIMATION_FIELDS = Set.of(
-            "domain", "name", "currentPayloadHash", "acceptedPayloadHashes");
+    private static final Set<String> ANIMATION_FIELDS =
+        Set.of("domain", "name", "currentPayloadHash", "acceptedPayloadHashes");
     private static final Set<String> HISTORY_ROOT_FIELDS = Set.of("animations");
     private static final Set<String> HISTORY_FIELDS = Set.of("domain", "name", "payloadHashes");
 
@@ -48,8 +48,7 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
     private final Hash256 dedupProfileHash;
 
     private BuiltinModelIndex(Map<ModelPath, Hash256> models,
-                              Map<DefaultAnimationKey, DefaultAnimationEntry> defaultAnimations,
-                              Hash256 dedupProfileHash) {
+        Map<DefaultAnimationKey, DefaultAnimationEntry> defaultAnimations, Hash256 dedupProfileHash) {
         this.models = Map.copyOf(models);
         this.defaultAnimations = Map.copyOf(defaultAnimations);
         this.dedupProfileHash = dedupProfileHash;
@@ -59,10 +58,9 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         return of(models, Map.of(), Map.of());
     }
 
-    public static BuiltinModelIndex of(
-            Map<ModelPath, Hash256> models,
-            Map<DefaultAnimationKey, Hash256> currentAnimations,
-            Map<DefaultAnimationKey, Set<Hash256>> historicalAnimations) throws IOException {
+    public static BuiltinModelIndex of(Map<ModelPath, Hash256> models,
+        Map<DefaultAnimationKey, Hash256> currentAnimations,
+        Map<DefaultAnimationKey, Set<Hash256>> historicalAnimations) throws IOException {
         var sorted = new LinkedHashMap<ModelPath, Hash256>();
         var hashes = new HashSet<Hash256>();
         for (var entry : models.entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
@@ -74,20 +72,18 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
             }
         }
         requireDefault(sorted.keySet());
-        var unknownHistory = historicalAnimations.keySet().stream()
-                .filter(key -> !currentAnimations.containsKey(key)).sorted().toList();
+        var unknownHistory =
+            historicalAnimations.keySet().stream().filter(key -> !currentAnimations.containsKey(key)).sorted().toList();
         if (!unknownHistory.isEmpty()) {
-            throw new IOException("Historical animation entries have no current animation: "
-                    + unknownHistory);
+            throw new IOException("Historical animation entries have no current animation: " + unknownHistory);
         }
         var animations = new LinkedHashMap<DefaultAnimationKey, DefaultAnimationEntry>();
-        for (var entry : currentAnimations.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey()).toList()) {
+        for (var entry : currentAnimations.entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
             var accepted = new HashSet<Hash256>();
             accepted.add(entry.getValue());
             accepted.addAll(historicalAnimations.getOrDefault(entry.getKey(), Set.of()));
-            animations.put(entry.getKey(), new DefaultAnimationEntry(
-                    entry.getKey(), entry.getValue(), accepted.stream().sorted().toList()));
+            animations.put(entry.getKey(),
+                new DefaultAnimationEntry(entry.getKey(), entry.getValue(), accepted.stream().sorted().toList()));
         }
         return new BuiltinModelIndex(sorted, animations, profileHash(animations.values()));
     }
@@ -171,8 +167,8 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         var profileHash = parseHash(rawProfileHash, "dedup profile");
         var actualProfileHash = profileHash(animations.values());
         if (!profileHash.equals(actualProfileHash)) {
-            throw new IOException("Builtin animation dedup profile hash mismatch: expected="
-                    + profileHash + ", actual=" + actualProfileHash);
+            throw new IOException("Builtin animation dedup profile hash mismatch: expected=" + profileHash + ", actual="
+                + actualProfileHash);
         }
         return new BuiltinModelIndex(models, animations, profileHash);
     }
@@ -233,8 +229,7 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
     }
 
     public List<DefaultAnimationEntry> animationEntries() {
-        return defaultAnimations.values().stream()
-                .sorted((left, right) -> left.key().compareTo(right.key())).toList();
+        return defaultAnimations.values().stream().sorted((left, right) -> left.key().compareTo(right.key())).toList();
     }
 
     public boolean accepts(DefaultAnimationKey key, Hash256 payloadHash) {
@@ -248,16 +243,13 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
     }
 
     @Override
-    public AnimationFile apply(
-            RenderTargetKind kind,
-            Collection<String> matches,
-            String animationSet,
-            AnimationFile source) throws IOException {
+    public AnimationFileProto apply(RenderTargetKind kind, Collection<String> matches, String animationSet,
+        AnimationFileProto source) throws IOException {
         if (source.animations().isEmpty()) {
             return source;
         }
         var domain = DefaultAnimationKey.domain(kind, matches, animationSet);
-        var result = AnimationFile.newBuilder();
+        var result = AnimationFileProto.newBuilder();
         for (var animation : source.animations()) {
             var key = new DefaultAnimationKey(domain, animation.name());
             var hash = BuiltinModelMaterializer.payloadHash(animation);
@@ -268,15 +260,12 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         return result.build();
     }
 
-    public void requireCurrent(RenderTarget target,
-                               String animationSet,
-                               Animation animation) throws IOException {
-        var key = new DefaultAnimationKey(
-                DefaultAnimationKey.domain(target, animationSet), animation.name());
+    public void requireCurrent(RenderTargetProto target, String animationSet, AnimationProto animation)
+        throws IOException {
+        var key = new DefaultAnimationKey(DefaultAnimationKey.domain(target, animationSet), animation.name());
         var hash = BuiltinModelMaterializer.payloadHash(animation);
         if (!isCurrent(key, hash)) {
-            throw new IOException("Builtin default animation hash mismatch: " + key
-                    + " payloadHash=" + hash);
+            throw new IOException("Builtin default animation hash mismatch: " + key + " payloadHash=" + hash);
         }
     }
 
@@ -285,8 +274,8 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         var missing = models.keySet().stream().filter(path -> !actual.contains(path)).sorted().toList();
         var unexpected = actual.stream().filter(path -> !models.containsKey(path)).sorted().toList();
         if (!missing.isEmpty() || !unexpected.isEmpty()) {
-            throw new IOException("Builtin model index coverage mismatch: missing=" + missing
-                    + ", unexpected=" + unexpected);
+            throw new IOException(
+                "Builtin model index coverage mismatch: missing=" + missing + ", unexpected=" + unexpected);
         }
     }
 
@@ -296,17 +285,14 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         }
     }
 
-    private static void requireExactFields(JsonObject object, Set<String> expected, String context)
-            throws IOException {
+    private static void requireExactFields(JsonObject object, Set<String> expected, String context) throws IOException {
         var actual = object.keySet();
         if (!actual.equals(expected)) {
-            throw new IOException("Unexpected fields in " + context + ": expected=" + expected
-                    + ", actual=" + actual);
+            throw new IOException("Unexpected fields in " + context + ": expected=" + expected + ", actual=" + actual);
         }
     }
 
-    private static JsonPrimitive requirePrimitive(JsonObject object, String name)
-            throws IOException {
+    private static JsonPrimitive requirePrimitive(JsonObject object, String name) throws IOException {
         var element = object.get(name);
         if (element == null || !element.isJsonPrimitive()) {
             throw new IOException("Builtin model index field must be primitive: " + name);
@@ -322,8 +308,7 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         return primitive.getAsString();
     }
 
-    public static Map<DefaultAnimationKey, Set<Hash256>> readAnimationHistory(Path file)
-            throws IOException {
+    public static Map<DefaultAnimationKey, Set<Hash256>> readAnimationHistory(Path file) throws IOException {
         if (!Files.exists(file)) {
             return Map.of();
         }
@@ -350,8 +335,7 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
             }
             var value = element.getAsJsonObject();
             requireExactFields(value, HISTORY_FIELDS, "default animation history entry");
-            var key = new DefaultAnimationKey(
-                    requireString(value, "domain"), requireString(value, "name"));
+            var key = new DefaultAnimationKey(requireString(value, "domain"), requireString(value, "name"));
             if (previous != null && previous.compareTo(key) >= 0) {
                 throw new IOException("Default animation history entries must be strictly sorted: " + key);
             }
@@ -374,8 +358,8 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         return Map.copyOf(result);
     }
 
-    private static Map<DefaultAnimationKey, DefaultAnimationEntry> readAnimations(
-            JsonElement array) throws IOException {
+    private static Map<DefaultAnimationKey, DefaultAnimationEntry> readAnimations(JsonElement array)
+        throws IOException {
         var result = new LinkedHashMap<DefaultAnimationKey, DefaultAnimationEntry>();
         DefaultAnimationKey previous = null;
         for (var element : array.getAsJsonArray()) {
@@ -384,14 +368,12 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
             }
             var value = element.getAsJsonObject();
             requireExactFields(value, ANIMATION_FIELDS, "builtin default animation entry");
-            var key = new DefaultAnimationKey(
-                    requireString(value, "domain"), requireString(value, "name"));
+            var key = new DefaultAnimationKey(requireString(value, "domain"), requireString(value, "name"));
             if (previous != null && previous.compareTo(key) >= 0) {
                 throw new IOException("Builtin default animation entries must be strictly sorted: " + key);
             }
             previous = key;
-            var current = parseHash(requireString(value, "currentPayloadHash"),
-                    "current animation " + key);
+            var current = parseHash(requireString(value, "currentPayloadHash"), "current animation " + key);
             var acceptedElement = value.get("acceptedPayloadHashes");
             if (acceptedElement == null || !acceptedElement.isJsonArray()) {
                 throw new IOException("acceptedPayloadHashes must be an array for " + key);
@@ -405,8 +387,8 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
             }
             var sorted = accepted.stream().distinct().sorted().toList();
             if (!accepted.equals(sorted) || !sorted.contains(current)) {
-                throw new IOException("Accepted animation hashes must be unique, sorted and contain current hash: "
-                        + key);
+                throw new IOException(
+                    "Accepted animation hashes must be unique, sorted and contain current hash: " + key);
             }
             result.put(key, new DefaultAnimationEntry(key, current, sorted));
         }
@@ -424,11 +406,9 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         }
     }
 
-    private static Hash256 profileHash(Collection<DefaultAnimationEntry> entries)
-            throws IOException {
+    private static Hash256 profileHash(Collection<DefaultAnimationEntry> entries) throws IOException {
         var output = new ByteArrayOutputStream();
-        for (var entry : entries.stream()
-                .sorted((left, right) -> left.key().compareTo(right.key())).toList()) {
+        for (var entry : entries.stream().sorted((left, right) -> left.key().compareTo(right.key())).toList()) {
             output.write(entry.key().domain().getBytes(StandardCharsets.UTF_8));
             output.write(0);
             output.write(entry.key().name().getBytes(StandardCharsets.UTF_8));
@@ -447,9 +427,8 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         }
     }
 
-    public record DefaultAnimationEntry(
-            DefaultAnimationKey key, Hash256 currentPayloadHash,
-            List<Hash256> acceptedPayloadHashes) {
+    public record DefaultAnimationEntry(DefaultAnimationKey key, Hash256 currentPayloadHash,
+        List<Hash256> acceptedPayloadHashes) {
         public DefaultAnimationEntry {
             acceptedPayloadHashes = List.copyOf(acceptedPayloadHashes);
         }

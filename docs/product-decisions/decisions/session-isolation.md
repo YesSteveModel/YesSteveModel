@@ -5,7 +5,8 @@
 - Needs:
   - 会话失败: [DD.local-failure-degradation](failure-isolation.md#ddlocal-failure-degradation)
 - Landing:
-  - [architecture](../../architecture/network/transport-and-session.md)
+  - [implementation](../../architecture/network/implementation/transport-and-session.md)
+  - [design](../../architecture/network/overview.md)
 
 ## DD.session-scopes-remote-state
 

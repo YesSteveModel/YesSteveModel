@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.client.compat.ironsspellbooks;
 
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
 import com.elfmcys.ysm.client.entity.CustomHumanoidEntity;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
@@ -21,14 +20,6 @@ public class IronsSpellBooksCompat {
         return IS_LOADED;
     }
 
-    public static void addBinding(CtrlBinding binding) {
-        if (IS_LOADED) {
-            IronsSpellBooksCompatInner.addInnerBinding(binding);
-        } else {
-            addEmptyBinding(binding);
-        }
-    }
-
     @Nullable
     public static PlayState playAnimation(AnimationEvent<CustomHumanoidEntity<?>> event, LivingEntity entity) {
         if (IS_LOADED) {
@@ -37,10 +28,4 @@ public class IronsSpellBooksCompat {
         return null;
     }
 
-    /**
-     * 没有安装此模组时，这些 molang 应该存在，否则会报错
-     */
-    private static void addEmptyBinding(CtrlBinding binding) {
-        binding.clientPlayerVar("iss_animation", ctx -> "");
-    }
 }

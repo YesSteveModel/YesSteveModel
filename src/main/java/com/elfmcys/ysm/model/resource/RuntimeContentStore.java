@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.model.resource;
 
+import com.elfmcys.ysm.model.storage.ContentStorageBinding;
+
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
@@ -17,15 +19,12 @@ import java.util.function.Consumer;
 
 /** Owns exact local-source read instances and commits their failure facts on its tick. */
 public final class RuntimeContentStore {
-    private final WeakHashMap<ModelContent, ExactContent> current =
-            new WeakHashMap<>();
-    private final ConcurrentLinkedQueue<CorruptionReport> reports =
-            new ConcurrentLinkedQueue<>();
+    private final WeakHashMap<ModelContent, ExactContent> current = new WeakHashMap<>();
+    private final ConcurrentLinkedQueue<CorruptionReport> reports = new ConcurrentLinkedQueue<>();
     private final Consumer<IOException> corruptionReporter;
 
     public RuntimeContentStore(Consumer<IOException> corruptionReporter) {
-        this.corruptionReporter = Objects.requireNonNull(
-                corruptionReporter, "corruptionReporter");
+        this.corruptionReporter = Objects.requireNonNull(corruptionReporter, "corruptionReporter");
     }
 
     public synchronized ModelContent exact(ModelContent content) {
@@ -33,8 +32,7 @@ public final class RuntimeContentStore {
         if (!(content instanceof ManagedContainer)) {
             return content;
         }
-        return current.computeIfAbsent(content,
-                value -> new ExactContent(value, reports));
+        return current.computeIfAbsent(content, value -> new ExactContent(value, reports));
     }
 
     /** Commits reports without changing any catalog, completed resource, or source path. */
@@ -48,11 +46,12 @@ public final class RuntimeContentStore {
 
     private static final class ExactContent implements ModelContent {
         private final ModelRepresentation representation;
+        private final ContentStorageBinding storageBinding;
         private final ChunkDataSource chunks;
         private volatile boolean corrupted;
 
-        private ExactContent(ModelContent source,
-                             ConcurrentLinkedQueue<CorruptionReport> reports) {
+        private ExactContent(ModelContent source, ConcurrentLinkedQueue<CorruptionReport> reports) {
+            storageBinding = source.storageBinding();
             representation = source.representation();
             chunks = new ExactChunks(this, source.chunks(), reports);
         }
@@ -67,10 +66,14 @@ public final class RuntimeContentStore {
             return chunks;
         }
 
+        @Override
+        public ContentStorageBinding storageBinding() {
+            return storageBinding;
+        }
+
         private synchronized void beginRead() throws AssetLoadException {
             if (corrupted) {
-                throw AssetLoadException.content(
-                        "The exact model source instance is corrupted");
+                throw AssetLoadException.content("The exact model source instance is corrupted");
             }
         }
 
@@ -86,21 +89,53 @@ public final class RuntimeContentStore {
     private record CorruptionReport(ExactContent content, IOException failure) {
     }
 
-    private static final class ExactChunks implements ChunkDataSource {
+    private static class ExactChunks implements ChunkDataSource {
         private final ExactContent content;
         private final ChunkDataSource source;
         private final ConcurrentLinkedQueue<CorruptionReport> reports;
 
         private ExactChunks(ExactContent content, ChunkDataSource source,
-                            ConcurrentLinkedQueue<CorruptionReport> reports) {
+            ConcurrentLinkedQueue<CorruptionReport> reports) {
             this.content = content;
             this.source = source;
             this.reports = reports;
         }
 
         @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk,
-                                     BufferType bufferType) throws IOException {
+        public ReadPhase openReadPhase() throws IOException {
+            content.beginRead();
+            ReadPhase phase = null;
+            try {
+                phase = source.openReadPhase();
+                return new ExactReadPhase(content, phase, reports);
+            } catch (IOException | RuntimeException | Error failure) {
+                if (phase != null) {
+                    try {
+                        phase.close();
+                    } catch (IOException cleanup) {
+                        failure.addSuppressed(cleanup);
+                    }
+                }
+                if (failure instanceof IOException io)
+                    reportContentFailure(io);
+                throw failure;
+            }
+        }
+
+        @Override
+        public java.util.Map<String, UniBuffer> readPayloads(java.util.function.BooleanSupplier cancelled,
+            java.util.Collection<AssetContainerView.ChunkInfo> chunks, BufferType type) throws IOException {
+            content.beginRead();
+            try {
+                return source.readPayloads(cancelled, chunks, type);
+            } catch (IOException failure) {
+                reportContentFailure(failure);
+                throw failure;
+            }
+        }
+
+        @Override
+        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
             content.beginRead();
             try {
                 return source.readPayload(chunk, bufferType);
@@ -111,8 +146,8 @@ public final class RuntimeContentStore {
         }
 
         @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk,
-                                            BufferType bufferType) throws IOException {
+        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            throws IOException {
             content.beginRead();
             try {
                 return source.readStoredVerified(chunk, bufferType);
@@ -123,10 +158,24 @@ public final class RuntimeContentStore {
         }
 
         private void reportContentFailure(IOException failure) {
-            if (failure instanceof AssetLoadException asset
-                    && asset.reason() == AssetLoadException.Reason.CONTENT) {
+            if (failure instanceof AssetLoadException asset && asset.reason() == AssetLoadException.Reason.CONTENT) {
                 reports.add(new CorruptionReport(content, failure));
             }
+        }
+    }
+
+    private static final class ExactReadPhase extends ExactChunks implements ChunkDataSource.ReadPhase {
+        private final ChunkDataSource.ReadPhase owner;
+
+        private ExactReadPhase(ExactContent content, ChunkDataSource.ReadPhase source,
+            ConcurrentLinkedQueue<CorruptionReport> reports) {
+            super(content, source, reports);
+            owner = source;
+        }
+
+        @Override
+        public void close() throws IOException {
+            owner.close();
         }
     }
 }

@@ -7,10 +7,9 @@ import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import com.elfmcys.ysm.geckolib3.core.controller.IBoneAnimationQueue;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
 import com.elfmcys.ysm.geckolib3.core.keyframe.AnimationVec3;
-import com.elfmcys.ysm.geckolib3.core.molang.context.MolangContext;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
+import com.elfmcys.ysm.expression.aot.EventProgram;
 import com.elfmcys.ysm.geckolib3.core.snapshot.BoneTopLevelSnapshot;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceMap;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3f;
@@ -49,12 +48,15 @@ public class VehicleOriginController implements IAnimationController<CustomVehic
     }
 
     @Override
-    public void updateModel(List<BoneTopLevelSnapshot> modelRendererList, Object2ReferenceMap<String, List<IValue>> eventHandlers) {
+    public void updateModel(List<BoneTopLevelSnapshot> modelRendererList,
+        Object2ReferenceMap<String, List<EventProgram>> eventHandlers, java.util.function.Function<String,
+            com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData> definitions) {
         rootBone = modelRendererList.isEmpty() ? null : modelRendererList.get(0);
     }
 
     @Override
-    public void process(AnimationEvent<CustomVehicleEntity> event, ExpressionEvaluator<MolangContext<?>> evaluator, boolean allowEmitting) {
+    public void process(AnimationEvent<CustomVehicleEntity> event, EntityExpressionRuntime.Evaluation evaluation,
+        boolean executeEvents) {
         ImmersiveAircraftCompat.getRotation(event).or(() -> SimplePlaneCompat.getRotation(event)).ifPresent(q -> {
             rotation = new AnimationVec3(q);
             rotation.setEndingTransitionPercentProgressIfLess(0);
@@ -81,17 +83,17 @@ public class VehicleOriginController implements IAnimationController<CustomVehic
         }
 
         @Override
-        public Optional<AnimationVec3> pollRotationPoint(ExpressionEvaluator<MolangContext<?>> evaluator) {
+        public Optional<AnimationVec3> pollRotationPoint(EntityExpressionRuntime.Evaluation evaluation) {
             return Optional.ofNullable(rotation);
         }
 
         @Override
-        public Optional<AnimationVec3> pollPositionPoint(ExpressionEvaluator<MolangContext<?>> evaluator) {
+        public Optional<AnimationVec3> pollPositionPoint(EntityExpressionRuntime.Evaluation evaluation) {
             return Optional.empty();
         }
 
         @Override
-        public Optional<AnimationVec3> pollScalePoint(ExpressionEvaluator<MolangContext<?>> evaluator) {
+        public Optional<AnimationVec3> pollScalePoint(EntityExpressionRuntime.Evaluation evaluation) {
             return Optional.empty();
         }
     }

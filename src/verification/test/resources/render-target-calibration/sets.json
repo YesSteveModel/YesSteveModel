@@ -1,0 +1,33 @@
+{
+  "id":"A02-independent-sets",
+  "initialRoaming":{"shared":3},
+  "initialOrdinary":{"init":0,"update":0,"sync":0,"config":0,"entry":0,"exit":0,"next_entry":0,"instruction":0,"deferred":0,"transition":0},
+  "commonFunctions":{"offset":"return r.shared;"},
+  "body":{
+    "set":"main", "ordinaryType":"F32",
+    "animations":{"idle":{"blend_weight":"v.kind=1; return fn.offset()+100;","override_previous_animation":true,"timeline":{"0":"v.instruction=v.instruction+1;"}}},
+    "events":{"@player_init":"v.init=v.init+1;","@player_update":"v.update=v.update+1;","@sync":"v.sync=v.sync+1;","@config":"v.config=v.config+1;"},
+    "expectedValue":103
+  },
+  "arm":{
+    "set":"fp_arm", "ordinaryType":"String",
+    "animations":{"idle":{"blend_weight":"v.kind='arm'; return fn.offset()+200;","override_previous_animation":true,"timeline":{"0":"v.instruction=v.instruction+1;"}}},
+    "expectedValue":203
+  },
+  "controller":{
+    "initial_state":"idle",
+    "states":{
+      "idle":{"animations":["idle"],"on_entry":["v.entry=v.entry+1;"],"on_exit":["v.exit=v.exit+1;"],"transitions":[{"next":"v.transition==1"}]},
+      "next":{"animations":["idle"],"on_entry":["v.next_entry=v.next_entry+1;"]}
+    }
+  },
+  "stimulus":["install-body","install-arm","normal-body-update","authorized-sync-once","authorized-config-once","body-controller-idle-to-next","arm-controller-idle-to-next","instruction-once-each","defer-once-each","observe-pass","observe-pass","observe-pass"],
+  "expectedActions":{
+    "body":{"init":1,"update":1,"sync":1,"config":1,"entry":1,"exit":1,"next_entry":1,"instruction":1,"defer":1},
+    "arm":{"init":0,"update":0,"sync":0,"config":0,"entry":1,"exit":1,"next_entry":1,"instruction":1,"defer":1}
+  },
+  "deferInput":{"body":"v.deferred=v.deferred+1;","arm":"v.deferred=v.deferred+1;","expectedEach":1},
+  "defaultBorrow":{"missingAnimation":"walk","expectedOwner":"current-set-generation","crossGenerationRefAllowed":false},
+  "failure":{"badAnimation":"broken","otherAnimation":"idle","expectedIdleStillRuns":true},
+  "scope":"independent fixture; production controller/defer/ingress adapter is T02/T04 responsibility"
+}

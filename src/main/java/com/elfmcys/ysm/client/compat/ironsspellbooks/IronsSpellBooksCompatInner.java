@@ -1,7 +1,6 @@
 package com.elfmcys.ysm.client.compat.ironsspellbooks;
 
 import com.elfmcys.ysm.YesSteveModel;
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
 import com.elfmcys.ysm.client.animation.predicate.IAnimationPredicate;
 import com.elfmcys.ysm.client.entity.CustomHumanoidEntity;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
@@ -20,13 +19,10 @@ import javax.annotation.Nullable;
 public class IronsSpellBooksCompatInner {
     private static final String PREFIX = "iss:";
 
-    static void addInnerBinding(CtrlBinding binding) {
-        binding.clientPlayerVar("iss_animation", ctx -> getAnimation(ctx.entity(), null));
-    }
-
     static String getAnimation(LivingEntity entity, @Nullable AnimationEvent<CustomHumanoidEntity<?>> event) {
         if (entity instanceof AbstractClientPlayer player) {
-            var layer = (ModifierLayer<IAnimation>) PlayerAnimationAccess.getPlayerAssociatedData(player).get(SpellAnimations.ANIMATION_RESOURCE);
+            var layer = (ModifierLayer<IAnimation>)PlayerAnimationAccess.getPlayerAssociatedData(player)
+                .get(SpellAnimations.ANIMATION_RESOURCE);
             if (layer != null && layer.isActive() && layer.getAnimation() instanceof KeyframeAnimationPlayer keyframe) {
                 // 每次动画开始时重置动画状态
                 if (event != null && keyframe.getTick() == 0) {

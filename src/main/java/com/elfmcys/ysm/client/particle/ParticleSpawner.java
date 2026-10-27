@@ -1,8 +1,5 @@
 package com.elfmcys.ysm.client.particle;
 
-import com.elfmcys.ysm.geckolib3.core.molang.context.IContext;
-import com.elfmcys.ysm.molang.runtime.ExecutionContext;
-import com.elfmcys.ysm.molang.runtime.Function;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.mojang.brigadier.StringReader;
@@ -28,59 +25,34 @@ import java.util.concurrent.TimeUnit;
 
 @OnlyIn(Dist.CLIENT)
 public class ParticleSpawner {
-    private static final Cache<String, ParticleOptions> PARTICLE_OPTIONS_CACHE = CacheBuilder.newBuilder().expireAfterAccess(60, TimeUnit.SECONDS).build();
+    private static final Cache<String, ParticleOptions> PARTICLE_OPTIONS_CACHE =
+        CacheBuilder.newBuilder().expireAfterAccess(60, TimeUnit.SECONDS).build();
 
-    public static boolean evalSpawnParticle(ExecutionContext<IContext<Entity>> context, Function.ArgumentCollection arguments, boolean absPos)
-            throws ExecutionException, CommandSyntaxException {
-        String id = arguments.getAsString(context, 0);
+    /**
+     * Validates and freezes an AOT particle effect before its logical transaction commits. The returned action performs
+     * only the already-admitted client mutation.
+     */
+    public static Runnable prepareSpawnParticle(Entity entity, String id, Vector3d pos, Vector3d delta,
+        double particleSpeed, int count, int particleLifeTime, boolean absPos, RandomSource random)
+        throws ExecutionException, CommandSyntaxException {
         if (StringUtils.isBlank(id)) {
-            return false;
+            return () -> {
+            };
         }
-
-        Vector3d pos = new Vector3d(0, 0, 0);
-        Vector3d delta = new Vector3d(0, 0, 0);
-        double particleSpeed = 0f;
-        int count = 0;
-        int particleLifeTime = 20;
-
-        int size = arguments.size();
-        if (size > 1) {
-            pos.x = arguments.getAsDouble(context, 1);
-        }
-        if (size > 2) {
-            pos.y = arguments.getAsDouble(context, 2);
-        }
-        if (size > 3) {
-            pos.z = arguments.getAsDouble(context, 3);
-        }
-        if (size > 4) {
-            delta.x = arguments.getAsDouble(context, 4);
-        }
-        if (size > 5) {
-            delta.y = arguments.getAsDouble(context, 5);
-        }
-        if (size > 6) {
-            delta.z = arguments.getAsDouble(context, 6);
-        }
-        if (size > 7) {
-            particleSpeed = arguments.getAsDouble(context, 7);
-        }
-        if (size > 8) {
-            count = Math.max(arguments.getAsInt(context, 8), 0);
-        }
-        if (size > 9) {
-            particleLifeTime = Math.max(arguments.getAsInt(context, 9), 1);
-        }
-        spawnParticle(context.entity().entity(), id, pos, delta, particleSpeed, count, particleLifeTime, absPos, context.entity().random());
-        return true;
+        ParticleOptions particleOptions = particleOptions(id);
+        var frozenPos = new Vector3d(pos);
+        var frozenDelta = new Vector3d(delta);
+        return () -> spawnParticle(entity, particleOptions, frozenPos, frozenDelta, particleSpeed, count,
+            particleLifeTime, absPos, random);
     }
 
-    @SuppressWarnings("all")
-    private static void spawnParticle(Entity entity, String id, Vector3d pos, Vector3d delta,
-                                      double particleSpeed, int count, int particleLifeTime, boolean absPos, RandomSource random)
-            throws CommandSyntaxException, ExecutionException {
-        ParticleOptions particleOptions = PARTICLE_OPTIONS_CACHE.get(id, () ->
-                ParticleArgument.readParticle(new StringReader(id), BuiltInRegistries.PARTICLE_TYPE.asLookup()));
+    private static ParticleOptions particleOptions(String id) throws ExecutionException, CommandSyntaxException {
+        return PARTICLE_OPTIONS_CACHE.get(id,
+            () -> ParticleArgument.readParticle(new StringReader(id), BuiltInRegistries.PARTICLE_TYPE.asLookup()));
+    }
+
+    private static void spawnParticle(Entity entity, ParticleOptions particleOptions, Vector3d pos, Vector3d delta,
+        double particleSpeed, int count, int particleLifeTime, boolean absPos, RandomSource random) {
         if (particleOptions == null) {
             return;
         }
@@ -105,7 +77,8 @@ public class ParticleSpawner {
             double zSpeed = particleSpeed * delta.z();
 
             Minecraft.getInstance().execute(() -> {
-                Particle result = particleEngine.createParticle(particleOptions, xPos, yPos, zPos, xSpeed, ySpeed, zSpeed);
+                Particle result =
+                    particleEngine.createParticle(particleOptions, xPos, yPos, zPos, xSpeed, ySpeed, zSpeed);
                 if (result != null) {
                     result.setLifetime(particleLifeTime);
                 }
@@ -113,13 +86,15 @@ public class ParticleSpawner {
         } else {
             // 多个粒子就需要加点随机了
             for (int i = 0; i < count; ++i) {
-                createParticle(entity, pos, delta, particleSpeed, particleLifeTime, particleEngine, particleOptions, absPos, random);
+                createParticle(entity, pos, delta, particleSpeed, particleLifeTime, particleEngine, particleOptions,
+                    absPos, random);
             }
         }
     }
 
-    private static void createParticle(Entity entity, Vector3d pos, Vector3d delta, double particleSpeed, int particleLifeTime,
-                                       ParticleEngine particleEngine, ParticleOptions particleOptions, boolean absPos, RandomSource random) {
+    private static void createParticle(Entity entity, Vector3d pos, Vector3d delta, double particleSpeed,
+        int particleLifeTime, ParticleEngine particleEngine, ParticleOptions particleOptions, boolean absPos,
+        RandomSource random) {
         double offsetX = random.nextGaussian() * delta.x();
         double offsetY = random.nextGaussian() * delta.y();
         double offsetZ = random.nextGaussian() * delta.z();

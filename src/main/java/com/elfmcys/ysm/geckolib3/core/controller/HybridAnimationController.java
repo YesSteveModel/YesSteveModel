@@ -2,11 +2,10 @@ package com.elfmcys.ysm.geckolib3.core.controller;
 
 import com.elfmcys.ysm.client.animation.predicate.IAnimationPredicate;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.geckolib3.core.molang.context.MolangContext;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
+import com.elfmcys.ysm.expression.aot.EventProgram;
 import com.elfmcys.ysm.geckolib3.core.snapshot.BoneTopLevelSnapshot;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceMap;
 
 import java.util.List;
@@ -21,16 +20,20 @@ public class HybridAnimationController<T extends AnimatableEntity<?>> implements
     private boolean isBedrock;
     private IAnimationController<T> activeController;
 
-    public HybridAnimationController(T animatableEntity, String name, float transitionLengthTicks, IAnimationPredicate<T> animationPredicate) {
+    public HybridAnimationController(T animatableEntity, String name, float transitionLengthTicks,
+        IAnimationPredicate<T> animationPredicate) {
         this(animatableEntity, name, transitionLengthTicks, animationPredicate, false);
     }
 
     @Deprecated
-    public HybridAnimationController(T animatableEntity, String name, float transitionLengthTicks, IAnimationPredicate<T> animationPredicate, boolean blendRotation) {
+    public HybridAnimationController(T animatableEntity, String name, float transitionLengthTicks,
+        IAnimationPredicate<T> animationPredicate, boolean blendRotation) {
         this.name = name;
         this.animatableEntity = animatableEntity;
-        this.codedAnimationController = new CodedAnimationController<>(animatableEntity, name, transitionLengthTicks, animationPredicate, blendRotation);
-        this.bedrockAnimationController = new BedrockAnimationController<>(animatableEntity, name, transitionLengthTicks);
+        this.codedAnimationController = new CodedAnimationController<>(animatableEntity, name, transitionLengthTicks,
+            animationPredicate, blendRotation);
+        this.bedrockAnimationController =
+            new BedrockAnimationController<>(animatableEntity, name, transitionLengthTicks);
         this.activeController = this.codedAnimationController;
     }
 
@@ -42,45 +45,61 @@ public class HybridAnimationController<T extends AnimatableEntity<?>> implements
     @Override
     public String getStateName() {
         if (isBedrock) {
-            return this.bedrockAnimationController.isBuiltinState() ? ("[builtin] " + this.codedAnimationController.getStateName()) : this.bedrockAnimationController.getStateName();
+            return this.bedrockAnimationController.isBuiltinState()
+                ? ("[builtin] " + this.codedAnimationController.getStateName())
+                : this.bedrockAnimationController.getStateName();
         } else {
             return this.codedAnimationController.getStateName();
         }
     }
 
     @Override
-    public void updateModel(List<BoneTopLevelSnapshot> modelBones, Object2ReferenceMap<String, List<IValue>> eventHandlers) {
-        var animationControllerData = animatableEntity.getAnimationControllerData(this.name);
+    public void updateModel(List<BoneTopLevelSnapshot> modelBones,
+        Object2ReferenceMap<String, List<EventProgram>> eventHandlers, java.util.function.Function<String,
+            com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData> definitions) {
+        var animationControllerData = definitions.apply(this.name);
         if (animationControllerData != null) {
             this.isBedrock = true;
             this.bedrockAnimationController.updateModel(modelBones, animationControllerData);
-            this.codedAnimationController.updateModel(modelBones, eventHandlers);
+            this.codedAnimationController.updateModel(modelBones, eventHandlers, definitions);
             this.activeController = this.bedrockAnimationController;
         } else {
             this.isBedrock = false;
-            this.codedAnimationController.updateModel(modelBones, eventHandlers);
+            this.codedAnimationController.updateModel(modelBones, eventHandlers, definitions);
             this.bedrockAnimationController.clear();
             this.activeController = this.codedAnimationController;
         }
     }
 
     @Override
-    public void process(AnimationEvent<T> event, ExpressionEvaluator<MolangContext<?>> evaluator, boolean allowEmitting) {
+    public Runnable prepareResourceBinding(Object2ReferenceMap<String, List<EventProgram>> eventHandlers,
+        java.util.function.Function<String,
+            com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData> definitions) {
+        var coded = codedAnimationController.prepareResourceBinding(eventHandlers, definitions);
+        var bedrock = bedrockAnimationController.prepareResourceBinding(eventHandlers, definitions);
+        return () -> {
+            coded.run();
+            bedrock.run();
+        };
+    }
+
+    @Override
+    public void process(AnimationEvent<T> event, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents) {
         if (this.isBedrock) {
-            this.bedrockAnimationController.process(event, evaluator, allowEmitting);
+            this.bedrockAnimationController.process(event, evaluation, executeEvents);
             if (this.bedrockAnimationController.isBuiltinState()) {
                 if (this.activeController != this.codedAnimationController) {
-                    this.codedAnimationController.setBeginningTransition(this.bedrockAnimationController.getStateData().blendTransition().startNew());
+                    this.codedAnimationController.setBeginningTransition(
+                        this.bedrockAnimationController.getStateData().blendTransition().startNew());
                     this.activeController = this.codedAnimationController;
                 }
-                this.codedAnimationController.process(event, evaluator, allowEmitting);
+                this.codedAnimationController.process(event, evaluation, executeEvents);
             } else if (this.activeController != this.bedrockAnimationController) {
-                this.codedAnimationController.finalizeAnimationContext(evaluator);
                 this.codedAnimationController.reset();
                 this.activeController = this.bedrockAnimationController;
             }
         } else {
-            this.codedAnimationController.process(event, evaluator, allowEmitting);
+            this.codedAnimationController.process(event, evaluation, executeEvents);
         }
     }
 

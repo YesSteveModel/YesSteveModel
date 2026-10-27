@@ -24,9 +24,12 @@ public class PlayAnimationCommand {
     private static final String STOP = "stop";
 
     public static LiteralArgumentBuilder<CommandSourceStack> get() {
-        LiteralArgumentBuilder<CommandSourceStack> play = Commands.literal(PLAY_NAME).requires(src -> CommandUtil.hasPermission(src, 2));
-        RequiredArgumentBuilder<CommandSourceStack, EntitySelector> targets = Commands.argument(TARGETS_NAME, EntityArgument.players());
-        RequiredArgumentBuilder<CommandSourceStack, String> animation = Commands.argument(ANIMATION_NAME, StringArgumentType.string()).suggests(CommandRegistry.ALL_ANIMATIONS);
+        LiteralArgumentBuilder<CommandSourceStack> play =
+            Commands.literal(PLAY_NAME).requires(src -> CommandUtil.hasPermission(src, 2));
+        RequiredArgumentBuilder<CommandSourceStack, EntitySelector> targets =
+            Commands.argument(TARGETS_NAME, EntityArgument.players());
+        RequiredArgumentBuilder<CommandSourceStack, String> animation =
+            Commands.argument(ANIMATION_NAME, StringArgumentType.string()).suggests(CommandRegistry.ALL_ANIMATIONS);
         play.then(targets.then(animation.executes(PlayAnimationCommand::playAnimation)));
         return play;
     }

@@ -10,11 +10,15 @@
   - 网络成本与失败: [DD.main-loop-has-priority](workload-budget.md#ddmain-loop-has-priority)
   - 资产分发与 gameplay 消息竞争: [DD.gameplay-traffic-precedes-asset-distribution](workload-budget.md#ddgameplay-traffic-precedes-asset-distribution)
 - Landing:
-  - [architecture](../../architecture/network/catalog-sync.md)
-  - [architecture](../../architecture/network/asset-transfer.md)
-  - [architecture](../../architecture/model-management/storage-and-cache.md)
+  - [implementation](../../architecture/network/implementation/catalog-sync.md)
+  - [implementation](../../architecture/network/implementation/asset-transfer.md)
+  - [implementation](../../architecture/model-management/storage/implementation/persistence.md#remote-与图片)
   - [standard](../../standards/asset-container.md#container-verification)
   - [standard](../../standards/asset-container.md#chunk-table)
+  - [design](../../architecture/network/overview.md)
+  - [design](../../architecture/model-management/storage/overview.md#精确身份与原子提交)
+  - [design](../../architecture/model-management/sessions/overview.md#远端权威与激活)
+  - [design](../../architecture/model-management/audio/overview.md#接纳与读取)
 
 ## DD.catalog-before-model-body
 
@@ -27,7 +31,7 @@
 
 ### BC.transfer-only-needed-asset-closure
 
-- Claim: 内容访问获准时，目标使用取得其 geometry、纹理、动画及其他实际依赖的完整资源闭包，不因它们位于同一容器就连带传输无关目标；未获准的内容不能以补齐依赖为由取得。
+- Claim: 内容访问获准时，目标准备取得其 geometry、纹理、动画及全部声音首块等实际准入依赖，不因它们位于同一容器就连带传输无关目标；声音尾块只在真实播放需要时取得，未获准的内容不能以补齐依赖为由取得。
 
 ### BC.verified-prefix-does-not-imply-ready-content
 

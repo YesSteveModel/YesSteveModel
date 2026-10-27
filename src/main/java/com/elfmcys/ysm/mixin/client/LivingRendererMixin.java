@@ -19,7 +19,8 @@ public abstract class LivingRendererMixin extends EntityRenderer implements ILiv
 
     @Unique
     @Override
-    public void ysm$renderNameTag(LivingEntity pEntity, float pEntityYaw, float pPartialTicks, PoseStack pMatrixStack, MultiBufferSource pBuffer, int pPackedLight) {
+    public void ysm$renderNameTag(LivingEntity pEntity, float pEntityYaw, float pPartialTicks, PoseStack pMatrixStack,
+        MultiBufferSource pBuffer, int pPackedLight) {
         super.render(pEntity, pEntityYaw, pPartialTicks, pMatrixStack, pBuffer, pPackedLight);
     }
 }

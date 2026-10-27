@@ -5,8 +5,9 @@
 - Needs:
   - 状态输入来源: [DD.client-evaluates-visible-state](animation-sampling.md#ddclient-evaluates-visible-state)
 - Landing:
-  - [architecture](../../architecture/rendering/vertex-output.md)
+  - [implementation](../../architecture/rendering/implementation/vertex-output.md)
   - [status](../../status/known-issues/rendering.md#视觉与接入)
+  - [design](../../architecture/rendering/overview.md)
 
 ## DD.preserve-game-visual-signals
 

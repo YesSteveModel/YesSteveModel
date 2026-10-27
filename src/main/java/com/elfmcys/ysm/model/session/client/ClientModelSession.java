@@ -2,6 +2,7 @@ package com.elfmcys.ysm.model.session.client;
 
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.session.client.state.ActivationFailure;
 import com.elfmcys.ysm.model.session.client.state.ActivationSnapshot;
 import com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot;
@@ -25,9 +26,9 @@ public final class ClientModelSession {
     private String offeredTransportVersion;
     private Boolean offeredSyncRoaming;
     private boolean declined;
+    private final LinkedHashMap<ModelFileIdentity, PreviewObservation> previews = new LinkedHashMap<>();
 
-    public ClientModelSession(SessionMode requestedMode, boolean channelPresent,
-                              CatalogSnapshot localCatalog) {
+    public ClientModelSession(SessionMode requestedMode, boolean channelPresent, CatalogSnapshot localCatalog) {
         Objects.requireNonNull(localCatalog, "localCatalog");
         explicitLocal = requestedMode == SessionMode.LOCAL;
         state = explicitLocal || !channelPresent ? State.LOCAL : State.NEGOTIATING;
@@ -39,8 +40,7 @@ public final class ClientModelSession {
         return state;
     }
 
-    public synchronized Optional<Response> onServerHello(String transportVersion,
-                                                         boolean syncRoaming) {
+    public synchronized Optional<Response> onServerHello(String transportVersion, boolean syncRoaming) {
         if (state == State.CLOSED) {
             return Optional.empty();
         }
@@ -51,9 +51,7 @@ public final class ClientModelSession {
             declined = true;
             return Optional.of(new Response(false));
         }
-        if (!VersionCompatibility.isCompatible(
-                ProtocolVersion.TRANSPORT_VERSION,
-                transportVersion, String::equals)) {
+        if (!VersionCompatibility.isCompatible(ProtocolVersion.TRANSPORT_VERSION, transportVersion, String::equals)) {
             failCompleteTransfer();
             return Optional.empty();
         }
@@ -63,8 +61,7 @@ public final class ClientModelSession {
         if (offeredTransportVersion == null) {
             offeredTransportVersion = transportVersion;
             offeredSyncRoaming = syncRoaming;
-        } else if (!offeredTransportVersion.equals(transportVersion)
-                || offeredSyncRoaming != syncRoaming) {
+        } else if (!offeredTransportVersion.equals(transportVersion) || offeredSyncRoaming != syncRoaming) {
             failCompleteTransfer();
             return Optional.empty();
         }
@@ -84,6 +81,7 @@ public final class ClientModelSession {
         remote = Objects.requireNonNull(snapshot, "snapshot");
         activation = ActivationSnapshot.pending(snapshot);
         state = State.ACTIVE;
+        reconcilePreviews(snapshot);
     }
 
     /** Commits new authority first and retains state only for unchanged exact tuples. */
@@ -94,7 +92,7 @@ public final class ClientModelSession {
         snapshot.entries().forEach((modelId, entry) -> {
             var previousEntry = remote.entries().get(modelId);
             var previous = activation.entries().get(modelId);
-            if (entry.equals(previousEntry) && previous != null) {
+            if (entry.sameContent(previousEntry) && previous != null) {
                 if (previous instanceof ActivationSnapshot.Ready ready) {
                     states.put(modelId, new ActivationSnapshot.Ready(entry, ready.record()));
                 } else if (previous instanceof ActivationSnapshot.Failed failed) {
@@ -108,15 +106,61 @@ public final class ClientModelSession {
         });
         remote = snapshot;
         activation = new ActivationSnapshot(snapshot, states);
+        reconcilePreviews(snapshot);
+    }
+
+    private void reconcilePreviews(RemotePublicationSnapshot snapshot) {
+        var members = new LinkedHashSet<ModelFileIdentity>();
+        snapshot.entries().values().forEach(entry -> members.add(entry.identity()));
+        previews.keySet().retainAll(members);
+        members.forEach(identity -> previews.computeIfAbsent(identity, key -> new PreviewObservation(this, key)));
+    }
+
+    public synchronized boolean previewAbsent(ModelFileIdentity identity) {
+        var observation = previews.get(identity);
+        return state == State.ACTIVE && observation != null && observation.absent;
+    }
+
+    /** Captures member incarnation and invalidation eligibility before a request is sent. */
+    public synchronized Optional<PreviewObservation> observePreview(ModelFileIdentity identity) {
+        return state == State.ACTIVE ? Optional.ofNullable(previews.get(identity)) : Optional.empty();
+    }
+
+    public synchronized boolean completePreviewAbsent(PreviewObservation observation) {
+        if (!previewObservationCurrent(observation)) {
+            return false;
+        }
+        observation.absent = true;
+        return true;
+    }
+
+    public synchronized boolean previewObservationCurrent(PreviewObservation observation) {
+        return state == State.ACTIVE && observation != null && observation.owner == this
+            && previews.get(observation.identity) == observation;
+    }
+
+    public synchronized void invalidatePreview(ModelFileIdentity identity) {
+        if (state == State.ACTIVE && previews.containsKey(identity)) {
+            previews.put(identity, new PreviewObservation(this, identity));
+        }
+    }
+
+    public static final class PreviewObservation {
+        private final ClientModelSession owner;
+        private final ModelFileIdentity identity;
+        private boolean absent;
+
+        private PreviewObservation(ClientModelSession owner, ModelFileIdentity identity) {
+            this.owner = owner;
+            this.identity = identity;
+        }
     }
 
     public synchronized void publishActivation(ActivationSnapshot snapshot) {
         requireState(State.ACTIVE);
         Objects.requireNonNull(snapshot, "snapshot");
-        if (!snapshot.terminal()
-                || !snapshot.publication().entries().equals(remote.entries())) {
-            throw new IllegalArgumentException(
-                    "Activation does not belong to the current publication owner");
+        if (!snapshot.terminal() || !snapshot.publication().entries().equals(remote.entries())) {
+            throw new IllegalArgumentException("Activation does not belong to the current publication owner");
         }
         var states = new LinkedHashMap<Hash256, ActivationSnapshot.State>();
         remote.entries().forEach((modelId, entry) -> {
@@ -141,7 +185,7 @@ public final class ClientModelSession {
                 continue;
             }
             if (entry.getValue() instanceof ActivationSnapshot.Failed failed
-                    && failed.failure().kind() == ActivationFailure.Kind.TRANSIENT_ACCESS) {
+                && failed.failure().kind() == ActivationFailure.Kind.TRANSIENT_ACCESS) {
                 states.put(entry.getKey(), new ActivationSnapshot.Pending(failed.publication()));
                 retries.add(entry.getKey());
             }
@@ -156,6 +200,7 @@ public final class ClientModelSession {
         if (state != State.CLOSED && state != State.LOCAL) {
             remote = null;
             activation = null;
+            previews.clear();
             offeredTransportVersion = null;
             offeredSyncRoaming = null;
             state = State.INTRINSIC_DEFAULT_ONLY;
@@ -165,8 +210,7 @@ public final class ClientModelSession {
     public synchronized CatalogSnapshot catalog() {
         return switch (state) {
             case LOCAL -> localCatalog;
-            case ACTIVE -> activation.readyCatalog()
-                    .withIntrinsicDefaultFrom(intrinsicDefault);
+            case ACTIVE -> activation.readyCatalog().withIntrinsicDefaultFrom(intrinsicDefault);
             case NEGOTIATING, INTRINSIC_DEFAULT_ONLY -> defaultOnly();
             case CLOSED -> CatalogSnapshot.empty();
         };
@@ -185,6 +229,7 @@ public final class ClientModelSession {
     }
 
     public synchronized void close() {
+        previews.clear();
         remote = null;
         activation = null;
         offeredTransportVersion = null;
@@ -199,11 +244,7 @@ public final class ClientModelSession {
     }
 
     public enum State {
-        LOCAL,
-        NEGOTIATING,
-        ACTIVE,
-        INTRINSIC_DEFAULT_ONLY,
-        CLOSED
+        LOCAL, NEGOTIATING, ACTIVE, INTRINSIC_DEFAULT_ONLY, CLOSED
     }
 
     public record Response(boolean accepted) {

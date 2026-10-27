@@ -9,8 +9,7 @@ public class ModelAuthor {
     public LinkedHashMap<String, String> contact = new LinkedHashMap<>();
     public String comment = "";
 
-    public ModelAuthor() {
-    }
+    public ModelAuthor() {}
 
     public ModelAuthor(String name) {
         this.name = name;

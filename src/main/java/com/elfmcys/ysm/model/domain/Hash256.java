@@ -48,11 +48,9 @@ public final class Hash256 implements Comparable<Hash256> {
     }
 
     public boolean matches(byte[] value, int offset, int length) {
-        return length == SIZE && offset >= 0 && offset <= value.length - length
-                && word0 == readLong(value, offset)
-                && word1 == readLong(value, offset + Long.BYTES)
-                && word2 == readLong(value, offset + Long.BYTES * 2)
-                && word3 == readLong(value, offset + Long.BYTES * 3);
+        return length == SIZE && offset >= 0 && offset <= value.length - length && word0 == readLong(value, offset)
+            && word1 == readLong(value, offset + Long.BYTES) && word2 == readLong(value, offset + Long.BYTES * 2)
+            && word3 == readLong(value, offset + Long.BYTES * 3);
     }
 
     public boolean matches(byte[] value) {
@@ -61,7 +59,7 @@ public final class Hash256 implements Comparable<Hash256> {
 
     /** Only roaming-variable synchronization is allowed to use this truncated value. */
     public int roamingHash() {
-        return (int) (word0 >>> Integer.SIZE);
+        return (int)(word0 >>> Integer.SIZE);
     }
 
     @Override
@@ -81,11 +79,8 @@ public final class Hash256 implements Comparable<Hash256> {
 
     @Override
     public boolean equals(Object obj) {
-        return obj instanceof Hash256 other
-                && word0 == other.word0
-                && word1 == other.word1
-                && word2 == other.word2
-                && word3 == other.word3;
+        return obj instanceof Hash256 other && word0 == other.word0 && word1 == other.word1 && word2 == other.word2
+            && word3 == other.word3;
     }
 
     @Override
@@ -102,19 +97,15 @@ public final class Hash256 implements Comparable<Hash256> {
     }
 
     private static long readLong(byte[] source, int offset) {
-        return (long) (source[offset] & 0xff) << 56
-                | (long) (source[offset + 1] & 0xff) << 48
-                | (long) (source[offset + 2] & 0xff) << 40
-                | (long) (source[offset + 3] & 0xff) << 32
-                | (long) (source[offset + 4] & 0xff) << 24
-                | (long) (source[offset + 5] & 0xff) << 16
-                | (long) (source[offset + 6] & 0xff) << 8
-                | (source[offset + 7] & 0xffL);
+        return (long)(source[offset] & 0xff) << 56 | (long)(source[offset + 1] & 0xff) << 48
+            | (long)(source[offset + 2] & 0xff) << 40 | (long)(source[offset + 3] & 0xff) << 32
+            | (long)(source[offset + 4] & 0xff) << 24 | (long)(source[offset + 5] & 0xff) << 16
+            | (long)(source[offset + 6] & 0xff) << 8 | (source[offset + 7] & 0xffL);
     }
 
     private static void writeLong(byte[] target, int offset, long value) {
         for (var index = Long.BYTES - 1; index >= 0; index--) {
-            target[offset + index] = (byte) value;
+            target[offset + index] = (byte)value;
             value >>>= Byte.SIZE;
         }
     }

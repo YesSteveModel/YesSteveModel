@@ -35,5 +35,5 @@ Scope: Minecraft 1.20.1 Forge；玩家/投射物/载具视觉替换、创作与�
 - ID 前缀定义类型：PG/SCN/CON 见 shared；REQ = 需求；DD = 领域决策；BC = 可观察行为契约。ID 是稳定定位键，文件分包可调整；标题只含 ID，链接使用自动锚点（ID 转小写并去掉句点），不维护额外 HTML 锚点。
 - Claim = 决定或承诺；Rationale = 产品选择理由与成本。DD 默认 selected；Disposition = superseded 的方案只解释拒绝理由，不能作为当前行为。Horizon = future 的记录不表示已实现。
 - Requirement 指向包内决策的需求来源；Motivation 指向上游目标/场景；Constraints 是明确约束；Needs 是带触发条件的跨包边界。REQ.Select/Uses 提供正向关系，BC 默认嵌套在产生它的 DD 下，不另写重复边表。
-- Landing 只路由：standard 定义格式/wire，architecture 定义当前机制，design 解释内部取舍，concept 定义概念，status 定义支持/缺口，future 定义后续方向。有链接不证明该决定已落实；映射不到时显式报告缺少落点，不从目录相似推定实现。
+- Landing 只路由：standard 定义格式/wire，design 定义内部契约与取舍，implementation 定位当前机制，verification 说明验证方法，governance 定义文档与证据规则，status 定义支持/缺口，future 定义后续方向。有链接不证明该决定已落实；映射不到时显式报告缺少落点，不从目录相似推定实现。
 - 正文唯一拥有业务事实；Select/Uses 与 reverse-index 只维护导航，不复制结论。分包依据共同裁决边界，不按行数或每个 ID 机械拆文件。

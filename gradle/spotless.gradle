@@ -1,0 +1,17 @@
+spotless {
+    encoding = 'UTF-8'
+    lineEndings = 'UNIX'
+    java {
+        // Explicit roots keep generated sources out of formatting task dependencies.
+        target fileTree('src') {
+            include '**/*.java'
+            exclude 'generated/**', '**/resources/**'
+        }, fileTree('buildSrc/src') {
+            include '**/*.java'
+            exclude '**/resources/**'
+        }
+        eclipse('4.26').configFile('config/spotless/eclipse-codestyle.xml')
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}

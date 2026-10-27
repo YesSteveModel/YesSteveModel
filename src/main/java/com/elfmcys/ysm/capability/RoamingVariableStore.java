@@ -14,13 +14,11 @@ import java.util.function.Consumer;
 
 /** Persistent roaming-variable storage plus deferred access before a model is selected. */
 final class RoamingVariableStore {
-    private Int2ReferenceOpenHashMap<Object2FloatOpenHashMap<String>> variables =
-            new Int2ReferenceOpenHashMap<>();
+    private Int2ReferenceOpenHashMap<Object2FloatOpenHashMap<String>> variables = new Int2ReferenceOpenHashMap<>();
     private final Queue<Consumer<Object2FloatOpenHashMap<String>>> pending = new ArrayDeque<>();
 
     Object2FloatOpenHashMap<String> variables(Hash256 modelHash) {
-        var values = variables.computeIfAbsent(modelHash.roamingHash(),
-                ignored -> new Object2FloatOpenHashMap<>(0));
+        var values = variables.computeIfAbsent(modelHash.roamingHash(), ignored -> new Object2FloatOpenHashMap<>(0));
         Consumer<Object2FloatOpenHashMap<String>> consumer;
         while ((consumer = pending.poll()) != null) {
             consumer.accept(values);
@@ -74,8 +72,8 @@ final class RoamingVariableStore {
         var storageTag = new CompoundTag();
         variables.int2ReferenceEntrySet().fastForEach(storageEntry -> {
             var valuesTag = new CompoundTag();
-            storageEntry.getValue().object2FloatEntrySet().fastForEach(entry ->
-                    valuesTag.putFloat(entry.getKey(), entry.getFloatValue()));
+            storageEntry.getValue().object2FloatEntrySet()
+                .fastForEach(entry -> valuesTag.putFloat(entry.getKey(), entry.getFloatValue()));
             storageTag.put(String.valueOf(storageEntry.getIntKey()), valuesTag);
         });
         return storageTag;

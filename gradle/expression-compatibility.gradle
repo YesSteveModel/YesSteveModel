@@ -1,0 +1,46 @@
+def compatibilityRoot = projectDir.absolutePath
+def compatibilityOutput = layout.buildDirectory.dir('generated/sources/expressionCompatibility/java')
+def generateExpressionCompatibility = tasks.register('generateExpressionCompatibility') {
+    inputs.files(fileTree('.') {
+        include 'build.gradle', 'gradle/declaration.gradle', 'gradle/expression*.gradle'
+        include 'src/declaration/java/**'
+        include 'src/main/java/com/elfmcys/ysm/api/annotation/**'
+        include 'src/main/java/com/elfmcys/ysm/api/molang/**'
+        include 'src/main/java/com/elfmcys/ysm/expression/**'
+        include 'src/main/java/com/elfmcys/ysm/geckolib3/core/processor/MinecraftInvocationInputs.java'
+        include 'src/main/java/com/elfmcys/ysm/geckolib3/core/processor/MinecraftRuntimeInputs.java'
+        include 'src/main/java/com/elfmcys/ysm/geckolib3/core/processor/AnimationProcessor.java'
+        include 'src/main/java/com/elfmcys/ysm/client/entity/AnimatableEntity.java'
+        include 'docs/architecture/design/animation/molang-declarations.md'
+        include 'docs/architecture/design/animation/molang-static-language.md'
+        include 'docs/architecture/design/animation/molang-runtime.md'
+    }).withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir(compatibilityOutput)
+    doLast { task ->
+        def root = java.nio.file.Path.of(compatibilityRoot)
+        def entries = task.inputs.files.files.collect { source ->
+            def name = root.relativize(source.toPath()).toString().replace('\\', '/')
+            def text = source.getText('UTF-8').replace('\r\n', '\n').replace('\r', '\n')
+            [name, text]
+        }.sort { a, b -> a[0] <=> b[0] }
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        def field = { String value ->
+            byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            digest.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.length).array())
+            digest.update(bytes)
+        }
+        field('ysm:expression-compatibility-content')
+        digest.update(java.nio.ByteBuffer.allocate(4).putInt(entries.size()).array())
+        entries.each { entry -> field(entry[0]); field(entry[1]) }
+        def hash = java.util.HexFormat.of().formatHex(digest.digest())
+        def output = new File(task.outputs.files.singleFile,
+                'com/elfmcys/ysm/expression/host/HostCompatibility.java')
+        output.parentFile.mkdirs()
+        output.setText("package com.elfmcys.ysm.expression.host;\n" +
+                "public final class HostCompatibility {\n" +
+                "    public static final String SHA256 = \"${hash}\";\n" +
+                "    private HostCompatibility() {}\n}\n", 'UTF-8')
+    }
+}
+sourceSets.main.java.srcDir(compatibilityOutput)
+tasks.named('compileJava') { dependsOn generateExpressionCompatibility }

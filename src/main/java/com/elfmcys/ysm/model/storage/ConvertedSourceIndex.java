@@ -6,8 +6,7 @@ import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import java.util.Objects;
 
 /** The only persisted converted-source mapping. */
-public record ConvertedSourceIndex(ModelFileIdentity identity,
-                                   String rawRelativePath, String fullModVersion) {
+public record ConvertedSourceIndex(ModelFileIdentity identity, String rawRelativePath, String fullModVersion) {
     public ConvertedSourceIndex {
         Objects.requireNonNull(identity, "identity");
         rawRelativePath = normalizeRawRelativePath(rawRelativePath);
@@ -27,8 +26,8 @@ public record ConvertedSourceIndex(ModelFileIdentity identity,
 
     static String normalizeRawRelativePath(String value) {
         Objects.requireNonNull(value, "rawRelativePath");
-        if (value.isEmpty() || value.startsWith("/") || value.endsWith("/")
-                || value.indexOf('\\') >= 0 || value.indexOf('\0') >= 0) {
+        if (value.isEmpty() || value.startsWith("/") || value.endsWith("/") || value.indexOf('\\') >= 0
+            || value.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("Invalid raw relative path: " + value);
         }
         for (var segment : value.split("/", -1)) {

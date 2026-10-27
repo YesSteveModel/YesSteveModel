@@ -4,6 +4,7 @@ import com.elfmcys.ysm.format.schema.file.PBRImageSources;
 import com.elfmcys.ysm.info.type.PBRTextureType;
 import com.elfmcys.ysm.model.resource.client.ModelResourceFailureGate;
 import com.elfmcys.ysm.natives.image.ImageSource;
+import com.elfmcys.ysm.util.ResourceDiagnostics;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.platform.TextureUtil;
 import java.io.IOException;
@@ -27,33 +28,25 @@ public final class CustomPBRTextureSet extends AbstractTexture implements PBRTex
     private final Map<PBRTextureType, AbstractTexture> pbrTextures;
     private NativeImage prepared;
 
-    public CustomPBRTextureSet(PBRImageSources sources,
-                               NativeImage uv, @Nullable NativeImage normal,
-                               @Nullable NativeImage specular,
-                               ModelResourceFailureGate uvFailure,
-                               ModelResourceFailureGate normalFailure,
-                               ModelResourceFailureGate specularFailure) {
-        this(sources, uv, normal, specular, uvFailure, normalFailure,
-                specularFailure, TextureIO.PRODUCTION);
+    public CustomPBRTextureSet(PBRImageSources sources, NativeImage uv, @Nullable NativeImage normal,
+        @Nullable NativeImage specular, ModelResourceFailureGate uvFailure, ModelResourceFailureGate normalFailure,
+        ModelResourceFailureGate specularFailure) {
+        this(sources, uv, normal, specular, uvFailure, normalFailure, specularFailure, TextureIO.PRODUCTION);
     }
 
-    CustomPBRTextureSet(PBRImageSources sources,
-                        NativeImage uv, @Nullable NativeImage normal,
-                        @Nullable NativeImage specular,
-                        ModelResourceFailureGate uvFailure,
-                        ModelResourceFailureGate normalFailure,
-                        ModelResourceFailureGate specularFailure,
-                        TextureIO textureIO) {
+    CustomPBRTextureSet(PBRImageSources sources, NativeImage uv, @Nullable NativeImage normal,
+        @Nullable NativeImage specular, ModelResourceFailureGate uvFailure, ModelResourceFailureGate normalFailure,
+        ModelResourceFailureGate specularFailure, TextureIO textureIO) {
         Objects.requireNonNull(sources, "sources");
         source = sources.uv();
         prepared = Objects.requireNonNull(uv, "uv");
         failureGate = Objects.requireNonNull(uvFailure, "uvFailure");
         this.textureIO = Objects.requireNonNull(textureIO, "textureIO");
         this.normal = sources.normal() == null ? null
-                : new ComponentTexture(sources.normal(), Objects.requireNonNull(normal, "normal"),
+            : new ComponentTexture(sources.normal(), Objects.requireNonNull(normal, "normal"),
                 Objects.requireNonNull(normalFailure, "normalFailure"), textureIO);
         this.specular = sources.specular() == null ? null
-                : new ComponentTexture(sources.specular(), Objects.requireNonNull(specular, "specular"),
+            : new ComponentTexture(sources.specular(), Objects.requireNonNull(specular, "specular"),
                 Objects.requireNonNull(specularFailure, "specularFailure"), textureIO);
         var textures = new EnumMap<PBRTextureType, AbstractTexture>(PBRTextureType.class);
         if (this.normal != null) {
@@ -117,10 +110,8 @@ public final class CustomPBRTextureSet extends AbstractTexture implements PBRTex
         super.close();
     }
 
-    private static void load(ImageSource source, NativeImage prepared,
-                             ModelResourceFailureGate failureGate,
-                             AbstractTexture texture,
-                             TextureIO textureIO) throws IOException {
+    private static void load(ImageSource source, NativeImage prepared, ModelResourceFailureGate failureGate,
+        AbstractTexture texture, TextureIO textureIO) throws IOException {
         var previous = failureGate.failure().orElse(null);
         if (previous != null) {
             var failure = new IOException("Model texture component previously failed", previous);
@@ -161,9 +152,7 @@ public final class CustomPBRTextureSet extends AbstractTexture implements PBRTex
     interface TextureIO {
         TextureIO PRODUCTION = (texture, pixels) -> {
             TextureUtil.prepareImage(texture.getId(), 0, pixels.getWidth(), pixels.getHeight());
-            pixels.upload(0, 0, 0, 0, 0,
-                    pixels.getWidth(), pixels.getHeight(),
-                    false, false, false, false);
+            pixels.upload(0, 0, 0, 0, 0, pixels.getWidth(), pixels.getHeight(), false, false, false, false);
         };
 
         void upload(AbstractTexture texture, NativeImage pixels);
@@ -179,9 +168,8 @@ public final class CustomPBRTextureSet extends AbstractTexture implements PBRTex
         private final TextureIO textureIO;
         private NativeImage prepared;
 
-        private ComponentTexture(ImageSource source, NativeImage prepared,
-                                 ModelResourceFailureGate failureGate,
-                                 TextureIO textureIO) {
+        private ComponentTexture(ImageSource source, NativeImage prepared, ModelResourceFailureGate failureGate,
+            TextureIO textureIO) {
             this.source = source;
             this.prepared = prepared;
             this.failureGate = failureGate;
@@ -199,6 +187,10 @@ public final class CustomPBRTextureSet extends AbstractTexture implements PBRTex
         public void close() {
             prepared = CustomPBRTextureSet.close(prepared, textureIO);
             super.close();
+            var description = ResourceDiagnostics.untrack(ResourceDiagnostics.Kind.TEXTURE, this);
+            if (description != null) {
+                ResourceDiagnostics.log("texture PBR remove: {}", description);
+            }
         }
     }
 }

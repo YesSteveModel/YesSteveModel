@@ -1,0 +1,26 @@
+def packagedSoundSmokeClasses = layout.buildDirectory.dir('packaged-sound-smoke/classes')
+
+tasks.register('compilePackagedSoundSmoke', JavaCompile) {
+    dependsOn tasks.named('shadowJar')
+    source = fileTree('src/verification/sound/java') { include '**/*.java' }
+    classpath = files(tasks.named('shadowJar').flatMap { it.archiveFile }, configurations.compileClasspath)
+    destinationDirectory = packagedSoundSmokeClasses
+    options.compilerArgs += ['-proc:none']
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('verifyPackagedSoundLinkage', JavaExec) {
+    group = 'verification'
+    description = 'Checks sound interface calls and method references in the final remapped archive.'
+    dependsOn tasks.named('compilePackagedSoundSmoke')
+    // The development host supplies class definitions; this check does not call Minecraft methods.
+    classpath = files(packagedSoundSmokeClasses,
+            tasks.named('shadowJar').flatMap { it.archiveFile }, configurations.compileClasspath)
+    mainClass = 'com.elfmcys.ysm.client.sound.instance.PackagedSoundLinkageSmoke'
+    doFirst { args tasks.named('shadowJar').get().archiveFile.get().asFile.absolutePath }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyPackagedSoundLinkage')
+}

@@ -1,0 +1,400 @@
+sourceSets {
+    mockSupport {
+        java.setSrcDirs(['src/verification/mock/support/java'])
+        resources.setSrcDirs(['src/verification/mock/support/resources'])
+    }
+    mockCommon {
+        java.setSrcDirs(['src/verification/mock/common/java'])
+        resources.setSrcDirs(['src/verification/mock/common/resources'])
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath +
+                sourceSets.mockSupport.output
+    }
+    mockClient {
+        java.setSrcDirs(['src/verification/mock/client/java'])
+        resources.setSrcDirs(['src/verification/mock/client/resources'])
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath +
+                sourceSets.mockSupport.output + sourceSets.mockCommon.output
+    }
+    mockServer {
+        java.setSrcDirs(['src/verification/mock/server/java'])
+        resources.setSrcDirs(['src/verification/mock/server/resources'])
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath +
+                sourceSets.mockSupport.output + sourceSets.mockCommon.output
+    }
+    mockHost {
+        java.setSrcDirs(['src/verification/mock/host/java'])
+        resources.setSrcDirs(['src/verification/mock/host/resources'])
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += output + sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+    mockVanilla {
+        java.setSrcDirs(['src/verification/mock/vanilla/java'])
+        resources.setSrcDirs(['src/verification/mock/vanilla/resources'])
+    }
+    mockSupervisor {
+        java.setSrcDirs(['src/verification/mock/supervisor/java'])
+        resources.setSrcDirs(['src/verification/mock/supervisor/resources'])
+        compileClasspath += sourceSets.mockSupport.output
+        runtimeClasspath += output + sourceSets.mockSupport.output
+    }
+}
+
+legacyForge {
+    mods {
+        ysmMockHost {
+            sourceSet sourceSets.mockHost
+        }
+        ysmMockVanilla {
+            sourceSet sourceSets.mockVanilla
+        }
+    }
+
+    runs {
+        mockHostClientA {
+            client()
+            sourceSet = sourceSets.mockHost
+            gameDirectory = layout.buildDirectory.dir('model-management-mock/unused/client-a')
+            programArguments = ["--username", "YsmHostA",
+                                "--mixin.config", "ysm.mixins.json"]
+            loadedMods = [mods.ysm, mods.ysmMockHost]
+            disableIdeRun()
+        }
+
+        mockHostClientB {
+            client()
+            sourceSet = sourceSets.mockHost
+            gameDirectory = layout.buildDirectory.dir('model-management-mock/unused/client-b')
+            programArguments = ["--username", "YsmHostB",
+                                "--mixin.config", "ysm.mixins.json"]
+            loadedMods = [mods.ysm, mods.ysmMockHost]
+            disableIdeRun()
+        }
+
+        mockHostServer {
+            server()
+            sourceSet = sourceSets.mockHost
+            gameDirectory = layout.buildDirectory.dir('model-management-mock/unused/server')
+            programArguments = ["--mixin.config", "ysm.mixins.json"]
+            loadedMods = [mods.ysm, mods.ysmMockHost]
+            disableIdeRun()
+        }
+        mockHostVanilla {
+            client()
+            sourceSet = sourceSets.mockVanilla
+            gameDirectory = layout.buildDirectory.dir('model-management-mock/unused/vanilla')
+            programArguments = ["--username", "YsmVanilla"]
+            loadedMods = [mods.ysmMockVanilla]
+            disableIdeRun()
+        }
+    }
+
+    addModdingDependenciesTo sourceSets.mockHost
+    addModdingDependenciesTo sourceSets.mockVanilla
+}
+
+dependencies {
+    mockSupportImplementation 'com.google.code.gson:gson:2.10.1'
+    mockSupervisorImplementation 'com.google.code.gson:gson:2.10.1'
+    if (providers.gradleProperty('entityPresentationOptional').getOrElse('false').toBoolean()) {
+        mockHostRuntimeOnly files(providers.provider {
+            sourceSets.main.compileClasspath.filter {
+                it.name.endsWith('.jar') && ['geckolib', 'superbwarfare', 'curios-forge'].any { name -> it.name.contains(name) }
+            }
+        })
+    }
+    mockHostServerAdditionalRuntimeClasspath \
+            'org.lwjgl:lwjgl:3.3.1:natives-windows'
+}
+
+def validateMockEvidenceRoot = { File configured, boolean explicitlyConfigured ->
+    def evidenceRoot = configured.canonicalFile
+    def projectRoot = projectDir.canonicalFile
+    def buildRoot = layout.buildDirectory.get().asFile.canonicalFile
+    def userHome = new File(System.getProperty('user.home')).canonicalFile
+    def fileSystemRoot = evidenceRoot.toPath().root.toFile().canonicalFile
+    if (evidenceRoot == fileSystemRoot || evidenceRoot == userHome ||
+            evidenceRoot == projectRoot || evidenceRoot == buildRoot ||
+            projectRoot.toPath().startsWith(evidenceRoot.toPath()) ||
+            userHome.toPath().startsWith(evidenceRoot.toPath())) {
+        throw new GradleException("Refusing unsafe evidence directory: ${evidenceRoot}")
+    }
+    if (!explicitlyConfigured && !evidenceRoot.toPath().startsWith(buildRoot.toPath())) {
+        throw new GradleException("Default evidence directory escaped build/: ${evidenceRoot}")
+    }
+    def marker = new File(evidenceRoot, '.ysm-model-management-evidence')
+    def underBuild = evidenceRoot.toPath().startsWith(buildRoot.toPath())
+    if (evidenceRoot.exists() && evidenceRoot.listFiles()?.length > 0 &&
+            !underBuild && !marker.isFile()) {
+        throw new GradleException(
+                "Refusing non-empty unmarked evidence directory: ${evidenceRoot}")
+    }
+    return evidenceRoot
+}
+
+def resolveMockEvidenceRoot = { configuredPath, String propertyName, String defaultDirectory ->
+    def explicitlyConfigured = configuredPath.isPresent()
+    def configuredValue = explicitlyConfigured ? configuredPath.get() : null
+    if (explicitlyConfigured && !new File(configuredValue).isAbsolute()) {
+        throw new GradleException("${propertyName} must be absolute")
+    }
+    def configured = explicitlyConfigured
+            ? new File(configuredValue)
+            : layout.buildDirectory.dir("model-management-mock/${defaultDirectory}").get().asFile
+    validateMockEvidenceRoot(configured, explicitlyConfigured)
+}
+
+def resetMockEvidenceRoot = { File evidenceRoot ->
+    delete evidenceRoot
+    mkdir evidenceRoot
+    java.nio.file.Files.writeString(
+            new File(evidenceRoot, '.ysm-model-management-evidence').toPath(),
+            'model-management-mock\n')
+}
+
+def writeMockClasspath = { File evidenceRoot, String name, FileCollection classpathFiles ->
+    def target = new File(evidenceRoot, name)
+    def entries = new LinkedHashSet<String>()
+    classpathFiles.files.findAll { it.exists() }.each {
+        entries.add(it.canonicalPath)
+    }
+    java.nio.file.Files.writeString(target.toPath(),
+            entries.join('\n') + '\n', java.nio.charset.StandardCharsets.UTF_8)
+    target
+}
+
+def modelManagementMockEvidenceDir = providers.gradleProperty(
+        'modelManagementMockEvidenceDir')
+def modelManagementMockIntentionalFailure = providers.gradleProperty(
+        'modelManagementMockIntentionalFailure').map { it.toBoolean() }.orElse(false)
+def modelManagementMockImplementationRevision = 21
+def modelManagementMockJavaRevision = providers.exec {
+    workingDir projectDir
+    commandLine 'git', 'rev-parse', 'HEAD'
+}.standardOutput.asText.map { it.trim() }
+
+tasks.register('modelManagementMockDomain', Test) {
+    description = 'Runs model-management domain and workload mock scenarios with evidence output.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'model-management-mock'
+    }
+    outputs.upToDateWhen { false }
+
+    doFirst {
+        def explicitlyConfigured = modelManagementMockEvidenceDir.isPresent()
+        def evidenceRoot = resolveMockEvidenceRoot(modelManagementMockEvidenceDir,
+                'modelManagementMockEvidenceDir', 'domain')
+        resetMockEvidenceRoot(evidenceRoot)
+        systemProperty 'ysm.mock.evidenceRoot', evidenceRoot.absolutePath
+        systemProperty 'ysm.mock.javaRevision', modelManagementMockJavaRevision.get()
+        systemProperty 'ysm.mock.startedAt', java.time.Instant.now().toString()
+        systemProperty 'ysm.mock.implementationRevision',
+                modelManagementMockImplementationRevision.toString()
+        systemProperty 'ysm.mock.command',
+                "./gradlew modelManagementMockDomain${explicitlyConfigured ? " -PmodelManagementMockEvidenceDir=${evidenceRoot.absolutePath}" : ''}${modelManagementMockIntentionalFailure.get() ? ' -PmodelManagementMockIntentionalFailure=true' : ''}"
+        systemProperty 'ysm.mock.intentionalFailure',
+                modelManagementMockIntentionalFailure.get().toString()
+    }
+}
+
+def modelManagementMockForgeEvidenceDir = providers.gradleProperty(
+        'modelManagementMockForgeEvidenceDir')
+def productionArchives = providers.provider {
+    [tasks.named('jar').get().archiveFile.get().asFile,
+     tasks.named('reobfJar').get().archiveFile.get().asFile,
+     tasks.named('shadowJar').get().archiveFile.get().asFile]
+}
+
+tasks.register('verifyMockHostPackaging') {
+    description = 'Verifies mock-only classes and resources are absent from release archives.'
+    group = 'verification'
+    dependsOn tasks.named('jar'), tasks.named('shadowJar')
+    inputs.files(productionArchives)
+    doLast {
+        def forbidden = [
+                'com/elfmcys/ysm/mock/host/',
+                'com/elfmcys/ysm/mock/supervisor/',
+                'com/elfmcys/ysm/mock/vanilla/',
+                'com/elfmcys/ysm/mock/agent/',
+                'com/elfmcys/ysm/mock/evidence/',
+                'com/elfmcys/ysm/mock/classpath/',
+                'com/elfmcys/ysm/verification/CatalogLinksVerification',
+                'com/elfmcys/ysm/network/forge/MockClientEndpoint',
+                'com/elfmcys/ysm/network/forge/MockServerEndpoint',
+                'log4j2-mock-smoke.xml'
+        ]
+        productionArchives.get().each { archive ->
+            def leaked = zipTree(archive).matching {
+                forbidden.each { prefix -> include "${prefix}**" }
+            }.files
+            if (!leaked.isEmpty()) {
+                throw new GradleException(
+                        "Verification-only classes leaked into ${archive}: ${leaked}")
+            }
+        }
+    }
+}
+
+def modelManagementMockSystemEvidenceDir = providers.gradleProperty(
+        'modelManagementMockSystemEvidenceDir')
+def mockClientPhysicalClasspath = files(
+        sourceSets.mockClient.output,
+        sourceSets.mockCommon.output,
+        sourceSets.mockSupport.output,
+        sourceSets.main.output,
+        configurations.mockHostClientALegacyClasspath)
+def mockServerPhysicalClasspath = files(
+        sourceSets.mockServer.output,
+        sourceSets.mockCommon.output,
+        sourceSets.mockSupport.output,
+        sourceSets.main.output,
+        configurations.mockHostServerLegacyClasspath)
+def mockJavaLauncher = javaToolchains.launcherFor(java.toolchain)
+
+tasks.register('modelManagementMockSupervisorTest', Test) {
+    description = 'Runs the process-supervisor lifecycle and exact-cleanup self-tests.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching 'com.elfmcys.ysm.mock.supervisor.ProcessSupervisorTest'
+        includeTestsMatching 'com.elfmcys.ysm.mock.supervisor.MockExact100VerifierTest'
+    }
+}
+
+def registerMockClasspathScenario = {
+        String taskName, String taskDescription, String evidenceDirectory, String mode ->
+    tasks.register(taskName, JavaExec) {
+        description = taskDescription
+        group = 'verification'
+        dependsOn tasks.named('mockClientClasses')
+        dependsOn tasks.named('mockServerClasses')
+        dependsOn tasks.named('mockSupervisorClasses')
+        dependsOn tasks.named('modelManagementMockSupervisorTest')
+        dependsOn tasks.named('verifyMockHostPackaging')
+        classpath = sourceSets.mockSupervisor.runtimeClasspath
+        mainClass = 'com.elfmcys.ysm.mock.supervisor.MockSupervisor'
+        outputs.upToDateWhen { false }
+        doFirst {
+            def evidenceRoot = resolveMockEvidenceRoot(modelManagementMockSystemEvidenceDir,
+                    'modelManagementMockSystemEvidenceDir', evidenceDirectory)
+            resetMockEvidenceRoot(evidenceRoot)
+            def clientEntries = writeMockClasspath(
+                    evidenceRoot, 'classpath.client.entries', mockClientPhysicalClasspath)
+            def serverEntries = writeMockClasspath(
+                    evidenceRoot, 'classpath.server.entries', mockServerPhysicalClasspath)
+
+            def arguments = [evidenceRoot.absolutePath,
+                             modelManagementMockJavaRevision.get(),
+                             modelManagementMockImplementationRevision.toString(),
+                             mockJavaLauncher.get().executablePath.asFile.absolutePath,
+                             clientEntries.absolutePath,
+                             serverEntries.absolutePath,
+                             sourceSets.mockClient.output.classesDirs.singleFile.absolutePath,
+                             sourceSets.mockServer.output.classesDirs.singleFile.absolutePath]
+            if (mode != null) {
+                arguments.addAll([ysmNativeLibraryPath.get(), mode])
+            }
+            setArgs(arguments)
+        }
+    }
+}
+
+registerMockClasspathScenario('modelManagementMockSmoke',
+        'Runs the side-specific ordinary-JVM model-management classpath smoke.',
+        'classpath-smoke', null)
+registerMockClasspathScenario('modelManagementMockSystem',
+        'Runs the repeated side-specific ordinary-JVM system scenario.',
+        'classpath-system', 'full')
+registerMockClasspathScenario('modelManagementMockExact100',
+        'Runs the repeated exact-100 mode on the side-specific classpath runtime.',
+        'classpath-exact-100', 'exact-100')
+
+tasks.register('modelManagementMockForge', JavaExec) {
+    description = 'Runs the thin isolated Forge host-adapter conformance scenario.'
+    group = 'verification'
+    dependsOn tasks.named('mockSupervisorClasses')
+    dependsOn tasks.named('createMockHostServerLaunchScript')
+    dependsOn tasks.named('createMockHostClientALaunchScript')
+    dependsOn tasks.named('createMockHostClientBLaunchScript')
+    dependsOn tasks.named('verifyMockHostPackaging')
+    classpath = sourceSets.mockSupervisor.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.mock.supervisor.HostSupervisor'
+    outputs.upToDateWhen { false }
+
+    doFirst {
+        def evidenceRoot = resolveMockEvidenceRoot(modelManagementMockForgeEvidenceDir,
+                'modelManagementMockForgeEvidenceDir', 'forge')
+        resetMockEvidenceRoot(evidenceRoot)
+
+        args projectDir.absolutePath,
+                evidenceRoot.absolutePath,
+                modelManagementMockJavaRevision.get(),
+                ysmNativeLibraryPath.get(),
+                modelManagementMockImplementationRevision.toString(),
+                layout.buildDirectory.file(
+                        'moddev/runMockHostServer.cmd').get().asFile.absolutePath,
+                layout.buildDirectory.file(
+                        'moddev/runMockHostClientA.cmd').get().asFile.absolutePath,
+                layout.buildDirectory.file(
+                        'moddev/runMockHostClientB.cmd').get().asFile.absolutePath
+    }
+}
+
+tasks.register('verifyMolangForgeConsumer', JavaExec) {
+    description = 'Observes Molang command/watch rendering and reconnect in an isolated Forge host.'
+    group = 'verification'
+    dependsOn tasks.named('mockSupervisorClasses')
+    dependsOn tasks.named('createMockHostServerLaunchScript')
+    dependsOn tasks.named('createMockHostClientALaunchScript')
+    dependsOn tasks.named('verifyMockHostPackaging')
+    classpath = sourceSets.mockSupervisor.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.mock.supervisor.MolangHostSupervisor'
+    doFirst {
+        args projectDir.absolutePath, providers.gradleProperty('molangForgeEvidenceDir').get()
+        if (providers.gradleProperty('molangForgeFailures').getOrElse('false').toBoolean()) {
+            args 'failures'
+        }
+    }
+}
+
+tasks.register('guiEntryHostAgent', Jar) {
+    dependsOn tasks.named('mockHostClasses')
+    archiveFileName = 'gui-entry-host-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('model-management-mock')
+    from(sourceSets.mockHost.output) { include 'com/elfmcys/ysm/mock/agent/GuiEntryHostAgent*.class' }
+    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.mock.agent.GuiEntryHostAgent' }
+}
+
+tasks.register('verifyEntityPresentationForge', JavaExec) {
+    description = 'Observes real Forge entity presentation, suppression and reconnect.'
+    group = 'verification'
+    dependsOn tasks.named('mockSupervisorClasses')
+    dependsOn tasks.named('guiEntryHostAgent')
+    dependsOn tasks.named('createMockHostServerLaunchScript')
+    dependsOn tasks.named('createMockHostClientALaunchScript')
+    dependsOn tasks.named('createMockHostClientBLaunchScript')
+    dependsOn tasks.named('createMockHostVanillaLaunchScript')
+    dependsOn tasks.named('verifyMockHostPackaging')
+    classpath = sourceSets.mockSupervisor.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.mock.supervisor.MolangHostSupervisor'
+    doFirst {
+        def scope = providers.gradleProperty('entityPresentationScope').getOrElse('all')
+        if (!(scope in ['all', 'lifecycle', 'roles', 'optional', 'opportunities', 'gui-purpose', 'catalog-progress'])) throw new GradleException('entityPresentationScope must be all, lifecycle, roles, optional, opportunities, gui-purpose or catalog-progress')
+        args projectDir.absolutePath, providers.gradleProperty('entityPresentationEvidenceDir').get(), scope == 'all' ? 'entity-state' : 'entity-' + scope
+        args providers.gradleProperty('entityPresentationFixtureDir').getOrElse('')
+    }
+}
+
+tasks.named('compileMockHostJava', JavaCompile) {
+    dependsOn tasks.named('declarationProcessorJar')
+    options.annotationProcessorPath = files(tasks.named('declarationProcessorJar', Jar)
+            .flatMap { it.archiveFile }) + sourceSets.main.output +
+            sourceSets.main.compileClasspath
+    options.compilerArgs += ['-processor',
+            'com.elfmcys.ysm.api.internal.processor.UnifiedDeclarationProcessor,' +
+            'com.elfmcys.ysm.api.internal.processor.ExtensionCompatibilityProcessor']
+}

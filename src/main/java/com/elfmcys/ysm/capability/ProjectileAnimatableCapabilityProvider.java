@@ -14,8 +14,7 @@ import org.jetbrains.annotations.Nullable;
 
 @OnlyIn(Dist.CLIENT)
 public class ProjectileAnimatableCapabilityProvider implements ICapabilityProvider {
-    public static Capability<ProjectileAnimatableCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {
-    });
+    public static Capability<ProjectileAnimatableCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {});
     private ProjectileAnimatableCapability instance;
     private Projectile projectile;
 

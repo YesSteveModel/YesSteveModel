@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.geckolib3.core.keyframe.bone;
 
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
 import org.joml.Vector3f;
 
 public abstract class BoneKeyFrame {
@@ -28,7 +28,7 @@ public abstract class BoneKeyFrame {
         return endTick;
     }
 
-    public abstract Vector3f getLerpPoint(ExpressionEvaluator<?> evaluator, float percentCompleted);
+    public abstract Vector3f getLerpPoint(EntityExpressionRuntime.Evaluation evaluation, float percentCompleted);
 
     public static boolean isBegin(float percentCompleted) {
         return percentCompleted < 0.00001;

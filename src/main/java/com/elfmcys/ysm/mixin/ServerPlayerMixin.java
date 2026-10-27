@@ -11,19 +11,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(ServerPlayer.class)
 public abstract class ServerPlayerMixin {
-    @Inject(
-            method = "startRiding(Lnet/minecraft/world/entity/Entity;Z)Z",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/world/entity/Entity;positionRider(Lnet/minecraft/world/entity/Entity;)V",
-                    shift = At.Shift.AFTER
-            )
-    )
+    @Inject(method = "startRiding(Lnet/minecraft/world/entity/Entity;Z)Z",
+        at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;positionRider(Lnet/minecraft/world/entity/Entity;)V",
+            shift = At.Shift.AFTER))
     private void afterPositionRider(Entity vehicle, boolean force, CallbackInfoReturnable<Boolean> cir) {
         if (!YesSteveModel.isAvailable()) {
             return;
         }
-        ServerPlayer serverPlayer = (ServerPlayer) (Object) this;
+        ServerPlayer serverPlayer = (ServerPlayer)(Object)this;
         if (vehicle.getFirstPassenger() == serverPlayer) {
             CapabilityEvent.onVehicleSetModel(vehicle, serverPlayer);
         }

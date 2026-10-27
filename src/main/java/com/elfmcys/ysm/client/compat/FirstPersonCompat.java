@@ -12,7 +12,8 @@ public class FirstPersonCompat {
     private static boolean INSTALLED;
 
     public static void init() {
-        INSTALLED = LoadingModList.get().getModFileById(MOD_ID) != null || LoadingModList.get().getModFileById(LEGACY_MOD_ID) != null;
+        INSTALLED = LoadingModList.get().getModFileById(MOD_ID) != null
+            || LoadingModList.get().getModFileById(LEGACY_MOD_ID) != null;
         if (INSTALLED) {
             registerOffset();
             setHeadPos(24);
@@ -24,8 +25,8 @@ public class FirstPersonCompat {
     }
 
     private static void registerOffset() {
-        FirstPersonAPI.registerPlayerHandler((PlayerOffsetHandler)(entity, delta, original, current) ->
-                new Vec3(current.x(), 1.5f - HEAD_POS, current.z()));
+        FirstPersonAPI.registerPlayerHandler((PlayerOffsetHandler)(entity, delta, original,
+            current) -> new Vec3(current.x(), 1.5f - HEAD_POS, current.z()));
     }
 
     public static boolean isRenderingPlayer() {

@@ -8,7 +8,7 @@ import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.container.InlineChunkReader;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.natives.Blake3;
-import com.elfmcys.ysm.proto.mixel.asset.model.data.GeoModel;
+import com.elfmcys.ysm.proto.mixel.asset.model.data.GeoModelProto;
 import com.elfmcys.ysm.util.ProtoUtil;
 import com.elfmcys.ysm.version.VersionCompatibility;
 import java.io.IOException;
@@ -20,7 +20,7 @@ import org.jetbrains.annotations.Nullable;
 
 public class BakedModelView {
     private final AssetContainerView assetView;
-    private final GeoModel model;
+    private final GeoModelProto model;
     private final Hash256 bakeHash;
 
     public BakedModelView(SeekableByteChannel file) throws IOException {
@@ -29,14 +29,11 @@ public class BakedModelView {
             throw new IOException("Schema ID mismatch: " + assetView.getSchema());
         }
 
-        var version = Objects.requireNonNull(
-                assetView.getSchemaProperty(BakedModelConstant.PROP_VERSION),
-                "Version property not found");
-        if (!VersionCompatibility.isCompatible(BakedModelConstant.CURRENT_VERSION.toString(),
-                version, (current, candidate) -> new DefaultArtifactVersion(current)
-                        .equals(new DefaultArtifactVersion(candidate)))) {
-            throw new UnsupportedEncodingException(String.format(
-                    "Unsupported baked model version: \"%s\".", version));
+        var version = Objects.requireNonNull(assetView.getSchemaProperty(BakedModelConstant.PROP_VERSION),
+            "Version property not found");
+        if (!VersionCompatibility.isCompatible(BakedModelConstant.CURRENT_VERSION.toString(), version, (current,
+            candidate) -> new DefaultArtifactVersion(current).equals(new DefaultArtifactVersion(candidate)))) {
+            throw new UnsupportedEncodingException(String.format("Unsupported baked model version: \"%s\".", version));
         }
 
         var manifestChunk = assetView.getChunkInfo(BakedModelConstant.MANIFEST_CHUNK_NAME);
@@ -50,7 +47,7 @@ public class BakedModelView {
             if (!(manifestData instanceof ArrayBuffer arrayBuffer)) {
                 throw new IOException("Baked model manifest is not array-backed");
             }
-            model = GeoModel.parseFrom(ProtoUtil.source(arrayBuffer));
+            model = GeoModelProto.parseFrom(ProtoUtil.source(arrayBuffer));
         }
         var hashChunk = assetView.getChunkInfo(BakedModelConstant.BAKE_HASH_CHUNK_NAME);
         if (hashChunk == null) {
@@ -63,12 +60,11 @@ public class BakedModelView {
             if (!(hashData instanceof ArrayBuffer arrayBuffer)) {
                 throw new IOException("Baked model bake hash is not array-backed");
             }
-            bakeHash = new Hash256(arrayBuffer.array(), arrayBuffer.arrayOffset(),
-                    arrayBuffer.size());
+            bakeHash = new Hash256(arrayBuffer.array(), arrayBuffer.arrayOffset(), arrayBuffer.size());
         }
     }
 
-    public GeoModel model() {
+    public GeoModelProto model() {
         return model;
     }
 

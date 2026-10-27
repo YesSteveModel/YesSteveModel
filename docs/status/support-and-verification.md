@@ -1,21 +1,26 @@
 # 当前支持状态
 
-“已接线”只表示主要代码链路存在，不代表稳定、完整或通过实机、跨平台及跨实现验证。格式与协议要求以[一致性标准](../standards/conformance.md)为准。
+“已接线”只表示生产链路存在。自动化、实机、跨平台和跨实现证据分别判断；精确版本见[标准入口](../standards/README.md)，证据边界由下列问题页维护。
 
-| 能力 | 当前边界 |
-|---|---|
-| Asset Container / Model Schema `0.1.0-unstable` | 标准已定义 canonical `ModelId`、扩展 verification payload、preamble 与完整模型 profile；Java 主路径已接线核心结构、direct/zstd、BLAKE3、冻结 capture 和严格 preamble，当前 generic container 与 model profile 均精确写出/接受 `0.1.0-unstable`，尚未完成该版本跨实现 conformance，见[格式问题](known-issues/format-and-schema.md) |
-| ED25519 verification | 不支持 |
-| Protocol `0.3.0-unstable` | Forge `EventNetworkChannel` 的 bounded frame、exact-connection session closure、四 collection typed full/delta、三类 model-distribution request、七类 typed fragment、server-private forced selection、全局 dispatch 及既有玩家/entity/control path 已接线。Player-state report/update 与收藏快照已退出 sequence/revision，报告机会采用 best-effort，真实 FULL baseline 留在 exact model session；资源侧由获取前已存在的 typed owner 将完整 packet 集合提交给唯一 dispatch，bytes/chunk/file 共用有界 range 生命周期。Schema/registry、typed producer/consumer、业务 bounds/assembly、replacement/late outcome、per-child admission/cancel、三种 source retry/close、dispatch closure 与完整 unsigned transfer ID range 已有自动化覆盖；真实 Forge 的 no-channel/buffer handoff、同 UUID replacement、逐观察者异常、LAN/集成 server frame、真正 version mismatch、长期资源回收及 secondary-login 单 session 仍缺机器可判定 observation，见[网络问题](known-issues/network.md) |
-| Java 模型管理 | 进程 Catalog 的 startup default、首次消费登记/scan/prune、逐项验证与 owner-tick 增量发布、direct 精确读取实例、remote/converted 非破坏性坏读、exact session 查询释放、独立 runtime、完整 target lease 与 30/60 unused LRU 已接线；GUI/local/每个 remote entity 的 0.3/0.7 秒连续需求也已接入。自动化与 thin Forge host 覆盖主要局部分支；真实大目录、多进程 prune、广泛 reload、长期资源回收、成本对照和完整 LAN 交错仍需独立验收，见[模型管理问题](known-issues/model-management.md) |
-| Preview 与 export | Direct 成品内嵌 preview 准入、内部转换缺图例外、`ContainerId` 独立图片 cache、特化 presentation、真实 target/bake→256×256 offscreen draw/readback→worker encode，以及 `/ysm export` 的直接输入与 `.mxc` 完整容器重封装已接线。Client tick 的单一总 admission 覆盖 probe、Ready/Flight 或 detached load、host pixels、encode/persist/export 和终态；专服已有图片 export 由 server tick 接纳完整 worker，cold miss 明确失败。Owner-pause、共享容量、terminal release、host/encode 失败关闭、导出 route/后缀和当前容器再发现已有自动化覆盖；真实 Forge 画面、游戏内命令、完整失败矩阵、长期图片空间与冷暖成本仍未完成最终验收。 |
-| Java 动画运行时 | animation、coded / Bedrock / hybrid controller、玩家状态、骨骼输出与模型声音触发主链已接线，模型 execution-bearing 字段携带 Molang source 字符串，由 `com.elfmcys.ysm.molang` 的 lexer/parser/`ExpressionEvaluator` 与 `client.animation.molang` 的 binding 在本地逐次解析和求值；Roaming 由 `LocalRoamingStruct` / `RemoteRoamingStruct` 记录并消费 full 与 delta，`AnimationProcessor.putRemoteStruct` 把它们交给 entity 的 processor。Java `test` task 最近执行 575 项，0 failure、0 error、9 skipped，覆盖 animation/controller Proto、模型导入、Roaming 和模型音频局部边界。表达式解释器仍没有专门单元测试，也没有 Minecraft/Forge world 级、多 pass、`ysm.sync`、config-action、声音 once-only 或性能测量；不能声明运行时验收通过，见[动画问题](known-issues/animation.md) |
-| Native CPU renderer | bake / extract / render、SIMD 与多线程顶点生成已接线；已有 Release binary 的 bake/JNI 聚焦测试通过，但当前源码的 MSVC 19.51 fresh Release build 在既有 GNU-style `asm volatile` 处失败，不能据旧 binary 声明 fresh native artifact 已验证；自动化基线和视觉验收也未收敛，见[格式与构建问题](known-issues/format-and-schema.md#codec导入与平台)和[渲染问题](known-issues/rendering.md) |
-| 图像 codec | Native 解码覆盖 PNG、JPEG、WebP、AVIF、ZTX，编码仅覆盖 WebP、AVIF、ZTX；平台组合未完整验证，JPEG XL 不支持 |
-| 当前产品运行入口 | Java 入口覆盖 Windows x64（最低 Windows 10）、GNU/Linux x64 和专用环境下的 Android arm64；x64 要求 SSE4.1，x86-64-v1 与 Windows 7 尚不支持；macOS 与其他架构尚不可用，native 构建目标不等于产品支持；目标基线与适配边界见[平台适配现状与原则](../product-decisions/requirements/req-platform-availability.md) |
-| legacy v1/v2 | Archive 到统一 raw parser、当前音频写出与重开已有自动化；真实语料中 12 个文件已按 header 精确识别为 raw，但仍缺带可信历史 provenance 的 Java 端到端声音包装验证 |
-| **模型音频** | **Raw directory/archive、current export/reopen、legacy projection、严格 Ogg Vorbis/Opus 解释、真实 JNI Opus 解码、按需本地/remote chunk 取得、64 MiB encoded/PCM 统一保留以及 Minecraft `AudioStream` 播放主链已接线。冻结 fixture 覆盖阈值、精确 frame、冷/热一致、独立播放、两周期 loop、取消与 channel handoff 局部边界；真实 legacy v1/v2/v3 包装、remote session、Minecraft/OpenAL 设备、stream pool N+1、heap retaining path 与 GC/Cleaner 最终回收尚未验收，不能据自动化声明端到端支持已通过** |
-| v3 加密模型 | 同步、流式的单向导入已接线；native 真实语料覆盖 185 个加密容器及 inner version 1/4/9/15，全部完成解密、反混淆、解压、反序列化和 current projection，并覆盖 778 个 sound field（777 个保留、1 个未知格式按裁决省略）。Java current staging/reopen 与音频 projector 自动化已通过，但仍缺把可信历史 v3 包装接到 Java、远端和实际游戏播放的端到端、跨平台验收，见[格式问题](known-issues/format-and-schema.md) |
-| 独立 Backend / 通用外部模型源 / GPU renderer | [Backend](../future/independent-backend.md)、[外部模型源](../future/external-model-sources.md)与 [GPU renderer](../future/gpu-compute-renderer.md)均未实现 |
-
-总体使用风险见[项目概览](../README.md)。
+| 能力 | 当前结论 | 主要缺口与证据入口 |
+|---|---|---|
+| Asset Container / Model Schema | Java 已接入当前容器、Schema、canonical identity、direct/zstd 与分层验证；ED25519 verification 不支持 | 缺跨实现 conformance；[格式问题](known-issues/format-and-schema.md) |
+| Protocol | Forge 已接入 model session、typed publication、按需分发、管理补图、玩家/entity 状态和全局调度 | 完整双端授权、版本失败、交错与长期回收未验；[网络问题](known-issues/network.md) |
+| 客户端资源调度 | 本地玩家隔离容量、共享工作提权与有预算发布已接入；功能回归和受控 JMH 已覆盖 | 有后台容量代价，真实游戏收益未证实；[调度证据](known-issues/model-management.md#调度与平台) |
+| Java 线程策略与启动 | 专属后台线程已接入 OS 策略；普通目录在 required 发布后异步激活 | Windows JNI 与隔离 Forge 已验证部分生命周期；其他平台与性能仍有缺口；[调度证据](known-issues/model-management.md#调度与平台) |
+| 全局目录启动 | 不可变目录配置、整组能力探测、平台候选与缓存受检路径门面已接入 | 平台策略、Windows symlink/junction、断链、ACL 与启动隔离已有测试；标准库迁移回归覆盖 Windows 和 WSL 原生 ext4。多根、完整地址、首个完整接纳、独立 pack 与消费者已接通；macOS 真实查询、其他平台/启动器及完整游戏仍未验证；[存储与平台边界](known-issues/model-management.md#目录存储与安装) |
+| 共享模型存储 | 内容绑定接入 converted、geometry、expression、preview、remote 与 export；converted 按 DATA／完整转换版本分区，文件锁统一使用 JDK | Windows 与 WSL ext4 回归覆盖同 key 完整提交、索引合并、消费者保护和残留恢复；Linux 私有 bind mount 另验证父目录别名下的重入、取消与消费者锁保留。来源切换及跨实例复用已有组合测试；网络共享 FS、其他 provider、Android/macOS 和完整游戏仍未验证；[存储证据边界](known-issues/model-management.md#目录存储与安装) |
+| 有界文件读取 | 用户来源、converted、remote、动画/几何、图片与 raw 单流已按实际阶段关闭；动画 discovery 与实体同步 pass 复用精确来源 | Windows 真实 Java 句柄、失败/取消及并发借用有定向验证；缺少 fileKey 的替换项、Forge 特有 provider、其他平台与 native archive 内部句柄不在该证据范围；[读取验证](../verification/model-management.md#有界文件读取) |
+| Java 模型管理 | Catalog、精确存储、remote activation、共享 lease、preview/export 和集中 demand 已接入 | 功能回归与有限宿主观察不覆盖全部取消、Busy 帧成本及长期物理回收；[模型管理问题](known-issues/model-management.md) |
+| Local Catalog 进度 | HUD 与页面各次绘制读取同轮阶段/输入计数；发现、最终交接与无活动分别呈现 | Windows 真实 Forge 单人/多人已验证逐项文字、右对齐深灰，以及 Catalog 空闲时 FULL 排队、真实远端 activation／metadata transfer 的独立隐藏对照；OOM 终态另有领域注入，未作 Forge OOM 注入；[进度验证](../verification/model-management.md#构建与进程-ownership) |
+| 已有 Java OOM 边界 | 实体执行、候选安装、资源取得与 Catalog 沿原 owner 终结受影响操作；内部不增加全入口 wrapper | Windows 定向注入覆盖整轮效果丢弃、旧内容/安装保留、异步终态和下一项独立工作；不证明全入口或真实堆耗尽存活；[验证范围](../verification/model-management.md#输入与证据门禁) |
+| 模型冷加载与图片交接 | 内存 Ready 与可选持久化分离、原始冷编译证明、共享声音首块及一次图片解码交接已接入；客户端非音频字节政策已删除，数量与借用保护保留 | 超旧额度输入、完整 MAIN 新 JVM 重开及额度隔离已有定向证据；真实 integrated 联合场景、GL 大图和长期 RSS 仍未验证，固定内容收益仍未通过；[交接验证边界](known-issues/model-management.md#模型加载与图片交接) |
+| Java 动画与模型声音 | Controller、typed AOT、统一声明、固定许可与轮级共享状态已接入；独立发布组合、标量成本、真实 JNI、代表性默认程序和隔离 Forge 有局部证据 | 完整启动/热性能收益、实体动作、多 pass、双端同步、设备声音和长期回收尚未完成验证；[动画问题](known-issues/animation.md) |
+| Molang 重复编译与宿主预算 | 完整入口契约共享分析、source／entry 分离和显式宿主策略已接入；三档规模、冷暖来源／资格及代表模型 GUI/FULL 完整准备通过 | Windows Forge 已观察该模型冷暖预览、选用与第一／第三人称；完整动作、逐骨骼视觉、声音及净性能收益仍未验证；[复现与边界](../verification/animation-bake-benchmark.md#model-scaling) |
+| Native CPU renderer | Bake/extract/render、SIMD 与并行顶点生成已有生产入口；hermetic clang Release 聚焦回归通过 | Cube-info Java view 已复现越界；MSVC、完整游戏视觉及其他平台未通过验收；[渲染问题](known-issues/rendering.md)、[构建问题](known-issues/format-and-schema.md#codec导入与平台) |
+| GUI 模型准备与取景 | 完整闭包、主体特化和动画复用已接入；当前卡片与生成图已有有限像素验证；完整地址、Ctrl 分派和跨根 pack 导航有局部测试 | 真实 Ctrl 点击、剪贴板和文件管理器响应、完整模型/动画矩阵、输入往返与最终主循环成本未验；[取景边界](known-issues/rendering.md#gui-取景)、[冷准备性能](known-issues/animation.md#gui-与模型冷准备) |
+| 第一人称与重复消费 | 标准/SW 手部和初始背景已接入持久局部输出；受控 JNI 与部分实机路径通过 | 完整资源生命周期、动态 renderer oracle、native 成本与用户视觉未验；[第一人称证据](known-issues/rendering.md#重复消费与第一人称) |
+| 图像 codec | 解码支持 PNG、JPEG、WebP、AVIF、ZTX；编码支持 WebP、AVIF、ZTX；不支持 JPEG XL | 平台与 codec 组合未完整验证；[格式问题](known-issues/format-and-schema.md#codec导入与平台) |
+| 平台入口 | Windows x64、GNU/Linux x64、专用 Android arm64 环境有产品入口；x64 要求 SSE4.1 | Windows 7、x86-64-v1、macOS 和其他架构尚不可用；[平台需求](../product-decisions/requirements/req-platform-availability.md) |
+| Legacy v1/v2/v3 | 已接入 current container 单向导入；Windows x64 真实语料已重开验证 | Remote、游戏播放、headless、其他平台与听测未验；[格式问题](known-issues/format-and-schema.md#codec导入与平台) |
+| 独立 Backend / 外部模型源 / GPU renderer | 未实现 | [Backend](../future/independent-backend.md)、[外部模型源](../future/external-model-sources.md)、[GPU renderer](../future/gpu-compute-renderer.md) |

@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.model.resource.client.asset;
 
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.natives.image.ImageSource;
 
@@ -14,17 +15,20 @@ public final class ClientAssetBatch implements AutoCloseable {
         this.delegate = delegate;
     }
 
-    public CompletableFuture<ImageSource> preview(Hash256 hash) {
+    public CompletableFuture<PreviewResult> preview(Hash256 hash) {
         return delegate.preview(hash);
+    }
+
+    public boolean previewAbsent(ModelFileIdentity identity) {
+        return delegate.previewAbsent(identity);
     }
 
     public CompletableFuture<ImageSource> packCover(ModelPackDescriptor pack) {
         return delegate.packCover(pack);
     }
 
-    public CompletableFuture<ImageSource> presentation(Hash256 hash,
-                                                       ModelAssetSelector.PresentationAsset asset,
-                                                       int index) {
+    public CompletableFuture<ImageSource> presentation(Hash256 hash, ModelAssetSelector.PresentationAsset asset,
+        int index) {
         return delegate.presentation(hash, asset, index);
     }
 

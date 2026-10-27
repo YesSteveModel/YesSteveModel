@@ -10,6 +10,7 @@
   - 外部动作适配: [DD.model-controller-overrides-builtins](bone-and-controller.md#ddmodel-controller-overrides-builtins)
   - 状态读取与输入: [DD.client-evaluates-visible-state](animation-sampling.md#ddclient-evaluates-visible-state)
 - Landing:
+  - [Molang declarations](../../architecture/animation/molang-declarations.md)
   - [future](../../future/mod-animation-integration.md)
   - [status](../../status/known-issues/animation.md#联动与验证)
 
@@ -56,8 +57,14 @@
 ## DD.open-integration-to-external-adapters
 
 - Horizon: future
-- Claim: 未来提供公共 API，使其他模组可以直接适配 YSM 系统，也可由独立桥接模组实现双方联动。
+- Claim: 提供公共 API，使其他模组可以直接适配 YSM 系统，也可由独立桥接模组实现双方联动。
+- Landing: 当前仅交付[统一 Molang 声明与业务 view](../../architecture/animation/molang-declarations.md)子范围；模型/渲染与完整适配仍属于 future。
 - Rationale: 系统替换影响的内容组合超出 YSM 自身能够逐一维护的范围；让内容提供方与第三方参与适配，可以进一步降低替换破坏，并分担持续增长的联动维护成本。
+
+### BC.current-molang-api-supports-direct-and-bridge-adaptation
+
+- Claim: 当前 Molang 子范围允许内容提供方或独立桥接模组声明函数，遵守公共值、owner/effect 和类级失败隔离；它不授予 gameplay、模型资源或渲染所有权。
+- Landing: [声明契约](../../architecture/animation/molang-declarations.md)、[接纳](../../architecture/integration/implementation/extension-loading.md#扩展兼容检查与注册)
 
 ### BC.future-api-supports-direct-and-bridge-adaptation
 

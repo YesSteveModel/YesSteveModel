@@ -6,7 +6,6 @@ import com.elfmcys.ysm.client.entity.IPreviewEntity;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.builder.LoopType;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
 import com.elfmcys.ysm.util.EquipmentUtil;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
@@ -23,7 +22,7 @@ public class ArmorPredicate implements IAnimationPredicate<CustomHumanoidEntity<
     }
 
     @Override
-    public PlayState test(AnimationEvent<CustomHumanoidEntity<?>> event, ExpressionEvaluator<?> evaluator) {
+    public PlayState test(AnimationEvent<CustomHumanoidEntity<?>> event) {
         LivingEntity entity = event.getAnimatableEntity().getEntity();
         if (entity == null || event.getAnimatableEntity() instanceof IPreviewEntity) {
             return PlayState.STOP;

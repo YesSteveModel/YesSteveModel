@@ -6,13 +6,14 @@ import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
 import com.elfmcys.ysm.geckolib3.core.keyframe.*;
 import com.elfmcys.ysm.geckolib3.core.keyframe.point.BeginningTransitionPoint;
 import com.elfmcys.ysm.geckolib3.core.keyframe.point.EndingTransitionPoint;
-import com.elfmcys.ysm.geckolib3.core.molang.context.ControllerContext;
-import com.elfmcys.ysm.geckolib3.core.molang.context.MolangContext;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
+import com.elfmcys.ysm.expression.host.ControllerExecutionState;
+import com.elfmcys.ysm.expression.host.ModelSoundId;
+import com.elfmcys.ysm.expression.aot.BooleanProgram;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
+import com.elfmcys.ysm.expression.aot.EventProgram;
 import com.elfmcys.ysm.geckolib3.core.snapshot.BoneTopLevelSnapshot;
 import com.elfmcys.ysm.geckolib3.core.util.MathUtil;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import it.unimi.dsi.fastutil.Pair;
 import it.unimi.dsi.fastutil.ints.Int2ReferenceOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
@@ -28,7 +29,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
 
-
 public class BedrockAnimationController<T extends AnimatableEntity<?>> implements IAnimationController<T> {
     private static final int MAX_HIERARCHY_DEPTH = 5;
 
@@ -38,7 +38,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
     /**
      * 与动画控制器相关的 molang 上下文
      */
-    private final ControllerContext ctx;
+    private final ControllerExecutionState ctx;
 
     @Nullable
     private List<BoneTopLevelSnapshot> modelBones;
@@ -52,7 +52,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
     private final ReferenceArrayList<AnimationPlayerHolder> animationPlayers = new ReferenceArrayList<>(8);
     private int activeAnimationPlayerSize = 0;
 
-    private final Int2ReferenceOpenHashMap<BlendBoneAnimationQueue> blendAnimationQueues = new Int2ReferenceOpenHashMap<>(64);
+    private final Int2ReferenceOpenHashMap<BlendBoneAnimationQueue> blendAnimationQueues =
+        new Int2ReferenceOpenHashMap<>(64);
     private final ReferenceArrayList<BlendBoneAnimationQueue> activeBlendAnimationQueues = new ReferenceArrayList<>(16);
     private boolean isActiveQueuesDirty = false;
 
@@ -68,8 +69,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
      * 你可以为一个实体附加多个动画控制器 <br>
      * 比如一个控制器控制实体大小，另一个控制移动，攻击等等
      *
-     * @param animatableEntity      实体
-     * @param name                  动画控制器名称
+     * @param animatableEntity 实体
+     * @param name 动画控制器名称
      * @param transitionLengthTicks 默认动画过渡时间（tick）
      */
     public BedrockAnimationController(T animatableEntity, String name, float transitionLengthTicks) {
@@ -78,25 +79,24 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         this.initTransitionLengthTicks = transitionLengthTicks;
         this.hierarchy = null;
         this.hierarchyDepth = 1;
-        this.ctx = new ControllerContext(true);
+        this.ctx = new ControllerExecutionState(true);
     }
 
     @Override
     @SuppressWarnings("DataFlowIssue")
-    public void process(AnimationEvent<T> event, ExpressionEvaluator<MolangContext<?>> evaluator, boolean allowEmitting) {
+    public void process(AnimationEvent<T> event, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents) {
         if (this.data == null) {
             return;
         }
+        evaluation.setControllerContext(ctx);
 
-        evaluator.entity().setAnimationContext(null);
-        evaluator.entity().setControllerContext(ctx);
         var renderTicks = event.renderTicks;
 
         // 转换到空状态时连续跳转
         skipPathSet.clear();
         var update = false;
         while (true) {
-            if (updateState(evaluator)) {
+            if (updateState(evaluation)) {
                 update = true;
                 if (this.activeAnimationPlayerSize == 0) {
                     continue;
@@ -107,11 +107,14 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
 
         if (state != null && state.subEntryName() != null && hierarchyDepth != MAX_HIERARCHY_DEPTH) {
             if (update) {
-                var subHierarchy = hierarchyDepth > 1 ? String.format("%s.%s", hierarchy, state.subEntryName()) : state.subEntryName();
-                var subData = this.animatableEntity.getAnimationControllerData(String.format("%s.%s", this.name, subHierarchy));
+                var subHierarchy =
+                    hierarchyDepth > 1 ? String.format("%s.%s", hierarchy, state.subEntryName()) : state.subEntryName();
+                var subData =
+                    this.animatableEntity.getAnimationControllerData(String.format("%s.%s", this.name, subHierarchy));
                 if (subData != null) {
                     if (subController == null) {
-                        subController = new BedrockAnimationController<>(this.animatableEntity, name, initTransitionLengthTicks);
+                        subController =
+                            new BedrockAnimationController<>(this.animatableEntity, name, initTransitionLengthTicks);
                         subController.updateModel(modelBones, subData);
                     } else {
                         subController.updateControllerData(subData);
@@ -120,7 +123,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
                 }
             }
             if (subController != null) {
-                subController.process(event, evaluator, allowEmitting);
+                subController.process(event, evaluation, executeEvents);
             }
             return;
         }
@@ -128,8 +131,9 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         // 更新动画
         for (var i = 0; i < this.activeAnimationPlayerSize; i++) {
             var holder = this.animationPlayers.get(i);
-            holder.conditionHolder().evaluateApplyCondition(evaluator);
-            holder.animationPlayer().process(renderTicks, evaluator, allowEmitting && holder.conditionHolder().shouldApply());
+            holder.conditionHolder().evaluateApplyCondition(evaluation);
+            holder.animationPlayer().process(renderTicks, evaluation,
+                executeEvents && holder.conditionHolder().shouldApply());
         }
 
         if (isActiveQueuesDirty) {
@@ -182,8 +186,10 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
     }
 
     @Override
-    public void updateModel(List<BoneTopLevelSnapshot> modelBones, Object2ReferenceMap<String, List<IValue>> eventHandlers) {
-        var data = this.animatableEntity.getAnimationControllerData(this.name);
+    public void updateModel(List<BoneTopLevelSnapshot> modelBones,
+        Object2ReferenceMap<String, List<EventProgram>> eventHandlers, java.util.function.Function<String,
+            com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData> definitions) {
+        var data = definitions.apply(this.name);
         if (data != null) {
             this.updateModel(modelBones, data);
         } else {
@@ -191,7 +197,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         }
     }
 
-    public void updateModel(List<BoneTopLevelSnapshot> modelBones, @NotNull AnimationControllerData animationControllerData) {
+    public void updateModel(List<BoneTopLevelSnapshot> modelBones,
+        @NotNull AnimationControllerData animationControllerData) {
         this.clear();
 
         this.data = animationControllerData;
@@ -199,6 +206,15 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
             this.blendAnimationQueues.put(bone.name, new BlendBoneAnimationQueue(bone));
         }
         this.modelBones = modelBones;
+    }
+
+    @Override
+    public Runnable prepareResourceBinding(Object2ReferenceMap<String, List<EventProgram>> eventHandlers,
+        java.util.function.Function<String, AnimationControllerData> definitions) {
+        var next = definitions.apply(name);
+        if (next != data)
+            throw new IllegalArgumentException("Compatible controller definition changed: " + name);
+        return () -> this.data = next;
     }
 
     private void updateControllerData(AnimationControllerData animationControllerData) {
@@ -210,7 +226,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         this.hierarchyDepth = hierarchyDepth;
     }
 
-    private boolean updateState(ExpressionEvaluator<MolangContext<?>> evaluator) {
+    private boolean updateState(EntityExpressionRuntime.Evaluation evaluation) {
         if (this.state == null) {
             // 初始化默认状态
             var stateName = this.data.initialState();
@@ -220,7 +236,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
             }
             skipPathSet.add(initialState.pooledName());
             setStateName(initialState.name());
-            transition(initialState, evaluator);
+            transition(initialState, evaluation);
             return true;
         } else {
             // 更新当前状态
@@ -243,7 +259,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
             }
 
             for (var transition : state.transitions()) {
-                if (!transition.right().evalAsBoolean(evaluator)) {
+                if (!evaluation.evaluate(transition.right())) {
                     continue;
                 }
                 var stateName = transition.leftInt();
@@ -252,39 +268,38 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
                     return false;
                 }
                 setStateName(newState.name());
-                transition(newState, evaluator);
+                transition(newState, evaluation);
                 return true;
             }
         }
         return false;
     }
 
-    private void transition(@Nullable AnimationControllerState newState, ExpressionEvaluator<MolangContext<?>> evaluator) {
+    private void transition(@Nullable AnimationControllerState newState,
+        EntityExpressionRuntime.Evaluation evaluation) {
         if (newState == null && this.state == null) {
             return;
         }
         ctx.soundManager().stopAllPlayingSounds();
 
-        evaluator.entity().setAllowEmitting(true);
         if (this.state != null) {
             if (this.state.subEntryName() != null && this.subController != null) {
-                this.subController.transition(null, evaluator);
+                this.subController.transition(null, evaluation);
             }
             for (var exp : this.state.onExit()) {
-                exp.eval(evaluator);
+                evaluation.execute(exp);
             }
         }
         if (newState != null) {
             for (var exp : newState.onEntry()) {
-                exp.eval(evaluator);
+                evaluation.execute(exp);
             }
             for (var se : newState.soundEffects()) {
                 if (!StringUtils.isNoneBlank(se)) {
-                    ctx.soundManager().playSound(evaluator.entity().animatableEntity(), 0, se, false, null);
+                    ctx.soundManager().playSound(animatableEntity, ModelSoundId.numeric(0), se, false, null);
                 }
             }
         }
-        evaluator.entity().setAllowEmitting(false);
         this.state = newState;
         for (var queue : this.activeBlendAnimationQueues) {
             queue.setInactive();
@@ -292,7 +307,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         this.activeBlendAnimationQueues.clear();
         this.isActiveQueuesDirty = true;
 
-        var animationSize = newState == null || newState.isBuiltin() || newState.subEntryName() != null ? 0 : newState.animations().size();
+        var animationSize = newState == null || newState.isBuiltin() || newState.subEntryName() != null ? 0
+            : newState.animations().size();
 
         // 扩容动画播放器列表
         for (var i = this.animationPlayers.size(); i < animationSize; i++) {
@@ -301,7 +317,6 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         // 停用多余的动画播放器
         for (var i = animationSize; i < this.activeAnimationPlayerSize; i++) {
             var player = this.animationPlayers.get(i).animationPlayer;
-            player.finalizeAnimationContext(evaluator);
             player.reset();
         }
         // 初始化动画播放器
@@ -316,7 +331,6 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
             }
 
             holder.conditionHolder().setApplyCondition(animPair.getRight());
-            holder.animationPlayer().finalizeAnimationContext(evaluator);
             holder.animationPlayer().setBeginningTransition(newState.blendTransition().startNew());
             holder.animationPlayer().indicateReload();
             holder.animationPlayer().setAnimation(animPair.getLeft());
@@ -353,7 +367,6 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
             holder.animationPlayer.clear();
         }
         this.animationPlayers.clear();
-        this.ctx.soundManager().stopAllPlayingSounds();
     }
 
     private static class AnimationPlayerHolder {
@@ -390,23 +403,23 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
 
     private static class ConditionHolder {
         @Nullable
-        private IValue applyCondition;
+        private BooleanProgram applyCondition;
         private boolean result;
 
         public ConditionHolder() {
             result = true;
         }
 
-        public void setApplyCondition(@Nullable IValue applyCondition) {
+        public void setApplyCondition(@Nullable BooleanProgram applyCondition) {
             this.applyCondition = applyCondition;
             if (applyCondition == null) {
                 result = true;
             }
         }
 
-        public void evaluateApplyCondition(ExpressionEvaluator<?> evaluator) {
+        public void evaluateApplyCondition(EntityExpressionRuntime.Evaluation evaluation) {
             if (applyCondition != null) {
-                result = applyCondition.evalAsBoolean(evaluator);
+                result = evaluation.evaluate(applyCondition);
             }
         }
 
@@ -416,8 +429,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
     }
 
     /**
-     * 在对过渡动画进行混合时假设所有活跃的动画播放器具有相同的过渡时间和起始点，并且同时开始过渡，
-     * 实际上也理应如此。
+     * 在对过渡动画进行混合时假设所有活跃的动画播放器具有相同的过渡时间和起始点，并且同时开始过渡， 实际上也理应如此。
      */
     private static class BlendBoneAnimationQueue implements IBoneAnimationQueue {
         private final BoneTopLevelSnapshot snapshot;
@@ -468,7 +480,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         }
 
         @Override
-        public Optional<AnimationVec3> pollRotationPoint(ExpressionEvaluator<MolangContext<?>> evaluator) {
+        public Optional<AnimationVec3> pollRotationPoint(EntityExpressionRuntime.Evaluation evaluation) {
             var target = new AnimationVec3();
 
             // 这一坨不要轻易改
@@ -505,7 +517,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
                 }
 
                 if (!isBeginningTransition) {
-                    var pointValue = point.getLerpPoint(evaluator);
+                    var pointValue = point.getLerpPoint(evaluation);
                     var weight = pair.right().getBlendWeight();
                     if (point instanceof EndingTransitionPoint endingPoint) {
                         var progress = endingPoint.getPercentCompleted();
@@ -516,8 +528,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
                     }
                     target.fma(weight, pointValue);
                 } else if (transitionPercentProgress <= -0.00001f || transitionPercentProgress >= 0.00001f) {
-                    var transitionPoint = (BeginningTransitionPoint) point;
-                    var dst = transitionPoint.getTransitionDst(evaluator);
+                    var transitionPoint = (BeginningTransitionPoint)point;
+                    var dst = transitionPoint.getTransitionDst(evaluation);
                     target.fma(pair.right().getBlendWeight(), dst);
                 } else {
                     target.set(offset);
@@ -536,7 +548,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         }
 
         @Override
-        public Optional<AnimationVec3> pollPositionPoint(ExpressionEvaluator<MolangContext<?>> evaluator) {
+        public Optional<AnimationVec3> pollPositionPoint(EntityExpressionRuntime.Evaluation evaluation) {
             var target = new AnimationVec3();
 
             // 这一坨不要轻易改
@@ -571,7 +583,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
                 }
 
                 if (!isBeginningTransition) {
-                    var pointValue = point.getLerpPoint(evaluator);
+                    var pointValue = point.getLerpPoint(evaluation);
                     var weight = pair.right().getBlendWeight();
                     if (point instanceof EndingTransitionPoint endingPoint) {
                         var progress = endingPoint.getPercentCompleted();
@@ -582,8 +594,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
                     }
                     target.fma(weight, pointValue);
                 } else if (transitionPercentProgress <= -0.00001f || transitionPercentProgress >= 0.00001f) {
-                    var transitionPoint = (BeginningTransitionPoint) point;
-                    var dst = transitionPoint.getTransitionDst(evaluator);
+                    var transitionPoint = (BeginningTransitionPoint)point;
+                    var dst = transitionPoint.getTransitionDst(evaluation);
                     target.fma(pair.right().getBlendWeight(), dst);
                 } else {
                     target.set(offset);
@@ -602,7 +614,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         }
 
         @Override
-        public Optional<AnimationVec3> pollScalePoint(ExpressionEvaluator<MolangContext<?>> evaluator) {
+        public Optional<AnimationVec3> pollScalePoint(EntityExpressionRuntime.Evaluation evaluation) {
             var target = new AnimationVec3(1, 1, 1);
 
             // 这一坨不要轻易改
@@ -637,7 +649,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
                 }
 
                 if (!isBeginningTransition) {
-                    var pointValue = point.getLerpPoint(evaluator);
+                    var pointValue = point.getLerpPoint(evaluation);
                     var weight = pair.right().getBlendWeight();
                     if (point instanceof EndingTransitionPoint endingPoint) {
                         var progress = endingPoint.getPercentCompleted();
@@ -652,8 +664,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
                         target.mul(MathUtil.computeWeightedScale(pointValue, weight));
                     }
                 } else if (transitionPercentProgress <= -0.00001f || transitionPercentProgress >= 0.00001f) {
-                    var transitionPoint = (BeginningTransitionPoint) point;
-                    var dst = transitionPoint.getTransitionDst(evaluator);
+                    var transitionPoint = (BeginningTransitionPoint)point;
+                    var dst = transitionPoint.getTransitionDst(evaluation);
                     target.mul(MathUtil.computeWeightedScale(dst, pair.right().getBlendWeight()));
                 } else {
                     target.set(offset);

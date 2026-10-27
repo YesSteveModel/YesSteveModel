@@ -11,8 +11,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 public class VehicleModelInfoCapabilityProvider implements ICapabilitySerializable<CompoundTag> {
-    public static Capability<VehicleModelInfoCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {
-    });
+    public static Capability<VehicleModelInfoCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {});
     private VehicleModelInfoCapability instance = null;
 
     @Override

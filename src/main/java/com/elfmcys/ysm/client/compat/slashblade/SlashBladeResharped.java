@@ -10,7 +10,6 @@ import org.apache.commons.lang3.StringUtils;
 
 import java.util.Map;
 
-
 public class SlashBladeResharped {
     /**
      * 兼容新旧两版拔刀剑，部分不一致的动画名在这里归一化

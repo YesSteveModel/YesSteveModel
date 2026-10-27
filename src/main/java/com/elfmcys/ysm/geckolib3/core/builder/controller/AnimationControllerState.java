@@ -1,8 +1,9 @@
 package com.elfmcys.ysm.geckolib3.core.builder.controller;
 
 import com.elfmcys.ysm.geckolib3.core.controller.transition.IBlendTransition;
-import com.elfmcys.ysm.geckolib3.core.molang.util.StringPool;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
+import com.elfmcys.ysm.util.StringPool;
+import com.elfmcys.ysm.expression.aot.BooleanProgram;
+import com.elfmcys.ysm.expression.aot.VoidProgram;
 import it.unimi.dsi.fastutil.ints.IntReferenceImmutablePair;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import it.unimi.dsi.fastutil.objects.ReferenceList;
@@ -22,22 +23,25 @@ public class AnimationControllerState {
     private final boolean builtin;
     @Nullable
     private final String subEntryName;
-    private final List<Pair<String, @Nullable IValue>> animations;
-    private final List<IntReferenceImmutablePair<IValue>> transitions;
+    private final List<Pair<String, @Nullable BooleanProgram>> animations;
+    private final List<IntReferenceImmutablePair<BooleanProgram>> transitions;
     private final List<String> soundEffects;
-    private final List<IValue> onEntry;
-    private final List<IValue> onExit;
+    private final List<VoidProgram> onEntry;
+    private final List<VoidProgram> onExit;
     private final IBlendTransition blendTransition;
     private final boolean blendViaShortestPath;
 
     @SuppressWarnings("unchecked")
-    public AnimationControllerState(String name, Pair<String, IValue>[] animations, Pair<String, IValue>[] transitions, String[] soundEffects, IValue[] onEntry, IValue[] onExit, IBlendTransition blendTransition, boolean blendViaShortestPath) {
+    public AnimationControllerState(String name, Pair<String, BooleanProgram>[] animations,
+        Pair<String, BooleanProgram>[] transitions, String[] soundEffects, VoidProgram[] onEntry, VoidProgram[] onExit,
+        IBlendTransition blendTransition, boolean blendViaShortestPath) {
         this.name = name;
         this.pooledName = StringPool.computeIfAbsent(name);
         this.builtin = pooledName == BUILTIN_NAME;
         this.subEntryName = name.startsWith(SUB_ENTRY_PREFIX) ? name.substring(SUB_ENTRY_PREFIX.length()) : null;
         this.animations = ReferenceLists.unmodifiable(ReferenceArrayList.wrap(animations));
-        this.transitions = ReferenceLists.unmodifiable((ReferenceList<IntReferenceImmutablePair<IValue>>) (Object) ReferenceArrayList.wrap(Arrays.stream(transitions)
+        this.transitions = ReferenceLists.unmodifiable((ReferenceList<
+            IntReferenceImmutablePair<BooleanProgram>>)(Object)ReferenceArrayList.wrap(Arrays.stream(transitions)
                 .map(p -> new IntReferenceImmutablePair<>(StringPool.computeIfAbsent(p.getKey()), p.getValue()))
                 .toArray(IntReferenceImmutablePair[]::new)));
         this.soundEffects = ReferenceLists.unmodifiable(ReferenceArrayList.wrap(soundEffects));
@@ -64,11 +68,11 @@ public class AnimationControllerState {
         return subEntryName;
     }
 
-    public List<Pair<String, @Nullable IValue>> animations() {
+    public List<Pair<String, @Nullable BooleanProgram>> animations() {
         return animations;
     }
 
-    public List<IntReferenceImmutablePair<IValue>> transitions() {
+    public List<IntReferenceImmutablePair<BooleanProgram>> transitions() {
         return transitions;
     }
 
@@ -76,11 +80,11 @@ public class AnimationControllerState {
         return soundEffects;
     }
 
-    public List<IValue> onEntry() {
+    public List<VoidProgram> onEntry() {
         return onEntry;
     }
 
-    public List<IValue> onExit() {
+    public List<VoidProgram> onExit() {
         return onExit;
     }
 

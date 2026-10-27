@@ -24,12 +24,16 @@ public class AnimationRegister {
         register("riptide", Priority.HIGHEST, (player, event) -> player.isAutoSpinAttack());
         register("sleep", Priority.HIGHEST, (player, event) -> player.getPose() == Pose.SLEEPING);
         register("swim", Priority.HIGHEST, (player, event) -> player.isSwimming());
-        register("climb", Priority.HIGHEST, (player, event) -> player.getPose() == Pose.SWIMMING && Math.abs(event.getLimbSwingAmount()) > MIN_SPEED);
+        register("climb", Priority.HIGHEST,
+            (player, event) -> player.getPose() == Pose.SWIMMING && Math.abs(event.getLimbSwingAmount()) > MIN_SPEED);
         register("climbing", Priority.HIGHEST, (player, event) -> player.getPose() == Pose.SWIMMING);
 
-        register("ladder_up", Priority.HIGHEST, (player, event) -> player.onClimbable() && getVerticalSpeed(player) > 0);
-        register("ladder_stillness", Priority.HIGHEST, (player, event) -> player.onClimbable() && getVerticalSpeed(player) == 0);
-        register("ladder_down", Priority.HIGHEST, (player, event) -> player.onClimbable() && getVerticalSpeed(player) < 0);
+        register("ladder_up", Priority.HIGHEST,
+            (player, event) -> player.onClimbable() && getVerticalSpeed(player) > 0);
+        register("ladder_stillness", Priority.HIGHEST,
+            (player, event) -> player.onClimbable() && getVerticalSpeed(player) == 0);
+        register("ladder_down", Priority.HIGHEST,
+            (player, event) -> player.onClimbable() && getVerticalSpeed(player) < 0);
 
         register("fly", Priority.HIGH, (player, event) -> {
             if (event.getAnimatableEntity() instanceof PlayerAnimatableCapability cap && !cap.isLocalPlayer()) {
@@ -37,13 +41,16 @@ public class AnimationRegister {
             }
             return player.getAbilities().flying;
         });
-        register("elytra_fly", Priority.HIGH, (player, event) -> player.getPose() == Pose.FALL_FLYING && player.isFallFlying());
+        register("elytra_fly", Priority.HIGH,
+            (player, event) -> player.getPose() == Pose.FALL_FLYING && player.isFallFlying());
 
         register("swim_stand", Priority.NORMAL, (player, event) -> player.isInWater() && !player.onGround());
         register("attacked", LoopType.PLAY_ONCE, Priority.NORMAL, (player, event) -> player.hurtTime > 0);
         register("jump", Priority.NORMAL, (player, event) -> !player.onGround() && !player.isInWater());
-        register("sneak", Priority.NORMAL, (player, event) -> player.onGround() && player.getPose() == Pose.CROUCHING && Math.abs(event.getLimbSwingAmount()) > MIN_SPEED);
-        register("sneaking", Priority.NORMAL, (player, event) -> player.onGround() && player.getPose() == Pose.CROUCHING);
+        register("sneak", Priority.NORMAL, (player, event) -> player.onGround() && player.getPose() == Pose.CROUCHING
+            && Math.abs(event.getLimbSwingAmount()) > MIN_SPEED);
+        register("sneaking", Priority.NORMAL,
+            (player, event) -> player.onGround() && player.getPose() == Pose.CROUCHING);
 
         register("run", Priority.LOW, (player, event) -> player.onGround() && player.isSprinting());
         register("walk", Priority.LOW, (player, event) -> player.onGround() && event.getLimbSwingAmount() > MIN_SPEED);
@@ -51,15 +58,17 @@ public class AnimationRegister {
         register(IDLE, Priority.LOWEST, (player, event) -> true);
     }
 
-    private static void register(String animationName, LoopType loopType, int priority, BiPredicate<Player, AnimationEvent<CustomPlayerEntity>> predicate) {
+    private static void register(String animationName, LoopType loopType, int priority,
+        BiPredicate<Player, AnimationEvent<CustomPlayerEntity>> predicate) {
         PlayerMainPredicate.register(new AnimationState<>(animationName, loopType, priority, predicate));
     }
 
-    private static void register(String animationName, int priority, BiPredicate<Player, AnimationEvent<CustomPlayerEntity>> predicate) {
+    private static void register(String animationName, int priority,
+        BiPredicate<Player, AnimationEvent<CustomPlayerEntity>> predicate) {
         register(animationName, LoopType.LOOP, priority, predicate);
     }
 
     private static float getVerticalSpeed(Player player) {
-        return 20 * (float) (player.position().y - player.yo);
+        return 20 * (float)(player.position().y - player.yo);
     }
 }

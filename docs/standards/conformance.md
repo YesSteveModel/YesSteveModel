@@ -9,7 +9,7 @@
 | C1 Container Metadata | magic、summary、header、properties、chunk table、version、verification | ordinary payload 存在或可用 |
 | C2 Verified Preamble | C1，且输入恰好结束于 verification payload | 外部 ordinary payload 可取得 |
 | C3 Complete Container | C1，所有 inline payload、padding、decode size、hash 与精确 EOF | 上层 schema 语义 |
-| M1 Model Metadata | C1 或 C2、Manifest payload、schema/version/vendor、modelHash、target、按 kind 裁决的 texture cardinality 与 preview 不变量；列出所有 unsupported extension | 引用 payload 可加载或 extension 可消费 |
+| M1 Model Metadata | C1 或 C2、Manifest payload、schema/version/vendor、modelHash、target、按 kind 裁决的 texture cardinality、preview 不变量与 blob 引用角色相容；列出所有 unsupported extension | 引用 payload 可加载或 extension 可消费 |
 | M2 Complete Model | M1、完整引用闭包、全部资源与结构校验，且不依赖本标准未冻结的 extension | renderer 输出或平台设备行为 |
 
 实现必须在结果中携带实际 profile。Metadata-first、延迟加载和外部 payload source 是执行策略，不能把 M1 标成 M2。
@@ -40,10 +40,10 @@
 - alignment padding 中含非零字节、payload 截断、C3 尾随数据、C2 多余数据。
 - schema id、字面版本、vendor 错误，Manifest 缺失、空或非法 Proto3。
 - modelHash 非 32 bytes、player target 缺失或错配、target id 重复、player texture 为空、已有 texture entry 的 key 或 image/reference 不变量损坏。
-- preview source 与 thumbnail presence 冲突，blob/image/definition/string 引用缺失或类型冲突。
+- preview source 与 thumbnail presence 冲突，blob/image/definition/string/sound 引用缺失或类型冲突。
 - RGBA 长度或尺寸溢出、外部图像 probe 与 descriptor 不一致、多帧输入进入 portable profile。
 - bone name、parent、cycle、vector、finite-number、cube-count，以及 cube 数组长度或索引错误。
-- sound/stream 和 ZTX extension 不得被误报为 M2；ED25519 与未知 image token 不得被静默降级。
+- 不满足 Opus-only profile 的声音和 ZTX extension 不得被误报为 M2；ED25519 与未知 image token 不得被静默降级。
 
 每个负例应只破坏一个不变量，并断言失败层级；不能只断言“最终某处抛错”。
 
@@ -66,7 +66,7 @@
 | Profile | 必须证明 |
 |---|---|
 | P1 Frame | 单字节 `messageTag`、simple/full、little-endian header、Protobuf/zstd、attachment、大小限制和未知输入拒绝 |
-| P2 Model Session | P1、精确 `0.3.0-unstable` Hello、每 exact connection 单一 session、四 collection typed full/delta、七种 typed fragment、三种 model-distribution request、业务本地 bounds/completion、授权与既有 ID 17 selection 边界 |
+| P2 Model Session | P1、[当前协议](protocol-v1/README.md)的精确 Hello 版本、每 exact connection 单一 session、四 collection typed full/delta、七种 typed fragment、三种 model-distribution request、业务本地 bounds/completion、授权与 selection 边界 |
 | P3 Gameplay State | P2、真实 FULL baseline、generation-free 表现消息、best-effort 失败边界、控制消息方向与连接隔离 |
 
 P1 golden 至少包含同一消息的 simple frame、raw full frame、zstd full frame 与带 attachment 的 full frame，并明确 message tag、方向、三个 little-endian size、decoded Proto 和 attachment。负例至少覆盖未知/reserved ID、未知 flag、错误方向、截断、声明/实际长度不一致、zstd 尾随数据、解压长度和 strict 30 KiB / 1 MiB 边界。
@@ -84,7 +84,7 @@ P3 必须覆盖无真实 FULL baseline 的 `PlayerStateReport` DELTA 被拒绝�
 
 ## 视觉一致性验收
 
-视觉验收消费[受支持几何与材质语义](../product-decisions/decisions/geometry-regions.md)、[动画因果关系](../product-decisions/decisions/animation-sampling.md)、[附着内容](../product-decisions/decisions/attachments.md)、[游戏视觉反馈](../product-decisions/decisions/game-visual-signals.md)、[分类降级与恢复](../product-decisions/decisions/model-fallback.md)、[骨骼透明度](../product-decisions/decisions/bone-opacity.md)、[透明保证范围](../product-decisions/decisions/transparency-scope.md)与[联动能力](../product-decisions/decisions/mod-integration.md)；场景表不增加产品支持范围。固定游戏、联动和光照条件，比较整体视觉效果与对应语义，不设跨环境逐像素相同的硬门槛。
+视觉验收消费[创作结果与输出等价](../product-decisions/decisions/geometry-regions.md)、[动画因果关系](../product-decisions/decisions/animation-sampling.md)、[附着内容](../product-decisions/decisions/attachments.md)、[游戏视觉反馈](../product-decisions/decisions/game-visual-signals.md)、[分类降级与恢复](../product-decisions/decisions/model-fallback.md)、[骨骼透明度](../product-decisions/decisions/bone-opacity.md)、[透明保证范围](../product-decisions/decisions/transparency-scope.md)与[联动能力](../product-decisions/decisions/mod-integration.md)。具体剔除及观察范围由[渲染设计](../architecture/rendering/overview.md#几何与可见面)定义，场景表不增加产品支持范围。固定游戏、联动和光照条件，比较整体视觉效果与对应语义，不设跨环境逐像素相同的硬门槛。
 
 | 验收类别 | 必须覆盖的内容 |
 |---|---|

@@ -19,15 +19,14 @@ final class CatalogModelPreviewAnimationState {
     private boolean wasHovered;
 
     void configure(String previewAnimation, boolean hasHover, boolean hasHoverFadeout,
-                   DoubleSupplier hoverFadeoutMillis, boolean hasFocus) {
-        this.previewAnimation = previewAnimation == null || previewAnimation.isEmpty()
-                ? AnimationRegister.IDLE : previewAnimation;
+        DoubleSupplier hoverFadeoutMillis, boolean hasFocus) {
+        this.previewAnimation =
+            previewAnimation == null || previewAnimation.isEmpty() ? AnimationRegister.IDLE : previewAnimation;
         this.hoverAnimation = hasHover ? AnimationRegister.HOVER : AnimationRegister.EMPTY;
-        this.hoverFadeoutAnimation = hasHoverFadeout
-                ? AnimationRegister.HOVER_FADEOUT : AnimationRegister.EMPTY;
+        this.hoverFadeoutAnimation = hasHoverFadeout ? AnimationRegister.HOVER_FADEOUT : AnimationRegister.EMPTY;
         this.focusAnimation = hasFocus ? AnimationRegister.FOCUS : AnimationRegister.EMPTY;
-        this.hoverFadeoutMillis = hasHoverFadeout
-                ? Objects.requireNonNull(hoverFadeoutMillis, "hoverFadeoutMillis") : NO_FADEOUT;
+        this.hoverFadeoutMillis =
+            hasHoverFadeout ? Objects.requireNonNull(hoverFadeoutMillis, "hoverFadeoutMillis") : NO_FADEOUT;
         resetInteraction();
     }
 

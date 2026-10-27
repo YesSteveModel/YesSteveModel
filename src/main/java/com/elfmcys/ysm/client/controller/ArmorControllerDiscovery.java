@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.client.controller;
 
-import com.elfmcys.ysm.client.entity.CustomEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.client.entity.IPreviewEntity;
 import com.elfmcys.ysm.model.resource.client.CommonAsset;
 import com.elfmcys.ysm.model.resource.client.PlayerModelResources;
@@ -12,13 +12,15 @@ import org.apache.commons.lang3.tuple.Pair;
 import java.util.ArrayList;
 import java.util.List;
 
-public class ArmorControllerDiscovery<T extends CustomEntity<?>> implements ControllerDiscovery<T, PlayerModelResources> {
+public class ArmorControllerDiscovery<T extends AnimatableEntity<?>>
+    implements ControllerDiscovery<T, PlayerModelResources> {
     private final String category;
     private final String name;
     private final ResourceAdapter<PlayerModelResources> resourceAdapter;
     private final TriFunction<String, T, EquipmentSlot, IAnimationController<T>> controllerFunc;
 
-    public ArmorControllerDiscovery(String category, String name, ResourceAdapter<PlayerModelResources> resourceAdapter, TriFunction<String, T, EquipmentSlot, IAnimationController<T>> controllerFunc) {
+    public ArmorControllerDiscovery(String category, String name, ResourceAdapter<PlayerModelResources> resourceAdapter,
+        TriFunction<String, T, EquipmentSlot, IAnimationController<T>> controllerFunc) {
         this.category = category;
         this.name = name;
         this.resourceAdapter = resourceAdapter;
@@ -26,11 +28,11 @@ public class ArmorControllerDiscovery<T extends CustomEntity<?>> implements Cont
     }
 
     @Override
-    public ControllerFactory<T> process(PlayerModelResources playerResources, CommonAsset assets) {
+    public ControllerFactory<T> process(PlayerModelResources playerResources, CommonAsset assets,
+        com.elfmcys.ysm.model.resource.client.AnimationStore animations) {
         List<Pair<String, EquipmentSlot>> slots = new ArrayList<>();
         var condition = resourceAdapter.getArmorCondition(playerResources, assets);
         var controllers = resourceAdapter.getControllers(playerResources, assets);
-        var animations = resourceAdapter.getAnimations(playerResources, assets);
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             var controllerName = String.format("%s.%s_%s", category, name, slot.getName());
             if (controllers.containsKey(controllerName)) {
@@ -41,7 +43,8 @@ public class ArmorControllerDiscovery<T extends CustomEntity<?>> implements Cont
                 slots.add(Pair.of(controllerName, slot));
                 continue;
             }
-            if (slot.getType() == EquipmentSlot.Type.ARMOR && (condition.hasTest(slot) || animations.containsKey(slot.getName() + ":default"))) {
+            if (slot.getType() == EquipmentSlot.Type.ARMOR
+                && (condition.hasTest(slot) || animations.containsKey(slot.getName() + ":default"))) {
                 slots.add(Pair.of(controllerName, slot));
                 continue;
             }

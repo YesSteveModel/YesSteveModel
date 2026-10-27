@@ -39,7 +39,8 @@ public interface EasingType {
         }
         RawBoneKeyFrame begin = keyFrames.get(index - 1);
         RawBoneKeyFrame end = keyFrames.get(index);
-        return new LinearKeyFrame(begin.startTick(), end.startTick() - begin.startTick(), begin.postValue(), end.preValue(), end.postValue());
+        return new LinearKeyFrame(begin.startTick(), end.startTick() - begin.startTick(), begin.postValue(),
+            end.preValue(), end.postValue());
     }
 
     static BoneKeyFrame buildCatmullRomKeyFrame(List<RawBoneKeyFrame> keyFrames, int index) {
@@ -51,6 +52,7 @@ public interface EasingType {
         RawBoneKeyFrame end = keyFrames.get(index);
         RawBoneKeyFrame right = keyFrames.get(Math.min(keyFrames.size() - 1, index + 1));
 
-        return new CatmullRomKeyFrame(begin.startTick(), end.startTick() - begin.startTick(), left.postValue(), begin.postValue(), end.preValue(), right.preValue(), end.postValue());
+        return new CatmullRomKeyFrame(begin.startTick(), end.startTick() - begin.startTick(), left.postValue(),
+            begin.postValue(), end.preValue(), right.preValue(), end.postValue());
     }
 }

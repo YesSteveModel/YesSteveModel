@@ -6,8 +6,10 @@
   - 烘焙分区前提: [DD.authoring-semantics-before-optimization](geometry-regions.md#ddauthoring-semantics-before-optimization)
   - 动画属性边界: [BC.child-bones-inherit-pose](bone-and-controller.md#bcchild-bones-inherit-pose)
 - Landing:
-  - [architecture](../../architecture/animation/processor-and-bone-output.md)
-  - [architecture](../../architecture/rendering/bake-and-partition.md#四逻辑分区)
+  - [implementation](../../architecture/animation/implementation/processor-and-bone-output.md)
+  - [implementation](../../architecture/rendering/implementation/bake-and-partition.md#四逻辑分区)
+  - [design](../../architecture/animation/overview.md)
+  - [design](../../architecture/rendering/overview.md)
 
 ## DD.bone-opacity-is-translucent-only
 

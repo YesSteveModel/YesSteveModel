@@ -5,14 +5,35 @@ import com.elfmcys.ysm.util.Closeable;
 
 import java.lang.ref.Cleaner;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 public class NativeObject implements Closeable {
     private final State state;
     private final Cleaner.Cleanable cleanable;
 
     public NativeObject(long ptr) {
-        state = new State(ptr);
+        this(new State(ptr));
+    }
+
+    protected NativeObject(State state) {
+        this.state = state;
         cleanable = CleanerUtil.ref(this, state, State::clean);
+    }
+
+    /** The factory must finish construction before exposing the owner. */
+    protected static <T extends NativeObject> T adopt(long ptr, Function<State, T> factory) {
+        State state = null;
+        try {
+            state = new State(ptr);
+            return factory.apply(state);
+        } catch (RuntimeException | Error failure) {
+            if (state == null) {
+                nDestroy(ptr);
+            } else {
+                state.clean();
+            }
+            throw failure;
+        }
     }
 
     public long get() {
@@ -27,7 +48,7 @@ public class NativeObject implements Closeable {
         cleanable.clean();
     }
 
-    private static final class State {
+    protected static final class State {
         private final long ptr;
         private final AtomicBoolean open = new AtomicBoolean(true);
 

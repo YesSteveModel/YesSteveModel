@@ -10,12 +10,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 public final class ModelIdUtil {
-    private static final Set<String> KNOWN_EXT = Sets.newHashSet(
-            ".zip",
-            ".7z",
-            ".ysm",
-            ".mxc"
-    );
+    private static final Set<String> KNOWN_EXT = Sets.newHashSet(".zip", ".7z", ".ysm", ".mxc");
 
     /**
      * "dir1/dir2/id" -> {"id", "dir1/dir2/"}

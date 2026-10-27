@@ -1,14 +1,11 @@
 package com.elfmcys.ysm.client.entity;
 
-import com.elfmcys.ysm.client.compat.immersivemelodies.ImmersiveMelodiesCompat;
 import com.elfmcys.ysm.geckolib3.model.EntityStateTracker;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ItemStack;
 
 public class HumanoidStateTracker<T extends LivingEntity> extends EntityStateTracker<T> {
-    private ImmersiveMelodiesCompat.ImmersiveMelodiesData imData = new ImmersiveMelodiesCompat.ImmersiveMelodiesData();
-
     private ItemStack mainhandItemStack = ItemStack.EMPTY;
     private ItemStack offhandItemStack = ItemStack.EMPTY;
 
@@ -21,12 +18,6 @@ public class HumanoidStateTracker<T extends LivingEntity> extends EntityStateTra
         mainhandItemStack = ItemStack.EMPTY;
         offhandItemStack = ItemStack.EMPTY;
         super.reset();
-    }
-
-    @Override
-    protected void updateRenderTickData(float currentRenderTick, float lastRenderTick, float partialTicks) {
-        super.updateRenderTickData(currentRenderTick, lastRenderTick, partialTicks);
-        ImmersiveMelodiesCompat.updateMelodyProgress(this.entity, imData);
     }
 
     public ItemStack getHandItem(InteractionHand hand) {
@@ -45,7 +36,4 @@ public class HumanoidStateTracker<T extends LivingEntity> extends EntityStateTra
         }
     }
 
-    public ImmersiveMelodiesCompat.ImmersiveMelodiesData getImmersiveMelodiesData() {
-        return imData;
-    }
 }

@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.mixin;
 
-import com.elfmcys.ysm.network.forge.YsmPacketCompressionBypass;
+import com.elfmcys.ysm.network.forge.ChannelCompressionBypass;
 import io.netty.channel.Channel;
 import net.minecraft.network.CompressionEncoder;
 import net.minecraft.network.Connection;
@@ -16,24 +16,22 @@ public abstract class ConnectionMixin {
     private Channel channel;
 
     @Inject(method = "setupCompression", at = @At("RETURN"))
-    private void ysm$configureCompressionBypass(int threshold, boolean validateDecompressed,
-                                                CallbackInfo callback) {
+    private void ysm$configureCompressionBypass(int threshold, boolean validateDecompressed, CallbackInfo callback) {
         var pipeline = channel.pipeline();
         if (threshold < 0) {
-            if (pipeline.get(YsmPacketCompressionBypass.MARKER_HANDLER) != null) {
-                pipeline.remove(YsmPacketCompressionBypass.MARKER_HANDLER);
+            if (pipeline.get(ChannelCompressionBypass.MARKER_HANDLER) != null) {
+                pipeline.remove(ChannelCompressionBypass.MARKER_HANDLER);
             }
             return;
         }
         var current = pipeline.get("compress");
         if (current instanceof CompressionEncoder compression
-                && !(current instanceof YsmPacketCompressionBypass.Encoder)) {
-            pipeline.replace("compress", "compress",
-                    new YsmPacketCompressionBypass.Encoder(compression.getThreshold()));
+            && !(current instanceof ChannelCompressionBypass.Encoder)) {
+            pipeline.replace("compress", "compress", new ChannelCompressionBypass.Encoder(compression.getThreshold()));
         }
-        if (pipeline.get(YsmPacketCompressionBypass.MARKER_HANDLER) == null) {
-            pipeline.addAfter("encoder", YsmPacketCompressionBypass.MARKER_HANDLER,
-                    new YsmPacketCompressionBypass.Marker());
+        if (pipeline.get(ChannelCompressionBypass.MARKER_HANDLER) == null) {
+            pipeline.addAfter("encoder", ChannelCompressionBypass.MARKER_HANDLER,
+                new ChannelCompressionBypass.Marker());
         }
     }
 }

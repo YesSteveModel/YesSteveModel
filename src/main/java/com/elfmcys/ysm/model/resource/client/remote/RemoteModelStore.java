@@ -1,6 +1,9 @@
 package com.elfmcys.ysm.model.resource.client.remote;
 
-import com.elfmcys.ysm.AssetPaths;
+import com.elfmcys.ysm.model.storage.ModelStorageInfra;
+import com.elfmcys.ysm.model.storage.CacheDirectoryGuard;
+import com.elfmcys.ysm.model.storage.CacheRegion;
+import com.elfmcys.ysm.model.storage.ContentStorageBinding;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
@@ -9,11 +12,8 @@ import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.container.ChunkDecoding;
-import com.elfmcys.ysm.format.schema.file.AssetFileConstant;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.format.schema.model.ModelFileConstant;
-import com.elfmcys.ysm.format.schema.model.ModelFileView;
-import com.elfmcys.ysm.format.schema.model.ModelManifestLookup;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
@@ -22,27 +22,26 @@ import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.natives.Zstd;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -57,43 +56,56 @@ public final class RemoteModelStore implements AutoCloseable {
     private static final String ZSTD_ENCODING = "zstd";
 
     private final Path root;
-    private final AtomicMove atomicMove;
+    private final CacheRegion region;
+    private final CacheDirectoryGuard guard;
+    private final AtomicSharedCache cache;
     private final CacheReadObserver afterCacheRead;
+    private final Map<ChunkFlightKey, ChunkFlight> chunkFlights = new HashMap<>();
     private boolean closed;
 
     public RemoteModelStore(Path root) throws IOException {
-        this(root, AtomicSharedCache::moveCommitted, ignored -> { });
+        this(root, AtomicSharedCache.AtomicReplacement::run, ignored -> {
+        });
     }
 
-    RemoteModelStore(Path root, AtomicMove atomicMove,
-                     CacheReadObserver afterCacheRead) throws IOException {
+    RemoteModelStore(Path root, AtomicMove atomicMove, CacheReadObserver afterCacheRead) throws IOException {
+        this(root, atomicMove, afterCacheRead, null);
+    }
+
+    private RemoteModelStore(Path root, AtomicMove atomicMove, CacheReadObserver afterCacheRead, CacheRegion region)
+        throws IOException {
         var configuredRoot = root.toAbsolutePath().normalize();
-        Files.createDirectories(configuredRoot);
-        this.root = configuredRoot.toRealPath();
-        this.atomicMove = Objects.requireNonNull(atomicMove, "atomicMove");
+        guard = CacheDirectoryGuard.open(configuredRoot);
+        this.root = guard.root();
+        this.region = region == null ? new CacheRegion(this.root.getParent()) : region;
+        this.cache = new AtomicSharedCache(guard, Objects.requireNonNull(atomicMove, "atomicMove")::move);
         this.afterCacheRead = Objects.requireNonNull(afterCacheRead, "afterCacheRead");
         if (!Files.isWritable(this.root)) {
-            throw AssetLoadException.access(
-                    "Remote model store is not writable: " + this.root);
+            throw AssetLoadException.access("Remote model store is not writable: " + this.root);
         }
     }
 
-    public static RemoteModelStore create(Path gameDirectory) throws IOException {
-        Objects.requireNonNull(gameDirectory, "gameDirectory");
-        return new RemoteModelStore(AssetPaths.remoteRoot(gameDirectory));
+    public static RemoteModelStore create(ModelStorageInfra storage) throws IOException {
+        return new RemoteModelStore(storage.remote().root().resolve("remote"), AtomicSharedCache.AtomicReplacement::run,
+            ignored -> {
+            }, storage.remote());
+    }
+
+    ContentStorageBinding storageBinding() {
+        return ContentStorageBinding.remote(region);
     }
 
     public Path root() {
         return root;
     }
 
-    public synchronized void publishChunk(Hash256 modelId, AssetContainerView.ChunkInfo chunk,
-                                          byte[] storedBytes) throws IOException {
+    public void publishChunk(Hash256 modelId, AssetContainerView.ChunkInfo chunk, byte[] storedBytes)
+        throws IOException {
         publishChunk(modelId, chunk, ArrayBuffer.borrow(storedBytes));
     }
 
-    public synchronized void publishChunk(Hash256 modelId, AssetContainerView.ChunkInfo chunk,
-                                          UniBuffer storedBytes) throws IOException {
+    public void publishChunk(Hash256 modelId, AssetContainerView.ChunkInfo chunk, UniBuffer storedBytes)
+        throws IOException {
         requireOpen();
         Objects.requireNonNull(modelId, "modelId");
         Objects.requireNonNull(chunk, "chunk");
@@ -102,22 +114,19 @@ public final class RemoteModelStore implements AutoCloseable {
         }
         ChunkDecoding.validateStored(storedBytes, chunk);
         try {
-            publishAtomic(
-                    chunkPath(modelId, new Hash256(chunk.hash()), chunk.encoding()), storedBytes,
-                    temporary -> {
-                        try (var persisted = read(temporary, BufferType.NATIVE)) {
-                            ChunkDecoding.validateStored(persisted, chunk);
-                        }
-                        return true;
-                    });
+            publishAtomic(chunkPath(modelId, new Hash256(chunk.hash()), chunk.encoding()), storedBytes, temporary -> {
+                try (var persisted = read(temporary, BufferType.NATIVE)) {
+                    ChunkDecoding.validateStored(persisted, chunk);
+                }
+                return true;
+            });
         } catch (IOException error) {
             throw AssetLoadException.access("Failed to publish remote chunk", error);
         }
     }
 
     /** Single-file metadata lookup. This method never calls the network fetcher. */
-    public synchronized Optional<RemoteModelContent> probeMetadata(
-            ModelFileIdentity identity) throws IOException {
+    public synchronized Optional<RemoteModelContent> probeMetadata(ModelFileIdentity identity) throws IOException {
         requireOpen();
         Objects.requireNonNull(identity, "identity");
         var path = metadataPath(identity);
@@ -136,13 +145,12 @@ public final class RemoteModelStore implements AutoCloseable {
     }
 
     /** Validation completes before the atomic replacement that publishes the new prefix. */
-    public synchronized RemoteModelContent commitMetadataPrefix(
-            ModelFileIdentity identity, UniBuffer metadataPrefix) throws IOException {
+    public RemoteModelContent commitMetadataPrefix(ModelFileIdentity identity, UniBuffer metadataPrefix)
+        throws IOException {
         requireOpen();
         Objects.requireNonNull(identity, "identity");
         Objects.requireNonNull(metadataPrefix, "metadataPrefix");
-        if (metadataPrefix.size() <= 0
-                || metadataPrefix.size() > AssetContainerConstant.MAX_FILE_SIZE) {
+        if (metadataPrefix.size() <= 0 || metadataPrefix.size() > AssetContainerConstant.MAX_FILE_SIZE) {
             throw AssetLoadException.content("Remote metadata prefix size is invalid");
         }
         var content = validateMetadata(identity, metadataPrefix);
@@ -161,35 +169,27 @@ public final class RemoteModelStore implements AutoCloseable {
         return content;
     }
 
-    public RemoteModelContent openContent(ModelFileIdentity identity)
-            throws IOException {
-        return probeMetadata(identity).orElseThrow(() ->
-                AssetLoadException.access("Remote metadata is not cached"));
+    public RemoteModelContent openContent(ModelFileIdentity identity) throws IOException {
+        return probeMetadata(identity).orElseThrow(() -> AssetLoadException.access("Remote metadata is not cached"));
     }
 
-    <T> CompletableFuture<T> loadRenderTarget(
-            RemoteModelContent content, String targetId, String textureName,
-            BooleanSupplier cancelled, RemoteChunkFetcher fetcher,
-            Executor workers, Function<ModelContent, T> load) {
+    <T> CompletableFuture<T> loadRenderTarget(RemoteModelContent content, String targetId, String textureName,
+        BooleanSupplier cancelled, RemoteChunkFetcher fetcher, Executor workers, Function<ModelContent, T> load) {
         return loadChunks(content, cancelled, fetcher, workers,
-                () -> renderTargetChunks(content, targetId, textureName), load);
+            () -> com.elfmcys.ysm.format.schema.model.RenderTargetChunkPlan.chunks(content.representation().view(),
+                targetId, textureName),
+            load);
     }
 
-    <T> CompletableFuture<T> loadChunks(
-            RemoteModelContent content,
-            BooleanSupplier cancelled, RemoteChunkFetcher fetcher,
-            Executor workers, List<AssetContainerView.ChunkInfo> chunks,
-            Function<ModelContent, T> load) {
+    <T> CompletableFuture<T> loadChunks(RemoteModelContent content, BooleanSupplier cancelled,
+        RemoteChunkFetcher fetcher, Executor workers, List<AssetContainerView.ChunkInfo> chunks,
+        Function<ModelContent, T> load) {
         var immutableChunks = List.copyOf(chunks);
-        return loadChunks(content, cancelled, fetcher, workers,
-                () -> immutableChunks, load);
+        return loadChunks(content, cancelled, fetcher, workers, () -> immutableChunks, load);
     }
 
-    private <T> CompletableFuture<T> loadChunks(
-            RemoteModelContent content,
-            BooleanSupplier cancelled, RemoteChunkFetcher fetcher,
-            Executor workers, ChunkPlan chunks,
-            Function<ModelContent, T> load) {
+    private <T> CompletableFuture<T> loadChunks(RemoteModelContent content, BooleanSupplier cancelled,
+        RemoteChunkFetcher fetcher, Executor workers, ChunkPlan chunks, Function<ModelContent, T> load) {
         Objects.requireNonNull(content, "content");
         Objects.requireNonNull(cancelled, "cancelled");
         Objects.requireNonNull(workers, "workers");
@@ -209,18 +209,17 @@ public final class RemoteModelStore implements AutoCloseable {
                 return CompletableFuture.completedFuture(outcome.loaded);
             }
             if (fetcher == null) {
-                return CompletableFuture.failedFuture(
-                        AssetLoadException.access("Remote chunk fetcher is unavailable"));
+                return CompletableFuture.failedFuture(AssetLoadException.access("Remote chunk fetcher is unavailable"));
             }
             var expected = new LinkedHashMap<String, AssetContainerView.ChunkInfo>();
             outcome.missing.forEach(chunk -> expected.put(chunk.type(), chunk));
             var received = new ConcurrentHashMap<String, UniBuffer>();
             final CompletableFuture<Void> fetching;
             try {
-                fetching = Objects.requireNonNull(fetcher.fetch(
-                        content.representation().identity(), outcome.missing,
+                fetching = Objects.requireNonNull(
+                    fetcher.fetch(content.representation().identity(), outcome.missing,
                         (chunk, bytes) -> receiveChunk(expected, received, chunk, bytes)),
-                        "Remote chunk fetcher returned a null future");
+                    "Remote chunk fetcher returned a null future");
             } catch (RuntimeException failure) {
                 closeAll(received);
                 return CompletableFuture.failedFuture(failure);
@@ -234,14 +233,22 @@ public final class RemoteModelStore implements AutoCloseable {
             if (transferCancellationRequested.get()) {
                 fetching.cancel(false);
             }
+            Executor continuation = action -> {
+                try {
+                    workers.execute(action);
+                } catch (RejectedExecutionException rejected) {
+                    // No worker owns these inputs when the continuation was never accepted.
+                    closeAll(received);
+                    throw rejected;
+                }
+            };
             return fetching.thenApplyAsync(ignored -> {
                 try {
-                    return persistAndLoad(
-                            content, outcome.missing, received, cancelled, load);
+                    return persistAndLoad(content, outcome.missing, received, cancelled, load);
                 } catch (IOException | RuntimeException failure) {
                     throw new CompletionException(failure);
                 }
-            }, workers);
+            }, continuation);
         });
         result.whenComplete((ignored, failure) -> {
             if (!result.isCancelled()) {
@@ -257,10 +264,9 @@ public final class RemoteModelStore implements AutoCloseable {
         return result;
     }
 
-    private <T> RenderTargetProbe<T> probeChunks(
-            RemoteModelContent content,
-            List<AssetContainerView.ChunkInfo> descriptors,
-            BooleanSupplier cancelled, Function<ModelContent, T> load) throws IOException {
+    private <T> RenderTargetProbe<T> probeChunks(RemoteModelContent content,
+        List<AssetContainerView.ChunkInfo> descriptors, BooleanSupplier cancelled, Function<ModelContent, T> load)
+        throws IOException {
         if (cancelled.getAsBoolean()) {
             throw new CancellationException("Model activation was cancelled");
         }
@@ -269,65 +275,33 @@ public final class RemoteModelStore implements AutoCloseable {
             if (cancelled.getAsBoolean()) {
                 throw new CancellationException("Model activation was cancelled");
             }
-            try (var ignored = content.chunks().readStoredVerified(
-                    chunk, BufferType.ARRAY)) {
+            try (var ignored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
                 // A verified hit remains subject to the load's own exact read validation.
             } catch (IOException unavailable) {
                 missing.add(chunk);
             }
         }
-        return missing.isEmpty()
-                ? RenderTargetProbe.loaded(load.apply(content))
-                : RenderTargetProbe.missing(List.copyOf(missing));
+        return missing.isEmpty() ? RenderTargetProbe.loaded(load.apply(content))
+            : RenderTargetProbe.missing(List.copyOf(missing));
     }
 
-    private static List<AssetContainerView.ChunkInfo> renderTargetChunks(
-            RemoteModelContent content, String targetId, String textureName)
-            throws IOException {
-        var view = content.representation().view();
-        var target = view.requireRenderTarget(targetId);
-        var selected = ModelManifestLookup.chooseTexture(
-                view.getManifest(), targetId, textureName);
-        var descriptors = new LinkedHashMap<String, AssetContainerView.ChunkInfo>();
-        addBlob(descriptors, view, target.descriptor().blobId());
-        var texture = target.textureDescriptor(selected);
-        addBlob(descriptors, view, texture.uv().blobId());
-        if (texture.hasNormal()) addBlob(descriptors, view, texture.normalUnsafe().blobId());
-        if (texture.hasSpecular()) addBlob(descriptors, view, texture.specularUnsafe().blobId());
-        var common = view.getManifest().commonAssets();
-        if (common.stringsBlobId() > 0) {
-            addBlob(descriptors, view, common.stringsBlobId());
-        }
-        return descriptors.values().stream()
-                .sorted(Comparator.comparing(AssetContainerView.ChunkInfo::type))
-                .toList();
-    }
-
-    private static void receiveChunk(
-            Map<String, AssetContainerView.ChunkInfo> expected,
-            Map<String, UniBuffer> received,
-            AssetContainerView.ChunkInfo chunk, UniBuffer bytes) throws IOException {
+    private static void receiveChunk(Map<String, AssetContainerView.ChunkInfo> expected,
+        Map<String, UniBuffer> received, AssetContainerView.ChunkInfo chunk, UniBuffer bytes) throws IOException {
         Objects.requireNonNull(chunk, "chunk");
         Objects.requireNonNull(bytes, "bytes");
         var descriptor = expected.get(chunk.type());
         if (!sameChunk(descriptor, chunk)) {
-            throw AssetLoadException.content(
-                    "Remote transfer returned an unexpected chunk");
+            throw AssetLoadException.content("Remote transfer returned an unexpected chunk");
         }
         var copy = bytes.acquire();
         if (received.putIfAbsent(chunk.type(), copy) != null) {
             copy.close();
-            throw AssetLoadException.content(
-                    "Remote transfer returned a chunk more than once: " + chunk.type());
+            throw AssetLoadException.content("Remote transfer returned a chunk more than once: " + chunk.type());
         }
     }
 
-    private <T> T persistAndLoad(
-            RemoteModelContent content,
-            List<AssetContainerView.ChunkInfo> missing,
-            Map<String, UniBuffer> received,
-            BooleanSupplier cancelled,
-            Function<ModelContent, T> load) throws IOException {
+    private <T> T persistAndLoad(RemoteModelContent content, List<AssetContainerView.ChunkInfo> missing,
+        Map<String, UniBuffer> received, BooleanSupplier cancelled, Function<ModelContent, T> load) throws IOException {
         try {
             var complete = new LinkedHashMap<String, UniBuffer>();
             for (var chunk : missing) {
@@ -336,8 +310,8 @@ public final class RemoteModelStore implements AutoCloseable {
                 }
                 var bytes = received.get(chunk.type());
                 if (bytes == null) {
-                    throw AssetLoadException.content(
-                            "Remote transfer completed without a required chunk: " + chunk.type());
+                    throw AssetLoadException
+                        .content("Remote transfer completed without a required chunk: " + chunk.type());
                 }
                 ChunkDecoding.validateStored(bytes, chunk);
                 complete.put(chunk.type(), bytes);
@@ -346,12 +320,10 @@ public final class RemoteModelStore implements AutoCloseable {
             try {
                 for (var chunk : missing) {
                     try {
-                        publishChunk(content.representation().modelId(), chunk,
-                                complete.get(chunk.type()));
+                        publishChunk(content.representation().modelId(), chunk, complete.get(chunk.type()));
                     } catch (IOException cacheFailure) {
-                        YesSteveModel.LOGGER.warn(
-                                "Failed to persist verified remote model chunk model={} chunk={}",
-                                content.representation().modelId(), chunk.type(), cacheFailure);
+                        YesSteveModel.LOGGER.warn("Failed to persist verified remote model chunk model={} chunk={}",
+                            content.representation().modelId(), chunk.type(), cacheFailure);
                     }
                 }
                 if (cancelled.getAsBoolean()) {
@@ -371,45 +343,116 @@ public final class RemoteModelStore implements AutoCloseable {
         buffers.clear();
     }
 
-    private static boolean sameChunk(AssetContainerView.ChunkInfo expected,
-                                     AssetContainerView.ChunkInfo actual) {
-        return expected != null
-                && expected.type().equals(actual.type())
-                && expected.offset() == actual.offset()
-                && expected.size() == actual.size()
-                && expected.decodeSize() == actual.decodeSize()
-                && expected.encoding().equals(actual.encoding())
-                && Arrays.equals(expected.hash(), actual.hash());
+    private static boolean sameChunk(AssetContainerView.ChunkInfo expected, AssetContainerView.ChunkInfo actual) {
+        return expected != null && expected.type().equals(actual.type()) && expected.offset() == actual.offset()
+            && expected.size() == actual.size() && expected.decodeSize() == actual.decodeSize()
+            && expected.encoding().equals(actual.encoding()) && Arrays.equals(expected.hash(), actual.hash());
     }
 
-    private static void addBlob(Map<String, AssetContainerView.ChunkInfo> descriptors,
-                                ModelFileView view,
-                                int blobId) throws IOException {
-        var name = AssetFileConstant.BLOB_CHUNK_PREFIX + blobId;
-        var chunk = view.getFileView().getAssetView().getChunkInfo(name);
-        if (chunk == null) {
-            throw AssetLoadException.content("Model activation chunk is missing: " + name);
-        }
-        descriptors.putIfAbsent(name, chunk);
+    CompletableFuture<UniBuffer> requestChunk(RemoteModelContent content, AssetContainerView.ChunkInfo chunk,
+        RemoteChunkFetcher fetcher, Executor workers) {
+        Objects.requireNonNull(content, "content");
+        Objects.requireNonNull(chunk, "chunk");
+        Objects.requireNonNull(workers, "workers");
+        var result = new CompletableFuture<UniBuffer>();
+        var flight = new AtomicReference<ChunkFlight>();
+        var probe = CompletableFuture.supplyAsync(() -> {
+            try {
+                return content.chunks().readPayload(chunk, BufferType.NATIVE);
+            } catch (IOException unavailable) {
+                return null;
+            }
+        }, workers);
+        result.whenComplete((ignored, failure) -> {
+            if (!result.isCancelled()) {
+                return;
+            }
+            probe.cancel(false);
+            var current = flight.get();
+            if (current != null) {
+                current.cancel(result);
+            }
+        });
+        probe.whenComplete((cached, failure) -> {
+            if (failure != null) {
+                result.completeExceptionally(unwrap(failure));
+                return;
+            }
+            if (result.isDone()) {
+                close(cached);
+                return;
+            }
+            if (cached != null) {
+                if (!result.complete(cached)) {
+                    cached.close();
+                }
+                return;
+            }
+            if (fetcher == null) {
+                result.completeExceptionally(AssetLoadException.access("Remote chunk fetcher is unavailable"));
+                return;
+            }
+            final ChunkFlight acquired;
+            final boolean start;
+            try {
+                synchronized (this) {
+                    requireOpen();
+                    var key = new ChunkFlightKey(content.representation().identity(), chunk, fetcher);
+                    var existing = chunkFlights.get(key);
+                    if (existing != null && existing.isDone()) {
+                        chunkFlights.remove(key, existing);
+                        existing = null;
+                    }
+                    if (existing == null) {
+                        acquired = new ChunkFlight(key, content, chunk, fetcher, workers);
+                        chunkFlights.put(key, acquired);
+                        start = true;
+                    } else {
+                        acquired = existing;
+                        start = false;
+                    }
+                    acquired.add(result);
+                    flight.set(acquired);
+                }
+            } catch (IOException | RuntimeException error) {
+                result.completeExceptionally(error);
+                return;
+            }
+            if (result.isCancelled()) {
+                acquired.cancel(result);
+            }
+            if (start) {
+                acquired.start();
+            }
+        });
+        return result;
     }
 
     @Override
-    public synchronized void close() {
-        closed = true;
+    public void close() {
+        List<ChunkFlight> active;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            active = List.copyOf(chunkFlights.values());
+            chunkFlights.clear();
+        }
+        var failure = AssetLoadException.access("Remote model store is closed");
+        active.forEach(flight -> flight.ownerClosed(failure));
     }
 
-    private void requireOpen() throws IOException {
+    private synchronized void requireOpen() throws IOException {
         if (closed) {
             throw AssetLoadException.access("Remote model store is closed");
         }
     }
 
-    private RemoteModelContent validateMetadata(ModelFileIdentity identity,
-                                                UniBuffer metadataPrefix)
-            throws IOException {
+    private RemoteModelContent validateMetadata(ModelFileIdentity identity, UniBuffer metadataPrefix)
+        throws IOException {
         try {
-            var representation = ModelRepresentation.fromMetadataPrefix(
-                    identity, metadataPrefix);
+            var representation = ModelRepresentation.fromMetadataPrefix(identity, metadataPrefix);
             var asset = representation.view().getFileView().getAssetView();
             if (!identity.containerId().equals(asset.getContainerId())) {
                 representation.close();
@@ -433,8 +476,8 @@ public final class RemoteModelStore implements AutoCloseable {
     }
 
     Path chunkPath(Hash256 modelId, Hash256 hash, String encoding) {
-        return ownedPath(modelRoot(modelId).resolve(
-                hash + (ZSTD_ENCODING.equals(encoding) ? ZSTD_CHUNK_SUFFIX : CHUNK_SUFFIX)));
+        return ownedPath(
+            modelRoot(modelId).resolve(hash + (ZSTD_ENCODING.equals(encoding) ? ZSTD_CHUNK_SUFFIX : CHUNK_SUFFIX)));
     }
 
     /** Verified remote content of one model. */
@@ -444,145 +487,39 @@ public final class RemoteModelStore implements AutoCloseable {
 
     /** Verified remote metadata of one exact container. */
     private Path metadataRoot(ModelFileIdentity identity) {
-        return modelRoot(identity.modelId())
-                .resolve(METADATA_DIRECTORY)
-                .resolve(identity.containerId().toString());
+        return modelRoot(identity.modelId()).resolve(METADATA_DIRECTORY).resolve(identity.containerId().toString());
     }
 
-    private void publishAtomic(Path target, UniBuffer bytes,
-                               AtomicSharedCache.CacheValidator validator) throws IOException {
-        target = ownedPath(target);
-        var directory = prepareOwnedDirectory(target.getParent());
-        var fileName = target.getFileName();
-        var physicalTarget = directory.path().resolve(fileName);
-        rejectEscapingExistingTarget(physicalTarget);
-        var temporary = directory.path().resolve(fileName + ".tmp-" + UUID.randomUUID());
-        try {
-            try (var channel = FileChannel.open(temporary, StandardOpenOption.CREATE_NEW,
-                    StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+    private void publishAtomic(Path target, UniBuffer bytes, AtomicSharedCache.CacheValidator validator)
+        throws IOException {
+        cache.replaceValidated("remote", root.relativize(target).toString(), target, validator, temporary -> {
+            try (var channel = temporary) {
                 var source = bytes.nio();
-                while (source.hasRemaining()) {
+                while (source.hasRemaining())
                     channel.write(source);
-                }
-                channel.force(true);
+                channel.force();
             }
-            if (!validator.validate(temporary)) {
-                throw AssetLoadException.content(
-                        "Remote cache writer produced an invalid object: " + target);
+        }, replacement -> {
+            synchronized (RemoteModelStore.this) {
+                requireOpen();
+                replacement.run();
             }
-            verifyOwnedDirectory(directory);
-            rejectEscapingExistingTarget(physicalTarget);
-            atomicMove.move(temporary, physicalTarget);
-        } finally {
-            verifyOwnedDirectory(directory);
-            Files.deleteIfExists(temporary);
-        }
+        });
     }
 
     private Path ownedPath(Path candidate) {
         var normalized = candidate.toAbsolutePath().normalize();
-        if (!normalized.startsWith(root)) {
-            throw new IllegalArgumentException("Remote cache path escapes its owner root");
-        }
+        if (!normalized.startsWith(root))
+            throw new IllegalArgumentException("Remote cache path escapes its root");
         return normalized;
     }
 
-    private OwnedDirectory prepareOwnedDirectory(Path candidate) throws IOException {
-        var lexical = ownedPath(candidate);
-        var current = inspectOwnedDirectory(root);
-        for (var segment : root.relativize(lexical)) {
-            var child = current.path().resolve(segment.toString());
-            try {
-                Files.createDirectory(child);
-            } catch (FileAlreadyExistsException ignored) {
-                // Existing components are accepted only after resolving their physical identity.
-            } catch (SecurityException access) {
-                throw AssetLoadException.access(
-                        "Failed to create a remote cache directory", access);
-            }
-            current = inspectOwnedDirectory(child);
-        }
-        return current;
-    }
-
-    private OwnedDirectory inspectOwnedDirectory(Path candidate) throws IOException {
-        final Path physical;
-        final BasicFileAttributes attributes;
-        try {
-            physical = candidate.toRealPath();
-            attributes = Files.readAttributes(physical, BasicFileAttributes.class,
-                    LinkOption.NOFOLLOW_LINKS);
-        } catch (IOException | SecurityException access) {
-            throw AssetLoadException.access(
-                    "Failed to resolve a remote cache directory", access);
-        }
-        if (!physical.startsWith(root) || !attributes.isDirectory()) {
-            throw AssetLoadException.access(
-                    "Remote cache directory escapes its physical owner root");
-        }
-        return new OwnedDirectory(physical, attributes.fileKey());
-    }
-
-    private void verifyOwnedDirectory(OwnedDirectory expected) throws IOException {
-        var current = inspectOwnedDirectory(expected.path());
-        if (!sameIdentity(expected.path(), expected.fileKey(),
-                current.path(), current.fileKey())) {
-            throw AssetLoadException.access(
-                    "Remote cache directory changed during an active operation");
-        }
-    }
-
-    private OwnedFile inspectOwnedFile(Path candidate) throws IOException {
-        var lexical = ownedPath(candidate);
-        final Path physical;
-        final BasicFileAttributes attributes;
-        try {
-            physical = lexical.toRealPath();
-            attributes = Files.readAttributes(physical, BasicFileAttributes.class,
-                    LinkOption.NOFOLLOW_LINKS);
-        } catch (NoSuchFileException missing) {
-            throw missing;
-        } catch (IOException | SecurityException access) {
-            throw AssetLoadException.access("Failed to resolve cached remote data", access);
-        }
-        if (!physical.startsWith(root) || !attributes.isRegularFile()) {
-            throw AssetLoadException.access(
-                    "Cached remote data escapes its physical owner root");
-        }
-        return new OwnedFile(physical, attributes.fileKey());
-    }
-
-    private void verifyOwnedFile(OwnedFile expected) throws IOException {
-        var current = inspectOwnedFile(expected.path());
-        if (!sameIdentity(expected.path(), expected.fileKey(),
-                current.path(), current.fileKey())) {
-            throw AssetLoadException.access(
-                    "Cached remote data changed while it was being opened");
-        }
-    }
-
-    private void rejectEscapingExistingTarget(Path target) throws IOException {
-        try {
-            inspectOwnedFile(target);
-        } catch (NoSuchFileException missing) {
-            return;
-        }
-    }
-
-    private record OwnedDirectory(Path path, Object fileKey) {
-    }
-
-    private record OwnedFile(Path path, Object fileKey) {
-    }
-
-    private record RenderTargetProbe<T>(T loaded,
-                                         List<AssetContainerView.ChunkInfo> missing) {
+    private record RenderTargetProbe<T>(T loaded, List<AssetContainerView.ChunkInfo> missing) {
         private static <T> RenderTargetProbe<T> loaded(T value) {
             return new RenderTargetProbe<>(Objects.requireNonNull(value, "loaded"), List.of());
         }
 
-        private static <T> RenderTargetProbe<T> missing(
-                List<AssetContainerView.ChunkInfo> chunks) {
+        private static <T> RenderTargetProbe<T> missing(List<AssetContainerView.ChunkInfo> chunks) {
             return new RenderTargetProbe<>(null, List.copyOf(chunks));
         }
     }
@@ -590,15 +527,6 @@ public final class RemoteModelStore implements AutoCloseable {
     @FunctionalInterface
     private interface ChunkPlan {
         List<AssetContainerView.ChunkInfo> get() throws IOException;
-    }
-
-    private static boolean sameIdentity(Path expectedPath, Object expectedKey,
-                                        Path currentPath, Object currentKey)
-            throws IOException {
-        if (expectedKey != null && currentKey != null) {
-            return expectedKey.equals(currentKey);
-        }
-        return Files.isSameFile(expectedPath, currentPath);
     }
 
     private final class StoreChunkDataSource implements ChunkDataSource {
@@ -609,15 +537,13 @@ public final class RemoteModelStore implements AutoCloseable {
         }
 
         @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk,
-                                     BufferType bufferType) throws IOException {
+        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
             return decodePayload(chunk, bufferType);
         }
 
         @Override
-        public UniBuffer readPayload(BooleanSupplier cancelled,
-                                     AssetContainerView.ChunkInfo chunk,
-                                     BufferType bufferType) throws IOException {
+        public UniBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
+            BufferType bufferType) throws IOException {
             if (cancelled.getAsBoolean()) {
                 throw new CancellationException("Remote chunk read was cancelled");
             }
@@ -629,55 +555,48 @@ public final class RemoteModelStore implements AutoCloseable {
             return result;
         }
 
-        private UniBuffer decodePayload(AssetContainerView.ChunkInfo chunk,
-                                        BufferType bufferType) throws IOException {
+        private UniBuffer decodePayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
             try (var stored = readStoredVerifiedNow(chunk, BufferType.ARRAY)) {
                 if (!ChunkDecoding.isZstd(chunk)) {
-                    return bufferType == BufferType.ARRAY
-                            ? stored.acquireArray() : stored.acquireNative();
+                    return bufferType == BufferType.ARRAY ? stored.acquireArray() : stored.acquireNative();
                 }
                 try {
-                    return Zstd.decompressAndValidate(stored, chunk.decodeSize(),
-                            chunk.hash(), bufferType);
+                    return Zstd.decompressAndValidate(stored, chunk.decodeSize(), chunk.hash(), bufferType);
                 } catch (RuntimeException invalid) {
-                    throw AssetLoadException.content(
-                            "Invalid cached zstd chunk: " + chunk.type(), invalid);
+                    throw AssetLoadException.content("Invalid cached zstd chunk: " + chunk.type(), invalid);
                 }
             }
         }
 
         @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk,
-                                            BufferType bufferType) throws IOException {
+        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            throws IOException {
             return readStoredVerifiedNow(chunk, bufferType);
         }
 
-        private UniBuffer readStoredVerifiedNow(AssetContainerView.ChunkInfo chunk,
-                                                 BufferType bufferType) throws IOException {
+        private UniBuffer readStoredVerifiedNow(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            throws IOException {
             synchronized (RemoteModelStore.this) {
                 requireOpen();
                 return readStoredVerifiedLocked(chunk, bufferType);
             }
         }
 
-        private UniBuffer readStoredVerifiedLocked(AssetContainerView.ChunkInfo chunk,
-                                                   BufferType bufferType) throws IOException {
+        private UniBuffer readStoredVerifiedLocked(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            throws IOException {
             if (ModelFileConstant.MANIFEST_CHUNK_NAME.equals(chunk.type())) {
-                throw AssetLoadException.content(
-                        "Manifest is included in the metadata prefix");
+                throw AssetLoadException.content("Manifest is included in the metadata prefix");
             }
             if (chunk.hash() == null || chunk.hash().length != Hash256.SIZE) {
                 throw AssetLoadException.content("Remote chunk has no content hash");
             }
-            var path = chunkPath(identity.modelId(), new Hash256(chunk.hash()),
-                    chunk.encoding());
+            var path = chunkPath(identity.modelId(), new Hash256(chunk.hash()), chunk.encoding());
             AssetLoadException cachedFailure;
             try (var stored = read(path, bufferType)) {
                 validateCached(stored, chunk);
                 return stored.acquire();
             } catch (NoSuchFileException missing) {
-                cachedFailure = AssetLoadException.access(
-                        "Remote chunk is not cached: " + chunk.type(), missing);
+                cachedFailure = AssetLoadException.access("Remote chunk is not cached: " + chunk.type(), missing);
             } catch (AssetLoadException failure) {
                 if (failure.reason() == AssetLoadException.Reason.ACCESS) {
                     throw failure;
@@ -687,17 +606,15 @@ public final class RemoteModelStore implements AutoCloseable {
             throw cachedFailure;
         }
 
-        private void validateCached(UniBuffer stored, AssetContainerView.ChunkInfo chunk)
-                throws IOException {
+        private void validateCached(UniBuffer stored, AssetContainerView.ChunkInfo chunk) throws IOException {
             if (ChunkDecoding.isZstd(chunk)) {
                 try {
-                    try (var ignored = Zstd.decompressAndValidate(stored, chunk.decodeSize(),
-                            chunk.hash(), BufferType.NATIVE)) {
+                    try (var ignored =
+                        Zstd.decompressAndValidate(stored, chunk.decodeSize(), chunk.hash(), BufferType.NATIVE)) {
                         // A cached zstd representation may have a different compressed size.
                     }
                 } catch (RuntimeException error) {
-                    throw AssetLoadException.content(
-                            "Invalid cached zstd chunk: " + chunk.type(), error);
+                    throw AssetLoadException.content("Invalid cached zstd chunk: " + chunk.type(), error);
                 }
             } else {
                 ChunkDecoding.validateStored(stored, chunk);
@@ -706,11 +623,9 @@ public final class RemoteModelStore implements AutoCloseable {
     }
 
     private UniBuffer read(Path path, BufferType type) throws IOException {
-        var physical = inspectOwnedFile(path);
         final FileChannel opened;
         try {
-            opened = FileChannel.open(physical.path(), StandardOpenOption.READ,
-                    LinkOption.NOFOLLOW_LINKS);
+            opened = guard.observe(path, false).open(java.util.Set.of(StandardOpenOption.READ));
         } catch (NoSuchFileException missing) {
             throw missing;
         } catch (IOException | SecurityException error) {
@@ -718,7 +633,6 @@ public final class RemoteModelStore implements AutoCloseable {
         }
         UniBuffer result = null;
         try (var channel = opened) {
-            verifyOwnedFile(physical);
             var size = channel.size();
             if (size > AssetContainerConstant.MAX_FILE_SIZE) {
                 throw AssetLoadException.content("Cached data is too large: " + size);
@@ -727,10 +641,11 @@ public final class RemoteModelStore implements AutoCloseable {
             var target = result.nio();
             while (target.hasRemaining()) {
                 if (channel.read(target) < 0) {
-                    throw AssetLoadException.content(
-                            "Cached chunk was truncated while reading");
+                    throw AssetLoadException.content("Cached chunk was truncated while reading");
                 }
             }
+            if (channel.size() != size)
+                throw AssetLoadException.content("Cached chunk length changed while reading");
         } catch (AssetLoadException error) {
             close(result);
             throw error;
@@ -742,7 +657,7 @@ public final class RemoteModelStore implements AutoCloseable {
             throw error;
         }
         try {
-            afterCacheRead.observe(physical.path());
+            afterCacheRead.observe(path);
             return result;
         } catch (AssetLoadException error) {
             result.close();
@@ -756,15 +671,268 @@ public final class RemoteModelStore implements AutoCloseable {
         }
     }
 
+    private UniBuffer read(com.elfmcys.ysm.model.storage.CacheFile file, BufferType type) throws IOException {
+        var size = file.size();
+        if (size > AssetContainerConstant.MAX_FILE_SIZE)
+            throw AssetLoadException.content("Cached data is too large: " + size);
+        var result = UniBuffer.allocate(Math.toIntExact(size), type);
+        try {
+            file.position(0);
+            var target = result.nio();
+            while (target.hasRemaining())
+                if (file.read(target) < 0)
+                    throw AssetLoadException.content("Truncated staged chunk");
+            return result;
+        } catch (IOException | RuntimeException | Error failure) {
+            result.close();
+            throw failure;
+        }
+    }
+
     private static void close(UniBuffer buffer) {
         if (buffer != null) {
             buffer.close();
         }
     }
 
+    private static Throwable unwrap(Throwable failure) {
+        var current = failure;
+        while (current instanceof CompletionException && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private final class ChunkFlight {
+        private final ChunkFlightKey key;
+        private final RemoteModelContent content;
+        private final AssetContainerView.ChunkInfo chunk;
+        private final RemoteChunkFetcher fetcher;
+        private final Executor workers;
+        private final java.util.Set<CompletableFuture<UniBuffer>> interests =
+            Collections.newSetFromMap(new IdentityHashMap<>());
+        private CompletableFuture<Void> transfer;
+        private UniBuffer received;
+        private boolean done;
+
+        private ChunkFlight(ChunkFlightKey key, RemoteModelContent content, AssetContainerView.ChunkInfo chunk,
+            RemoteChunkFetcher fetcher, Executor workers) {
+            this.key = key;
+            this.content = content;
+            this.chunk = chunk;
+            this.fetcher = fetcher;
+            this.workers = workers;
+        }
+
+        private synchronized void add(CompletableFuture<UniBuffer> interest) {
+            if (!done && !interest.isDone()) {
+                interests.add(interest);
+            }
+        }
+
+        private synchronized boolean isDone() {
+            return done;
+        }
+
+        private void start() {
+            final boolean abandoned;
+            synchronized (this) {
+                abandoned = done || interests.isEmpty();
+                if (abandoned) {
+                    done = true;
+                }
+            }
+            if (abandoned) {
+                synchronized (RemoteModelStore.this) {
+                    chunkFlights.remove(key, this);
+                }
+                return;
+            }
+            final CompletableFuture<Void> accepted;
+            try {
+                accepted = Objects.requireNonNull(
+                    fetcher.fetch(content.representation().identity(), List.of(chunk), this::receive),
+                    "Remote chunk fetcher returned a null future");
+            } catch (RuntimeException failure) {
+                finish(null, failure);
+                return;
+            }
+            synchronized (this) {
+                transfer = accepted;
+                if (interests.isEmpty()) {
+                    accepted.cancel(false);
+                }
+            }
+            accepted.whenCompleteAsync(this::completeTransfer, workers);
+        }
+
+        private synchronized void receive(AssetContainerView.ChunkInfo actual, UniBuffer bytes) throws IOException {
+            if (done || !sameChunk(chunk, actual)) {
+                throw AssetLoadException.content("Remote transfer returned an unexpected sound chunk");
+            }
+            if (received != null) {
+                throw AssetLoadException.content("Remote transfer returned a sound chunk more than once");
+            }
+            received = bytes.acquire();
+        }
+
+        private void completeTransfer(Void ignored, Throwable failure) {
+            if (failure != null) {
+                finish(null, unwrap(failure));
+                return;
+            }
+            final UniBuffer stored;
+            synchronized (this) {
+                stored = received;
+                received = null;
+            }
+            if (stored == null) {
+                finish(null, AssetLoadException.content("Remote transfer completed without the sound chunk"));
+                return;
+            }
+            try (stored) {
+                ChunkDecoding.validateStored(stored, chunk);
+                try {
+                    publishChunk(content.representation().modelId(), chunk, stored);
+                } catch (IOException cacheFailure) {
+                    YesSteveModel.LOGGER.warn("Failed to persist verified remote sound chunk model={} chunk={}",
+                        content.representation().modelId(), chunk.type(), cacheFailure);
+                }
+                final UniBuffer payload;
+                if (ChunkDecoding.isZstd(chunk)) {
+                    payload = ChunkDecoding.decodeZstd(stored, chunk, BufferType.NATIVE);
+                } else {
+                    payload = stored.acquireNative();
+                }
+                finish(payload, null);
+            } catch (IOException | RuntimeException error) {
+                finish(null, error);
+            }
+        }
+
+        private void cancel(CompletableFuture<UniBuffer> interest) {
+            CompletableFuture<Void> accepted = null;
+            synchronized (this) {
+                interests.remove(interest);
+                if (!done && interests.isEmpty()) {
+                    accepted = transfer;
+                }
+            }
+            if (accepted != null) {
+                accepted.cancel(false);
+            }
+            if (accepted != null || interestsEmpty()) {
+                synchronized (RemoteModelStore.this) {
+                    chunkFlights.remove(key, this);
+                }
+            }
+        }
+
+        private synchronized boolean interestsEmpty() {
+            return interests.isEmpty();
+        }
+
+        private void ownerClosed(Throwable failure) {
+            CompletableFuture<Void> accepted;
+            UniBuffer pending;
+            List<CompletableFuture<UniBuffer>> waiting;
+            synchronized (this) {
+                if (done) {
+                    return;
+                }
+                done = true;
+                accepted = transfer;
+                pending = received;
+                received = null;
+                waiting = List.copyOf(interests);
+                interests.clear();
+            }
+            if (accepted != null) {
+                accepted.cancel(false);
+            }
+            close(pending);
+            waiting.forEach(value -> value.completeExceptionally(failure));
+        }
+
+        private void finish(UniBuffer payload, Throwable failure) {
+            List<CompletableFuture<UniBuffer>> waiting;
+            UniBuffer pending;
+            synchronized (this) {
+                if (done) {
+                    close(payload);
+                    return;
+                }
+                done = true;
+                pending = received;
+                received = null;
+                waiting = List.copyOf(interests);
+                interests.clear();
+            }
+            close(pending);
+            synchronized (RemoteModelStore.this) {
+                chunkFlights.remove(key, this);
+            }
+            if (failure != null) {
+                waiting.forEach(value -> value.completeExceptionally(failure));
+                close(payload);
+                return;
+            }
+            try (payload) {
+                for (var interest : waiting) {
+                    var acquired = payload.acquire();
+                    if (!interest.complete(acquired)) {
+                        acquired.close();
+                    }
+                }
+            }
+        }
+    }
+
+    private static final class ChunkFlightKey {
+        private final ModelFileIdentity representation;
+        private final String type;
+        private final String encoding;
+        private final long offset;
+        private final int size;
+        private final int decodeSize;
+        private final Hash256 hash;
+        private final RemoteChunkFetcher fetcher;
+
+        private ChunkFlightKey(ModelFileIdentity representation, AssetContainerView.ChunkInfo chunk,
+            RemoteChunkFetcher fetcher) {
+            this.representation = representation;
+            type = chunk.type();
+            encoding = chunk.encoding();
+            offset = chunk.offset();
+            size = chunk.size();
+            decodeSize = chunk.decodeSize();
+            hash = new Hash256(chunk.hash());
+            this.fetcher = fetcher;
+        }
+
+        @Override
+        public boolean equals(Object value) {
+            if (this == value) {
+                return true;
+            }
+            if (!(value instanceof ChunkFlightKey other)) {
+                return false;
+            }
+            return offset == other.offset && size == other.size && decodeSize == other.decodeSize
+                && fetcher == other.fetcher && representation.equals(other.representation) && type.equals(other.type)
+                && encoding.equals(other.encoding) && hash.equals(other.hash);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(representation, type, encoding, offset, size, decodeSize, hash,
+                System.identityHashCode(fetcher));
+        }
+    }
+
     @FunctionalInterface
     interface AtomicMove {
-        void move(Path temporary, Path target) throws IOException;
+        void move(AtomicSharedCache.AtomicReplacement replacement) throws IOException;
     }
 
     @FunctionalInterface

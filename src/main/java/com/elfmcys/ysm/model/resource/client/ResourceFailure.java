@@ -9,7 +9,6 @@ public record ResourceFailure(Kind kind, Throwable cause) {
     }
 
     public enum Kind {
-        DETERMINISTIC,
-        TRANSIENT
+        DETERMINISTIC, TRANSIENT
     }
 }

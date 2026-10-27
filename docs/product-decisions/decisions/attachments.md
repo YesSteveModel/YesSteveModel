@@ -7,8 +7,9 @@
   - 明确支持的自定义技巧: [DD.explicit-support-is-stable](model-compatibility.md#ddexplicit-support-is-stable)
   - 附着与本体透明穿插: [DD.attachment-order-is-creator-tunable](transparency-scope.md#ddattachment-order-is-creator-tunable)
 - Landing:
-  - [architecture](../../architecture/rendering/frame-execution.md#层级遍历与可见性)
+  - [implementation](../../architecture/rendering/implementation/frame-execution.md#层级遍历与可见性)
   - [status](../../status/known-issues/rendering.md#视觉与接入)
+  - [design](../../architecture/rendering/overview.md)
 
 ## DD.preserve-vanilla-attachments
 

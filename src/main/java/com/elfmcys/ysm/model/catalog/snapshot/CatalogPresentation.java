@@ -5,9 +5,8 @@ import com.elfmcys.ysm.model.catalog.content.AssetRef;
 import java.util.Objects;
 import java.util.Optional;
 
-public record CatalogPresentation(String displayName, String description,
-                                  Optional<AssetRef> icon,
-                                  Optional<AssetRef> preview) {
+public record CatalogPresentation(String displayName, String description, Optional<AssetRef> icon,
+    Optional<AssetRef> preview) {
     public CatalogPresentation {
         displayName = Objects.requireNonNullElse(displayName, "");
         description = Objects.requireNonNullElse(description, "");

@@ -1,13 +1,19 @@
 package com.elfmcys.ysm.client.gui;
 
-import com.elfmcys.ysm.client.animation.molang.PhysicsManager;
+import com.elfmcys.ysm.client.animation.physics.PhysicsManager;
+import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.entity.CustomPlayerEntity;
 import com.elfmcys.ysm.client.entity.IPreviewEntity;
 import com.elfmcys.ysm.client.event.ClientTickEvent;
 import com.elfmcys.ysm.model.resource.client.ResourceLease;
 import com.elfmcys.ysm.model.resource.client.ResourceRequest;
+import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
+import com.elfmcys.ysm.model.resource.client.ModelResourcePurpose;
+import com.elfmcys.ysm.client.demand.ModelResourceDemand;
+import org.jetbrains.annotations.Nullable;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.geckolib3.core.molang.context.DebugSource;
+import com.elfmcys.ysm.client.animation.debug.DebugSource;
+import com.elfmcys.ysm.util.ResourceDiagnostics;
 import com.elfmcys.ysm.geckolib3.geo.GeoRenderData;
 import com.elfmcys.ysm.geckolib3.geo.RenderContext;
 import com.mojang.authlib.GameProfile;
@@ -17,27 +23,98 @@ import net.minecraft.world.entity.player.Player;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.UUID;
+import java.util.Objects;
 
 public final class CustomGuiPlayerEntity extends CustomPlayerEntity implements IPreviewEntity {
     private final PreviewAnimationInfo guiAnimationInfo;
+    private final ModelResourcePurpose purpose;
     private boolean allowEmitting;
+    private boolean suppliedResource;
 
     public CustomGuiPlayerEntity() {
-        super(new FakePlayer(), false, false);
+        this(ModelResourcePurpose.GUI);
+    }
+
+    public CustomGuiPlayerEntity(ModelResourcePurpose purpose) {
+        this(new FakePlayer(), purpose);
+    }
+
+    CustomGuiPlayerEntity(Player subject) {
+        this(subject, ModelResourcePurpose.GUI);
+    }
+
+    private CustomGuiPlayerEntity(Player subject, ModelResourcePurpose purpose) {
+        super(subject, false, false);
+        this.purpose = Objects.requireNonNull(purpose);
         guiAnimationInfo = new PreviewAnimationInfo();
+        if (ResourceDiagnostics.isEnabled()) {
+            ResourceDiagnostics.track(ResourceDiagnostics.Kind.GUI_ENTITY, this,
+                "GUI entity " + purpose + " world=" + System.identityHashCode(subject.level()));
+            ResourceDiagnostics.log("GUI entity created: owner={} world={} purpose={}", System.identityHashCode(this),
+                System.identityHashCode(subject.level()), purpose);
+        }
+    }
+
+    private ModelResourceDemand.Mode demandMode = ModelResourceDemand.Mode.ONLINE;
+
+    public void setResourceDemandMode(ModelResourceDemand.Mode mode) {
+        demandMode = mode;
+    }
+
+    @Override
+    protected ModelResourceDemand.Mode resourceDemandMode() {
+        return demandMode;
+    }
+
+    @Override
+    protected ModelResourcePurpose resourcePurpose() {
+        return purpose;
+    }
+
+    @Override
+    protected Class<?> resourceSubjectType() {
+        return purpose == ModelResourcePurpose.FULL ? AbstractClientPlayer.class : FakePlayer.class;
+    }
+
+    @Override
+    protected String fallbackRenderTargetId() {
+        return null;
+    }
+
+    @Override
+    public void checkModelUpdate() {
+        // Supplied preview resources already completed the same installation seam.
+        if (!suppliedResource)
+            super.checkModelUpdate();
+    }
+
+    public @Nullable ModelRenderTarget displayedModel() {
+        return hasMatchingInstallation() ? getModelRenderTarget() : null;
     }
 
     void installPreviewResource(ResourceRequest request, ResourceLease lease) {
         super.installReadyForPreview(request, lease);
+        suppliedResource = true;
+    }
+
+    /** BUSY leaves the independent receiving lease with the caller. */
+    ClientDemandCoordinator.InstallationResult receiveReady(ResourceRequest request, ResourceLease lease) {
+        setResourceDemandMode(ModelResourceDemand.Mode.READY);
+        updateModelAndTexture(request.modelId(), request.requestedTexture());
+        var result = install(request, lease, false, purpose == ModelResourcePurpose.FULL);
+        if (result == ClientDemandCoordinator.InstallationResult.INSTALLED)
+            suppliedResource = true;
+        return result;
     }
 
     @Override
-    public void reset() {
+    protected void onModelEnded() {
         guiAnimationInfo.setFocus("");
         guiAnimationInfo.setPreview("");
         guiAnimationInfo.setHover("");
         allowEmitting = false;
-        super.reset();
+        suppliedResource = false;
+        super.onModelEnded();
     }
 
     @Override
@@ -82,7 +159,7 @@ public final class CustomGuiPlayerEntity extends CustomPlayerEntity implements I
 
     @Override
     protected GeoRenderData update(float partialTicks, RenderContext context) {
-        if (entity instanceof FakePlayer fakePlayer && !fakePlayer.updateClientLevel()) {
+        if (entity.level() != Minecraft.getInstance().level) {
             return null;
         }
         return super.update(partialTicks, context);
@@ -97,15 +174,10 @@ public final class CustomGuiPlayerEntity extends CustomPlayerEntity implements I
         return null;
     }
 
-    @Override
-    protected @NotNull HumanoidResourceHolder createResourceHolder(ResourceLease lease, boolean isFallback) {
-        return new HumanoidResourceHolder(lease, isFallback);
-    }
-
-    private static class FakePlayer extends AbstractClientPlayer {
-        @SuppressWarnings("DataFlowIssue")
+    public static final class FakePlayer extends AbstractClientPlayer {
         public FakePlayer() {
-            super(Minecraft.getInstance().level, createRandomGameProfile());
+            super(Objects.requireNonNull(Minecraft.getInstance().level, "A preview requires a client level"),
+                createRandomGameProfile());
         }
 
         private static GameProfile createRandomGameProfile() {
@@ -123,14 +195,5 @@ public final class CustomGuiPlayerEntity extends CustomPlayerEntity implements I
             return false;
         }
 
-        public boolean updateClientLevel() {
-            var level = Minecraft.getInstance().level;
-            if (level != null) {
-                this.setLevel(level);
-                return true;
-            } else {
-                return false;
-            }
-        }
     }
 }

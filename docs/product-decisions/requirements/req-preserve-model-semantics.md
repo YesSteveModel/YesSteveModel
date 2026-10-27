@@ -8,7 +8,7 @@
 
 | 任务涉及 | 决策包 |
 |---|---|
-| 导出语义冻结、兼容层级、raw/legacy 迁移 | [model-compatibility](../decisions/model-compatibility.md) |
+| 导出语义冻结、兼容层级、raw/legacy 迁移、GUI 展示求值范围 | [model-compatibility](../decisions/model-compatibility.md) |
 
 ## Uses
 

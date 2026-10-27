@@ -3,10 +3,11 @@ package com.elfmcys.ysm.format.schema.model.views;
 import com.elfmcys.ysm.format.schema.file.AssetFileView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.format.schema.file.PBRImageSources;
-import com.elfmcys.ysm.proto.mixel.asset.model.ModelData;
-import com.elfmcys.ysm.proto.mixel.manifest.asset.PBRTextureSet;
-import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTarget;
+import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
+import com.elfmcys.ysm.proto.mixel.manifest.asset.PBRTextureSetProto;
+import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetProto;
 import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind;
+
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -19,13 +20,13 @@ import java.util.function.BooleanSupplier;
 /** Read-only access to one independently distributable render target. */
 public final class RenderTargetView {
     private final AssetFileView fileView;
-    private final RenderTarget descriptor;
-    private final Map<String, PBRTextureSet> textures;
+    private final RenderTargetProto descriptor;
+    private final Map<String, PBRTextureSetProto> textures;
 
-    public RenderTargetView(AssetFileView fileView, RenderTarget descriptor) {
+    public RenderTargetView(AssetFileView fileView, RenderTargetProto descriptor) {
         this.fileView = fileView;
         this.descriptor = descriptor;
-        var values = new LinkedHashMap<String, PBRTextureSet>();
+        var values = new LinkedHashMap<String, PBRTextureSetProto>();
         if (!descriptor.textures().isEmpty()) {
             descriptor.textures().forEach(values::put);
         }
@@ -52,7 +53,7 @@ public final class RenderTargetView {
         return textures.keySet();
     }
 
-    public PBRTextureSet textureDescriptor(String name) throws FileNotFoundException {
+    public PBRTextureSetProto textureDescriptor(String name) throws FileNotFoundException {
         var value = textures.get(name);
         if (value == null) {
             throw new FileNotFoundException("Render target " + id() + " contains no texture named " + name);
@@ -60,23 +61,20 @@ public final class RenderTargetView {
         return value;
     }
 
-    public ModelData readDefinition(BooleanSupplier cancelled,
-                                                        ChunkDataSource source) throws IOException {
-        return fileView.readProtoBlob(cancelled, source, descriptor.blobId(),
-                ModelData::parseFrom);
+    public ModelDataProto readDefinition(BooleanSupplier cancelled, ChunkDataSource source) throws IOException {
+        return fileView.readProtoBlob(cancelled, source, descriptor.blobId(), ModelDataProto::parseFrom);
     }
 
-    public PBRImageSources textureSources(ChunkDataSource source, String textureName)
-            throws IOException {
+    public PBRImageSources textureSources(ChunkDataSource source, String textureName) throws IOException {
         return fileView.textureSources(source, textureDescriptor(textureName));
     }
 
-    public PBRImageSources textureSources(BooleanSupplier cancelled, ChunkDataSource source,
-                                          String textureName) throws IOException {
+    public PBRImageSources textureSources(BooleanSupplier cancelled, ChunkDataSource source, String textureName)
+        throws IOException {
         return fileView.textureSources(cancelled, source, textureDescriptor(textureName));
     }
 
-    public RenderTarget descriptor() {
+    public RenderTargetProto descriptor() {
         return descriptor;
     }
 }

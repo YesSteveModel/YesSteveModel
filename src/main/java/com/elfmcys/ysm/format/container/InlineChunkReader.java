@@ -10,12 +10,10 @@ import java.nio.channels.SeekableByteChannel;
 
 /** Reads and validates inline payloads described by an AssetContainerView. */
 public final class InlineChunkReader {
-    private InlineChunkReader() {
-    }
+    private InlineChunkReader() {}
 
-    public static UniBuffer readPayload(SeekableByteChannel channel,
-                                        AssetContainerView.ChunkInfo chunk,
-                                        BufferType bufferType) throws IOException {
+    public static UniBuffer readPayload(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
+        BufferType bufferType) throws IOException {
         if (!ChunkDecoding.isZstd(chunk)) {
             return readStoredVerified(channel, chunk, bufferType);
         }
@@ -24,35 +22,31 @@ public final class InlineChunkReader {
         }
     }
 
-    public static byte[] readPayloadBytes(SeekableByteChannel channel,
-                                          AssetContainerView.ChunkInfo chunk) throws IOException {
+    public static byte[] readPayloadBytes(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk)
+        throws IOException {
         try (var payload = readPayload(channel, chunk, BufferType.ARRAY)) {
             return toByteArray(payload);
         }
     }
 
-    public static UniBuffer readStoredVerified(SeekableByteChannel channel,
-                                               AssetContainerView.ChunkInfo chunk,
-                                               BufferType bufferType) throws IOException {
+    public static UniBuffer readStoredVerified(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
+        BufferType bufferType) throws IOException {
         var readType = ChunkDecoding.isZstd(chunk) ? BufferType.NATIVE : bufferType;
         try (var stored = readStored(channel, chunk, readType)) {
             ChunkDecoding.validateStored(stored, chunk);
-            return bufferType == BufferType.NATIVE
-                    ? stored.acquireNative()
-                    : stored.acquireArray();
+            return bufferType == BufferType.NATIVE ? stored.acquireNative() : stored.acquireArray();
         }
     }
 
-    public static byte[] readStoredVerifiedBytes(SeekableByteChannel channel,
-                                                 AssetContainerView.ChunkInfo chunk) throws IOException {
+    public static byte[] readStoredVerifiedBytes(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk)
+        throws IOException {
         try (var stored = readStoredVerified(channel, chunk, BufferType.ARRAY)) {
             return toByteArray(stored);
         }
     }
 
-    private static UniBuffer readStored(SeekableByteChannel channel,
-                                        AssetContainerView.ChunkInfo chunk,
-                                        BufferType bufferType) throws IOException {
+    private static UniBuffer readStored(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
+        BufferType bufferType) throws IOException {
         validate(channel, chunk);
         try (var scope = UniBuffer.allocateWithScope(chunk.size(), bufferType)) {
             readFully(channel, chunk.offset(), scope.get().nio());
@@ -66,9 +60,8 @@ public final class InlineChunkReader {
         return result;
     }
 
-    private static void validate(SeekableByteChannel channel,
-                                 AssetContainerView.ChunkInfo chunk) throws IOException {
-        if ((long) chunk.offset() + chunk.size() > channel.size()) {
+    private static void validate(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk) throws IOException {
+        if ((long)chunk.offset() + chunk.size() > channel.size()) {
             throw AssetLoadException.content("Inline chunk data overflow");
         }
         if (chunk.alignSize() == 0) {
@@ -92,8 +85,7 @@ public final class InlineChunkReader {
         }
     }
 
-    private static void readFully(SeekableByteChannel channel, long offset,
-                                  ByteBuffer target) throws IOException {
+    private static void readFully(SeekableByteChannel channel, long offset, ByteBuffer target) throws IOException {
         channel.position(offset);
         while (target.hasRemaining()) {
             if (channel.read(target) < 0) {

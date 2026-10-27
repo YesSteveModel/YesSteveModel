@@ -1,413 +1,493 @@
 package com.elfmcys.ysm.model.service;
 
-import com.elfmcys.ysm.AssetPaths;
+import com.elfmcys.ysm.model.storage.PreviewStorage;
+import com.elfmcys.ysm.model.catalog.snapshot.CatalogIndexEntry;
+
 import com.elfmcys.ysm.format.schema.model.ModelFileConstant;
 import com.elfmcys.ysm.model.ModelRuntime;
-import com.elfmcys.ysm.model.catalog.source.CatalogModelLocation;
-import com.elfmcys.ysm.model.catalog.source.ModelCatalogSources;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.ModelPath;
+import com.elfmcys.ysm.model.catalog.snapshot.ServerCatalog;
+import com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver;
+import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
+import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
+import com.elfmcys.ysm.model.domain.ModelFileIdentity;
+import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.model.storage.ModelExporter;
 import com.elfmcys.ysm.model.storage.PreviewStore;
 import com.elfmcys.ysm.util.Closeable;
+import net.minecraft.commands.CommandSourceStack;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CompletionException;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
-/** Routes export requests to the tick owner for the active physical side. */
+/** Integrated-environment admission and effect authority for complete model exports. */
 public final class ModelExportService {
-    private static final Object EXPORT_LOCK = new Object();
-    private static ExportRunner exportRunner;
+    private ModelExportService() {}
 
-    private ModelExportService() {
+    public static Environment environment(CommandSourceStack source) {
+        if (!source.hasPermission(2) || source.getServer().isDedicatedServer()) {
+            throw new IllegalStateException("Export requires integrated server permission level 2");
+        }
+        var environment = ServerModelService.instance().exportEnvironment();
+        environment.require(source.getServer());
+        return environment;
     }
 
-    public static Closeable registerExporter(ExportRunner runner) {
-        Objects.requireNonNull(runner, "runner");
-        synchronized (EXPORT_LOCK) {
-            if (exportRunner != null) {
-                throw new IllegalStateException("Client export runner is already registered");
-            }
-            exportRunner = runner;
-        }
-        return () -> {
-            synchronized (EXPORT_LOCK) {
-                if (exportRunner == runner) {
-                    exportRunner = null;
-                }
-            }
-        };
-    }
-
-    public static CompletableFuture<Path> export(String requestedPath, String extra) {
-        Objects.requireNonNull(requestedPath, "requestedPath");
-        var client = currentExporter();
-        if (client != null) {
-            try {
-                return Objects.requireNonNull(client.export(requestedPath, extra),
-                        "Client export runner returned no operation");
-            } catch (Throwable failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
-        }
-        var server = ServerModelService.current().orElse(null);
-        if (server == null) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("No model service owns export operations"));
-        }
-        return server.export(requestedPath, extra);
-    }
-
-    private static ExportRunner currentExporter() {
-        synchronized (EXPORT_LOCK) {
-            return exportRunner;
-        }
-    }
-
-    /** Performs one complete worker-safe source/probe/export preparation chain. */
-    public static PreparedExport prepare(String requestedPath, String extra) throws Exception {
-        Objects.requireNonNull(requestedPath, "requestedPath");
-        var path = new ModelPath(requestedPath);
-        var operation = openSource(path);
+    public static CompletableFuture<Path> export(CommandSourceStack source, String path, String extra) {
         try {
-            var system = ModelRuntime.system();
-            var previews = new PreviewStore(system.storage().gameCacheRoot(),
-                    system.storage().cache());
-            var preview = embedded(operation.source());
-            if (preview == null) {
-                preview = previews.load(operation.source().representation().containerId())
-                        .orElse(null);
-            }
-            var output = outputPath(path);
-            var completed = preview == null
-                    ? null
-                    : ModelExporter.export(operation.source(), preview, output, extra);
-            return new PreparedExport(operation, previews, output, completed, extra);
+            return environment(source).export(path, extra);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    public static PreparedExport prepare(Request request) throws Exception {
+        request.requireActive();
+        var system = ModelRuntime.system();
+        return prepare(request, system.previews(), null);
+    }
+
+    static PreparedExport prepare(Request request, PreviewStorage previews, Path output) throws Exception {
+        var operation = openExact(request.claimSource());
+        PreviewStore.EncodedPreview preview = null;
+        try {
+            request.requireActive();
+            preview = embedded(operation);
+            if (preview == null)
+                preview = previews.forContent(operation).load(operation.representation().containerId()).orElse(null);
+            var prepared = new PreparedExport(operation,
+                output == null ? outputPath(operation.location().value()) : output, request.extra, request, preview);
+            if (preview != null)
+                prepared.completed = ModelExporter.export(operation, preview, prepared.output, request.extra,
+                    replacement -> request.commit(prepared.output, replacement));
+            return prepared;
         } catch (Throwable failure) {
-            failure = operation.closeOwned(failure);
-            if (failure instanceof Error error) {
+            failure = closeResource(preview, failure);
+            failure = closeResource(operation.representation(), failure);
+            if (failure instanceof Error error)
                 throw error;
-            }
-            if (failure instanceof Exception exception) {
+            if (failure instanceof Exception exception)
                 throw exception;
-            }
             throw new RuntimeException(failure);
         }
     }
 
-    /** Completes encode persistence and artifact export in the caller's finite worker task. */
-    public static Path finish(PreparedExport prepared,
-                              PreviewStore.EncodedPreview generated) throws Exception {
-        Objects.requireNonNull(prepared, "prepared");
-        Objects.requireNonNull(generated, "generated");
-        var accepted = prepared.store.accept(
-                prepared.operation.source().representation().containerId(),
-                generated.bytes());
-        return ModelExporter.export(prepared.operation.source(), accepted,
-                prepared.output, prepared.extra);
+    public static Path finish(PreparedExport prepared, PreviewStore.EncodedPreview generated) throws IOException {
+        return ModelExporter.export(prepared.source, generated, prepared.output, prepared.extra,
+            replacement -> prepared.request.commit(prepared.output, replacement));
     }
 
-    private static SourceOperation openSource(ModelPath path) throws IOException {
-        var published = ServerModelService.instance().catalog().orElseThrow()
-                .findPath(path.value()).orElse(null);
-        return published == null
-                ? new SourceOperation(openRejectedDirect(path), true)
-                : new SourceOperation(published, false);
-    }
-
-    private static Path outputPath(ModelPath path) throws IOException {
-        var exportRoot = AssetPaths.exportRoot().toAbsolutePath().normalize();
-        var output = exportRoot.resolve(withDirectSuffix(path.value())).normalize();
-        if (!output.startsWith(exportRoot)) {
-            throw new IOException("Export path escapes its root");
+    private static ManagedContainer openExact(ManagedContainer source) throws IOException {
+        var opened = ManagedContainer.openIndexed(new CatalogIndexEntry(source.representation().identity(),
+            source.location(), source.file(), source.storageBinding()));
+        if (!opened.representation().identity().equals(source.representation().identity())) {
+            opened.representation().close();
+            throw new IOException("Export source representation changed");
         }
+        return opened;
+    }
+
+    private static Path outputPath(String address) throws IOException {
+        return outputPath(ModelRuntime.paths().exportRoot(), address);
+    }
+
+    static Path outputPath(Path root, String address) throws IOException {
+        var location = CatalogLocation.parse(address);
+        var directory = switch (location.root()) {
+            case GLOBAL_CUSTOM -> "global/custom";
+            case GLOBAL_AUTH -> "global/auth";
+            case LOCAL_CUSTOM -> "local/custom";
+            case LOCAL_AUTH -> "local/auth";
+            case BUILTIN -> throw new IOException("Builtin models cannot be exported");
+        };
+        var path = directory + "/" + location.entry();
+        var output = root.resolve(withDirectSuffix(path)).normalize();
+        if (!output.startsWith(root))
+            throw new IOException("Export path escapes its root");
         return output;
     }
 
     static String withDirectSuffix(String path) {
-        return path.toLowerCase(Locale.ROOT).endsWith(".mxc")
-                ? path
-                : path + ".mxc";
+        return path.toLowerCase(Locale.ROOT).endsWith(".mxc") ? path : path + ".mxc";
     }
 
-    private static PreviewStore.EncodedPreview embedded(ManagedContainer source)
-            throws IOException {
+    private static PreviewStore.EncodedPreview embedded(ManagedContainer source) throws IOException {
         var view = source.modelFile();
-        var chunk = view.getFileView().getAssetView().getChunkInfo(
-                ModelFileConstant.THUMB_BUTTON_CHUNK_NAME);
+        var chunk = view.getFileView().getAssetView().getChunkInfo(ModelFileConstant.THUMB_BUTTON_CHUNK_NAME);
         var image = view.thumbnailSource(source.chunks());
-        if (image == null) {
+        if (image == null)
             return null;
-        }
-        if (chunk == null) {
+        if (chunk == null)
             throw new IOException("Model preview chunk is unavailable");
-        }
         return PreviewStore.read(image, chunk.size());
-    }
-
-    private static ManagedContainer openRejectedDirect(ModelPath path) throws IOException {
-        var candidates = new ArrayList<ManagedContainer>();
-        try {
-            for (var root : ModelCatalogSources.reloadableSources()) {
-                var base = root.path().toAbsolutePath().normalize();
-                var candidate = base.resolve(directInputPath(path.value())).normalize();
-                if (!candidate.startsWith(base)
-                        || !Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS)) {
-                    continue;
-                }
-                candidates.add(ManagedContainer.openDirect(candidate,
-                        new CatalogModelLocation(root.rootKind(), path)));
-            }
-            if (candidates.size() != 1) {
-                throw new IOException(candidates.isEmpty()
-                        ? "Model does not exist: " + path.value()
-                        : "Model path is ambiguous: " + path.value());
-            }
-            return candidates.remove(0);
-        } finally {
-            candidates.forEach(value -> value.representation().close());
-        }
-    }
-
-    static String directInputPath(String path) {
-        var lower = path.toLowerCase(Locale.ROOT);
-        return lower.endsWith(".mxc") || lower.endsWith(".ysm")
-                ? path
-                : path + ".mxc";
     }
 
     @FunctionalInterface
     public interface ExportRunner {
-        CompletableFuture<Path> export(String requestedPath, String extra);
+        CompletableFuture<Path> export(Request request);
     }
 
-    public static final class PreparedExport {
-        private final SourceOperation operation;
-        private final PreviewStore store;
-        private final Path output;
-        private final Path completed;
-        private final String extra;
+    public record Item(String path, ModelFileIdentity identity) {
+    }
 
-        private PreparedExport(SourceOperation operation, PreviewStore store,
-                               Path output, Path completed, String extra) {
-            this.operation = operation;
-            this.store = store;
-            this.output = output;
-            this.completed = completed;
+    public static final class Environment implements Closeable {
+        private final Object owner;
+        private final BooleanSupplier available;
+        private final Supplier<ServerCatalog> catalog;
+        private final ExportRunner runner;
+        private final Set<Request> requests = new HashSet<>();
+        private boolean closed;
+        private int workers;
+        private Batch batch;
+
+        public Environment(Object owner, BooleanSupplier available, Supplier<ServerCatalog> catalog,
+            ExportRunner runner) {
+            this.owner = Objects.requireNonNull(owner);
+            this.available = Objects.requireNonNull(available);
+            this.catalog = Objects.requireNonNull(catalog);
+            this.runner = Objects.requireNonNull(runner);
+        }
+
+        public synchronized void require(Object expectedOwner) {
+            if (closed || owner != expectedOwner || !available.getAsBoolean())
+                throw new IllegalStateException("Export requires the current integrated environment");
+        }
+
+        public synchronized CompletableFuture<Path> export(String path, String extra) {
+            require(owner);
+            var current = catalog.get();
+            var resolution = current.resolvePath(path);
+            if (resolution.status() != CatalogAddressResolver.Status.FOUND)
+                return CompletableFuture.failedFuture(new CatalogAddressResolver.Failure(resolution.status()));
+            var source = resolution.found().flatMap(current::find).orElse(null);
+            if (source == null)
+                return CompletableFuture
+                    .failedFuture(new CatalogAddressResolver.Failure(CatalogAddressResolver.Status.NOT_FOUND));
+            if (source.location().rootKind() == CatalogRootKind.BUILTIN)
+                return CompletableFuture.failedFuture(new IOException("Builtin models cannot be exported"));
+            return start(source.location().value(), source, extra);
+        }
+
+        private CompletableFuture<Path> start(String path, ManagedContainer source, String extra) {
+            require(owner);
+            if (requests.size() >= 48)
+                return CompletableFuture.failedFuture(new IOException("Export is BUSY"));
+            var request = new Request(this, path, source, extra);
+            requests.add(request);
+            try {
+                request.running = Objects.requireNonNull(runner.export(request));
+                request.running.whenComplete((output, failure) -> {
+                    synchronized (this) {
+                        requests.remove(request);
+                        request.source = null;
+                        request.running = null;
+                        if (request.committed != null)
+                            request.output.complete(request.committed);
+                        else if (failure == null)
+                            request.output.complete(output);
+                        else
+                            request.output.completeExceptionally(unwrap(failure));
+                    }
+                });
+            } catch (Throwable failure) {
+                requests.remove(request);
+                request.output.completeExceptionally(failure);
+            }
+            return request.output;
+        }
+
+        public synchronized boolean exportAll(String pattern, Consumer<ModelWorkSummary.Item> itemNotice,
+            Consumer<ModelWorkSummary> summaryNotice) {
+            require(owner);
+            if (batch != null)
+                return false;
+            var selected = catalog.get().catalog().byModelId().values().stream()
+                .filter(record -> record.location().rootKind() != CatalogRootKind.BUILTIN)
+                .filter(record -> pattern == null || CatalogGlob.matches(pattern, record.entry().path().value()))
+                .map(record -> new Item(record.entry().path().value(),
+                    record.binding().content().representation().identity()))
+                .toList();
+            batch = new Batch(selected, itemNotice, summaryNotice);
+            return true;
+        }
+
+        public synchronized void tick() {
+            if (closed || batch == null)
+                return;
+            if (batch.running != null) {
+                if (!batch.running.isDone())
+                    return;
+                try {
+                    batch.finish(ModelWorkSummary.Outcome.SUCCESS, batch.running.join().toString());
+                } catch (RuntimeException failure) {
+                    batch.finish(ModelWorkSummary.Outcome.FAILED, message(failure));
+                }
+            }
+            if (batch.next == batch.selection.size()) {
+                batch.complete(false);
+                batch = null;
+                return;
+            }
+            var item = batch.selection.get(batch.next++);
+            batch.current = item;
+            var source = catalog.get().findPath(item.path).orElse(null);
+            if (source == null || source.location().rootKind() == CatalogRootKind.BUILTIN
+                || !source.representation().identity().equals(item.identity)) {
+                batch.finish(ModelWorkSummary.Outcome.SKIPPED, "Catalog identity retired");
+                return;
+            }
+            try {
+                batch.running = start(item.path, source, null);
+            } catch (RuntimeException failure) {
+                batch.finish(ModelWorkSummary.Outcome.FAILED, message(failure));
+            }
+        }
+
+        @Override
+        public void close() {
+            List<Request> active;
+            synchronized (this) {
+                if (closed)
+                    return;
+                closed = true;
+                active = List.copyOf(requests);
+            }
+            active.forEach(Request::cancel);
+            synchronized (this) {
+                boolean interrupted = false;
+                while (workers != 0) {
+                    try {
+                        wait();
+                    } catch (InterruptedException failure) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted)
+                    Thread.currentThread().interrupt();
+                if (batch != null) {
+                    if (batch.current != null) {
+                        if (batch.running.isDone() && !batch.running.isCompletedExceptionally())
+                            batch.finish(ModelWorkSummary.Outcome.SUCCESS, batch.running.join().toString());
+                        else
+                            batch.finish(ModelWorkSummary.Outcome.FAILED, "Integrated environment ended");
+                    }
+                    batch.complete(true);
+                    batch = null;
+                }
+                requests.clear();
+            }
+        }
+
+        private final class Batch {
+            private final List<Item> selection;
+            private final Consumer<ModelWorkSummary.Item> itemNotice;
+            private final Consumer<ModelWorkSummary> summaryNotice;
+            private final List<ModelWorkSummary.Item> results = new ArrayList<>();
+            private int next;
+            private Item current;
+            private CompletableFuture<Path> running;
+
+            private Batch(List<Item> selection, Consumer<ModelWorkSummary.Item> itemNotice,
+                Consumer<ModelWorkSummary> summaryNotice) {
+                this.selection = selection;
+                this.itemNotice = itemNotice;
+                this.summaryNotice = summaryNotice;
+            }
+
+            private void finish(ModelWorkSummary.Outcome outcome, String reason) {
+                var item = new ModelWorkSummary.Item(current.identity, current.path, outcome, reason);
+                results.add(item);
+                current = null;
+                running = null;
+                notice(() -> itemNotice.accept(item));
+            }
+
+            private void complete(boolean stopped) {
+                var summary =
+                    new ModelWorkSummary(selection.size(), results, selection.size() - results.size(), stopped);
+                notice(() -> summaryNotice.accept(summary));
+            }
+        }
+    }
+
+    /** Exact input and effect capability captured before any source work is admitted. */
+    public static final class Request implements AtomicSharedCache.CommitGate {
+        private final Environment environment;
+        private final String path;
+        private ManagedContainer source;
+        private final String extra;
+        private final CompletableFuture<Path> output = new CompletableFuture<>() {
+            @Override
+            public boolean cancel(boolean mayInterrupt) {
+                return Request.this.cancel();
+            }
+        };
+        private CompletableFuture<Path> running;
+        private boolean cancelled;
+        private boolean sourceClaimed;
+        private Path committed;
+
+        private Request(Environment environment, String path, ManagedContainer source, String extra) {
+            this.environment = environment;
+            this.path = path;
+            this.source = Objects.requireNonNull(source);
             this.extra = extra;
         }
 
+        public String path() {
+            return path;
+        }
+
+        public String extra() {
+            return extra;
+        }
+
+        private ManagedContainer claimSource() {
+            synchronized (environment) {
+                requireActive();
+                if (sourceClaimed)
+                    throw new IllegalStateException("Export source was already claimed");
+                sourceClaimed = true;
+                var exact = source;
+                source = null;
+                return exact;
+            }
+        }
+
+        public void requireActive() {
+            synchronized (environment) {
+                environment.require(environment.owner);
+                if (cancelled)
+                    throw new CancellationException("Export operation cancelled");
+            }
+        }
+
+        public boolean beginWorker() {
+            synchronized (environment) {
+                if (environment.closed || cancelled)
+                    return false;
+                environment.workers++;
+                return true;
+            }
+        }
+
+        public void endWorker() {
+            synchronized (environment) {
+                environment.workers--;
+                environment.notifyAll();
+            }
+        }
+
+        @Override
+        public void commit(AtomicSharedCache.AtomicReplacement replacement) throws IOException {
+            commit(outputPath(path), replacement);
+        }
+
+        public void commit(Path output, AtomicSharedCache.AtomicReplacement replacement) throws IOException {
+            synchronized (environment) {
+                requireActive();
+                replacement.run();
+                committed = output;
+            }
+        }
+
+        private boolean cancel() {
+            CompletableFuture<Path> operation;
+            boolean changed;
+            synchronized (environment) {
+                cancelled = true;
+                if (committed != null) {
+                    output.complete(committed);
+                    changed = false;
+                } else
+                    changed = output.completeExceptionally(new CancellationException("Export environment ended"));
+                operation = running;
+            }
+            if (operation != null)
+                operation.cancel(false);
+            return changed;
+        }
+    }
+
+    public static final class PreparedExport {
+        private final ManagedContainer source;
+        private final Path output;
+        private final String extra;
+        private final Request request;
+        private final PreviewStore.EncodedPreview preview;
+        private Path completed;
+        private boolean closed;
+
+        private PreparedExport(ManagedContainer source, Path output, String extra, Request request,
+            PreviewStore.EncodedPreview preview) {
+            this.source = source;
+            this.output = output;
+            this.extra = extra;
+            this.request = request;
+            this.preview = preview;
+        }
+
         public ModelContent content() {
-            return operation.source();
+            return source;
         }
 
         public Path completed() {
             return completed;
         }
 
-        public Throwable closeOwned(Throwable failure) {
-            return operation.closeOwned(failure);
-        }
-    }
-
-    private static final class SourceOperation {
-        private final ManagedContainer source;
-        private final boolean owned;
-        private final AtomicBoolean closed = new AtomicBoolean();
-
-        private SourceOperation(ManagedContainer source, boolean owned) {
-            this.source = source;
-            this.owned = owned;
-        }
-
-        private ManagedContainer source() {
-            return source;
-        }
-
-        private Throwable closeOwned(Throwable failure) {
-            if (owned && closed.compareAndSet(false, true)) {
-                try {
-                    source.representation().close();
-                } catch (Throwable closeFailure) {
-                    if (failure == null) {
-                        return closeFailure;
-                    }
-                    failure.addSuppressed(closeFailure);
-                }
+        public synchronized Throwable closeOwned(Throwable failure) {
+            if (!closed) {
+                closed = true;
+                failure = closeResource(preview, failure);
+                failure = closeResource(source.representation(), failure);
             }
             return failure;
         }
     }
 
-    /** Server-tick owner for dedicated-host exports that need no client renderer. */
-    static final class ServerRuntime implements Closeable {
-        private static final int MAX_ACTIVE = 8;
-        private static final int PENDING_CAPACITY = 16;
-        private static final int ADMISSIONS_PER_TICK = 4;
-        private static final AtomicLong NEXT_ID = new AtomicLong();
-
-        private final Executor workers;
-        private final ArrayBlockingQueue<ServerSubmission> submissions =
-                new ArrayBlockingQueue<>(PENDING_CAPACITY);
-        private final Map<Long, ServerOperation> active = new LinkedHashMap<>();
-        private final AtomicBoolean closed = new AtomicBoolean();
-
-        ServerRuntime(Executor workers) {
-            this.workers = Objects.requireNonNull(workers, "workers");
-        }
-
-        CompletableFuture<Path> submit(String requestedPath, String extra) {
-            var output = new CompletableFuture<Path>();
-            var submission = new ServerSubmission(
-                    NEXT_ID.incrementAndGet(), requestedPath, extra, output);
-            if (closed.get()) {
-                output.completeExceptionally(
-                        new CancellationException("Server export owner is closed"));
-            } else if (!submissions.offer(submission)) {
-                output.completeExceptionally(new RejectedExecutionException(
-                        "Server export request capacity is exhausted"));
-            } else if (closed.get() && submissions.remove(submission)) {
-                output.completeExceptionally(
-                        new CancellationException("Server export owner is closed"));
-            }
-            return output;
-        }
-
-        synchronized void tick() {
-            if (closed.get()) {
-                return;
-            }
-            for (var operation : new ArrayList<>(active.values())) {
-                var fact = operation.slot.poll();
-                if (fact == null) {
-                    continue;
-                }
-                active.remove(operation.submission.id());
-                operation.slot.close();
-                if (operation.submission.output().isDone()) {
-                    continue;
-                }
-                if (fact.failure() == null) {
-                    operation.submission.output().complete(fact.output());
-                } else {
-                    operation.submission.output().completeExceptionally(fact.failure());
-                }
-            }
-            for (var admitted = 0;
-                 admitted < ADMISSIONS_PER_TICK && active.size() < MAX_ACTIVE;
-                 admitted++) {
-                var submission = submissions.poll();
-                if (submission == null) {
-                    break;
-                }
-                if (submission.output().isDone()) {
-                    admitted--;
-                    continue;
-                }
-                var operation = new ServerOperation(submission);
-                active.put(submission.id(), operation);
-                try {
-                    workers.execute(() -> operation.slot.publish(run(submission)));
-                } catch (Throwable failure) {
-                    active.remove(submission.id());
-                    operation.slot.close();
-                    submission.output().completeExceptionally(failure);
-                }
-            }
-        }
-
-        private static ServerFact run(ServerSubmission submission) {
-            PreparedExport prepared = null;
-            Path output = null;
-            Throwable failure = null;
-            try {
-                prepared = prepare(submission.requestedPath(), submission.extra());
-                output = prepared.completed();
-                if (output == null) {
-                    throw new IOException(
-                            "A client renderer is required to generate the missing preview");
-                }
-            } catch (Throwable operationFailure) {
-                failure = operationFailure;
-            } finally {
-                if (prepared != null) {
-                    failure = prepared.closeOwned(failure);
-                }
-            }
-            return new ServerFact(output, failure);
-        }
-
-        @Override
-        public synchronized void close() {
-            if (!closed.compareAndSet(false, true)) {
-                return;
-            }
-            ServerSubmission submission;
-            while ((submission = submissions.poll()) != null) {
-                submission.output().completeExceptionally(
-                        new CancellationException("Server export owner is closed"));
-            }
-            for (var operation : active.values()) {
-                operation.slot.close();
-                operation.submission.output().cancel(false);
-            }
-            active.clear();
-        }
+    private static Throwable unwrap(Throwable failure) {
+        while (failure instanceof CompletionException && failure.getCause() != null)
+            failure = failure.getCause();
+        return failure;
     }
 
-    private record ServerSubmission(long id, String requestedPath, String extra,
-                                    CompletableFuture<Path> output) {
+    private static Throwable closeResource(AutoCloseable resource, Throwable failure) {
+        if (resource == null)
+            return failure;
+        try {
+            resource.close();
+        } catch (Throwable closeFailure) {
+            if (failure == null)
+                return closeFailure;
+            failure.addSuppressed(closeFailure);
+        }
+        return failure;
     }
 
-    private record ServerFact(Path output, Throwable failure) {
+    private static String message(Throwable failure) {
+        var cause = unwrap(failure);
+        com.elfmcys.ysm.YesSteveModel.LOGGER.error("Model export failed", cause);
+        return com.elfmcys.ysm.model.domain.PublicFailure.summary(cause);
     }
 
-    private static final class ServerOperation {
-        private final ServerSubmission submission;
-        private final ServerFactSlot slot = new ServerFactSlot();
-
-        private ServerOperation(ServerSubmission submission) {
-            this.submission = submission;
-        }
-    }
-
-    private static final class ServerFactSlot {
-        private static final Object WAITING = new Object();
-        private static final Object CONSUMED = new Object();
-        private static final Object CLOSED = new Object();
-        private final AtomicReference<Object> state = new AtomicReference<>(WAITING);
-
-        private void publish(ServerFact fact) {
-            state.compareAndSet(WAITING, fact);
-        }
-
-        private ServerFact poll() {
-            var value = state.get();
-            if (value instanceof ServerFact fact
-                    && state.compareAndSet(value, CONSUMED)) {
-                return fact;
-            }
-            return null;
-        }
-
-        private void close() {
-            state.set(CLOSED);
+    private static void notice(Runnable callback) {
+        try {
+            callback.run();
+        } catch (RuntimeException failure) {
+            com.elfmcys.ysm.YesSteveModel.LOGGER.warn("Export feedback failed", failure);
         }
     }
 }

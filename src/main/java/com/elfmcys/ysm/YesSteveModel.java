@@ -1,6 +1,6 @@
 package com.elfmcys.ysm;
 
-import com.elfmcys.ysm.api.internal.event.YsmEventHandlerLoader;
+import com.elfmcys.ysm.api.internal.event.ExtensionEventHandlerLoader;
 import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.config.ServerConfig;
 import com.elfmcys.ysm.init.ModSounds;
@@ -34,15 +34,15 @@ public class YesSteveModel {
     public YesSteveModel() throws IOException {
         MOD = ModLoadingContext.get().getActiveContainer();
         EVENT_BUS = FMLJavaModLoadingContext.get().getModEventBus();
-        initConfig();
-
         NativeLibUtil.load();
+        // Platform detection must finish before platform-dependent defaults are registered.
+        initConfig();
         if (!NativeLibUtil.isAvailable()) {
             LOGGER.error(getUnavailableMessageString());
             return;
         }
 
-        YsmEventHandlerLoader.attach(EVENT_BUS);
+        ExtensionEventHandlerLoader.attach(EVENT_BUS);
     }
 
     public static void registerEventHandler(Object handler) {

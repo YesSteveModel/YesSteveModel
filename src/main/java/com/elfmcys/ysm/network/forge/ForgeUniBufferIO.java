@@ -6,13 +6,11 @@ import com.elfmcys.ysm.buffer.UniBuffer;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.internal.PlatformDependent;
 import net.minecraft.network.FriendlyByteBuf;
-import org.lwjgl.system.MemoryUtil;
 
 import java.lang.ref.Reference;
 
 public final class ForgeUniBufferIO {
-    private ForgeUniBufferIO() {
-    }
+    private ForgeUniBufferIO() {}
 
     public static void write(FriendlyByteBuf target, UniBuffer source) {
         try {
@@ -20,7 +18,7 @@ public final class ForgeUniBufferIO {
                 target.writeBytes(array.array(), array.arrayOffset(), array.size());
                 return;
             }
-            var nativeBuffer = (NativeBuffer) source;
+            var nativeBuffer = (NativeBuffer)source;
             var length = nativeBuffer.size();
             var index = target.writerIndex();
             target.ensureWritable(length);
@@ -28,11 +26,10 @@ public final class ForgeUniBufferIO {
                 PlatformDependent.copyMemory(nativeBuffer.ptr(), target.memoryAddress() + index, length);
                 target.writerIndex(index + length);
             } else if (target.hasArray()) {
-                PlatformDependent.copyMemory(nativeBuffer.ptr(), target.array(),
-                        target.arrayOffset() + index, length);
+                PlatformDependent.copyMemory(nativeBuffer.ptr(), target.array(), target.arrayOffset() + index, length);
                 target.writerIndex(index + length);
             } else {
-                target.writeBytes(MemoryUtil.memByteBuffer(nativeBuffer.ptr(), length));
+                target.writeBytes(nativeBuffer.nio());
             }
         } finally {
             Reference.reachabilityFence(source);
@@ -55,23 +52,21 @@ public final class ForgeUniBufferIO {
         }
     }
 
-    static void copyFromNetty(ByteBuf source, int sourceIndex,
-                              NativeBuffer target, int targetOffset, int length) {
+    static void copyFromNetty(ByteBuf source, int sourceIndex, NativeBuffer target, int targetOffset, int length) {
         try {
-            if (sourceIndex < 0 || targetOffset < 0 || length < 0
-                    || sourceIndex > source.writerIndex() - length
-                    || targetOffset > target.size() - length) {
+            if (sourceIndex < 0 || targetOffset < 0 || length < 0 || sourceIndex > source.writerIndex() - length
+                || targetOffset > target.size() - length) {
                 throw new IndexOutOfBoundsException();
             }
             if (source.hasMemoryAddress()) {
-                PlatformDependent.copyMemory(source.memoryAddress() + sourceIndex,
-                        target.ptr() + targetOffset, length);
+                PlatformDependent.copyMemory(source.memoryAddress() + sourceIndex, target.ptr() + targetOffset, length);
             } else if (source.hasArray()) {
                 PlatformDependent.copyMemory(source.array(), source.arrayOffset() + sourceIndex,
-                        target.ptr() + targetOffset, length);
+                    target.ptr() + targetOffset, length);
             } else {
-                source.getBytes(sourceIndex,
-                        MemoryUtil.memByteBuffer(target.ptr() + targetOffset, length));
+                var view = target.nio();
+                view.position(targetOffset).limit(targetOffset + length);
+                source.getBytes(sourceIndex, view);
             }
         } finally {
             Reference.reachabilityFence(source);

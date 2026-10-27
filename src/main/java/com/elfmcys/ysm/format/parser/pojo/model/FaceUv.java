@@ -7,10 +7,10 @@ public class FaceUv {
 
     @SerializedName("uv_size")
     public float[] uvSize;
-/*
-// 暂未实现
+    /*
+    // 暂未实现
     @SerializedName("uv_rotation")
     public Integer uvRotation;
 
- */
+     */
 }

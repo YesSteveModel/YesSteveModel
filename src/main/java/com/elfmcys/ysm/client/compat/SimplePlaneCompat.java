@@ -28,12 +28,12 @@ public class SimplePlaneCompat {
 
     public static Optional<Vector3f> getRotation(AnimationEvent<CustomVehicleEntity> event) {
         if (INSTALLED && event.getAnimatableEntity().getEntity() instanceof PlaneEntity planeEntity) {
-            var q = xyz.przemyk.simpleplanes.misc.MathUtil.lerpQ(event.getPartialTick(),
-                    planeEntity.getQ_Prev(), planeEntity.getQ_Client());
+            var q = xyz.przemyk.simpleplanes.misc.MathUtil.lerpQ(event.getPartialTick(), planeEntity.getQ_Prev(),
+                planeEntity.getQ_Client());
 
             q.premul(Axis.YP.rotation(-MathUtil.degreesToRadians(planeEntity.getViewYRot(event.getPartialTick()))));
 
-            float timeSinceHitWithPartial = (float) planeEntity.getTimeSinceHit() - event.getPartialTick();
+            float timeSinceHitWithPartial = (float)planeEntity.getTimeSinceHit() - event.getPartialTick();
             if (timeSinceHitWithPartial > 0.0F) {
                 float angle = Math.clamp(timeSinceHitWithPartial / 10.0F, -30, 30);
                 timeSinceHitWithPartial = planeEntity.tickCount + event.getPartialTick();

@@ -4,6 +4,7 @@ import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
 import com.elfmcys.ysm.model.service.ClientModelService;
 import com.elfmcys.ysm.client.texture.CustomTextureManager;
+import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.network.forge.ClientProtocolGateway;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
@@ -19,6 +20,7 @@ public class ClientTickEvent {
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
         if (!YesSteveModel.isAvailable()) {
+            RegisterEntityRenderersEvent.releaseFirstPersonArm();
             return;
         }
         if (event.phase == TickEvent.Phase.END) {
@@ -30,11 +32,17 @@ public class ClientTickEvent {
         refreshRate = Minecraft.getInstance().getWindow().getRefreshRate();
 
         var player = Minecraft.getInstance().player;
+        if (player == null || ClientConfig.DISABLE_SELF_MODEL.get() || ClientConfig.DISABLE_SELF_HANDS.get()) {
+            RegisterEntityRenderersEvent.releaseFirstPersonArm();
+        }
         if (player != null) {
-            player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(capability -> {
-                capability.handleRoamingVarsChanges();
+            var capability = player.getCapability(PlayerAnimatableCapabilityProvider.CAP).orElse(null);
+            if (capability == null || !capability.isPresentationAllowed()) {
+                RegisterEntityRenderersEvent.releaseFirstPersonArm();
+            }
+            if (capability != null) {
                 ClientProtocolGateway.tick(player, capability);
-            });
+            }
         }
     }
 

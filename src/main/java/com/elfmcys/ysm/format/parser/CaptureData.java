@@ -7,6 +7,8 @@ import org.jetbrains.annotations.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.ArrayDeque;
+import java.util.concurrent.CancellationException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -116,26 +118,34 @@ final class CapturedSourceData implements CaptureData, VirtualFileSystem {
     }
 
     private void snapshotDirectory(String path) {
-        var sourcePath = path.isEmpty() ? null : path;
-        var files = snapshotEntries(source.listFiles(sourcePath), "file", path);
-        var childDirectories = snapshotEntries(source.listDirectories(sourcePath), "directory", path);
-        var fileNames = new HashSet<>(Arrays.asList(files));
-        for (var child : childDirectories) {
-            if (fileNames.contains(child)) {
-                throw new IllegalArgumentException("File/directory collision: " + join(path, child));
+        var pending = new ArrayDeque<String>();
+        pending.push(path);
+        while (!pending.isEmpty()) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new CancellationException("Raw source capture cancelled");
             }
-        }
-        if (directories.put(path, new DirectoryEntries(files, childDirectories)) != null) {
-            throw new IllegalArgumentException("Duplicate directory: " + path);
-        }
-        for (var file : files) {
-            var fullPath = join(path, file);
-            if (!sourceFiles.add(fullPath)) {
-                throw new IllegalArgumentException("Duplicate file: " + fullPath);
+            path = pending.pop();
+            var sourcePath = path.isEmpty() ? null : path;
+            var files = snapshotEntries(source.listFiles(sourcePath), "file", path);
+            var childDirectories = snapshotEntries(source.listDirectories(sourcePath), "directory", path);
+            var fileNames = new HashSet<>(Arrays.asList(files));
+            for (var child : childDirectories) {
+                if (fileNames.contains(child)) {
+                    throw new IllegalArgumentException("File/directory collision: " + join(path, child));
+                }
             }
-        }
-        for (var child : childDirectories) {
-            snapshotDirectory(join(path, child));
+            if (directories.put(path, new DirectoryEntries(files, childDirectories)) != null) {
+                throw new IllegalArgumentException("Duplicate directory: " + path);
+            }
+            for (var file : files) {
+                var fullPath = join(path, file);
+                if (!sourceFiles.add(fullPath)) {
+                    throw new IllegalArgumentException("Duplicate file: " + fullPath);
+                }
+            }
+            for (var child : childDirectories) {
+                pending.push(join(path, child));
+            }
         }
     }
 
@@ -159,7 +169,7 @@ final class CapturedSourceData implements CaptureData, VirtualFileSystem {
     private static String portablePath(String path) {
         Objects.requireNonNull(path, "path");
         if (path.isEmpty() || path.startsWith("/") || path.indexOf('\\') >= 0 || path.indexOf('\0') >= 0
-                || isWindowsAbsolute(path)) {
+            || isWindowsAbsolute(path)) {
             throw new IllegalArgumentException("Invalid portable path: " + path);
         }
         for (var segment : path.split("/", -1)) {
@@ -170,7 +180,7 @@ final class CapturedSourceData implements CaptureData, VirtualFileSystem {
 
     private static void validateSegment(String segment) {
         if (segment == null || segment.isEmpty() || segment.equals(".") || segment.equals("..")
-                || segment.indexOf('/') >= 0 || segment.indexOf('\\') >= 0 || segment.indexOf('\0') >= 0) {
+            || segment.indexOf('/') >= 0 || segment.indexOf('\\') >= 0 || segment.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("Invalid portable path segment: " + segment);
         }
         validateSurrogates(segment);
@@ -190,8 +200,8 @@ final class CapturedSourceData implements CaptureData, VirtualFileSystem {
     }
 
     private static boolean isWindowsAbsolute(String path) {
-        return path.length() >= 3 && Character.isLetter(path.charAt(0))
-                && path.charAt(1) == ':' && path.charAt(2) == '/';
+        return path.length() >= 3 && Character.isLetter(path.charAt(0)) && path.charAt(1) == ':'
+            && path.charAt(2) == '/';
     }
 
     private static String join(String parent, String name) {
@@ -249,13 +259,10 @@ final class CapturedSourceData implements CaptureData, VirtualFileSystem {
         }
 
         @Override
-        public void close() {
-        }
+        public void close() {}
     }
 
     private enum State {
-        CAPTURING,
-        FROZEN,
-        CLOSED
+        CAPTURING, FROZEN, CLOSED
     }
 }

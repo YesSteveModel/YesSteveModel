@@ -25,16 +25,18 @@ public class CustomPlayerItemInHandLayer extends GeoLayerRenderer<CustomPlayerEn
     }
 
     @Override
-    public void render(PoseStack poseStack, MultiBufferSource buffer, CustomPlayerEntity animatable, GeoRenderData renderData, int packedLight, int overlay) {
+    public void render(PoseStack poseStack, MultiBufferSource buffer, CustomPlayerEntity animatable,
+        GeoRenderData renderData, int packedLight, int overlay) {
         var entityLivingBaseIn = animatable.getEntity();
         var mainHandItem = entityLivingBaseIn.getMainHandItem();
         if (!mainHandItem.isEmpty() && renderData.modelState.locatorGroupSize(PlayerLocator.get().rightHand) > 0) {
             if (SlashBladeCompat.isSlashBladeItem(mainHandItem)) {
-                SlashBladeRender.renderMainhandSlashBlade(entityLivingBaseIn, renderData, poseStack, buffer, packedLight, mainHandItem);
+                SlashBladeRender.renderMainhandSlashBlade(entityLivingBaseIn, renderData, poseStack, buffer,
+                    packedLight, mainHandItem);
             } else {
                 TACZCompat.openFlashShellRender(entityLivingBaseIn, mainHandItem);
                 this.renderArmWithItem(entityLivingBaseIn, mainHandItem, ItemDisplayContext.THIRD_PERSON_RIGHT_HAND,
-                                       HumanoidArm.RIGHT, renderData, poseStack, buffer, packedLight);
+                    HumanoidArm.RIGHT, renderData, poseStack, buffer, packedLight);
                 TACZCompat.stopFlashShellRender(mainHandItem);
             }
         }
@@ -46,19 +48,20 @@ public class CustomPlayerItemInHandLayer extends GeoLayerRenderer<CustomPlayerEn
             } else {
                 // 卓越前线副手枪械不用这个渲染
                 if (!SWarfareCompat.isGun(offhandItem)) {
-                    this.renderArmWithItem(entityLivingBaseIn, mainHandItem,
-                                           ItemDisplayContext.THIRD_PERSON_RIGHT_HAND,
-                                           HumanoidArm.RIGHT, renderData, poseStack, buffer, packedLight);
+                    this.renderArmWithItem(entityLivingBaseIn, mainHandItem, ItemDisplayContext.THIRD_PERSON_RIGHT_HAND,
+                        HumanoidArm.RIGHT, renderData, poseStack, buffer, packedLight);
                 }
             }
             // TACZ 副手枪械渲染
             TACZCompat.renderOffsetHand(offhandItem, renderData, entityLivingBaseIn, poseStack, buffer, packedLight);
             // 卓越前线副手枪械渲染
-            SWarfareCompat.renderOffsetHand(offhandItem, renderData, entityLivingBaseIn, poseStack, buffer, packedLight);
+            SWarfareCompat.renderOffsetHand(offhandItem, renderData, entityLivingBaseIn, poseStack, buffer,
+                packedLight);
         }
     }
 
-    protected void renderArmWithItem(LivingEntity livingEntity, ItemStack itemStack, ItemDisplayContext displayContext, HumanoidArm arm, GeoRenderData data, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight) {
+    protected void renderArmWithItem(LivingEntity livingEntity, ItemStack itemStack, ItemDisplayContext displayContext,
+        HumanoidArm arm, GeoRenderData data, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight) {
         if (!itemStack.isEmpty()) {
             boolean isLeftHand = arm == HumanoidArm.LEFT;
             var locator = isLeftHand ? PlayerLocator.get().leftHand : PlayerLocator.get().rightHand;
@@ -72,7 +75,8 @@ public class CustomPlayerItemInHandLayer extends GeoLayerRenderer<CustomPlayerEn
                     poseStack.translate(0.1, 0, 0);
                     poseStack.scale(1.25f, 1.25f, 1.25f);
                 }
-                this.itemInHandRenderer.renderItem(livingEntity, itemStack, displayContext, isLeftHand, poseStack, bufferSource, packedLight);
+                this.itemInHandRenderer.renderItem(livingEntity, itemStack, displayContext, isLeftHand, poseStack,
+                    bufferSource, packedLight);
             });
         }
     }

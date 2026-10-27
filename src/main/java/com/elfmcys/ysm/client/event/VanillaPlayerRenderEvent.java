@@ -16,8 +16,10 @@ import java.util.Map;
 @Mod.EventBusSubscriber(value = Dist.CLIENT)
 @SuppressWarnings("removal")
 public class VanillaPlayerRenderEvent {
-    private static final ResourceLocation STEVE_SKIN_LOCATION = new ResourceLocation("textures/entity/player/wide/steve.png");
-    private static final ResourceLocation ALEX_SKIN_LOCATION = new ResourceLocation("textures/entity/player/slim/alex.png");
+    private static final ResourceLocation STEVE_SKIN_LOCATION =
+        new ResourceLocation("textures/entity/player/wide/steve.png");
+    private static final ResourceLocation ALEX_SKIN_LOCATION =
+        new ResourceLocation("textures/entity/player/slim/alex.png");
     private static final String STEVE = "misc/2_steve";
     private static final String ALEX = "misc/1_alex";
 
@@ -28,12 +30,14 @@ public class VanillaPlayerRenderEvent {
         }
         Player player = event.getPlayer();
         if (isVanillaPlayer(event.getModelId()) && player instanceof AbstractClientPlayer) {
-            AbstractClientPlayer clientPlayer = (AbstractClientPlayer) player;
+            AbstractClientPlayer clientPlayer = (AbstractClientPlayer)player;
             ResourceLocation location;
             Minecraft minecraft = Minecraft.getInstance();
-            Map<MinecraftProfileTexture.Type, MinecraftProfileTexture> map = minecraft.getSkinManager().getInsecureSkinInformation(clientPlayer.getGameProfile());
+            Map<MinecraftProfileTexture.Type, MinecraftProfileTexture> map =
+                minecraft.getSkinManager().getInsecureSkinInformation(clientPlayer.getGameProfile());
             if (map.containsKey(MinecraftProfileTexture.Type.SKIN)) {
-                location = minecraft.getSkinManager().registerTexture(map.get(MinecraftProfileTexture.Type.SKIN), MinecraftProfileTexture.Type.SKIN);
+                location = minecraft.getSkinManager().registerTexture(map.get(MinecraftProfileTexture.Type.SKIN),
+                    MinecraftProfileTexture.Type.SKIN);
             } else {
                 location = getDefaultSkin(event.getModelId());
             }

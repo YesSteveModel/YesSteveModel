@@ -42,17 +42,15 @@ final class CatalogBrowserState {
         catalog = next;
         allPacks.clear();
         next.packs().forEach(pack -> allPacks.putIfAbsent(pack.hierarchy(), packFactory.apply(pack)));
-        next.models().values().forEach(entry ->
-                addSyntheticPacks(new ModelPath(entry.displayPath()).parentHierarchy()));
-        next.failed().forEach(entry ->
-                addSyntheticPacks(new ModelPath(entry.displayPath()).parentHierarchy()));
+        next.models().values().forEach(entry -> addSyntheticPacks(parent(entry.displayPath())));
+        next.failed().forEach(entry -> addSyntheticPacks(parent(entry.displayPath())));
         if (!currentPack.isBlank() && !allPacks.containsKey(currentPack)) {
             currentPack = "";
         }
     }
 
-    void filter(String query, String locale, Set<String> hiddenPaths,
-                Predicate<Hash256> authorized, Predicate<Hash256> starred) {
+    void filter(String query, String locale, Set<String> hiddenPaths, Predicate<Hash256> authorized,
+        Predicate<Hash256> starred) {
         var allModels = new ArrayList<>(catalog.models().values());
         var search = query.strip().toLowerCase(Locale.ENGLISH);
         allModels.removeIf(entry -> !isVisible(entry, search, locale, hiddenPaths, authorized, starred));
@@ -69,10 +67,9 @@ final class CatalogBrowserState {
         } else {
             var packSearch = search.startsWith(PACK_SEARCH_PREFIX) ? search.substring(1) : search;
             packs = allPacks.values().stream()
-                    .filter(pack -> search.isBlank() ? directChild(currentPack, pack.hierarchy())
-                            : matches(pack, packSearch))
-                    .sorted(Comparator.comparing(ModelPackInfo::hierarchy))
-                    .toList();
+                .filter(
+                    pack -> search.isBlank() ? directChild(currentPack, pack.hierarchy()) : matches(pack, packSearch))
+                .sorted(Comparator.comparing(ModelPackInfo::hierarchy)).toList();
         }
         maxPage = Math.max(0, (models.size() + failed.size() + packs.size() - 1) / 10);
         if (page() > maxPage) {
@@ -80,27 +77,22 @@ final class CatalogBrowserState {
         }
     }
 
-    private boolean isVisible(ClientFailedCatalogEntry entry, String search,
-                              Set<String> hiddenPaths) {
+    private boolean isVisible(ClientFailedCatalogEntry entry, String search, Set<String> hiddenPaths) {
         if (hiddenPaths.contains(entry.displayPath()) || category == Category.STAR) {
             return false;
         }
-        if (category == Category.AUTH
-                && entry.access() != CatalogAccess.AUTHORIZED) {
+        if (category == Category.AUTH && entry.access() != CatalogAccess.AUTHORIZED) {
             return false;
         }
         if (search.isBlank()) {
-            return category != Category.ALL
-                    || new ModelPath(entry.displayPath()).parentHierarchy().equals(currentPack);
+            return category != Category.ALL || parent(entry.displayPath()).equals(currentPack);
         }
-        return !search.startsWith(PACK_SEARCH_PREFIX)
-                && !search.startsWith(AUTHOR_SEARCH_PREFIX)
-                && entry.displayPath().toLowerCase(Locale.ENGLISH).contains(search);
+        return !search.startsWith(PACK_SEARCH_PREFIX) && !search.startsWith(AUTHOR_SEARCH_PREFIX)
+            && entry.displayPath().toLowerCase(Locale.ENGLISH).contains(search);
     }
 
-    private boolean isVisible(ClientCatalogEntry entry, String search, String locale,
-                              Set<String> hiddenPaths, Predicate<Hash256> authorized,
-                              Predicate<Hash256> starred) {
+    private boolean isVisible(ClientCatalogEntry entry, String search, String locale, Set<String> hiddenPaths,
+        Predicate<Hash256> authorized, Predicate<Hash256> starred) {
         var metadata = CatalogModelMetadata.from(entry);
         if (hiddenPaths.contains(metadata.path())) {
             return false;
@@ -112,8 +104,7 @@ final class CatalogBrowserState {
             return false;
         }
         if (search.isBlank()) {
-            return category != Category.ALL
-                    || new ModelPath(entry.displayPath()).parentHierarchy().equals(currentPack);
+            return category != Category.ALL || parent(entry.displayPath()).equals(currentPack);
         }
         return matches(metadata, search, locale);
     }
@@ -132,7 +123,7 @@ final class CatalogBrowserState {
             for (var index = 0; index < modelMetadata.authors().size(); index++) {
                 var author = modelMetadata.authors().get(index);
                 if (metadata.localized(locale, "metadata.authors.%d.name".formatted(index), author.name())
-                        .toLowerCase(Locale.ENGLISH).contains(authorSearch)) {
+                    .toLowerCase(Locale.ENGLISH).contains(authorSearch)) {
                     return true;
                 }
             }
@@ -144,16 +135,16 @@ final class CatalogBrowserState {
         if (modelMetadata == null) {
             return false;
         }
-        if (metadata.localized(locale, "metadata.name", modelMetadata.name())
-                .toLowerCase(Locale.ENGLISH).contains(search)
-                || metadata.localized(locale, "metadata.tips", modelMetadata.tips().orElse(""))
-                .toLowerCase(Locale.ENGLISH).contains(search)) {
+        if (metadata.localized(locale, "metadata.name", modelMetadata.name()).toLowerCase(Locale.ENGLISH)
+            .contains(search)
+            || metadata.localized(locale, "metadata.tips", modelMetadata.tips().orElse("")).toLowerCase(Locale.ENGLISH)
+                .contains(search)) {
             return true;
         }
         for (var index = 0; index < modelMetadata.authors().size(); index++) {
             var author = modelMetadata.authors().get(index);
             if (metadata.localized(locale, "metadata.authors.%d.name".formatted(index), author.name())
-                    .toLowerCase(Locale.ENGLISH).contains(search)) {
+                .toLowerCase(Locale.ENGLISH).contains(search)) {
                 return true;
             }
         }
@@ -162,9 +153,8 @@ final class CatalogBrowserState {
 
     private static boolean matches(ModelPackInfo pack, String search) {
         return pack.hierarchy().toLowerCase(Locale.ENGLISH).contains(search)
-                || LanguageManager.getI18n(pack, "name", pack.name()).toLowerCase(Locale.ENGLISH).contains(search)
-                || LanguageManager.getI18n(pack, "description", pack.desc())
-                .toLowerCase(Locale.ENGLISH).contains(search);
+            || LanguageManager.getI18n(pack, "name", pack.name()).toLowerCase(Locale.ENGLISH).contains(search)
+            || LanguageManager.getI18n(pack, "description", pack.desc()).toLowerCase(Locale.ENGLISH).contains(search);
     }
 
     ClientCatalogSnapshot catalog() {
@@ -201,11 +191,8 @@ final class CatalogBrowserState {
     }
 
     void backToParent() {
-        var trimmed = currentPack.endsWith("/")
-                ? currentPack.substring(0, currentPack.length() - 1) : currentPack;
-        var slash = trimmed.lastIndexOf('/');
         var previous = currentPack;
-        currentPack = slash < 0 ? "" : trimmed.substring(0, slash + 1);
+        currentPack = parent(currentPack);
         PAGE_BY_PACK.removeInt(previous);
     }
 
@@ -235,28 +222,30 @@ final class CatalogBrowserState {
     }
 
     private void addSyntheticPacks(String hierarchy) {
-        var current = new StringBuilder();
-        for (var part : hierarchy.split("/")) {
-            if (part.isBlank()) {
-                continue;
-            }
-            current.append(part).append('/');
-            var value = current.toString();
-            allPacks.putIfAbsent(value, new ModelPackInfo(value, part, "", null, Map.of()));
+        while (!hierarchy.isEmpty()) {
+            var location = com.elfmcys.ysm.model.catalog.source.CatalogLocation.directory(hierarchy);
+            if (location.entry().isEmpty())
+                return;
+            var slash = location.entry().lastIndexOf('/');
+            var name = location.entry().substring(slash + 1);
+            allPacks.putIfAbsent(hierarchy, new ModelPackInfo(hierarchy, name, "", null, Map.of()));
+            hierarchy = parent(hierarchy);
         }
     }
 
-    private static boolean directChild(String parent, String candidate) {
-        if (parent.equals(candidate) || !candidate.startsWith(parent)) {
-            return false;
-        }
-        var remainder = candidate.substring(parent.length());
-        return remainder.indexOf('/') == remainder.length() - 1;
+    private String parent(String address) {
+        var location = com.elfmcys.ysm.model.catalog.source.CatalogLocation.directory(address);
+        if (location.entry().isEmpty())
+            return "";
+        var parent = location.parent();
+        return parent.equals(location.root().prefix()) && !allPacks.containsKey(parent) ? "" : parent;
+    }
+
+    private boolean directChild(String parent, String candidate) {
+        return !parent.equals(candidate) && parent(candidate).equals(parent);
     }
 
     enum Category {
-        ALL,
-        AUTH,
-        STAR
+        ALL, AUTH, STAR
     }
 }

@@ -1,0 +1,20 @@
+// Bone sampling must not retarget a shared spring independently.
+// Sample tail forcing on the owner clock before publishing spring inputs.
+v.tail1y=math.sin(1*(q.life_time-0*v.f)*360/(v.s/24))*5;v.tail1z=math.sin(1*(q.life_time-1*v.f)*360/(v.s/24))*10;v.tail2y=math.sin(1*(q.life_time-0.3*v.f)*360/(v.s/24))*10;v.tail2z=math.sin(1*(q.life_time-1.1*v.f)*360/(v.s/24))*4;v.tail3y=math.sin(1*(q.life_time-0.5*v.f)*360/(v.s/24))*4;v.tail3z=math.sin(1*(q.life_time-1.3*v.f)*360/(v.s/24))*6;v.tail4y=math.sin(1*(q.life_time-0.6*v.f)*360/(v.s/24))*10;v.tail4z=math.sin(1*(q.life_time-1.5)*360/(v.s/24))*3;v.tail5y=math.sin(1*(q.life_time-0.6)*360/(v.s/24))*20;v.tail6z=math.sin(1*(q.life_time-1.2)*360/(v.s/24))*20;
+// Legacy K3 scales forcing; response=0 avoids input-derivative feedforward.
+v.L1_P0=ysm.second_order('winefox_19_nine_tailed_l1_p0',30*0.8/2/math.pi/0.6*(math.clamp(q.vertical_speed+v.hv,-30,1)),0.6,0.8,0);
+v.L2_P0=ysm.second_order('winefox_19_nine_tailed_l2_p0',60*0.6/2/math.pi/2*(math.clamp(2*q.ground_speed+v.hg,0,30)),2,0.6,0);
+v.L3_P0=ysm.second_order('winefox_19_nine_tailed_l3_p0',15*0.6/2/math.pi/2*(math.clamp(q.yaw_speed,-600,600)),2,0.6,0);
+v.L4_P0=ysm.second_order('winefox_19_nine_tailed_l4_p0',10*0.8/2/math.pi/0.6*(math.clamp((math.min(q.yaw_speed,-300)+math.max(q.yaw_speed,300)),-300,300)),0.6,0.8,0);
+v.L6_P0=ysm.second_order('winefox_19_nine_tailed_l6_p0',10*0.8/2/math.pi/1.2*(ysm.head_yaw),1.2,0.8,0);
+v.L6_P00=ysm.second_order('winefox_19_nine_tailed_l6_p00',10*0.8/2/math.pi/1.2*(ysm.head_pitch),1.2,0.8,0);
+v.L13_P01y=ysm.second_order('winefox_19_nine_tailed_l13_p01y',20*0.8/2/math.pi/2*(v.tail1y),2,0.8,0);
+v.L13_P01z=ysm.second_order('winefox_19_nine_tailed_l13_p01z',20*0.8/2/math.pi/2*(v.tail1z),2,0.8,0);
+v.L13_P02y=ysm.second_order('winefox_19_nine_tailed_l13_p02y',20*0.8/2/math.pi/2*(v.tail2y),2,0.8,0);
+v.L13_P02z=ysm.second_order('winefox_19_nine_tailed_l13_p02z',20*0.8/2/math.pi/2*(v.tail2z),2,0.8,0);
+v.L13_P03y=ysm.second_order('winefox_19_nine_tailed_l13_p03y',20*0.8/2/math.pi/2*(v.tail3y),2,0.8,0);
+v.L13_P03z=ysm.second_order('winefox_19_nine_tailed_l13_p03z',20*0.8/2/math.pi/2*(v.tail3z),2,0.8,0);
+v.L13_P04y=ysm.second_order('winefox_19_nine_tailed_l13_p04y',20*0.8/2/math.pi/2*(v.tail4y),2,0.8,0);
+v.L13_P04z=ysm.second_order('winefox_19_nine_tailed_l13_p04z',20*0.8/2/math.pi/2*(v.tail4z),2,0.8,0);
+v.L13_P05y=ysm.second_order('winefox_19_nine_tailed_l13_p05y',20*0.8/2/math.pi/2*(v.tail5y),2,0.8,0);
+v.L13_P06z=ysm.second_order('winefox_19_nine_tailed_l13_p06z',20*0.8/2/math.pi/2*(v.tail6z),2,0.8,0);

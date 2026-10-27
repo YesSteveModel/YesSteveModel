@@ -3,8 +3,7 @@ package com.elfmcys.ysm.client.compat.slashblade;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.builder.LoopType;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.geckolib3.core.molang.context.IContext;
-import com.elfmcys.ysm.geckolib3.model.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.init.ModItemTags;
 import mods.flammpfeil.slashblade.capability.slashblade.CapabilitySlashBlade;
 import mods.flammpfeil.slashblade.capability.slashblade.SlashBladeState;
@@ -24,17 +23,15 @@ public class SlashBladeAnimation {
         return getCombName(livingEntity.getMainHandItem(), livingEntity);
     }
 
-    static String getAnimationName(IContext<? extends LivingEntity> context) {
-        LivingEntity livingEntity = context.entity();
+    static String getAnimationName(LivingEntity livingEntity) {
         return getCombName(livingEntity.getMainHandItem(), livingEntity);
     }
 
     /**
-     * slashblade:idle
-     * slashblade:run
-     * slashblade:walk
+     * slashblade:idle slashblade:run slashblade:walk
      */
-    static PlayState playMainAnimation(AnimationEvent<? extends AnimatableEntity<? extends LivingEntity>> event, String animationName, LoopType loopType) {
+    static PlayState playMainAnimation(AnimationEvent<? extends AnimatableEntity<? extends LivingEntity>> event,
+        String animationName, LoopType loopType) {
         String name = "slashblade:" + animationName;
         if (event.getAnimatableEntity().getAnimation(name) != null) {
             return playAnimation(event, name, loopType);

@@ -9,7 +9,6 @@ import com.elfmcys.ysm.capability.ProjectileModelInfoCapability;
 import com.elfmcys.ysm.capability.StarModelsCapability;
 import com.elfmcys.ysm.capability.VehicleAnimatableCapability;
 import com.elfmcys.ysm.capability.VehicleModelInfoCapability;
-import com.elfmcys.ysm.client.compat.touhoulittlemaid.TlmCommonCompat;
 import com.elfmcys.ysm.model.ModelRuntime;
 import com.elfmcys.ysm.network.NetworkHandler;
 import net.minecraftforge.api.distmarker.Dist;
@@ -31,7 +30,9 @@ public final class CommonEvent {
         event.enqueueWork(() -> {
             ModelRuntime.initialize();
             NetworkHandler.init();
-            TlmCommonCompat.registerEvent();
+            if (FMLEnvironment.dist == Dist.DEDICATED_SERVER) {
+                ModelRuntime.system().catalog().activate();
+            }
         });
     }
 

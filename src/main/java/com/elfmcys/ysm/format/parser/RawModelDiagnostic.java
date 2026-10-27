@@ -9,7 +9,6 @@ public record RawModelDiagnostic(Kind kind) {
     }
 
     public enum Kind {
-        UNKNOWN_AUDIO,
-        INVALID_AUDIO
+        UNKNOWN_AUDIO, INVALID_AUDIO
     }
 }

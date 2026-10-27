@@ -30,14 +30,16 @@ public class CustomPlayerElytraLayer extends GeoLayerRenderer<CustomPlayerEntity
     }
 
     @Override
-    public void render(PoseStack poseStack, MultiBufferSource buffer, CustomPlayerEntity animatable, GeoRenderData renderData, int packedLight, int overlay) {
+    public void render(PoseStack poseStack, MultiBufferSource buffer, CustomPlayerEntity animatable,
+        GeoRenderData renderData, int packedLight, int overlay) {
         var player = animatable.getEntity();
         ItemStack stack = EquipmentUtil.getEquippedElytraItem(player);
         if (!stack.isEmpty() && player instanceof AbstractClientPlayer clientPlayer) {
             ResourceLocation texture;
             if (clientPlayer.isElytraLoaded() && clientPlayer.getElytraTextureLocation() != null) {
                 texture = clientPlayer.getElytraTextureLocation();
-            } else if (clientPlayer.isCapeLoaded() && clientPlayer.getCloakTextureLocation() != null && player.isModelPartShown(PlayerModelPart.CAPE)) {
+            } else if (clientPlayer.isCapeLoaded() && clientPlayer.getCloakTextureLocation() != null
+                && player.isModelPartShown(PlayerModelPart.CAPE)) {
                 texture = clientPlayer.getCloakTextureLocation();
             } else {
                 texture = WINGS_LOCATION;
@@ -47,9 +49,12 @@ public class CustomPlayerElytraLayer extends GeoLayerRenderer<CustomPlayerEntity
                 locatorPose.mulPose(Axis.ZP.rotationDegrees(180));
                 locatorPose.scale(2.0f, 2.0f, 2.0f);
                 var anim = renderData.animationData;
-                this.elytraModel.setupAnim(player, anim.limbSwing, anim.limbSwingAmount, anim.lerpedAge, anim.netHeadYaw, anim.headPitch);
-                var vertexConsumer = ItemRenderer.getArmorFoilBuffer(buffer, RenderType.armorCutoutNoCull(texture), false, stack.hasFoil());
-                this.elytraModel.renderToBuffer(locatorPose, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, 1.0F, 1.0F, 1.0F, 1.0F);
+                this.elytraModel.setupAnim(player, anim.limbSwing, anim.limbSwingAmount, anim.lerpedAge,
+                    anim.netHeadYaw, anim.headPitch);
+                var vertexConsumer = ItemRenderer.getArmorFoilBuffer(buffer, RenderType.armorCutoutNoCull(texture),
+                    false, stack.hasFoil());
+                this.elytraModel.renderToBuffer(locatorPose, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY,
+                    1.0F, 1.0F, 1.0F, 1.0F);
             });
         }
     }

@@ -3511,7 +3511,7 @@
 					"rotation": {
 						"0.0": {
 							"post": [
-								"(-7.5+(1-0.7)*ysm.head_pitch))+(ctrl.elytra_fly==true?-30:0)",
+								"(-7.5+(1-0.7)*ysm.head_pitch)+(ctrl.elytra_fly==true?-30:0)",
 								"(ctrl.elytra_fly==true?0:-27.5)+((ysm.head_yaw<0)?((1-0.7)*ysm.head_yaw):((1-0.2)*ysm.head_yaw))",
 								"-5-ysm.head_pitch/9"
 							],
@@ -3621,7 +3621,7 @@
 					"rotation": {
 						"0.0": {
 							"post": [
-								"(-7.5+(1-0.7)*ysm.head_pitch))+(ctrl.elytra_fly==true?-30:0)",
+								"(-7.5+(1-0.7)*ysm.head_pitch)+(ctrl.elytra_fly==true?-30:0)",
 								"(ctrl.elytra_fly==true?0:-27.5)+((ysm.head_yaw<0)?((1-0.7)*ysm.head_yaw):((1-0.2)*ysm.head_yaw))",
 								-10
 							],
@@ -4974,7 +4974,7 @@
 					"rotation": {
 						"0.0": {
 							"post": [
-								"(-7.5+(1-0.7)*ysm.head_pitch))+(ctrl.elytra_fly==true?-30:0)",
+								"(-7.5+(1-0.7)*ysm.head_pitch)+(ctrl.elytra_fly==true?-30:0)",
 								"(ctrl.elytra_fly==true?0:-27.5)+((ysm.head_yaw<0)?((1-0.7)*ysm.head_yaw):((1-0.2)*ysm.head_yaw))",
 								"-5-ysm.head_pitch/9"
 							],
@@ -5129,7 +5129,7 @@
 					"rotation": {
 						"0.0": {
 							"post": [
-								"(-7.5+(1-0.7)*ysm.head_pitch))+(ctrl.elytra_fly==true?-30:0)",
+								"(-7.5+(1-0.7)*ysm.head_pitch)+(ctrl.elytra_fly==true?-30:0)",
 								"(ctrl.elytra_fly==true?0:-27.5)+((ysm.head_yaw<0)?((1-0.7)*ysm.head_yaw):((1-0.2)*ysm.head_yaw))",
 								-10
 							],

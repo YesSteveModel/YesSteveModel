@@ -15,43 +15,70 @@ import org.jetbrains.annotations.Nullable;
 import java.lang.ref.Reference;
 
 public class NativeRenderer {
-    public static void render(VertexConsumer vertexConsumer, PoseStack.Pose pose,
-                              NativeModelState modelState, int vertexCount,
-                              int light, int overlay, int color, RenderContextType contextType) {
-        var vb = probeVertexConsumer(vertexConsumer, vertexCount);
-        var isUnknownType = vb.type == VertexFormatType.FALLBACK;
+    private static final int SUCCESS = 1;
+    private static final int OUTPUT_REJECTED = 2;
 
-        var matBuffer = getMatBuffer(pose);
-        var lightAndOverlay = packLightAndOverlay(light, overlay);
-        var flags = packFlags(vb.type, contextType);
-
-        Object bufferObj;
-        int bufferFlags;
-        if (!isUnknownType && vb.region != null) {
-            bufferObj = vb.region.nio();
-            bufferFlags = vb.region.size();
-        } else {
-            bufferObj = FallbackVertexWriter.getVertexData(vertexCount);
-            bufferFlags = 0;
+    public static boolean render(VertexConsumer vertexConsumer, PoseStack.Pose pose, NativeModelState modelState,
+        int vertexCount, int light, int overlay, int color, RenderContextType contextType) {
+        if (!modelState.isValid()) {
+            return false;
         }
-
-        final boolean result;
+        if (vertexCount != modelState.getTotalVertexCount()) {
+            modelState.invalidate();
+            return false;
+        }
+        if (vertexCount == 0) {
+            var result = 0;
+            try {
+                result = nRender(null, 0, 0, modelState.get(), 0, 0, 0, 0, 0);
+                return result == SUCCESS;
+            } finally {
+                if (result != SUCCESS)
+                    modelState.invalidate();
+                Reference.reachabilityFence(modelState);
+            }
+        }
+        var result = 0;
         try {
-            result = nRender(bufferObj, bufferFlags, matBuffer.ptr(), modelState.get(),
-                    lightAndOverlay, packColor(color), flags, IrisCompat.getEntityId());
-        } finally {
-            Reference.reachabilityFence(vertexConsumer);
-            Reference.reachabilityFence(bufferObj);
-            Reference.reachabilityFence(vb.region);
-            Reference.reachabilityFence(matBuffer);
-            Reference.reachabilityFence(modelState);
-        }
+            var vb = probeVertexConsumer(vertexConsumer, vertexCount);
+            var isUnknownType = vb.type == VertexFormatType.FALLBACK;
 
-        if (result) {
-            if (isUnknownType || vb.region == null) {
-                FallbackVertexWriter.write(vertexConsumer, vertexCount, overlay);
-            } else if (vb.accessor != null) {
-                vb.accessor.ysm$advance(vertexCount);
+            var matBuffer = getMatBuffer(pose);
+            var lightAndOverlay = packLightAndOverlay(light, overlay);
+            var flags = packFlags(vb.type, contextType);
+
+            Object bufferObj;
+            int bufferFlags;
+            if (!isUnknownType && vb.region != null) {
+                bufferObj = vb.region.nio();
+                bufferFlags = vb.region.size();
+            } else {
+                bufferObj = FallbackVertexWriter.getVertexData(vertexCount);
+                bufferFlags = 0;
+            }
+
+            try {
+                result = nRender(bufferObj, bufferFlags, matBuffer.ptr(), modelState.get(), vertexCount,
+                    lightAndOverlay, packColor(color), flags, IrisCompat.getEntityId());
+            } finally {
+                Reference.reachabilityFence(vertexConsumer);
+                Reference.reachabilityFence(bufferObj);
+                Reference.reachabilityFence(vb.region);
+                Reference.reachabilityFence(matBuffer);
+                Reference.reachabilityFence(modelState);
+            }
+
+            if (result == SUCCESS) {
+                if (isUnknownType || vb.region == null) {
+                    FallbackVertexWriter.write(vertexConsumer, vertexCount, overlay);
+                } else if (vb.accessor != null) {
+                    vb.accessor.ysm$advance(vertexCount);
+                }
+            }
+            return result == SUCCESS;
+        } finally {
+            if (result != SUCCESS && result != OUTPUT_REJECTED) {
+                modelState.invalidate();
             }
         }
     }
@@ -70,7 +97,7 @@ public class NativeRenderer {
                     }
                 }
             }
-            accessor.ysm$reserve(vertexCount);  // 有必要吗？
+            accessor.ysm$reserve(vertexCount); // 有必要吗？
         }
         return new VertexBuffer(null, VertexFormatType.FALLBACK, null);
     }
@@ -93,26 +120,25 @@ public class NativeRenderer {
     }
 
     private static long packFlags(VertexFormatType v, RenderContextType c) {
-        return ((long) v.id() << 2) | c.id();
+        return ((long)v.id() << 2) | c.id();
     }
 
     private static long packLightAndOverlay(int lightUv, int overlayOv) {
-        return ((long) lightUv << 32) | overlayOv;
+        return ((long)lightUv << 32) | overlayOv;
     }
 
     static int packColor(int argb) {
-        return ((argb >>> 16) & 0xFF) |
-                (argb & 0xFF00) |
-                ((argb & 0xFF) << 16) |
-                (argb & 0xFF000000);
+        return ((argb >>> 16) & 0xFF) | (argb & 0xFF00) | ((argb & 0xFF) << 16) | (argb & 0xFF000000);
     }
 
-    private static native boolean nRender(Object vertexBuffer, int vertexBufferFlag, long matPtr, long modelStatePtr,
-                                          long lightAndOverlay, int color, long flags, long irisEntityId);
+    private static native int nRender(Object vertexBuffer, int vertexBufferFlag, long matPtr, long modelStatePtr,
+        int vertexCount, long lightAndOverlay, int color, long flags, long irisEntityId);
 
     private static final class MatBufferHolder {
         private static final NativeBuffer BUFFER = NativeBuffer.allocate(256, 64);
     }
 
-    private record VertexBuffer(@Nullable VertexBufferAccessor accessor, VertexFormatType type, @Nullable NativeBuffer region){}
+    private record VertexBuffer(@Nullable VertexBufferAccessor accessor, VertexFormatType type,
+        @Nullable NativeBuffer region) {
+    }
 }

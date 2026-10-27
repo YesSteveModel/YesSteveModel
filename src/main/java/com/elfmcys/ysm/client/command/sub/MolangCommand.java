@@ -1,11 +1,9 @@
 package com.elfmcys.ysm.client.command.sub;
 
 import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
-import com.elfmcys.ysm.client.animation.molang.CustomMolangParser;
 import com.elfmcys.ysm.client.gui.overlay.DebugAnimationScreen;
-import com.elfmcys.ysm.geckolib3.core.molang.value.IValue;
+import com.elfmcys.ysm.expression.aot.TransientExpressionSession;
 import com.elfmcys.ysm.geckolib3.core.processor.DebugInfo;
-import com.elfmcys.ysm.molang.parser.ParseException;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -47,15 +45,20 @@ public class MolangCommand {
 
         LiteralArgumentBuilder<CommandSourceStack> execute = Commands.literal(EXECUTE_NAME);
 
-        Supplier<RequiredArgumentBuilder<CommandSourceStack, String>> expName = () -> Commands.argument(EXPRESSION_NAME_NAME, StringArgumentType.string());
-        Supplier<RequiredArgumentBuilder<CommandSourceStack, String>> exp = () -> Commands.argument(EXPRESSION_NAME, StringArgumentType.greedyString()).suggests(ALL_VARS);
+        Supplier<RequiredArgumentBuilder<CommandSourceStack, String>> expName =
+            () -> Commands.argument(EXPRESSION_NAME_NAME, StringArgumentType.string());
+        Supplier<RequiredArgumentBuilder<CommandSourceStack, String>> exp =
+            () -> Commands.argument(EXPRESSION_NAME, StringArgumentType.greedyString()).suggests(ALL_VARS);
 
-        watch.then(add.then(pre.then(expName.get().then(exp.get().executes(ctx -> addExpression(ctx, DebugInfo.Phase.PRE_ANIMATION)))))
-                      .then(post.then(expName.get().then(exp.get().executes(ctx -> addExpression(ctx, DebugInfo.Phase.POST_ANIMATION))))))
-                .then(remove.then(expName.get().executes(MolangCommand::removeExpression)))
-                .then(clear.executes(MolangCommand::clearExpression));
-        molang.then(watch)
-              .then(execute.then(exp.get().executes(MolangCommand::executeMolang)));
+        watch
+            .then(add
+                .then(pre.then(
+                    expName.get().then(exp.get().executes(ctx -> addExpression(ctx, DebugInfo.Phase.PRE_ANIMATION)))))
+                .then(post.then(
+                    expName.get().then(exp.get().executes(ctx -> addExpression(ctx, DebugInfo.Phase.POST_ANIMATION))))))
+            .then(remove.then(expName.get().executes(MolangCommand::removeExpression)))
+            .then(clear.executes(MolangCommand::clearExpression));
+        molang.then(watch).then(execute.then(exp.get().executes(MolangCommand::executeMolang)));
 
         return molang;
     }
@@ -67,17 +70,10 @@ public class MolangCommand {
         }
         String expName = StringArgumentType.getString(ctx, EXPRESSION_NAME_NAME);
         String exp = StringArgumentType.getString(ctx, EXPRESSION_NAME);
-        IValue value;
-        try {
-            value = CustomMolangParser.parseSingleExpressionUnsafe(exp);
-        } catch (ParseException e) {
-            ctx.getSource().sendFailure(Component.translatable("message.yes_steve_model.model.debug_animation.parser_error", e.getMessage()));
-            return Command.SINGLE_SUCCESS;
-        }
-        Minecraft.getInstance().execute(() ->
-                Minecraft.getInstance().player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
-                    DebugAnimationScreen.getDebugInfo().add(phase, expName, value);
-                }));
+        Minecraft.getInstance().execute(() -> Minecraft.getInstance().player
+            .getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+                DebugAnimationScreen.getDebugInfo().add(phase, expName, exp);
+            }));
 
         return Command.SINGLE_SUCCESS;
     }
@@ -87,10 +83,10 @@ public class MolangCommand {
             return Command.SINGLE_SUCCESS;
         }
         String expName = StringArgumentType.getString(ctx, EXPRESSION_NAME_NAME);
-        Minecraft.getInstance().execute(() ->
-                Minecraft.getInstance().player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
-                    DebugAnimationScreen.getDebugInfo().remove(expName);
-                }));
+        Minecraft.getInstance().execute(() -> Minecraft.getInstance().player
+            .getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+                DebugAnimationScreen.getDebugInfo().remove(expName);
+            }));
 
         return Command.SINGLE_SUCCESS;
     }
@@ -99,10 +95,10 @@ public class MolangCommand {
         if (!isClientReady()) {
             return Command.SINGLE_SUCCESS;
         }
-        Minecraft.getInstance().execute(() ->
-                Minecraft.getInstance().player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
-                    DebugAnimationScreen.getDebugInfo().clear();
-                }));
+        Minecraft.getInstance().execute(() -> Minecraft.getInstance().player
+            .getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+                DebugAnimationScreen.getDebugInfo().clear();
+            }));
 
         return Command.SINGLE_SUCCESS;
     }
@@ -112,21 +108,14 @@ public class MolangCommand {
             return Command.SINGLE_SUCCESS;
         }
         String exp = StringArgumentType.getString(ctx, EXPRESSION_NAME);
-        IValue value;
-        try {
-            value = CustomMolangParser.parseSingleExpressionUnsafe(exp);
-        } catch (ParseException e) {
-            ctx.getSource().sendFailure(Component.translatable("message.yes_steve_model.model.debug_animation.parser_error", e.getMessage()));
-            return Command.SINGLE_SUCCESS;
-        }
-
         var target = DebugAnimationScreen.getTarget();
         if (target == null) {
             target = Minecraft.getInstance().player.getCapability(PlayerAnimatableCapabilityProvider.CAP).orElse(null);
         }
         if (target != null) {
-            target.executeMolangExp(value, true, false, result -> {
-                Minecraft.getInstance().player.sendSystemMessage(Component.translatable("message.yes_steve_model.model.debug_animation.result", result));
+            target.executeTransient(exp, TransientExpressionSession.Privilege.LOCAL_EXECUTE, false, result -> {
+                Minecraft.getInstance().player.sendSystemMessage(
+                    Component.translatable("message.yes_steve_model.model.debug_animation.result", result));
             });
         }
 

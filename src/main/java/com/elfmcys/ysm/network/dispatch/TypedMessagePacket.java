@@ -21,18 +21,16 @@ final class TypedMessagePacket implements CancellablePacket {
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    TypedMessagePacket(ProtoMessage<?> message, Runnable closeHook,
-                       Consumer<RuntimeException> productionFailure) {
+    TypedMessagePacket(ProtoMessage<?> message, Runnable closeHook, Consumer<RuntimeException> productionFailure) {
         this.message = Objects.requireNonNull(message, "message");
-        var spec = ProtocolMessages.REGISTRY.find(message.getClass()).orElseThrow(() ->
-                new IllegalArgumentException("Unregistered resource outcome message"));
+        var spec = ProtocolMessages.REGISTRY.find(message.getClass())
+            .orElseThrow(() -> new IllegalArgumentException("Unregistered resource outcome message"));
         if (spec.attachmentPolicy() != ProtocolMessageSpec.AttachmentPolicy.CONDITIONAL) {
             throw new IllegalArgumentException("Typed outcome must allow an empty attachment");
         }
         messageId = spec.id();
         this.closeHook = Objects.requireNonNull(closeHook, "closeHook");
-        this.productionFailure = Objects.requireNonNull(productionFailure,
-                "productionFailure");
+        this.productionFailure = Objects.requireNonNull(productionFailure, "productionFailure");
     }
 
     @Override
@@ -49,8 +47,7 @@ final class TypedMessagePacket implements CancellablePacket {
     @Override
     public OutboundFrame buildFragment(int index) {
         requireIndex(index);
-        try (var protobuf = ProtocolBuffer.serialize(message);
-             var attachment = ArrayBuffer.allocate(0)) {
+        try (var protobuf = ProtocolBuffer.serialize(message); var attachment = ArrayBuffer.allocate(0)) {
             return FrameCodec.encode(messageId, protobuf, attachment);
         }
     }

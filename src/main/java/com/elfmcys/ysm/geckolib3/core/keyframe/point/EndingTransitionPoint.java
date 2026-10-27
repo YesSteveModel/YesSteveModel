@@ -1,15 +1,13 @@
 package com.elfmcys.ysm.geckolib3.core.keyframe.point;
 
-import com.elfmcys.ysm.geckolib3.core.molang.context.AnimationContext;
-import com.elfmcys.ysm.geckolib3.core.molang.context.MolangContext;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
 import org.joml.Vector3f;
 
 public class EndingTransitionPoint extends AnimationPoint {
     protected final Vector3f srcPoint;
 
-    public EndingTransitionPoint(float currentTick, float transitionLength, Vector3f srcPoint, AnimationContext context) {
-        super(currentTick, transitionLength, context);
+    public EndingTransitionPoint(float currentTick, float transitionLength, Vector3f srcPoint) {
+        super(currentTick, transitionLength);
         this.srcPoint = srcPoint;
     }
 
@@ -22,7 +20,7 @@ public class EndingTransitionPoint extends AnimationPoint {
     }
 
     @Override
-    public Vector3f getLerpPoint(ExpressionEvaluator<MolangContext<?>> evaluator) {
+    public Vector3f getLerpPoint(EntityExpressionRuntime.Evaluation evaluation) {
         if (lastLerpResult == null) {
             lastLerpResult = new Vector3f(srcPoint);
         } else {

@@ -17,10 +17,8 @@ import java.util.List;
 
 public record Image(Format format, int width, int height, UniBuffer data) implements AutoCloseable {
     private Image(long packedInfo, UniBuffer buffer) {
-        this(Format.VALUES.get((int) (packedInfo >>> 32) & 0xFF),
-                (int) (packedInfo >>> 16) & 0xFFFF,
-                (int) (packedInfo & 0xFFFF),
-                buffer);
+        this(Format.VALUES.get((int)(packedInfo >>> 32) & 0xFF), (int)(packedInfo >>> 16) & 0xFFFF,
+            (int)(packedInfo & 0xFFFF), buffer);
     }
 
     public Image share() {
@@ -32,12 +30,11 @@ public record Image(Format format, int width, int height, UniBuffer data) implem
         var args = BufferArgument.packInput(data);
         try (var dstScope = ScopeGuard.create(new NativeImage(NativeImage.Format.RGBA, width, height, false))) {
             var dst = dstScope.get();
-            var dstAccessor = (NativeImageAccessor) (Object) dst;
+            var dstAccessor = (NativeImageAccessor)(Object)dst;
             final boolean result;
             try {
-                result = Native.nDecode(args.obj(), args.flags(),
-                        format.id, width, height,
-                        dstAccessor.ysm$pixels(), dstAccessor.ysm$size());
+                result = Native.nDecode(args.obj(), args.flags(), format.id, width, height, dstAccessor.ysm$pixels(),
+                    dstAccessor.ysm$size());
             } finally {
                 Reference.reachabilityFence(data);
                 Reference.reachabilityFence(dst);
@@ -55,8 +52,7 @@ public record Image(Format format, int width, int height, UniBuffer data) implem
             var dst = dstScope.get();
             final boolean result;
             try {
-                result = Native.nDecode(args.obj(), args.flags(),
-                        format.id, width, height, dst.ptr(), dst.size());
+                result = Native.nDecode(args.obj(), args.flags(), format.id, width, height, dst.ptr(), dst.size());
             } finally {
                 Reference.reachabilityFence(data);
                 Reference.reachabilityFence(dst);
@@ -89,18 +85,13 @@ public record Image(Format format, int width, int height, UniBuffer data) implem
 
     private static class Native {
         private static native long nProbe(Object input, long input_flags);
-        private static native boolean nDecode(Object input, long input_flags,
-                                              int format, int width, int height,
-                                              long dst, long dst_size);
+
+        private static native boolean nDecode(Object input, long input_flags, int format, int width, int height,
+            long dst, long dst_size);
     }
 
     public enum Format {
-        RGBA(0),
-        PNG(1),
-        JPEG(2),
-        WEBP(3),
-        AVIF(4),
-        ZTX(5);
+        RGBA(0), PNG(1), JPEG(2), WEBP(3), AVIF(4), ZTX(5);
 
         private final int id;
 
@@ -112,7 +103,7 @@ public record Image(Format format, int width, int height, UniBuffer data) implem
             return id;
         }
 
-        public static final List<Format> VALUES = ReferenceLists.unmodifiable(ReferenceArrayList.wrap(
-                Arrays.stream(Format.values()).sorted(Comparator.comparingInt(f -> f.id)).toArray(Format[]::new)));
+        public static final List<Format> VALUES = ReferenceLists.unmodifiable(ReferenceArrayList
+            .wrap(Arrays.stream(Format.values()).sorted(Comparator.comparingInt(f -> f.id)).toArray(Format[]::new)));
     }
 }

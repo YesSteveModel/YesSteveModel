@@ -1,13 +1,11 @@
 package com.elfmcys.ysm.client.compat.parcool;
 
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
 import com.elfmcys.ysm.client.entity.CustomPlayerEntity;
 import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.geckolib3.core.controller.HybridAnimationController;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.fml.loading.LoadingModList;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.maven.artifact.versioning.ArtifactVersion;
 import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
@@ -51,9 +49,37 @@ public class ParCoolCompat {
         return INSTALLED;
     }
 
-    public static Optional<BiFunction<String, CustomPlayerEntity, IAnimationController<CustomPlayerEntity>>> animationPredicate() {
+    /**
+     * Whether one borrowed entity currently plays a ParCool animation.
+     *
+     * <p>
+     * This is the capability-facing form used by generic control: it owns the player narrowing so the generic decision
+     * never reaches the optional adapter itself.
+     */
+    public static boolean hasAnimation(net.minecraft.world.entity.Entity entity) {
+        return entity instanceof Player player && hasAnimation(player);
+    }
+
+    /**
+     * The ParCool animation name of one borrowed entity without its namespace, or the empty string when this entity has
+     * no ParCool animation or the adapter is unavailable.
+     */
+    public static String animationName(net.minecraft.world.entity.Entity entity) {
+        if (!(entity instanceof Player player)) {
+            return "";
+        }
+        var animation = getAnimation(player);
+        if (animation == null) {
+            return "";
+        }
+        return animation.startsWith("parcool:") ? animation.substring("parcool:".length()) : animation;
+    }
+
+    public static Optional<BiFunction<String, CustomPlayerEntity, IAnimationController<CustomPlayerEntity>>>
+        animationPredicate() {
         if (INSTALLED) {
-            return Optional.of((name, entity) -> new HybridAnimationController<>(entity, name, 0.1f, new ParCoolPredicate()));
+            return Optional
+                .of((name, entity) -> new HybridAnimationController<>(entity, name, 0.1f, new ParCoolPredicate()));
         } else {
             return Optional.empty();
         }
@@ -74,18 +100,4 @@ public class ParCoolCompat {
         return null;
     }
 
-    public static void addBinding(CtrlBinding binding) {
-        if (isInstalled()) {
-            ParCoolCtrlBinding.addInnerBinding(binding);
-        } else {
-            addEmptyBinding(binding);
-        }
-    }
-
-    /**
-     * 没有安装此模组时，这些 molang 应该存在，否则会报错
-     */
-    private static void addEmptyBinding(CtrlBinding binding) {
-        binding.livingEntityVar("parcool_state", ctx -> StringUtils.EMPTY);
-    }
 }

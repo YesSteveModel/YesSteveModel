@@ -8,10 +8,10 @@ import com.elfmcys.ysm.client.texture.CustomTexture;
 import com.elfmcys.ysm.client.texture.CustomTextureManager;
 import com.elfmcys.ysm.format.schema.model.views.ModelInfoView;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
-import com.elfmcys.ysm.model.resource.client.asset.ClientAssetBatch;
+import com.elfmcys.ysm.model.resource.client.asset.PageImages;
 import com.elfmcys.ysm.model.resource.client.asset.ModelAssetSelector;
 import com.elfmcys.ysm.model.service.ClientModelService;
-import com.elfmcys.ysm.proto.mixel.manifest.info.Author;
+import com.elfmcys.ysm.proto.mixel.manifest.info.AuthorProto;
 import com.google.common.collect.ImmutableMap;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,7 +24,6 @@ import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.ConfirmLinkScreen;
-import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FormattedCharSequence;
@@ -32,25 +31,26 @@ import org.apache.commons.lang3.StringUtils;
 import org.jetbrains.annotations.Nullable;
 
 @SuppressWarnings("removal")
-public class ModelInfoScreen extends Screen {
-    private final static ResourceLocation DEFAULT_AVATAR = new ResourceLocation(YesSteveModel.MOD_ID, "texture/default_avatar.png");
-    private final static Map<String, Component> LINK_TYPE_PRESET = ImmutableMap.of(
-            "home", Component.translatable("gui.yes_steve_model.url.home"),
-            "donate", Component.translatable("gui.yes_steve_model.url.donate")
-    );
-    private final List<CustomTexture> loadedAvatars = new ArrayList<>();
+public class ModelInfoScreen extends ModelScreen {
+    private final static ResourceLocation DEFAULT_AVATAR =
+        new ResourceLocation(YesSteveModel.MOD_ID, "texture/default_avatar.png");
+    private final static Map<String, Component> LINK_TYPE_PRESET =
+        ImmutableMap.of("home", Component.translatable("gui.yes_steve_model.url.home"), "donate",
+            Component.translatable("gui.yes_steve_model.url.donate"));
+    private final Map<Integer, PageImages.Image> avatars = new HashMap<>();
+    private com.elfmcys.ysm.client.demand.ClientDemandCoordinator.PageScope pageScope;
     private final Map<Integer, AuthorButton> authorButtons = new HashMap<>();
 
     private final PlayerModelScreen parent;
     private final ModelRenderTarget model;
     private final ModelInfoView modelInfo;
     private int startAuthorIndex = 0;
-    private ClientAssetBatch pageAssets;
+    private PageImages pageAssets;
     private int x;
     private int y;
 
     public ModelInfoScreen(PlayerModelScreen parent, ModelRenderTarget model) {
-        super(Component.literal("Model Info GUI"));
+        super(Component.literal("Model Info GUI"), parent);
         this.parent = parent;
         this.model = model;
         this.modelInfo = model.info();
@@ -64,20 +64,32 @@ public class ModelInfoScreen extends Screen {
 
     @Override
     protected void init() {
-        closePage();
+        if (!hasCurrentWorld())
+            return;
         this.clearWidgets();
-        pageAssets = ClientModelService.instance().createAssetBatch();
+        authorButtons.clear();
 
         this.x = (width - 420) / 2;
         this.y = (height - 235) / 2;
 
         var metadata = this.modelInfo.getMetadata();
-        List<Author> authors = metadata == null
-                ? List.of() : metadata.authors();
+        List<AuthorProto> authors = metadata == null ? List.of() : metadata.authors();
         if (authors.size() <= startAuthorIndex) {
             startAuthorIndex = 0;
         }
 
+        var signature = pageIdentity();
+        if (pageScope == null || !pageScope.matches(signature)) {
+            var service = ClientModelService.instance();
+            pageScope = service.demands().replacePage(pageScope, signature);
+            pageAssets = new PageImages(service.createAssetBatch());
+            pageScope.action(pageAssets);
+            avatars.clear();
+            for (var index = startAuthorIndex; index < Math.min(authors.size(), startAuthorIndex + 5); index++)
+                if (authors.get(index).hasAvatar())
+                    avatars.put(index, pageAssets.presentation(model.modelHash(),
+                        ModelAssetSelector.PresentationAsset.AUTHOR_AVATAR, index));
+        }
         for (int i = 0; i < 5; i++) {
             int index = startAuthorIndex + i;
             if (index >= authors.size()) {
@@ -87,13 +99,12 @@ public class ModelInfoScreen extends Screen {
                 continue;
             }
             var author = authors.get(index);
-            var button = new AuthorButton(this.x + 25 + 75 * i, this.y + 15,
-                    author, model, DEFAULT_AVATAR, index, this);
+            var button =
+                new AuthorButton(this.x + 25 + 75 * i, this.y + 15, author, model, DEFAULT_AVATAR, index, this);
             authorButtons.put(index, button);
             addRenderableWidget(button);
-            requestAvatar(index, button, pageAssets);
+            button.setAvatarImage(avatars.get(index));
         }
-        pageAssets.submit();
 
         addRenderableWidget(new FlatColorButton(x + 2, y + 25, 18, 100, Component.literal("<"), (b) -> {
             if (startAuthorIndex > 0) {
@@ -122,72 +133,44 @@ public class ModelInfoScreen extends Screen {
             addRenderableWidget(new FlatColorButton(this.x + 310, y, 85, 20, displayText, b -> openUrl(value)));
             y += 25;
         }
-        addRenderableWidget(new FlatColorButton(this.x + 310, y, 85, 20, Component.translatable("gui.yes_steve_model.model.return"), (b) -> {
-            this.getMinecraft().setScreen(parent);
-        }));
+        addRenderableWidget(new FlatColorButton(this.x + 310, y, 85, 20,
+            Component.translatable("gui.yes_steve_model.model.return"), (b) -> {
+                showScreen(parent);
+            }));
+    }
+
+    @Override
+    public void tick() {
+        if (hasCurrentWorld() && (pageScope == null || !pageScope.matches(pageIdentity())))
+            init();
+    }
+
+    private List<?> pageIdentity() {
+        var content = ClientModelService.instance().catalog().find(model.modelHash())
+            .map(entry -> (Object)entry.content().representation().identity()).orElse("missing");
+        return List.of(model.modelHash(), content, startAuthorIndex);
     }
 
     private void openUrl(@Nullable String homeUrl) {
         if (homeUrl != null && StringUtils.isNoneBlank(homeUrl)) {
-            this.getMinecraft().setScreen(new ConfirmLinkScreen(yes -> {
+            showScreen(new ConfirmLinkScreen(yes -> {
+                if (!hasCurrentWorld())
+                    return;
                 if (yes) {
                     Util.getPlatform().openUri(homeUrl);
                 }
-                this.getMinecraft().setScreen(this);
+                showScreen(this);
             }, homeUrl, true));
         }
     }
 
-    private void requestAvatar(int index, AuthorButton button, ClientAssetBatch assets) {
-        var manifest = ClientModelService.instance().catalog().find(model.modelHash())
-                .map(entry -> entry.displayRepresentation().view().getManifest()).orElse(null);
-        var metadata = manifest == null ? null : manifest.info().metadataUnsafe();
-        if (metadata == null || metadata.authors().isEmpty()
-                || index >= metadata.authors().size()
-                || !metadata.authors().get(index).hasAvatar()) {
-            return;
-        }
-        assets.presentation(model.modelHash(),
-                        ModelAssetSelector.PresentationAsset.AUTHOR_AVATAR, index)
-                .whenComplete((source, error) -> Minecraft.getInstance().execute(() -> {
-                    if (pageAssets != assets || authorButtons.get(index) != button) {
-                        return;
-                    }
-                    if (source != null) {
-                        var texture = ClientModelService.instance().createTexture(source);
-                        loadedAvatars.add(texture);
-                        button.setAvatar(CustomTextureManager.register(texture).id());
-                    } else if (!isCancellation(error)) {
-                        if (error == null) {
-                            YesSteveModel.LOGGER.debug("Failed to load author avatar {}: unknown error", index);
-                        } else {
-                            YesSteveModel.LOGGER.debug("Failed to load author avatar {}", index, unwrap(error));
-                        }
-                    }
-                }));
-    }
-
     private void closePage() {
-        var closingAssets = pageAssets;
+        if (pageScope != null)
+            pageScope.close();
+        pageScope = null;
         pageAssets = null;
-        loadedAvatars.forEach(CustomTextureManager::release);
-        loadedAvatars.clear();
+        avatars.clear();
         authorButtons.clear();
-        if (closingAssets != null) {
-            closingAssets.close();
-        }
-    }
-
-    private static boolean isCancellation(@Nullable Throwable error) {
-        return unwrap(error) instanceof CancellationException;
-    }
-
-    private static Throwable unwrap(@Nullable Throwable error) {
-        while ((error instanceof CompletionException || error instanceof ExecutionException)
-                && error.getCause() != null) {
-            error = error.getCause();
-        }
-        return error;
     }
 
     @Override
@@ -212,7 +195,7 @@ public class ModelInfoScreen extends Screen {
         super.render(graphics, mouseX, mouseY, partialTick);
 
         this.renderables.stream().filter(r -> r instanceof AuthorButton)
-                .forEach(r -> ((AuthorButton) r).renderToolTip(graphics, this, mouseX, mouseY));
+            .forEach(r -> ((AuthorButton)r).renderToolTip(graphics, this, mouseX, mouseY));
     }
 
     @Override

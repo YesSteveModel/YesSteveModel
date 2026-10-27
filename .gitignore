@@ -8,11 +8,10 @@ bin
 .profileconfig.json
 
 # idea
-out
+/out/*
 *.ipr
 *.iws
 *.iml
-.idea
 
 # gradle
 build
@@ -27,11 +26,15 @@ eclipse
 /run
 /logs
 __pycache__
-/.codegraph
-/.gitnexus/
+
+# hidden files
+/.*
 
 # Files from Forge MDK
 forge*changelog.txt
 
 # dark past
 hs_err_pid*
+
+# ci
+!/.github/

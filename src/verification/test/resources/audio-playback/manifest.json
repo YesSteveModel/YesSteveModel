@@ -1,0 +1,487 @@
+{
+  "generated": "2026-10-21",
+  "encoder": "ffmpeg version 2025-09-08-git-45db6945e9-full_build-www.gyan.dev Copyright (c) 2000-2025 the FFmpeg developers",
+  "chunking": "The first chunk contains OpusTags and exactly the first effective audio page. Each later complete page is a tail chunk.",
+  "cases": [
+    {
+      "file": "mono-four-plus.ogg",
+      "encoded_sha256": "30547a71eeee534e526936d4353b977c1e31fd8aca1c00bb15eca26df1c58bec",
+      "source_channels": 1,
+      "sample_rate": 48000,
+      "frames": 576017,
+      "prefix_frames": 215688,
+      "pages": [
+        {
+          "bytes": 47,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 89,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 13527,
+          "segments": 75,
+          "granule": 216000
+        },
+        {
+          "bytes": 13527,
+          "segments": 75,
+          "granule": 432000
+        },
+        {
+          "bytes": 9207,
+          "segments": 51,
+          "granule": 576329
+        }
+      ],
+      "command": [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.3*sin(2*PI*317*t)|0.2*sin(2*PI*571*t):s=48000:d=12.000354",
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "24k",
+        "-frame_duration",
+        "60",
+        "-page_duration",
+        "4500000",
+        "-oggpagesize",
+        "0",
+        "mono-four-plus.ogg"
+      ]
+    },
+    {
+      "file": "mono-long.ogg",
+      "encoded_sha256": "4611d09e4dbe89af0adc069032b067efae54bf7620a132f523d64d8ccab5f119",
+      "source_channels": 1,
+      "sample_rate": 48000,
+      "frames": 576017,
+      "prefix_frames": 47688,
+      "pages": [
+        {
+          "bytes": 47,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 89,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 9406,
+          "segments": 51,
+          "granule": 48000
+        },
+        {
+          "bytes": 9325,
+          "segments": 50,
+          "granule": 96000
+        },
+        {
+          "bytes": 9384,
+          "segments": 50,
+          "granule": 144000
+        },
+        {
+          "bytes": 9962,
+          "segments": 50,
+          "granule": 192000
+        },
+        {
+          "bytes": 10291,
+          "segments": 50,
+          "granule": 240000
+        },
+        {
+          "bytes": 10412,
+          "segments": 50,
+          "granule": 288000
+        },
+        {
+          "bytes": 10453,
+          "segments": 50,
+          "granule": 336000
+        },
+        {
+          "bytes": 10470,
+          "segments": 50,
+          "granule": 384000
+        },
+        {
+          "bytes": 10480,
+          "segments": 50,
+          "granule": 432000
+        },
+        {
+          "bytes": 10484,
+          "segments": 50,
+          "granule": 480000
+        },
+        {
+          "bytes": 10485,
+          "segments": 50,
+          "granule": 528000
+        },
+        {
+          "bytes": 10485,
+          "segments": 50,
+          "granule": 576000
+        },
+        {
+          "bytes": 373,
+          "segments": 2,
+          "granule": 576329
+        }
+      ],
+      "command": [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=317:sample_rate=48000:duration=12.000354",
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "70k",
+        "-frame_duration",
+        "20",
+        "mono-long.ogg"
+      ]
+    },
+    {
+      "file": "mono-over-five.ogg",
+      "encoded_sha256": "10cee828a63ea0a3e390cb89bbab70b7cf571aa741562554f58c9f6f4d7a2d74",
+      "source_channels": 1,
+      "sample_rate": 48000,
+      "frames": 576017,
+      "prefix_frames": 287688,
+      "pages": [
+        {
+          "bytes": 47,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 89,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 18027,
+          "segments": 100,
+          "granule": 288000
+        },
+        {
+          "bytes": 18027,
+          "segments": 100,
+          "granule": 576000
+        },
+        {
+          "bytes": 207,
+          "segments": 1,
+          "granule": 576329
+        }
+      ],
+      "command": [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.3*sin(2*PI*317*t)|0.2*sin(2*PI*571*t):s=48000:d=12.000354",
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "24k",
+        "-frame_duration",
+        "60",
+        "-page_duration",
+        "6000000",
+        "-oggpagesize",
+        "0",
+        "mono-over-five.ogg"
+      ]
+    },
+    {
+      "file": "single-exact.ogg",
+      "encoded_sha256": "1cc23fb9938643133dfbe99c599f6f35535cbaedd83fa2f1ec7cb50bd09b951f",
+      "source_channels": 1,
+      "sample_rate": 48000,
+      "frames": 192000,
+      "prefix_frames": 192000,
+      "pages": [
+        {
+          "bytes": 47,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 89,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 11882,
+          "segments": 67,
+          "granule": 192312
+        }
+      ],
+      "command": [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=317:sample_rate=48000:duration=4",
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "24k",
+        "-frame_duration",
+        "60",
+        "-page_duration",
+        "20000000",
+        "-oggpagesize",
+        "0",
+        "single-exact.ogg"
+      ]
+    },
+    {
+      "file": "single-long.ogg",
+      "encoded_sha256": "889f41b2b37799227210d7b52926902aeec7878bbd8351d449594e6b1d0e752e",
+      "source_channels": 1,
+      "sample_rate": 48000,
+      "frames": 288017,
+      "prefix_frames": 288017,
+      "pages": [
+        {
+          "bytes": 47,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 89,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 18002,
+          "segments": 101,
+          "granule": 288329
+        }
+      ],
+      "command": [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=317:sample_rate=48000:duration=6.000354",
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "24k",
+        "-frame_duration",
+        "60",
+        "-page_duration",
+        "20000000",
+        "-oggpagesize",
+        "0",
+        "single-long.ogg"
+      ]
+    },
+    {
+      "file": "single-near-five.ogg",
+      "encoded_sha256": "c8632b488e315ed8db4d3936c0e0e560ac8c21cd6c9a541cef3e96991f315a49",
+      "source_channels": 1,
+      "sample_rate": 48000,
+      "frames": 235200,
+      "prefix_frames": 235200,
+      "pages": [
+        {
+          "bytes": 47,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 89,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 14582,
+          "segments": 82,
+          "granule": 235512
+        }
+      ],
+      "command": [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=317:sample_rate=48000:duration=4.9",
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "24k",
+        "-frame_duration",
+        "60",
+        "-page_duration",
+        "20000000",
+        "-oggpagesize",
+        "0",
+        "single-near-five.ogg"
+      ]
+    },
+    {
+      "file": "stereo-four-plus.ogg",
+      "encoded_sha256": "5334c61eb8bdc4eae3a5ffad8a8cdfd0efb8d32ab46f3ab73d20064bbee12a29",
+      "source_channels": 2,
+      "sample_rate": 48000,
+      "frames": 576017,
+      "prefix_frames": 215688,
+      "pages": [
+        {
+          "bytes": 47,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 89,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 13527,
+          "segments": 75,
+          "granule": 216000
+        },
+        {
+          "bytes": 13527,
+          "segments": 75,
+          "granule": 432000
+        },
+        {
+          "bytes": 9207,
+          "segments": 51,
+          "granule": 576329
+        }
+      ],
+      "command": [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.3*sin(2*PI*317*t)|0.2*sin(2*PI*571*t):s=48000:d=12.000354",
+        "-ac",
+        "2",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "24k",
+        "-frame_duration",
+        "60",
+        "-page_duration",
+        "4500000",
+        "-oggpagesize",
+        "0",
+        "stereo-four-plus.ogg"
+      ]
+    },
+    {
+      "file": "stereo-over-five.ogg",
+      "encoded_sha256": "8bc6b46dd31f5c4ab7859ba4020506216d6c797443ad5d66c16e59685c04d3d1",
+      "source_channels": 2,
+      "sample_rate": 48000,
+      "frames": 576017,
+      "prefix_frames": 287688,
+      "pages": [
+        {
+          "bytes": 47,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 89,
+          "segments": 1,
+          "granule": 0
+        },
+        {
+          "bytes": 18027,
+          "segments": 100,
+          "granule": 288000
+        },
+        {
+          "bytes": 18027,
+          "segments": 100,
+          "granule": 576000
+        },
+        {
+          "bytes": 207,
+          "segments": 1,
+          "granule": 576329
+        }
+      ],
+      "command": [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.3*sin(2*PI*317*t)|0.2*sin(2*PI*571*t):s=48000:d=12.000354",
+        "-ac",
+        "2",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "24k",
+        "-frame_duration",
+        "60",
+        "-page_duration",
+        "6000000",
+        "-oggpagesize",
+        "0",
+        "stereo-over-five.ogg"
+      ]
+    }
+  ]
+}

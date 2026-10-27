@@ -22,15 +22,15 @@
 | 机制簇 | 复杂度为什么出现、又衍生什么 | 机制入口 |
 |---|---|---|
 | 输入冻结与转换交付 | 可变来源分阶段解析 → capture；archive 借用再增加复制时点约束；多格式统一为当前容器 → staging/重开验证；legacy 完整模型解码 → 图片表示提前归约 | [AP-01/02/06](java-assets-and-presentation/README.md)，NR-11/13/17 |
-| 模型音频 | Raw/legacy/current 使用同一媒体 profile；真实触发按 exact representation 取得完整 encoded；统一账本保留 encoded/短 PCM；每播放独占 decoder/cursor 并以 handoff ticket 交给宿主 | [AP-09](java-assets-and-presentation/mechanisms.md)、[MN-25](java-models-and-network/mechanisms.md)、[AN-20](java-animation-and-integration/mechanisms.md)、[NR-14](native-capabilities/mechanisms.md) |
-| 目录与来源演进 | 增量 candidate 分别完成、owner tick 合成完整快照；metadata 可用和 target Ready 不是同一阶段；direct 未来读取按实例局部失败，converted 以短期跨进程登记保护保守清理 | [MN-01/02、05、08、24](java-models-and-network/README.md) |
+| 模型音频 | Raw/legacy/current 归约为同一 Opus 表示；等价纹理共用准备寿命内的完整首块，target 与播放分别持独立引用。播放按 exact representation 顺序取尾块。单 chunk 保留完整 PCM，多个 chunk 保留首块 PCM/checkpoint；消费缺口才恢复独占 decoder，准备、refill、loop 共用一条时间线。共享状态复制、活动计价和取消封口是保留策略的协调成本 | [AP-09](java-assets-and-presentation/mechanisms.md)、[MN-25](java-models-and-network/mechanisms.md)、[AN-20](java-animation-and-integration/mechanisms.md)、[NR-14](native-capabilities/mechanisms.md) |
+| 目录与来源演进 | 启动激活与进入刷新共用 Catalog 接纳，前置登记和后台完整构造不阻塞 owner 锁，tick 接纳最新快照；metadata 与 target Ready 分离；converted 登记覆盖扫描和 runtime 使用期，保护首次保守清理 | [MN-01/02、05、08、24](java-models-and-network/README.md) |
 | 共享资源与发布 | 已完成资源跨 owner 使用 → 独立 lease；未完成工作复用 → exact interest/迟到终态；host texture 发布 → sample-ready 总门禁 → 延后 admission 及等待期取消 | [MN-06/17–19](java-models-and-network/README.md) |
 | 恢复与失败记忆 | Pending/失败时保持旧表现 → desired/installed 协调；允许恢复 → exact 失败记忆、lazy 资源 gate 与显式重试资格 | [MN-10/20](java-models-and-network/README.md) |
-| 传输与投影 | 连接寿命短于延后工作 → exact session/retirement；typed 分片 → coverage 与先验证后构造；超帧才引入 parent；accepted cursor → 背压/重建/单点关闭 | [MN-07、11–16](java-models-and-network/README.md) |
-| 派生物复用与存储边界 | Exact 表示 → 原子 cache；文件 sink → 物理路径约束；converted 活跃消费者 → 保守 prune；baked 模型与 baked 动画跨进程共享 → 同 key writer 协调；能力布局再引入独立 baked identity/失效 | [MN-05、22–24](java-models-and-network/README.md)，NR-04/05 |
+| 传输与投影 | 连接寿命短于延后工作 → exact session/retirement；typed 分片 → coverage 与先验证后构造；超帧才引入 parent；accepted cursor → 背压/重建/单点关闭；表达式瞬时事件 → shared semantics 与三端门禁 | [MN-07、11–16、26](java-models-and-network/README.md) |
+| 派生物复用与存储边界 | Exact 表示 → 原子 cache；文件 sink → 物理路径约束；converted 活跃消费者 → 保守 prune；表达式 specialization → 独立本地 identity。完整内存产物与可选持久化分离 → 单一有界工作域、独立快照和共享 native 保留；baked 模型与 baked 动画跨进程共享 → 同 key writer 协调。冷编译证明随原始 artifact 存在，geometry 命中交付本次验证的数据 | [MN-05、22–24、27](java-models-and-network/README.md)，NR-04/05 |
 | 动画状态与执行权限 | 原地异步状态 → 汇合；多 pass 共用历史 → 姿态恢复/动作门禁；共享解析产物 → 每实体 processor/Molang memory 与 roaming struct；求值窗口 → 动作能力；defer → 参数快照与逆序排空 | [AN-01–06、08–13、19](java-animation-and-integration/README.md) |
 | Native 输出与借用 | JNI → 绑定/地址/失败协议；固定并行区间 → 容量空洞清理、透明暂存；全局 scratch → 串行调用前提；原地 frame view 与 schedule cache 各有失效条件 | [NR-01/02、04–10、15/16](native-capabilities/README.md)，AN-11/12 |
-| 展示、接入与未明补偿 | 当前意图寿命短 → 页面/hover/实体分别设置门槛和迟到处置；preview-first 与 cache-only 3D → 独立图片 cache 和离线 miss；direct 来源准入与 schema 分层；可选扩展 → 加载前隔离及生成 checker；混合补丁、额外 fence、allocator 补偿的必要性仍未闭合 | [AP-03–05、07/08](java-assets-and-presentation/README.md)，[MN-10](java-models-and-network/README.md)，[AN-08–10/13](java-animation-and-integration/README.md)，[NR-03](native-capabilities/README.md) |
+| 展示、接入与未明补偿 | 当前意图寿命短 → 集中 Coordinator 维护独立用途与连续门槛；图片独立取得、展示资格与 GUI 交互准备分离 → 独立图片、用途 anchor 和接收 lease。自动展示只准备默认 body；图片首次解码同时建立媒体资格与上传像素 → 封闭内容、RGBA 计价与接纳点交接，逐条发布避免批次与容量互相等待。direct 来源准入与 schema 分层；可选扩展 → 加载前隔离及生成 checker；builtin 声明 → 生成 component/call plan；混合补丁、额外 fence、allocator 补偿的必要性仍未闭合 | [AP-03–05、07/08](java-assets-and-presentation/README.md)，[MN-10](java-models-and-network/README.md)，[AN-08–10/13/21](java-animation-and-integration/README.md)，[NR-03](native-capabilities/README.md) |
 
 ## 共享口径与维护
 

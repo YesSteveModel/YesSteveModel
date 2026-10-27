@@ -11,9 +11,8 @@ import java.util.concurrent.CompletableFuture;
 /** Network-adapter seam used only when a verified remote representation is absent. */
 @FunctionalInterface
 public interface RemoteChunkFetcher {
-    CompletableFuture<Void> fetch(
-            ModelFileIdentity identity, List<AssetContainerView.ChunkInfo> chunks,
-            ChunkReceiver receiver);
+    CompletableFuture<Void> fetch(ModelFileIdentity identity, List<AssetContainerView.ChunkInfo> chunks,
+        ChunkReceiver receiver);
 
     @FunctionalInterface
     interface ChunkReceiver {

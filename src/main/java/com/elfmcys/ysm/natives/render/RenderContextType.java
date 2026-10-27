@@ -1,9 +1,7 @@
 package com.elfmcys.ysm.natives.render;
 
 public enum RenderContextType {
-    LEVEL(0),
-    IRIS_SHADOW(1),
-    GUI(2);
+    LEVEL(0), IRIS_SHADOW(1), GUI(2);
 
     private final int id;
 

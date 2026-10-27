@@ -18,7 +18,8 @@ public class CustomProjectileRenderer extends GeoProjectilesRenderer<Projectile,
     }
 
     @Override
-    public void render(Projectile entity, float yaw, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight) {
+    public void render(Projectile entity, float yaw, float partialTick, PoseStack poseStack,
+        MultiBufferSource bufferSource, int packedLight) {
         if (Minecraft.getInstance().player == null || entity.isInvisibleTo(Minecraft.getInstance().player)) {
             return;
         }
@@ -31,6 +32,7 @@ public class CustomProjectileRenderer extends GeoProjectilesRenderer<Projectile,
     @Override
     @NotNull
     public ResourceLocation getTextureLocation(Projectile entity) {
-        return entity.getCapability(ProjectileAnimatableCapabilityProvider.CAP).map(CustomProjectileEntity::getTextureLocation).orElse(MissingTextureAtlasSprite.getLocation());
+        return entity.getCapability(ProjectileAnimatableCapabilityProvider.CAP)
+            .map(CustomProjectileEntity::getTextureLocation).orElse(MissingTextureAtlasSprite.getLocation());
     }
 }

@@ -1,12 +1,13 @@
 package com.elfmcys.ysm.client.controller;
 
-import com.elfmcys.ysm.client.entity.CustomEntity;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.model.resource.client.CommonAsset;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 
 import java.util.function.BiFunction;
 
-public class SingleControllerDiscovery<T extends CustomEntity<?>, TModel> implements ControllerDiscovery<T, TModel> {
+public class SingleControllerDiscovery<T extends AnimatableEntity<?>, TModel>
+    implements ControllerDiscovery<T, TModel> {
     private final String controllerName;
     private final String scriptName;
     private final String[] animationNames;
@@ -14,7 +15,8 @@ public class SingleControllerDiscovery<T extends CustomEntity<?>, TModel> implem
     private final ResourceAdapter<TModel> resourceAdapter;
     private final BiFunction<String, T, IAnimationController<T>> controllerFunc;
 
-    public SingleControllerDiscovery(String category, String name, String[] animationNames, boolean hybrid, ResourceAdapter<TModel> resourceAdapter, BiFunction<String, T, IAnimationController<T>> controllerFunc) {
+    public SingleControllerDiscovery(String category, String name, String[] animationNames, boolean hybrid,
+        ResourceAdapter<TModel> resourceAdapter, BiFunction<String, T, IAnimationController<T>> controllerFunc) {
         this.controllerName = String.format("%s.%s", category, name);
         this.scriptName = String.format("%s_ctrl_%s", category, name);
         this.animationNames = animationNames;
@@ -24,14 +26,14 @@ public class SingleControllerDiscovery<T extends CustomEntity<?>, TModel> implem
     }
 
     @Override
-    public ControllerFactory<T> process(TModel model, CommonAsset assets) {
+    public ControllerFactory<T> process(TModel model, CommonAsset assets,
+        com.elfmcys.ysm.model.resource.client.AnimationStore animations) {
         var accept = false;
         if (hybrid && resourceAdapter.getControllers(model, assets).containsKey(controllerName)) {
             accept = true;
         } else if (assets.eventHandlers().containsKey(scriptName)) {
             accept = true;
         } else if (animationNames != null) {
-            var animations = resourceAdapter.getAnimations(model, assets);
             for (String animationName : animationNames) {
                 var anim = animations.get(animationName);
                 if (anim != null && !anim.isEmpty()) {
@@ -45,7 +47,8 @@ public class SingleControllerDiscovery<T extends CustomEntity<?>, TModel> implem
                 consumer.accept(controllerFunc.apply(controllerName, animatable));
             });
         } else {
-            return ((animatable, consumer) -> {});
+            return ((animatable, consumer) -> {
+            });
         }
     }
 }

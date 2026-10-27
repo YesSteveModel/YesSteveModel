@@ -38,7 +38,6 @@ public final class AssetLoadException extends IOException {
     }
 
     public enum Reason {
-        ACCESS,
-        CONTENT
+        ACCESS, CONTENT
     }
 }

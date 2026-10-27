@@ -20,7 +20,7 @@ public abstract class PauseScreenMixin extends Screen {
 
     @Inject(method = "init()V", at = @At(value = "TAIL"))
     private void ysmInit(CallbackInfo ci) {
-        List<Button> buttons = AndroidCompat.addYsmSkinButton((PauseScreen) (Object) this);
+        List<Button> buttons = AndroidCompat.addYsmSkinButton((PauseScreen)(Object)this);
         if (buttons != null && !buttons.isEmpty()) {
             for (Button b : buttons) {
                 this.addRenderableWidget(b);

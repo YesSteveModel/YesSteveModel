@@ -9,6 +9,7 @@ flowchart LR
     NATIVE["A-NATIVE"] --> JNI["P-JNI"] --> NR01["NR-01 binding"]
     JNI --> NR02["NR-02 buffers/handles"]
     JNI --> NR14["NR-14 audio decoder"]
+    AUDIO["A-AUDIO-RETENTION"] --> NR14
     JNI --> NR15["NR-15 error boundary"]
     SIMD["A-SIMD"] --> NR04["NR-04 hot layout"] --> CACHE["P-CACHE-LAYOUT"] --> NR05["NR-05 baked cache"]
     FRAME["A-FRAME-REUSE"] --> NR06["NR-06 frame view"]
@@ -27,6 +28,7 @@ flowchart LR
 
 | 候选 | 影响的本地机制 | 局部解释 |
 |---|---|---|
+| `A-AUDIO-RETENTION` | NR-14 | 前缀复用增加状态深拷贝、checkpoint owner/adoption 与恢复计价 |
 | `A-NATIVE` | NR-01/02/14/15 | 绑定、地址/owner、音频 decoder 和错误收口是并列 ABI 义务 |
 | `A-PARALLEL` | NR-08/09/10/16 | 固定区间与同 draw 汇合继续派生空洞和透明重排 |
 | `A-SIMD` | NR-04/05 | 能力相关热布局要求 baked cache 按 profile 隔离 |

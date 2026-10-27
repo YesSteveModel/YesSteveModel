@@ -5,8 +5,7 @@ import com.elfmcys.ysm.model.domain.Hash256;
 import java.util.Objects;
 
 /** Content-addressed reference used by presentation and resource requests. */
-public record AssetRef(Kind kind, String name, Hash256 hash, int storedSize,
-                       int decodedSize, String encoding) {
+public record AssetRef(Kind kind, String name, Hash256 hash, int storedSize, int decodedSize, String encoding) {
     public AssetRef {
         Objects.requireNonNull(kind, "kind");
         name = Objects.requireNonNullElse(name, "");
@@ -18,9 +17,6 @@ public record AssetRef(Kind kind, String name, Hash256 hash, int storedSize,
     }
 
     public enum Kind {
-        PREVIEW,
-        ICON,
-        CHUNK,
-        PACK_COVER
+        PREVIEW, ICON, CHUNK, PACK_COVER
     }
 }

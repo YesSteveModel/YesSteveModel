@@ -1,25 +1,22 @@
 package com.elfmcys.ysm.model.resource.client.audio;
 
-import com.elfmcys.ysm.format.media.SupportedAudioProbe;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.resource.client.SoundSource;
 
 import java.util.Objects;
 
-record AudioCacheKey(ModelFileIdentity representation, int streamId,
-                     SupportedAudioProbe.Encoding encoding, int channels,
-                     long sampleRate, long frames, Hash256 logicalHash) {
+/** Source channels remain part of exact identity; output format version describes the default mono PCM contract. */
+record AudioCacheKey(ModelFileIdentity representation, Hash256 mediaIdentity, int channels, long frames, int preSkip,
+    int outputGain, int outputFormatVersion) {
     AudioCacheKey {
         Objects.requireNonNull(representation, "representation");
-        Objects.requireNonNull(encoding, "encoding");
-        Objects.requireNonNull(logicalHash, "logicalHash");
+        Objects.requireNonNull(mediaIdentity, "mediaIdentity");
     }
 
     static AudioCacheKey from(SoundSource source) {
-        var stream = source.stream();
-        return new AudioCacheKey(source.representation(), stream.streamId(),
-                stream.encoding(), stream.channels(), stream.sampleRate(),
-                stream.frames(), stream.locator().logicalHash());
+        var media = source.media();
+        return new AudioCacheKey(source.representation(), media.mediaIdentity(), media.channels(), media.frames(),
+            media.preSkip(), media.outputGain(), 1);
     }
 }

@@ -38,15 +38,10 @@ final class CompatibilityAnalyzer {
     static final String MOJANG_PREFIX = "com/mojang/";
     static final String MOJANG_COMMAND_PREFIX = "com/mojang/brigadier/";
 
-    private static final Set<String> KNOWN_BOOTSTRAPS = Set.of(
-            "java/lang/invoke/LambdaMetafactory.metafactory",
-            "java/lang/invoke/LambdaMetafactory.altMetafactory",
-            "java/lang/invoke/StringConcatFactory.makeConcat",
-            "java/lang/invoke/StringConcatFactory.makeConcatWithConstants",
-            "java/lang/runtime/ObjectMethods.bootstrap",
-            "java/lang/runtime/SwitchBootstraps.typeSwitch",
-            "java/lang/runtime/SwitchBootstraps.enumSwitch"
-    );
+    private static final Set<String> KNOWN_BOOTSTRAPS = Set.of("java/lang/invoke/LambdaMetafactory.metafactory",
+        "java/lang/invoke/LambdaMetafactory.altMetafactory", "java/lang/invoke/StringConcatFactory.makeConcat",
+        "java/lang/invoke/StringConcatFactory.makeConcatWithConstants", "java/lang/runtime/ObjectMethods.bootstrap",
+        "java/lang/runtime/SwitchBootstraps.typeSwitch", "java/lang/runtime/SwitchBootstraps.enumSwitch");
 
     private final ClassRepository repository;
 
@@ -58,9 +53,8 @@ final class CompatibilityAnalyzer {
         var result = new ExtensionPlan.AnalysisResult();
         Optional<ClassNode> root = repository.find(plan.ownerInternalName());
         if (root.isEmpty()) {
-            result.issues.add(new ExtensionPlan.CoverageIssue(
-                    "OWNED_CODE_UNAVAILABLE", plan.ownerBinaryName,
-                    "The annotated class was not present in javac CLASS_OUTPUT."));
+            result.issues.add(new ExtensionPlan.CoverageIssue("OWNED_CODE_UNAVAILABLE", plan.ownerBinaryName,
+                "The annotated class was not present in javac CLASS_OUTPUT."));
             return result;
         }
 
@@ -85,7 +79,7 @@ final class CompatibilityAnalyzer {
             if (resolved.isEmpty()) {
                 if (isOwned(key.owner(), group)) {
                     addIssue(result, "OWNED_CODE_UNAVAILABLE", key.display(),
-                            "An owned call-graph method could not be read from CLASS_OUTPUT or CLASS_PATH.");
+                        "An owned call-graph method could not be read from CLASS_OUTPUT or CLASS_PATH.");
                 }
                 continue;
             }
@@ -94,11 +88,8 @@ final class CompatibilityAnalyzer {
         return result;
     }
 
-    private void scanOwnedHierarchy(
-            ClassNode node,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result,
-            Set<String> visited) {
+    private void scanOwnedHierarchy(ClassNode node, ExtensionPlan.CheckGroup group, ExtensionPlan.AnalysisResult result,
+        Set<String> visited) {
         if (!visited.add(node.name)) {
             return;
         }
@@ -111,10 +102,9 @@ final class CompatibilityAnalyzer {
             collectHierarchyParent(interfaceName, true, result);
         }
         collectSignature(node.signature, false, result);
-        if (containsMixinAnnotation(node.visibleAnnotations)
-                || containsMixinAnnotation(node.invisibleAnnotations)) {
+        if (containsMixinAnnotation(node.visibleAnnotations) || containsMixinAnnotation(node.invisibleAnnotations)) {
             addIssue(result, "MIXIN_RUNTIME_TRANSFORM", DescriptorUtil.binaryName(node.name),
-                    "Mixin can alter the effective runtime call graph after javac analysis.");
+                "Mixin can alter the effective runtime call graph after javac analysis.");
         }
 
         for (FieldNode field : node.fields) {
@@ -123,10 +113,10 @@ final class CompatibilityAnalyzer {
         }
         for (MethodNode method : node.methods) {
             if (containsMixinAnnotation(method.visibleAnnotations)
-                    || containsMixinAnnotation(method.invisibleAnnotations)) {
+                || containsMixinAnnotation(method.invisibleAnnotations)) {
                 addIssue(result, "MIXIN_RUNTIME_TRANSFORM",
-                        DescriptorUtil.binaryName(node.name) + '#' + method.name + method.desc,
-                        "Mixin annotations can alter linkage or execution after javac analysis.");
+                    DescriptorUtil.binaryName(node.name) + '#' + method.name + method.desc,
+                    "Mixin annotations can alter linkage or execution after javac analysis.");
             }
             if (!method.name.equals("<clinit>") && !method.name.equals("<init>")) {
                 collectDescriptor(method.desc, result);
@@ -146,26 +136,18 @@ final class CompatibilityAnalyzer {
         }
     }
 
-    private void visitOwnedParent(
-            String internalName,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result,
-            Set<String> visited) {
+    private void visitOwnedParent(String internalName, ExtensionPlan.CheckGroup group,
+        ExtensionPlan.AnalysisResult result, Set<String> visited) {
         if (internalName == null || !isOwned(internalName, group)) {
             return;
         }
-        repository.find(internalName).ifPresentOrElse(
-                node -> scanOwnedHierarchy(node, group, result, visited),
-                () -> addIssue(result, "OWNED_CODE_UNAVAILABLE", DescriptorUtil.binaryName(internalName),
-                        "An owned superclass or interface could not be read."));
+        repository.find(internalName).ifPresentOrElse(node -> scanOwnedHierarchy(node, group, result, visited),
+            () -> addIssue(result, "OWNED_CODE_UNAVAILABLE", DescriptorUtil.binaryName(internalName),
+                "An owned superclass or interface could not be read."));
     }
 
-    private void collectOwnedHierarchyMethods(
-            ClassNode node,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result,
-            Set<String> visited,
-            Set<ExtensionPlan.MethodKey> methods) {
+    private void collectOwnedHierarchyMethods(ClassNode node, ExtensionPlan.CheckGroup group,
+        ExtensionPlan.AnalysisResult result, Set<String> visited, Set<ExtensionPlan.MethodKey> methods) {
         if (!visited.add(node.name)) {
             return;
         }
@@ -178,25 +160,18 @@ final class CompatibilityAnalyzer {
         }
     }
 
-    private void collectOwnedParentMethods(
-            String internalName,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result,
-            Set<String> visited,
-            Set<ExtensionPlan.MethodKey> methods) {
+    private void collectOwnedParentMethods(String internalName, ExtensionPlan.CheckGroup group,
+        ExtensionPlan.AnalysisResult result, Set<String> visited, Set<ExtensionPlan.MethodKey> methods) {
         if (internalName == null || !isOwned(internalName, group)) {
             return;
         }
         repository.find(internalName).ifPresentOrElse(
-                node -> collectOwnedHierarchyMethods(node, group, result, visited, methods),
-                () -> addIssue(result, "OWNED_CODE_UNAVAILABLE", DescriptorUtil.binaryName(internalName),
-                        "Method bodies in this owned hierarchy node are not available."));
+            node -> collectOwnedHierarchyMethods(node, group, result, visited, methods),
+            () -> addIssue(result, "OWNED_CODE_UNAVAILABLE", DescriptorUtil.binaryName(internalName),
+                "Method bodies in this owned hierarchy node are not available."));
     }
 
-    private void collectOverriddenYsmMethod(
-            ClassNode owner,
-            MethodNode method,
-            ExtensionPlan.AnalysisResult result) {
+    private void collectOverriddenYsmMethod(ClassNode owner, MethodNode method, ExtensionPlan.AnalysisResult result) {
         int forbidden = Opcodes.ACC_STATIC | Opcodes.ACC_PRIVATE;
         if ((method.access & forbidden) != 0 || method.name.startsWith("<")) {
             return;
@@ -204,17 +179,14 @@ final class CompatibilityAnalyzer {
         for (String parent : directParents(owner)) {
             Optional<ResolvedMethod> inherited = resolveMethod(parent, method.name, method.desc);
             if (inherited.isPresent() && isYsm(inherited.get().owner.name)) {
-                result.requirements.add(new ExtensionPlan.Requirement(
-                        METHOD, inherited.get().owner.name, method.name, method.desc, true, false));
+                result.requirements.add(new ExtensionPlan.Requirement(METHOD, inherited.get().owner.name, method.name,
+                    method.desc, true, false));
             }
         }
     }
 
-    private void scanMethodBody(
-            ResolvedMethod resolved,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result,
-            Deque<ExtensionPlan.MethodKey> pending) {
+    private void scanMethodBody(ResolvedMethod resolved, ExtensionPlan.CheckGroup group,
+        ExtensionPlan.AnalysisResult result, Deque<ExtensionPlan.MethodKey> pending) {
         MethodNode method = resolved.method;
         collectDescriptor(method.desc, result);
         if (method.tryCatchBlocks != null) {
@@ -227,25 +199,21 @@ final class CompatibilityAnalyzer {
                 collectType(typeInsn.desc, result);
                 if (typeInsn.getOpcode() == Opcodes.NEW && isYsm(typeInsn.desc)) {
                     result.requirements.add(new ExtensionPlan.Requirement(
-                            ExtensionPlan.RequirementKind.INSTANTIABLE_CLASS,
-                            typeInsn.desc, "", "", false, false));
+                        ExtensionPlan.RequirementKind.INSTANTIABLE_CLASS, typeInsn.desc, "", "", false, false));
                 }
             } else if (instruction instanceof FieldInsnNode fieldInsn) {
                 collectDescriptor(fieldInsn.desc, result);
                 collectCompileOwnerKind(fieldInsn.owner, result);
                 collectYsmField(fieldInsn.owner, fieldInsn.name, fieldInsn.desc,
-                        fieldInsn.getOpcode() == Opcodes.GETSTATIC
-                                || fieldInsn.getOpcode() == Opcodes.PUTSTATIC,
-                        result);
+                    fieldInsn.getOpcode() == Opcodes.GETSTATIC || fieldInsn.getOpcode() == Opcodes.PUTSTATIC, result);
             } else if (instruction instanceof MethodInsnNode methodInsn) {
                 collectDescriptor(methodInsn.desc, result);
                 collectOwnerKind(methodInsn.owner, methodInsn.itf, result);
                 collectYsmMethod(methodInsn.owner, methodInsn.name, methodInsn.desc,
-                        methodInsn.getOpcode() == Opcodes.INVOKESTATIC, result);
+                    methodInsn.getOpcode() == Opcodes.INVOKESTATIC, result);
                 if (methodInsn.getOpcode() == Opcodes.INVOKEVIRTUAL
-                        || methodInsn.getOpcode() == Opcodes.INVOKEINTERFACE) {
-                    warnUnknownDynamicDispatch(
-                            methodInsn.owner, methodInsn.name, methodInsn.desc, group, result);
+                    || methodInsn.getOpcode() == Opcodes.INVOKEINTERFACE) {
+                    warnUnknownDynamicDispatch(methodInsn.owner, methodInsn.name, methodInsn.desc, group, result);
                 }
                 followOwnedMethod(methodInsn.owner, methodInsn.name, methodInsn.desc, group, result, pending);
             } else if (instruction instanceof InvokeDynamicInsnNode dynamicInsn) {
@@ -256,10 +224,9 @@ final class CompatibilityAnalyzer {
                 }
                 if (!isKnownBootstrap(dynamicInsn.bsm)) {
                     addIssue(result, "DYNAMIC_TARGET_UNKNOWN",
-                            DescriptorUtil.binaryName(resolved.owner.name) + '#' + method.name + method.desc,
-                            "invokedynamic bootstrap " + DescriptorUtil.binaryName(dynamicInsn.bsm.getOwner())
-                                    + '.' + dynamicInsn.bsm.getName()
-                                    + " may resolve targets that are not statically visible.");
+                        DescriptorUtil.binaryName(resolved.owner.name) + '#' + method.name + method.desc,
+                        "invokedynamic bootstrap " + DescriptorUtil.binaryName(dynamicInsn.bsm.getOwner()) + '.'
+                            + dynamicInsn.bsm.getName() + " may resolve targets that are not statically visible.");
                 }
             } else if (instruction instanceof LdcInsnNode ldcInsn) {
                 inspectConstant(ldcInsn.cst, group, result, pending, constants);
@@ -272,12 +239,8 @@ final class CompatibilityAnalyzer {
         }
     }
 
-    private void inspectConstant(
-            Object value,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result,
-            Deque<ExtensionPlan.MethodKey> pending,
-            Set<ConstantDynamic> visitedConstants) {
+    private void inspectConstant(Object value, ExtensionPlan.CheckGroup group, ExtensionPlan.AnalysisResult result,
+        Deque<ExtensionPlan.MethodKey> pending, Set<ConstantDynamic> visitedConstants) {
         if (value instanceof Type type) {
             if (type.getSort() == Type.METHOD) {
                 collectDescriptor(type.getDescriptor(), result);
@@ -293,46 +256,33 @@ final class CompatibilityAnalyzer {
                 inspectConstant(dynamic.getBootstrapMethodArgument(index), group, result, pending, visitedConstants);
             }
             if (!isKnownBootstrap(dynamic.getBootstrapMethod())) {
-                addIssue(result, "DYNAMIC_TARGET_UNKNOWN",
-                        dynamic.getName() + ':' + dynamic.getDescriptor(),
-                        "ConstantDynamic bootstrap "
-                                + DescriptorUtil.binaryName(dynamic.getBootstrapMethod().getOwner())
-                                + '.' + dynamic.getBootstrapMethod().getName()
-                                + " may resolve references that are not statically visible.");
+                addIssue(result, "DYNAMIC_TARGET_UNKNOWN", dynamic.getName() + ':' + dynamic.getDescriptor(),
+                    "ConstantDynamic bootstrap " + DescriptorUtil.binaryName(dynamic.getBootstrapMethod().getOwner())
+                        + '.' + dynamic.getBootstrapMethod().getName()
+                        + " may resolve references that are not statically visible.");
             }
         }
     }
 
-    private void inspectHandle(
-            Handle handle,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result,
-            Deque<ExtensionPlan.MethodKey> pending) {
+    private void inspectHandle(Handle handle, ExtensionPlan.CheckGroup group, ExtensionPlan.AnalysisResult result,
+        Deque<ExtensionPlan.MethodKey> pending) {
         collectDescriptor(handle.getDesc(), result);
         collectOwnerKind(handle.getOwner(), handle.isInterface(), result);
         if (handle.getTag() <= Opcodes.H_PUTSTATIC) {
             collectYsmField(handle.getOwner(), handle.getName(), handle.getDesc(),
-                    handle.getTag() == Opcodes.H_GETSTATIC
-                            || handle.getTag() == Opcodes.H_PUTSTATIC,
-                    result);
+                handle.getTag() == Opcodes.H_GETSTATIC || handle.getTag() == Opcodes.H_PUTSTATIC, result);
         } else {
             collectYsmMethod(handle.getOwner(), handle.getName(), handle.getDesc(),
-                    handle.getTag() == Opcodes.H_INVOKESTATIC, result);
-            if (handle.getTag() == Opcodes.H_INVOKEVIRTUAL
-                    || handle.getTag() == Opcodes.H_INVOKEINTERFACE) {
-                warnUnknownDynamicDispatch(
-                        handle.getOwner(), handle.getName(), handle.getDesc(), group, result);
+                handle.getTag() == Opcodes.H_INVOKESTATIC, result);
+            if (handle.getTag() == Opcodes.H_INVOKEVIRTUAL || handle.getTag() == Opcodes.H_INVOKEINTERFACE) {
+                warnUnknownDynamicDispatch(handle.getOwner(), handle.getName(), handle.getDesc(), group, result);
             }
             followOwnedMethod(handle.getOwner(), handle.getName(), handle.getDesc(), group, result, pending);
         }
     }
 
-    private void warnUnknownDynamicDispatch(
-            String owner,
-            String name,
-            String descriptor,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result) {
+    private void warnUnknownDynamicDispatch(String owner, String name, String descriptor,
+        ExtensionPlan.CheckGroup group, ExtensionPlan.AnalysisResult result) {
         if (!isOwned(owner, group)) {
             return;
         }
@@ -342,68 +292,51 @@ final class CompatibilityAnalyzer {
         }
         int fixedMethodFlags = Opcodes.ACC_FINAL | Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC;
         boolean fixed = (target.get().owner.access & Opcodes.ACC_FINAL) != 0
-                || (target.get().method.access & fixedMethodFlags) != 0;
+            || (target.get().method.access & fixedMethodFlags) != 0;
         if (!fixed) {
-            addIssue(result, "DYNAMIC_DISPATCH_UNKNOWN",
-                    DescriptorUtil.binaryName(owner) + '#' + name + descriptor,
-                    "Virtual dispatch may select an override outside the statically reachable owned graph.");
+            addIssue(result, "DYNAMIC_DISPATCH_UNKNOWN", DescriptorUtil.binaryName(owner) + '#' + name + descriptor,
+                "Virtual dispatch may select an override outside the statically reachable owned graph.");
         }
     }
 
-    private void followOwnedMethod(
-            String owner,
-            String name,
-            String descriptor,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult result,
-            Deque<ExtensionPlan.MethodKey> pending) {
+    private void followOwnedMethod(String owner, String name, String descriptor, ExtensionPlan.CheckGroup group,
+        ExtensionPlan.AnalysisResult result, Deque<ExtensionPlan.MethodKey> pending) {
         if (!isOwned(owner, group)) {
             return;
         }
         Optional<ResolvedMethod> target = resolveMethod(owner, name, descriptor);
         if (target.isPresent() && isOwned(target.get().owner.name, group)) {
-            pending.addLast(new ExtensionPlan.MethodKey(
-                    target.get().owner.name, target.get().method.name, target.get().method.desc));
+            pending.addLast(new ExtensionPlan.MethodKey(target.get().owner.name, target.get().method.name,
+                target.get().method.desc));
         } else if (target.isEmpty()) {
-            addIssue(result, "OWNED_CODE_UNAVAILABLE",
-                    DescriptorUtil.binaryName(owner) + '#' + name + descriptor,
-                    "The owned call target could not be resolved.");
+            addIssue(result, "OWNED_CODE_UNAVAILABLE", DescriptorUtil.binaryName(owner) + '#' + name + descriptor,
+                "The owned call target could not be resolved.");
         }
     }
 
-    private void collectYsmMethod(
-            String owner,
-            String name,
-            String descriptor,
-            boolean staticMember,
-            ExtensionPlan.AnalysisResult result) {
+    private void collectYsmMethod(String owner, String name, String descriptor, boolean staticMember,
+        ExtensionPlan.AnalysisResult result) {
         if (!isYsm(owner)) {
             return;
         }
         Optional<ResolvedMethod> declaration = resolveMethod(owner, name, descriptor);
         if (declaration.isEmpty() || isYsm(declaration.get().owner.name)) {
-            ExtensionPlan.RequirementKind kind = name.equals("<init>")
-                    ? ExtensionPlan.RequirementKind.CONSTRUCTOR
-                    : METHOD;
-            result.requirements.add(new ExtensionPlan.Requirement(
-                    kind, owner, name, descriptor, name.equals("<init>"), staticMember));
+            ExtensionPlan.RequirementKind kind =
+                name.equals("<init>") ? ExtensionPlan.RequirementKind.CONSTRUCTOR : METHOD;
+            result.requirements
+                .add(new ExtensionPlan.Requirement(kind, owner, name, descriptor, name.equals("<init>"), staticMember));
             collectType(owner, result);
         }
     }
 
-    private void collectYsmField(
-            String owner,
-            String name,
-            String descriptor,
-            boolean staticMember,
-            ExtensionPlan.AnalysisResult result) {
+    private void collectYsmField(String owner, String name, String descriptor, boolean staticMember,
+        ExtensionPlan.AnalysisResult result) {
         if (!isYsm(owner)) {
             return;
         }
         Optional<ResolvedField> declaration = resolveField(owner, name, descriptor);
         if (declaration.isEmpty() || isYsm(declaration.get().owner.name)) {
-            result.requirements.add(new ExtensionPlan.Requirement(
-                    FIELD, owner, name, descriptor, false, staticMember));
+            result.requirements.add(new ExtensionPlan.Requirement(FIELD, owner, name, descriptor, false, staticMember));
             collectType(owner, result);
         }
     }
@@ -417,43 +350,31 @@ final class CompatibilityAnalyzer {
         }
     }
 
-    private void collectHierarchyParent(
-            String internalName,
-            boolean interfaceType,
-            ExtensionPlan.AnalysisResult result) {
+    private void collectHierarchyParent(String internalName, boolean interfaceType,
+        ExtensionPlan.AnalysisResult result) {
         if (!isYsm(internalName)) {
             return;
         }
         result.requirements.add(new ExtensionPlan.Requirement(
-                interfaceType
-                        ? ExtensionPlan.RequirementKind.INTERFACE
-                        : ExtensionPlan.RequirementKind.EXTENDABLE_CLASS,
-                internalName, "", "", false, false));
+            interfaceType ? ExtensionPlan.RequirementKind.INTERFACE : ExtensionPlan.RequirementKind.EXTENDABLE_CLASS,
+            internalName, "", "", false, false));
     }
 
-    private void collectOwnerKind(
-            String internalName,
-            boolean interfaceType,
-            ExtensionPlan.AnalysisResult result) {
+    private void collectOwnerKind(String internalName, boolean interfaceType, ExtensionPlan.AnalysisResult result) {
         if (!isYsm(internalName)) {
             return;
         }
         result.requirements.add(new ExtensionPlan.Requirement(
-                interfaceType
-                        ? ExtensionPlan.RequirementKind.INTERFACE
-                        : ExtensionPlan.RequirementKind.CLASS_OWNER,
-                internalName, "", "", false, false));
+            interfaceType ? ExtensionPlan.RequirementKind.INTERFACE : ExtensionPlan.RequirementKind.CLASS_OWNER,
+            internalName, "", "", false, false));
     }
 
-    private void collectCompileOwnerKind(
-            String internalName,
-            ExtensionPlan.AnalysisResult result) {
+    private void collectCompileOwnerKind(String internalName, ExtensionPlan.AnalysisResult result) {
         if (!isYsm(internalName)) {
             return;
         }
-        boolean interfaceType = repository.find(internalName)
-                .map(node -> (node.access & Opcodes.ACC_INTERFACE) != 0)
-                .orElse(false);
+        boolean interfaceType =
+            repository.find(internalName).map(node -> (node.access & Opcodes.ACC_INTERFACE) != 0).orElse(false);
         collectOwnerKind(internalName, interfaceType, result);
     }
 
@@ -474,10 +395,7 @@ final class CompatibilityAnalyzer {
         }
     }
 
-    private void collectSignature(
-            String signature,
-            boolean typeSignature,
-            ExtensionPlan.AnalysisResult result) {
+    private void collectSignature(String signature, boolean typeSignature, ExtensionPlan.AnalysisResult result) {
         if (signature == null) {
             return;
         }
@@ -496,7 +414,7 @@ final class CompatibilityAnalyzer {
             }
         } catch (IllegalArgumentException ignored) {
             addIssue(result, "SIGNATURE_UNREADABLE", signature,
-                    "ASM could not parse a generic signature; descriptor checks still apply.");
+                "ASM could not parse a generic signature; descriptor checks still apply.");
         }
     }
 
@@ -515,11 +433,7 @@ final class CompatibilityAnalyzer {
         return resolveMethod(owner, name, descriptor, new HashSet<>());
     }
 
-    private Optional<ResolvedMethod> resolveMethod(
-            String owner,
-            String name,
-            String descriptor,
-            Set<String> visited) {
+    private Optional<ResolvedMethod> resolveMethod(String owner, String name, String descriptor, Set<String> visited) {
         if (owner == null || !visited.add(owner)) {
             return Optional.empty();
         }
@@ -532,8 +446,7 @@ final class CompatibilityAnalyzer {
                 return Optional.of(new ResolvedMethod(node.get(), method));
             }
         }
-        Optional<ResolvedMethod> inherited = resolveMethod(
-                node.get().superName, name, descriptor, visited);
+        Optional<ResolvedMethod> inherited = resolveMethod(node.get().superName, name, descriptor, visited);
         if (inherited.isPresent()) {
             return inherited;
         }
@@ -550,11 +463,7 @@ final class CompatibilityAnalyzer {
         return resolveField(owner, name, descriptor, new HashSet<>());
     }
 
-    private Optional<ResolvedField> resolveField(
-            String owner,
-            String name,
-            String descriptor,
-            Set<String> visited) {
+    private Optional<ResolvedField> resolveField(String owner, String name, String descriptor, Set<String> visited) {
         if (owner == null || !visited.add(owner)) {
             return Optional.empty();
         }
@@ -567,8 +476,7 @@ final class CompatibilityAnalyzer {
                 return Optional.of(new ResolvedField(node.get(), field));
             }
         }
-        Optional<ResolvedField> inherited = resolveField(
-                node.get().superName, name, descriptor, visited);
+        Optional<ResolvedField> inherited = resolveField(node.get().superName, name, descriptor, visited);
         if (inherited.isPresent()) {
             return inherited;
         }
@@ -585,20 +493,17 @@ final class CompatibilityAnalyzer {
         if (requirement.kind() != METHOD) {
             return Optional.empty();
         }
-        Optional<ResolvedMethod> declaration = resolveMethod(
-                requirement.owner(), requirement.name(), requirement.descriptor());
+        Optional<ResolvedMethod> declaration =
+            resolveMethod(requirement.owner(), requirement.name(), requirement.descriptor());
         if (declaration.isEmpty() || !isYsm(declaration.get().owner.name)) {
             return Optional.empty();
         }
-        return findReobfuscatedAncestorMethod(
-                declaration.get().owner, requirement.name(), requirement.descriptor(), new HashSet<>());
+        return findReobfuscatedAncestorMethod(declaration.get().owner, requirement.name(), requirement.descriptor(),
+            new HashSet<>());
     }
 
-    private Optional<ResolvedMethod> findReobfuscatedAncestorMethod(
-            ClassNode node,
-            String name,
-            String descriptor,
-            Set<String> visited) {
+    private Optional<ResolvedMethod> findReobfuscatedAncestorMethod(ClassNode node, String name, String descriptor,
+        Set<String> visited) {
         for (String parentName : directParents(node)) {
             if (!visited.add(parentName)) {
                 continue;
@@ -608,13 +513,11 @@ final class CompatibilityAnalyzer {
                 continue;
             }
             for (MethodNode method : parent.get().methods) {
-                if (method.name.equals(name) && method.desc.equals(descriptor)
-                        && requiresReobfProbe(parentName)) {
+                if (method.name.equals(name) && method.desc.equals(descriptor) && requiresReobfProbe(parentName)) {
                     return Optional.of(new ResolvedMethod(parent.get(), method));
                 }
             }
-            Optional<ResolvedMethod> deeper = findReobfuscatedAncestorMethod(
-                    parent.get(), name, descriptor, visited);
+            Optional<ResolvedMethod> deeper = findReobfuscatedAncestorMethod(parent.get(), name, descriptor, visited);
             if (deeper.isPresent()) {
                 return deeper;
             }
@@ -624,8 +527,8 @@ final class CompatibilityAnalyzer {
 
     private boolean isOwned(String internalName, ExtensionPlan.CheckGroup group) {
         if (internalName == null || isYsm(internalName) || requiresReobfProbe(internalName)
-                || internalName.startsWith("java/") || internalName.startsWith("javax/")
-                || internalName.startsWith("jdk/") || internalName.startsWith("sun/")) {
+            || internalName.startsWith("java/") || internalName.startsWith("javax/") || internalName.startsWith("jdk/")
+            || internalName.startsWith("sun/")) {
             return false;
         }
         if (repository.isCurrentOutput(internalName)) {
@@ -645,31 +548,26 @@ final class CompatibilityAnalyzer {
     }
 
     static boolean requiresReobfProbe(String internalName) {
-        return internalName != null
-                && (internalName.startsWith(MINECRAFT_PREFIX)
-                || (internalName.startsWith(MOJANG_PREFIX)
-                && !internalName.startsWith(MOJANG_COMMAND_PREFIX)));
+        return internalName != null && (internalName.startsWith(MINECRAFT_PREFIX)
+            || (internalName.startsWith(MOJANG_PREFIX) && !internalName.startsWith(MOJANG_COMMAND_PREFIX)));
     }
 
     static boolean isClientOnlyPlatformType(String internalName) {
-        return internalName != null
-                && (internalName.startsWith("net/minecraft/client/")
-                || internalName.startsWith("com/mojang/blaze3d/")
-                || internalName.startsWith("com/mojang/realmsclient/"));
+        return internalName != null && (internalName.startsWith("net/minecraft/client/")
+            || internalName.startsWith("com/mojang/blaze3d/") || internalName.startsWith("com/mojang/realmsclient/"));
     }
 
     private static boolean containsMixinAnnotation(List<AnnotationNode> annotations) {
         if (annotations == null) {
             return false;
         }
-        return annotations.stream().anyMatch(annotation ->
-                annotation.desc.startsWith("Lorg/spongepowered/asm/mixin/"));
+        return annotations.stream().anyMatch(annotation -> annotation.desc.startsWith("Lorg/spongepowered/asm/mixin/"));
     }
 
     private static boolean isKnownBootstrap(Handle bootstrap) {
         String identity = bootstrap.getOwner() + '.' + bootstrap.getName();
         return KNOWN_BOOTSTRAPS.contains(identity)
-                || bootstrap.getOwner().equals("java/lang/invoke/ConstantBootstraps");
+            || bootstrap.getOwner().equals("java/lang/invoke/ConstantBootstraps");
     }
 
     private static List<String> directParents(ClassNode node) {
@@ -681,11 +579,7 @@ final class CompatibilityAnalyzer {
         return parents;
     }
 
-    private static void addIssue(
-            ExtensionPlan.AnalysisResult result,
-            String kind,
-            String symbol,
-            String detail) {
+    private static void addIssue(ExtensionPlan.AnalysisResult result, String kind, String symbol, String detail) {
         var issue = new ExtensionPlan.CoverageIssue(kind, symbol, detail);
         if (!result.issues.contains(issue)) {
             result.issues.add(issue);

@@ -8,7 +8,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Objects;
 
 public record ProjectileModelData(GeoModel geoModel, AnimationStore animations,
-                                  @Nullable AnimationControllerFile controllerFile) implements RenderTargetData {
+    @Nullable AnimationControllerFile controllerFile) implements RenderTargetData {
     public ProjectileModelData {
         Objects.requireNonNull(geoModel, "geoModel");
         Objects.requireNonNull(animations, "animations");

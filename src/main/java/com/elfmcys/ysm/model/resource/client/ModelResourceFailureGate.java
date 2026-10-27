@@ -21,7 +21,6 @@ public interface ModelResourceFailureGate {
         }
 
         @Override
-        public void fail(Throwable cause) {
-        }
+        public void fail(Throwable cause) {}
     }
 }

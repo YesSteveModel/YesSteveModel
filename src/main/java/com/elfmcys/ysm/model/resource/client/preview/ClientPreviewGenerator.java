@@ -1,5 +1,8 @@
 package com.elfmcys.ysm.model.resource.client.preview;
 
+import com.elfmcys.ysm.model.storage.PreviewStorage;
+import com.elfmcys.ysm.model.resource.client.work.ClientResourceScheduler;
+import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.client.gui.PreviewRenderHost;
 import com.elfmcys.ysm.format.schema.model.ModelFileConstant;
@@ -11,11 +14,17 @@ import com.elfmcys.ysm.model.resource.client.AcquireResult;
 import com.elfmcys.ysm.model.resource.client.ClientModelRenderTargetManager;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.model.resource.client.ModelResourceFailures;
+import com.elfmcys.ysm.model.resource.client.ModelResourcePurpose;
 import com.elfmcys.ysm.model.resource.client.ResourceLease;
 import com.elfmcys.ysm.model.resource.client.ResourceRequest;
+import com.elfmcys.ysm.model.resource.client.remote.RemoteModelContent;
+import com.elfmcys.ysm.model.resource.client.remote.RemoteChunkFetcher;
+import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.model.resource.client.render.ModelRenderTargetLoader;
 import com.elfmcys.ysm.model.service.ModelExportService;
 import com.elfmcys.ysm.model.storage.PreviewStore;
+import com.elfmcys.ysm.model.storage.PreviewPixels;
+import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.natives.image.ImageEncoder;
 import com.elfmcys.ysm.natives.image.ImageSource;
 import com.elfmcys.ysm.util.Closeable;
@@ -23,7 +32,6 @@ import com.mojang.blaze3d.platform.NativeImage;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -46,11 +54,13 @@ public final class ClientPreviewGenerator implements Closeable {
     private static final AtomicLong NEXT_OPERATION_ID = new AtomicLong();
 
     private final TargetSource targetSource;
+    private java.util.function.BiFunction<ModelContent, RemoteChunkFetcher, TargetPlan> managementTargets;
+    private TargetSource exportTargets;
     private final HostRenderer hostRenderer;
     private final Encoder encoder;
     private final Executor hostExecutor;
     private final Executor workers;
-    private final PreviewStore previewStore;
+    private final PreviewStorage previewStore;
     private final ExportPreparer exportPreparer;
     private final ExportFinisher exportFinisher;
     private final int maxActive;
@@ -58,47 +68,72 @@ public final class ClientPreviewGenerator implements Closeable {
     private final ArrayBlockingQueue<Submission> submissions;
     private final Map<Long, Operation> active = new LinkedHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final PreviewPixels.Owner pixelOwner = new PreviewPixels.Owner();
 
-    public ClientPreviewGenerator(ClientCatalogManager catalogs,
-                                  ClientModelRenderTargetManager targets,
-                                  ModelRenderTargetLoader loader,
-                                  PreviewStore previewStore,
-                                  Executor hostExecutor, Executor workers) {
-        this(content -> planProductionTarget(catalogs, targets, loader, content),
-                PreviewRenderHost::render, ClientPreviewGenerator::encode,
-                hostExecutor, workers, previewStore,
-                ModelExportService::prepare, ModelExportService::finish,
-                DEFAULT_MAX_ACTIVE, DEFAULT_PENDING_CAPACITY,
-                DEFAULT_ADMISSIONS_PER_TICK);
+    public ClientPreviewGenerator(ClientCatalogManager catalogs, ClientModelRenderTargetManager targets,
+        ModelRenderTargetLoader loader, PreviewStorage previewStore, Executor hostExecutor,
+        ClientResourceScheduler scheduler) {
+        this(content -> planProductionTarget(catalogs, targets, loader, scheduler, content), PreviewRenderHost::render,
+            ClientPreviewGenerator::encode, hostExecutor, scheduler.backgroundExecutor(), previewStore,
+            ModelExportService::prepare, ModelExportService::finish, DEFAULT_MAX_ACTIVE, DEFAULT_PENDING_CAPACITY,
+            DEFAULT_ADMISSIONS_PER_TICK);
+        exportTargets = content -> {
+            var request =
+                targets.request(content.modelId(), RenderTargetIds.PLAYER, "", ModelResourcePurpose.GUI, null);
+            var published = catalogs.snapshot().find(content.modelId()).map(ClientCatalogEntry::content)
+                .filter(current -> current.representation().identity().equals(content.representation().identity()));
+            if (published.isPresent()) {
+                var ready = targets.findReady(request);
+                if (ready.isPresent())
+                    return new ReadyTarget(request, ready.get());
+            }
+            return new AsyncDetachedTarget(request,
+                cancelled -> loadDetached(loader, scheduler, content, request, cancelled));
+        };
+        managementTargets = (content, fetcher) -> {
+            var request =
+                targets.request(content.modelId(), RenderTargetIds.PLAYER, "", ModelResourcePurpose.GUI, null);
+            var published = catalogs.snapshot().find(content.modelId()).map(ClientCatalogEntry::content)
+                .filter(candidate -> candidate.representation().identity().equals(content.representation().identity()))
+                .isPresent();
+            if (published) {
+                var ready = targets.findReady(request);
+                if (ready.isPresent())
+                    return new ReadyTarget(request, ready.get());
+            }
+            return new AsyncDetachedTarget(request, cancelled -> {
+                if (content instanceof RemoteModelContent remote) {
+                    return remote.loadRenderTargetAsync(cancelled, request.targetId(), request.requestedTexture(),
+                        fetcher, scheduler.backgroundExecutor(),
+                        prepared -> loadDetached(loader, scheduler, prepared, request, cancelled),
+                        ModelRenderTargetLoader.ModelCandidate::close);
+                }
+                return loadDetached(loader, scheduler, content, request, cancelled);
+            });
+        };
     }
 
-    ClientPreviewGenerator(TargetSource targetSource, HostRenderer hostRenderer,
-                           Encoder encoder, Executor hostExecutor, Executor workers) {
-        this(targetSource, hostRenderer, encoder, hostExecutor, workers, null,
-                (path, extra) -> {
-                    throw new IOException("Export preparation is unavailable in this test seam");
-                }, (prepared, preview) -> {
-                    throw new IOException("Export completion is unavailable in this test seam");
-                }, DEFAULT_MAX_ACTIVE, DEFAULT_PENDING_CAPACITY,
-                DEFAULT_ADMISSIONS_PER_TICK);
+    ClientPreviewGenerator(TargetSource targetSource, HostRenderer hostRenderer, Encoder encoder, Executor hostExecutor,
+        Executor workers) {
+        this(targetSource, hostRenderer, encoder, hostExecutor, workers, null, request -> {
+            throw new IOException("Export preparation is unavailable in this test seam");
+        }, (prepared, preview) -> {
+            throw new IOException("Export completion is unavailable in this test seam");
+        }, DEFAULT_MAX_ACTIVE, DEFAULT_PENDING_CAPACITY, DEFAULT_ADMISSIONS_PER_TICK);
     }
 
-    ClientPreviewGenerator(TargetSource targetSource, HostRenderer hostRenderer,
-                           Encoder encoder, Executor hostExecutor, Executor workers,
-                           int maxActive, int pendingCapacity) {
-        this(targetSource, hostRenderer, encoder, hostExecutor, workers, null,
-                (path, extra) -> {
-                    throw new IOException("Export preparation is unavailable in this test seam");
-                }, (prepared, preview) -> {
-                    throw new IOException("Export completion is unavailable in this test seam");
-                }, maxActive, pendingCapacity, maxActive);
+    ClientPreviewGenerator(TargetSource targetSource, HostRenderer hostRenderer, Encoder encoder, Executor hostExecutor,
+        Executor workers, int maxActive, int pendingCapacity) {
+        this(targetSource, hostRenderer, encoder, hostExecutor, workers, null, request -> {
+            throw new IOException("Export preparation is unavailable in this test seam");
+        }, (prepared, preview) -> {
+            throw new IOException("Export completion is unavailable in this test seam");
+        }, maxActive, pendingCapacity, maxActive);
     }
 
-    ClientPreviewGenerator(TargetSource targetSource, HostRenderer hostRenderer,
-                           Encoder encoder, Executor hostExecutor, Executor workers,
-                           PreviewStore previewStore, ExportPreparer exportPreparer,
-                           ExportFinisher exportFinisher, int maxActive,
-                           int pendingCapacity, int admissionsPerTick) {
+    ClientPreviewGenerator(TargetSource targetSource, HostRenderer hostRenderer, Encoder encoder, Executor hostExecutor,
+        Executor workers, PreviewStorage previewStore, ExportPreparer exportPreparer, ExportFinisher exportFinisher,
+        int maxActive, int pendingCapacity, int admissionsPerTick) {
         this.targetSource = Objects.requireNonNull(targetSource, "targetSource");
         this.hostRenderer = Objects.requireNonNull(hostRenderer, "hostRenderer");
         this.encoder = Objects.requireNonNull(encoder, "encoder");
@@ -116,9 +151,13 @@ public final class ClientPreviewGenerator implements Closeable {
     }
 
     public CompletableFuture<ImageSource> resolveLocal(ModelContent content) {
+        return resolveLocal(content, true);
+    }
+
+    public CompletableFuture<ImageSource> resolveLocal(ModelContent content, boolean allowGeneration) {
         Objects.requireNonNull(content, "content");
         var output = new CompletableFuture<ImageSource>();
-        return submit(new LocalPreviewSubmission(nextId(), content, output), output);
+        return submit(new LocalPreviewSubmission(nextId(), content, allowGeneration, output), output);
     }
 
     public CompletableFuture<Optional<ImageSource>> probeRemote(ModelContent content) {
@@ -133,33 +172,80 @@ public final class ClientPreviewGenerator implements Closeable {
         return submit(new GeneratedPreviewSubmission(nextId(), content, output), output);
     }
 
-    public CompletableFuture<Path> export(String requestedPath, String extra) {
-        Objects.requireNonNull(requestedPath, "requestedPath");
+    public CompletableFuture<PreviewStore.EncodedPreview> resolveEncoded(ModelContent content,
+        RemoteChunkFetcher fetcher) {
+        Objects.requireNonNull(content, "content");
+        var output = new CompletableFuture<PreviewStore.EncodedPreview>();
+        return submit(new EncodedPreviewSubmission(nextId(), content, fetcher, output), output);
+    }
+
+    public CompletableFuture<ImageSource> resolveRaw(ModelContent content, UniBuffer bytes) {
+        var output = new CompletableFuture<ImageSource>();
+        try {
+            var pending = PreviewStore.pending(bytes);
+            var submission = new RawPreviewSubmission(nextId(), content, pending, output);
+            submit(submission, output);
+            if (output.isDone())
+                pending.close();
+        } catch (IOException | RuntimeException failure) {
+            output.completeExceptionally(failure);
+        }
+        return output;
+    }
+
+    public CompletableFuture<Path> export(ModelExportService.Request request) {
+        Objects.requireNonNull(request, "request");
         var output = new CompletableFuture<Path>();
-        return submit(new ExportSubmission(nextId(), requestedPath, extra, output), output);
+        var submission = new ExportSubmission(nextId(), request, output);
+        output.whenComplete((ignored, failure) -> {
+            if (output.isCancelled())
+                cancelExport(submission);
+        });
+        return submit(submission, output);
+    }
+
+    private synchronized void cancelExport(ExportSubmission submission) {
+        submissions.remove(submission);
+        var operation = active.get(submission.id());
+        if (operation != null) {
+            operation.closeSlot();
+            operation.requestCancellation();
+            finishFailure(operation, new CancellationException("Export environment ended"));
+        }
     }
 
     private static long nextId() {
         return NEXT_OPERATION_ID.incrementAndGet();
     }
 
-    private <T> CompletableFuture<T> submit(Submission submission,
-                                             CompletableFuture<T> output) {
+    private <T> CompletableFuture<T> submit(Submission submission, CompletableFuture<T> output) {
         if (closed.get()) {
-            output.completeExceptionally(
-                    new CancellationException("Preview operation owner is closed"));
+            output.completeExceptionally(new CancellationException("Preview operation owner is closed"));
             return output;
         }
         if (!submissions.offer(submission)) {
-            output.completeExceptionally(new RejectedExecutionException(
-                    "Preview operation request capacity is exhausted"));
+            output.completeExceptionally(
+                new RejectedExecutionException("Preview operation request capacity is exhausted"));
             return output;
         }
         if (closed.get() && submissions.remove(submission)) {
-            output.completeExceptionally(
-                    new CancellationException("Preview operation owner is closed"));
+            output.completeExceptionally(new CancellationException("Preview operation owner is closed"));
         }
+        output.whenComplete((value, failure) -> {
+            if (output.isCancelled())
+                cancelSubmission(submission);
+        });
         return output;
+    }
+
+    private synchronized void cancelSubmission(Submission submission) {
+        if (submissions.remove(submission) && submission instanceof RawPreviewSubmission raw)
+            raw.pending().close();
+        var operation = active.get(submission.id());
+        if (operation != null) {
+            operation.requestCancellation();
+            finishFailure(operation, new CancellationException("Preview request ended"));
+        }
     }
 
     /** Polls immutable stage facts and performs all operation admission and release. */
@@ -169,16 +255,17 @@ public final class ClientPreviewGenerator implements Closeable {
         }
         for (var operation : new ArrayList<>(active.values())) {
             if (operation.output().isCancelled()) {
+                operation.closeSlot();
                 operation.requestCancellation();
+                finishFailure(operation, new CancellationException("Preview operation cancelled"));
+                continue;
             }
             var fact = operation.poll();
             if (fact != null) {
                 apply(operation, fact);
             }
         }
-        for (var admitted = 0;
-             admitted < admissionsPerTick && active.size() < maxActive;
-             admitted++) {
+        for (var admitted = 0; admitted < admissionsPerTick && active.size() < maxActive; admitted++) {
             var submission = submissions.poll();
             if (submission == null) {
                 break;
@@ -204,11 +291,14 @@ public final class ClientPreviewGenerator implements Closeable {
             startProbe(operation, remote.content(), true);
         } else if (operation.submission instanceof GeneratedPreviewSubmission generated) {
             startTarget(operation, generated.content());
+        } else if (operation.submission instanceof EncodedPreviewSubmission encoded) {
+            startProbe(operation, encoded.content(), false);
+        } else if (operation.submission instanceof RawPreviewSubmission raw) {
+            startDecode(operation, raw.pending(), false, false);
         } else if (operation.submission instanceof ExportSubmission export) {
             startExportPreparation(operation, export);
         } else {
-            finishFailure(operation, new IllegalStateException(
-                    "Unsupported preview operation submission"));
+            finishFailure(operation, new IllegalStateException("Unsupported preview operation submission"));
         }
     }
 
@@ -216,96 +306,169 @@ public final class ClientPreviewGenerator implements Closeable {
         var slot = operation.begin();
         dispatchWorker(operation, slot, () -> {
             try {
-                return new ProbeFact(probe(content, remote), null);
+                return probe(content, remote);
             } catch (Throwable failure) {
-                return new ProbeFact(null, failure);
+                return new ProbeFact(null, false, failure);
             }
         }, FailureCleanup.NONE);
     }
 
-    private PreviewStore.EncodedPreview probe(ModelContent content, boolean remote)
-            throws IOException {
+    private ProbeFact probe(ModelContent content, boolean remote) throws IOException {
         try {
             var view = content.modelFile();
-            var chunk = view.getFileView().getAssetView().getChunkInfo(
-                    ModelFileConstant.THUMB_BUTTON_CHUNK_NAME);
+            var chunk = view.getFileView().getAssetView().getChunkInfo(ModelFileConstant.THUMB_BUTTON_CHUNK_NAME);
             var source = view.thumbnailSource(() -> false, content.chunks());
             if (source != null) {
                 if (chunk == null) {
                     throw new IOException("Model preview chunk is unavailable");
                 }
-                return PreviewStore.read(source, chunk.size());
+                return new ProbeFact(PreviewStore.pending(source, chunk.size()), false, null);
             }
         } catch (IOException | RuntimeException failure) {
-            if (!remote) {
+            if (!remote && !(content instanceof RemoteModelContent && failure instanceof AssetLoadException access
+                && access.reason() == AssetLoadException.Reason.ACCESS)) {
                 throw failure;
             }
         }
-        return previewStore == null
-                ? null
-                : previewStore.load(content.representation().containerId()).orElse(null);
+        if (previewStore != null) {
+            try {
+                var stored = previewStore.forContent(content).readEncoded(content.representation().containerId());
+                if (stored.isPresent()) {
+                    try (var bytes = stored.orElseThrow()) {
+                        return new ProbeFact(PreviewStore.pending(bytes), true, null);
+                    }
+                }
+            } catch (IOException | RuntimeException invalidCache) {
+                // Standalone previews remain optional; a declared embedded image was handled above.
+            }
+        }
+        return new ProbeFact(null, false, null);
     }
 
     private void startExportPreparation(Operation operation, ExportSubmission export) {
         var slot = operation.begin();
         dispatchWorker(operation, slot, () -> {
             try {
-                return new ExportPreparedFact(
-                        exportPreparer.prepare(export.requestedPath(), export.extra()), null);
+                return new ExportPreparedFact(exportPreparer.prepare(export.request()), null);
             } catch (Throwable failure) {
                 return new ExportPreparedFact(null, failure);
             }
         }, FailureCleanup.NONE);
     }
 
+    private void startDecode(Operation operation, PreviewStore.PendingPreview pending, boolean generated,
+        boolean standalone) {
+        var prepared = operation.export;
+        if (operation.submission instanceof ExportSubmission)
+            operation.export = null;
+        var slot = operation.begin();
+        dispatchWorker(operation, slot, () -> {
+            PreviewStore.EncodedPreview preview = null;
+            var display = operation.submission instanceof LocalPreviewSubmission
+                || operation.submission instanceof RemotePreviewSubmission
+                || operation.submission instanceof RawPreviewSubmission;
+            try (pending) {
+                preview = pending.verify(pixelOwner, display);
+                if (operation.submission instanceof ExportSubmission) {
+                    try (var owned = preview) {
+                        return finishExport(prepared, owned);
+                    }
+                }
+                if ((generated && operation.submission instanceof LocalPreviewSubmission
+                    || operation.submission instanceof RawPreviewSubmission) && previewStore != null)
+                    previewStore.forContent(operation.content())
+                        .accept(operation.content().representation().containerId(), preview);
+                return new DecodedFact(preview, generated, null);
+            } catch (Throwable failure) {
+                if (preview != null)
+                    preview.close();
+                if (prepared != null)
+                    failure = prepared.closeOwned(failure);
+                if (standalone && failure instanceof AssetLoadException invalid
+                    && invalid.reason() == AssetLoadException.Reason.CONTENT)
+                    return new DecodedFact(null, false, null);
+                return new DecodedFact(null, generated, failure);
+            }
+        }, failure -> {
+            pending.close();
+            return prepared == null ? failure : prepared.closeOwned(failure);
+        });
+    }
+
     private void startTarget(Operation operation, ModelContent content) {
         final TargetPlan plan;
         try {
-            plan = Objects.requireNonNull(targetSource.plan(content),
-                    "Preview target source returned no plan");
+            if (operation.submission instanceof ExportSubmission export)
+                export.request().requireActive();
+            plan = Objects.requireNonNull(
+                operation.submission instanceof EncodedPreviewSubmission encoded && managementTargets != null
+                    ? managementTargets.apply(content, encoded.fetcher())
+                    : operation.submission instanceof ExportSubmission && exportTargets != null
+                        ? exportTargets.plan(content) : targetSource.plan(content),
+                "Preview target source returned no plan");
         } catch (Throwable failure) {
             finishFailure(operation, failure);
+            return;
+        }
+        if (plan instanceof ReadyTarget ready) {
+            startHost(operation, new RenderInput(ready.request(), ready.lease()));
             return;
         }
         if (plan instanceof AwaitingTarget awaiting) {
             var slot = operation.begin();
             operation.acquisition = awaiting.acquisition();
             awaiting.acquisition().result().whenComplete((lease, failure) -> slot.publish(
-                    new TargetFact(lease == null ? null
-                            : new RenderInput(awaiting.request(), lease), unwrap(failure))));
+                new TargetFact(lease == null ? null : new RenderInput(awaiting.request(), lease), unwrap(failure))));
             return;
         }
-        var detached = (DetachedTarget) plan;
-        var slot = operation.begin();
-        dispatchWorker(operation, slot, () -> {
+        if (plan instanceof AsyncDetachedTarget detached) {
+            var slot = operation.begin();
             try {
-                return new DetachedFact(detached.request(), detached.loader().load(), null);
+                operation.detachedLoad = detached.loader().apply(() -> operation.output().isCancelled());
+                operation.detachedLoad.whenComplete((candidate, failure) -> slot
+                    .publish(new DetachedFact(detached.request(), candidate, unwrap(failure))));
             } catch (Throwable failure) {
-                return new DetachedFact(detached.request(), null, failure);
+                slot.publish(new DetachedFact(detached.request(), null, failure));
             }
-        }, FailureCleanup.NONE);
+            return;
+        }
+        throw new IllegalStateException("Unsupported preview target plan");
     }
 
     private void startHost(Operation operation, RenderInput input) {
         var slot = operation.begin();
+        var pending = new AtomicReference<>(input);
+        slot.onClose(() -> {
+            var owned = pending.getAndSet(null);
+            if (owned != null)
+                dispose(new TargetFact(owned, null));
+        });
         try {
-            hostExecutor.execute(() -> renderPublished(slot, input));
+            hostExecutor.execute(() -> {
+                var owned = pending.getAndSet(null);
+                if (owned != null)
+                    renderPublished(slot, owned);
+            });
         } catch (Throwable failure) {
-            try {
-                input.lease().close();
-            } catch (Throwable closeFailure) {
-                failure = append(failure, closeFailure);
-            }
             finishFailure(operation, failure);
         }
     }
 
     private void startDetachedHost(Operation operation, DetachedFact detached) {
         var slot = operation.begin();
+        var pending = new AtomicReference<>(detached);
+        slot.onClose(() -> {
+            var owned = pending.getAndSet(null);
+            if (owned != null)
+                dispose(owned);
+        });
         try {
-            hostExecutor.execute(() -> renderDetached(slot, detached));
+            hostExecutor.execute(() -> {
+                var owned = pending.getAndSet(null);
+                if (owned != null)
+                    renderDetached(slot, owned);
+            });
         } catch (Throwable failure) {
-            failure = closeCandidate(detached.candidate(), failure);
             finishFailure(operation, failure);
         }
     }
@@ -315,9 +478,8 @@ public final class ClientPreviewGenerator implements Closeable {
         Throwable failure = null;
         try {
             if (!slot.isClosed()) {
-                pixels = Objects.requireNonNull(
-                        hostRenderer.render(input.request(), input.lease()),
-                        "Preview host returned null pixels");
+                pixels = Objects.requireNonNull(hostRenderer.render(input.request(), input.lease()),
+                    "Preview host returned null pixels");
             }
         } catch (Throwable renderingFailure) {
             failure = renderingFailure;
@@ -341,11 +503,9 @@ public final class ClientPreviewGenerator implements Closeable {
         try {
             if (!slot.isClosed()) {
                 var target = detached.candidate().publish();
-                lease = new DetachedTargetLease(
-                        detached.request(), target, detached.candidate());
-                pixels = Objects.requireNonNull(
-                        hostRenderer.render(detached.request(), lease),
-                        "Preview host returned null pixels");
+                lease = new DetachedTargetLease(detached.request(), target, detached.candidate());
+                pixels = Objects.requireNonNull(hostRenderer.render(detached.request(), lease),
+                    "Preview host returned null pixels");
             }
         } catch (Throwable renderingFailure) {
             failure = renderingFailure;
@@ -368,87 +528,76 @@ public final class ClientPreviewGenerator implements Closeable {
 
     private void startFinish(Operation operation, NativeImage pixels) {
         var slot = operation.begin();
-        if (operation.submission instanceof ExportSubmission) {
-            var prepared = operation.export;
-            operation.export = null;
-            if (prepared == null) {
-                var failure = closePixels(pixels,
-                        new IllegalStateException("Export operation lost its preparation"));
-                finishFailure(operation, failure);
-                return;
-            }
-            dispatchWorker(operation, slot,
-                    () -> finishExport(prepared, pixels),
-                    failure -> prepared.closeOwned(closePixels(pixels, failure)));
-            return;
-        }
-        var content = operation.content();
-        var persist = operation.submission instanceof LocalPreviewSubmission;
-        dispatchWorker(operation, slot,
-                () -> finishPreview(content, pixels, persist),
-                failure -> closePixels(pixels, failure));
-    }
-
-    private PreviewFinishedFact finishPreview(ModelContent content,
-                                               NativeImage pixels,
-                                               boolean persist) {
-        PreviewStore.EncodedPreview encoded = null;
-        Throwable failure = null;
-        try {
-            encoded = Objects.requireNonNull(encoder.encode(pixels),
-                    "Preview encoder returned null");
-        } catch (Throwable encodingFailure) {
-            failure = encodingFailure;
-        }
-        failure = closePixels(pixels, failure);
-        if (failure == null && persist && previewStore != null) {
+        dispatchWorker(operation, slot, () -> {
+            PreviewStore.PendingPreview encoded = null;
+            Throwable failure = null;
             try {
-                encoded = previewStore.accept(
-                        content.representation().containerId(), encoded.bytes());
-            } catch (Throwable persistenceFailure) {
-                failure = persistenceFailure;
+                encoded = Objects.requireNonNull(encoder.encode(pixels), "Preview encoder returned null");
+            } catch (Throwable encodingFailure) {
+                failure = encodingFailure;
+            } finally {
+                failure = closePixels(pixels, failure);
             }
-        }
-        return new PreviewFinishedFact(encoded, failure);
+            return new EncodedFact(encoded, failure);
+        }, failure -> closePixels(pixels, failure));
     }
 
     private ExportFinishedFact finishExport(ModelExportService.PreparedExport prepared,
-                                            NativeImage pixels) {
+        PreviewStore.EncodedPreview encoded) {
         Path output = null;
         Throwable failure = null;
         try {
-            var encoded = Objects.requireNonNull(encoder.encode(pixels),
-                    "Preview encoder returned null");
-            failure = closePixels(pixels, null);
-            pixels = null;
-            if (failure == null) {
-                output = exportFinisher.finish(prepared, encoded);
-            }
+            output = exportFinisher.finish(prepared, encoded);
+            if (previewStore != null)
+                previewStore.forContent(prepared.content()).accept(prepared.content().representation().containerId(),
+                    encoded);
         } catch (Throwable finishFailure) {
             failure = finishFailure;
         } finally {
-            failure = closePixels(pixels, failure);
             failure = prepared.closeOwned(failure);
         }
         return new ExportFinishedFact(output, failure);
     }
 
-    private void dispatchWorker(Operation operation, FactSlot slot,
-                                FactSupplier supplier, FailureCleanup cleanup) {
+    private void dispatchWorker(Operation operation, FactSlot slot, FactSupplier supplier, FailureCleanup cleanup) {
+        var request = operation.submission instanceof ExportSubmission export ? export.request() : null;
+        if (request != null && !request.beginWorker()) {
+            slot.close();
+            finishFailure(operation, cleanup.apply(new CancellationException("Export environment ended")));
+            return;
+        }
+        var pending = new AtomicBoolean(true);
+        slot.onClose(() -> {
+            if (pending.compareAndSet(true, false)) {
+                cleanup.apply(new CancellationException("Preview stage was cancelled before execution"));
+                if (request != null)
+                    request.endWorker();
+            }
+        });
         try {
             workers.execute(() -> {
-                Fact fact;
+                if (!pending.compareAndSet(true, false))
+                    return;
                 try {
-                    fact = Objects.requireNonNull(supplier.get(),
-                            "Preview worker returned no fact");
-                } catch (Throwable failure) {
-                    fact = new FailureFact(failure);
+                    Fact fact;
+                    try {
+                        fact = Objects.requireNonNull(supplier.get(), "Preview worker returned no fact");
+                    } catch (Throwable failure) {
+                        fact = new FailureFact(failure);
+                    }
+                    slot.publish(fact);
+                } finally {
+                    if (request != null)
+                        request.endWorker();
                 }
-                slot.publish(fact);
             });
         } catch (Throwable failure) {
-            slot.close();
-            finishFailure(operation, cleanup.apply(failure));
+            if (pending.compareAndSet(true, false)) {
+                if (request != null)
+                    request.endWorker();
+                failure = cleanup.apply(failure);
+            }
+            finishFailure(operation, failure);
         }
     }
 
@@ -456,8 +605,7 @@ public final class ClientPreviewGenerator implements Closeable {
         operation.acquisition = null;
         if (operation.output().isCancelled()) {
             dispose(fact);
-            finishFailure(operation,
-                    new CancellationException("Preview operation was cancelled"));
+            finishFailure(operation, new CancellationException("Preview operation was cancelled"));
             return;
         }
         if (fact.failure() != null) {
@@ -466,57 +614,60 @@ public final class ClientPreviewGenerator implements Closeable {
             return;
         }
         if (fact instanceof ProbeFact probe) {
-            applyProbe(operation, probe.preview());
+            if (probe.preview() == null)
+                applyProbe(operation, null);
+            else
+                startDecode(operation, probe.preview(), false, probe.standalone());
         } else if (fact instanceof ExportPreparedFact prepared) {
             applyPreparedExport(operation, prepared.prepared());
         } else if (fact instanceof TargetFact target) {
             if (target.input() == null) {
-                finishFailure(operation, new NullPointerException(
-                        "Preview target source completed without input"));
+                finishFailure(operation, new NullPointerException("Preview target source completed without input"));
             } else {
                 startHost(operation, target.input());
             }
         } else if (fact instanceof DetachedFact detached) {
             if (detached.candidate() == null) {
-                finishFailure(operation, new NullPointerException(
-                        "Detached preview load completed without a candidate"));
+                finishFailure(operation,
+                    new NullPointerException("Detached preview load completed without a candidate"));
             } else {
                 startDetachedHost(operation, detached);
             }
         } else if (fact instanceof PixelsFact pixels) {
             if (pixels.pixels() == null) {
-                finishFailure(operation, new NullPointerException(
-                        "Preview host completed without pixels"));
+                finishFailure(operation, new NullPointerException("Preview host completed without pixels"));
             } else {
                 startFinish(operation, pixels.pixels());
             }
-        } else if (fact instanceof PreviewFinishedFact preview) {
-            finishPreviewSuccess(operation, preview.preview());
+        } else if (fact instanceof EncodedFact encoded) {
+            startDecode(operation, encoded.pending(), true, false);
+        } else if (fact instanceof DecodedFact preview) {
+            if (preview.generated() || operation.submission instanceof RawPreviewSubmission)
+                finishPreviewSuccess(operation, preview.preview());
+            else
+                applyProbe(operation, preview.preview());
         } else if (fact instanceof ExportFinishedFact export) {
             finishSuccess(operation, export.output());
         } else {
-            finishFailure(operation, new IllegalStateException(
-                    "Unsupported preview operation fact"));
+            finishFailure(operation, new IllegalStateException("Unsupported preview operation fact"));
         }
     }
 
-    private void applyProbe(Operation operation,
-                            PreviewStore.EncodedPreview preview) {
+    private void applyProbe(Operation operation, PreviewStore.EncodedPreview preview) {
         if (operation.submission instanceof RemotePreviewSubmission) {
-            finishSuccess(operation, Optional.ofNullable(preview)
-                    .<ImageSource>map(value -> value));
+            finishSuccess(operation, Optional.ofNullable(preview).<ImageSource>map(value -> value));
         } else if (preview != null) {
             finishSuccess(operation, preview);
+        } else if (operation.submission instanceof LocalPreviewSubmission local && !local.allowGeneration()) {
+            finishSuccess(operation, null);
         } else {
             startTarget(operation, operation.content());
         }
     }
 
-    private void applyPreparedExport(Operation operation,
-                                     ModelExportService.PreparedExport prepared) {
+    private void applyPreparedExport(Operation operation, ModelExportService.PreparedExport prepared) {
         if (prepared == null) {
-            finishFailure(operation, new NullPointerException(
-                    "Export preparation completed without a result"));
+            finishFailure(operation, new NullPointerException("Export preparation completed without a result"));
         } else if (prepared.completed() != null) {
             operation.export = prepared;
             finishSuccess(operation, prepared.completed());
@@ -526,10 +677,10 @@ public final class ClientPreviewGenerator implements Closeable {
         }
     }
 
-    private void finishPreviewSuccess(Operation operation,
-                                      PreviewStore.EncodedPreview preview) {
-        if (operation.submission instanceof LocalPreviewSubmission) {
-            finishSuccess(operation, (ImageSource) preview);
+    private void finishPreviewSuccess(Operation operation, PreviewStore.EncodedPreview preview) {
+        if (operation.submission instanceof LocalPreviewSubmission
+            || operation.submission instanceof RawPreviewSubmission) {
+            finishSuccess(operation, (ImageSource)preview);
         } else {
             finishSuccess(operation, preview);
         }
@@ -541,10 +692,19 @@ public final class ClientPreviewGenerator implements Closeable {
         active.remove(operation.submission.id());
         operation.closeSlot();
         if (failure != null) {
+            closeResult(result);
             operation.output().completeExceptionally(failure);
             return;
         }
-        ((CompletableFuture<Object>) operation.output()).complete(result);
+        if (!((CompletableFuture<Object>)operation.output()).complete(result))
+            closeResult(result);
+    }
+
+    private static void closeResult(Object result) {
+        if (result instanceof PreviewStore.EncodedPreview encoded)
+            encoded.close();
+        else if (result instanceof Optional<?> optional)
+            optional.ifPresent(ClientPreviewGenerator::closeResult);
     }
 
     private void finishFailure(Operation operation, Throwable failure) {
@@ -569,8 +729,9 @@ public final class ClientPreviewGenerator implements Closeable {
         }
         Submission submission;
         while ((submission = submissions.poll()) != null) {
-            submission.output().completeExceptionally(
-                    new CancellationException("Preview operation owner is closed"));
+            if (submission instanceof RawPreviewSubmission raw)
+                raw.pending().close();
+            submission.output().completeExceptionally(new CancellationException("Preview operation owner is closed"));
         }
         Throwable failure = null;
         for (var operation : new ArrayList<>(active.values())) {
@@ -584,9 +745,9 @@ public final class ClientPreviewGenerator implements Closeable {
             }
         }
         active.clear();
+        pixelOwner.close();
         if (failure != null) {
-            YesSteveModel.LOGGER.warn(
-                    "Failed to close every preview operation resource", failure);
+            YesSteveModel.LOGGER.warn("Failed to close every preview operation resource", failure);
         }
     }
 
@@ -597,9 +758,14 @@ public final class ClientPreviewGenerator implements Closeable {
                 failure = prepared.prepared().closeOwned(null);
             } else if (fact instanceof TargetFact target && target.input() != null) {
                 target.input().lease().close();
-            } else if (fact instanceof DetachedFact detached
-                    && detached.candidate() != null) {
+            } else if (fact instanceof DetachedFact detached && detached.candidate() != null) {
                 failure = closeCandidate(detached.candidate(), null);
+            } else if (fact instanceof ProbeFact probe && probe.preview() != null) {
+                probe.preview().close();
+            } else if (fact instanceof DecodedFact finished && finished.preview() != null) {
+                finished.preview().close();
+            } else if (fact instanceof EncodedFact encoded && encoded.pending() != null) {
+                encoded.pending().close();
             } else if (fact instanceof PixelsFact pixels) {
                 failure = closePixels(pixels.pixels(), null);
             }
@@ -607,39 +773,48 @@ public final class ClientPreviewGenerator implements Closeable {
             failure = disposeFailure;
         }
         if (failure != null) {
-            YesSteveModel.LOGGER.warn(
-                    "Failed to dispose a late preview operation fact", failure);
+            YesSteveModel.LOGGER.warn("Failed to dispose a late preview operation fact", failure);
         }
     }
 
-    private static TargetPlan planProductionTarget(
-            ClientCatalogManager catalogs, ClientModelRenderTargetManager targets,
-            ModelRenderTargetLoader loader, ModelContent content) {
-        var request = new ResourceRequest(content.modelId(), RenderTargetIds.PLAYER,
-                "", loader.bakeProfile());
-        var published = catalogs.snapshot().find(content.modelId())
-                .map(ClientCatalogEntry::content)
-                .filter(candidate -> candidate.representation().identity().equals(
-                        content.representation().identity()))
-                .isPresent();
+    private static TargetPlan planProductionTarget(ClientCatalogManager catalogs,
+        ClientModelRenderTargetManager targets, ModelRenderTargetLoader loader, ClientResourceScheduler scheduler,
+        ModelContent content) {
+        var request = targets.request(content.modelId(), RenderTargetIds.PLAYER, "", ModelResourcePurpose.GUI, null);
+        var published = catalogs.snapshot().find(content.modelId()).map(ClientCatalogEntry::content)
+            .filter(candidate -> candidate.representation().identity().equals(content.representation().identity()))
+            .isPresent();
         if (published) {
             return new AwaitingTarget(request, targets.getOrStartReady(request));
         }
-        return new DetachedTarget(request,
-                () -> loadDetached(loader, content, request));
+        return new AsyncDetachedTarget(request,
+            cancelled -> loadDetached(loader, scheduler, content, request, cancelled));
     }
 
-    private static ModelRenderTargetLoader.ModelCandidate loadDetached(
-            ModelRenderTargetLoader loader, ModelContent content,
-            ResourceRequest request) throws Throwable {
-        var key = ClientModelRenderTargetManager.resolveEffectiveKey(
-                content.representation().view().getManifest(), request);
-        var outcome = loader.load(() -> false, content, key,
-                false, ModelResourceFailures.none());
-        if (outcome instanceof ModelRenderTargetLoader.LoadResult.Failed failed) {
-            throw failed.failure().cause();
-        }
-        return ((ModelRenderTargetLoader.LoadResult.Ready) outcome).candidate();
+    private static CompletableFuture<ModelRenderTargetLoader.ModelCandidate> loadDetached(
+        ModelRenderTargetLoader loader, ClientResourceScheduler scheduler, ModelContent content,
+        ResourceRequest request, java.util.function.BooleanSupplier cancelled) {
+        var key =
+            ClientModelRenderTargetManager.resolveEffectiveKey(content.representation().view().getManifest(), request);
+        var loading = loader.loadAsync(cancelled, scheduler.dispatch(WorkPriority.BACKGROUND), content, key, false,
+            false, ModelResourceFailures.none());
+        var result = new CompletableFuture<ModelRenderTargetLoader.ModelCandidate>();
+        loading.whenComplete((outcome, failure) -> {
+            if (failure != null)
+                result.completeExceptionally(failure);
+            else if (outcome instanceof ModelRenderTargetLoader.LoadResult.Failed failed)
+                result.completeExceptionally(failed.failure().cause());
+            else {
+                var candidate = ((ModelRenderTargetLoader.LoadResult.Ready)outcome).candidate();
+                if (!result.complete(candidate))
+                    candidate.close();
+            }
+        });
+        result.whenComplete((ignored, failure) -> {
+            if (result.isCancelled())
+                loading.cancel(false);
+        });
+        return result;
     }
 
     private static Throwable closePixels(NativeImage pixels, Throwable failure) {
@@ -654,8 +829,7 @@ public final class ClientPreviewGenerator implements Closeable {
         return failure;
     }
 
-    private static Throwable closeCandidate(
-            ModelRenderTargetLoader.ModelCandidate candidate, Throwable failure) {
+    private static Throwable closeCandidate(ModelRenderTargetLoader.ModelCandidate candidate, Throwable failure) {
         if (candidate == null) {
             return failure;
         }
@@ -683,13 +857,9 @@ public final class ClientPreviewGenerator implements Closeable {
         return current;
     }
 
-    private static PreviewStore.EncodedPreview encode(NativeImage pixels) throws IOException {
-        try (var encoded = ImageEncoder.encodeLossy(
-                pixels, PreviewRenderHost.WIDTH, PreviewRenderHost.HEIGHT);
-             var data = encoded.data().acquireArray()) {
-            var bytes = Arrays.copyOfRange(data.array(), data.arrayOffset(),
-                    data.arrayOffset() + data.size());
-            return PreviewStore.decode(bytes);
+    static PreviewStore.PendingPreview encode(NativeImage pixels) throws IOException {
+        try (var encoded = ImageEncoder.encodeLossy(pixels, PreviewRenderHost.WIDTH, PreviewRenderHost.HEIGHT)) {
+            return PreviewStore.pending(encoded.data());
         }
     }
 
@@ -700,34 +870,26 @@ public final class ClientPreviewGenerator implements Closeable {
         }
     }
 
-    sealed interface TargetPlan permits AwaitingTarget, DetachedTarget {
-    }
+    sealed interface TargetPlan permits AwaitingTarget, ReadyTarget, AsyncDetachedTarget {}
 
-    record AwaitingTarget(
-            ResourceRequest request,
-            ClientModelRenderTargetManager.ReadyAcquisition acquisition) implements TargetPlan {
+    record AwaitingTarget(ResourceRequest request,
+        ClientModelRenderTargetManager.ReadyAcquisition acquisition) implements TargetPlan {
         AwaitingTarget {
             Objects.requireNonNull(request, "request");
             Objects.requireNonNull(acquisition, "acquisition");
         }
     }
 
-    record DetachedTarget(ResourceRequest request,
-                          DetachedLoader loader) implements TargetPlan {
-        DetachedTarget {
-            Objects.requireNonNull(request, "request");
-            Objects.requireNonNull(loader, "loader");
-        }
+    record ReadyTarget(ResourceRequest request, ResourceLease lease) implements TargetPlan {
+    }
+
+    record AsyncDetachedTarget(ResourceRequest request, java.util.function.Function<java.util.function.BooleanSupplier,
+        CompletableFuture<ModelRenderTargetLoader.ModelCandidate>> loader) implements TargetPlan {
     }
 
     @FunctionalInterface
     interface TargetSource {
         TargetPlan plan(ModelContent content);
-    }
-
-    @FunctionalInterface
-    interface DetachedLoader {
-        ModelRenderTargetLoader.ModelCandidate load() throws Throwable;
     }
 
     @FunctionalInterface
@@ -737,19 +899,17 @@ public final class ClientPreviewGenerator implements Closeable {
 
     @FunctionalInterface
     interface Encoder {
-        PreviewStore.EncodedPreview encode(NativeImage pixels) throws Exception;
+        PreviewStore.PendingPreview encode(NativeImage pixels) throws Exception;
     }
 
     @FunctionalInterface
     interface ExportPreparer {
-        ModelExportService.PreparedExport prepare(String requestedPath, String extra)
-                throws Exception;
+        ModelExportService.PreparedExport prepare(ModelExportService.Request request) throws Exception;
     }
 
     @FunctionalInterface
     interface ExportFinisher {
-        Path finish(ModelExportService.PreparedExport prepared,
-                    PreviewStore.EncodedPreview preview) throws Exception;
+        Path finish(ModelExportService.PreparedExport prepared, PreviewStore.EncodedPreview preview) throws Exception;
     }
 
     @FunctionalInterface
@@ -764,61 +924,63 @@ public final class ClientPreviewGenerator implements Closeable {
         Throwable apply(Throwable failure);
     }
 
-    private sealed interface Submission permits LocalPreviewSubmission,
-            RemotePreviewSubmission, GeneratedPreviewSubmission, ExportSubmission {
+    private sealed interface Submission permits LocalPreviewSubmission, RemotePreviewSubmission, GeneratedPreviewSubmission, EncodedPreviewSubmission, RawPreviewSubmission, ExportSubmission {
         long id();
 
         CompletableFuture<?> output();
     }
 
-    private record LocalPreviewSubmission(long id, ModelContent content,
-                                          CompletableFuture<ImageSource> output)
-            implements Submission {
+    private record LocalPreviewSubmission(long id, ModelContent content, boolean allowGeneration,
+        CompletableFuture<ImageSource> output) implements Submission {
     }
 
     private record RemotePreviewSubmission(long id, ModelContent content,
-                                           CompletableFuture<Optional<ImageSource>> output)
-            implements Submission {
+        CompletableFuture<Optional<ImageSource>> output) implements Submission {
     }
 
-    private record GeneratedPreviewSubmission(
-            long id, ModelContent content,
-            CompletableFuture<PreviewStore.EncodedPreview> output)
-            implements Submission {
+    private record GeneratedPreviewSubmission(long id, ModelContent content,
+        CompletableFuture<PreviewStore.EncodedPreview> output) implements Submission {
     }
 
-    private record ExportSubmission(long id, String requestedPath, String extra,
-                                    CompletableFuture<Path> output)
-            implements Submission {
+    private record EncodedPreviewSubmission(long id, ModelContent content, RemoteChunkFetcher fetcher,
+        CompletableFuture<PreviewStore.EncodedPreview> output) implements Submission {
     }
 
-    private sealed interface Fact permits ProbeFact, ExportPreparedFact, TargetFact,
-            DetachedFact, PixelsFact, PreviewFinishedFact, ExportFinishedFact,
-            FailureFact {
+    private record RawPreviewSubmission(long id, ModelContent content, PreviewStore.PendingPreview pending,
+        CompletableFuture<ImageSource> output) implements Submission {
+    }
+
+    private record ExportSubmission(long id, ModelExportService.Request request,
+        CompletableFuture<Path> output) implements Submission {
+    }
+
+    private sealed interface Fact permits ProbeFact, ExportPreparedFact, TargetFact, DetachedFact, PixelsFact, EncodedFact, DecodedFact, ExportFinishedFact, FailureFact {
         Throwable failure();
     }
 
-    private record ProbeFact(PreviewStore.EncodedPreview preview,
-                             Throwable failure) implements Fact {
+    private record ProbeFact(PreviewStore.PendingPreview preview, boolean standalone,
+        Throwable failure) implements Fact {
     }
 
-    private record ExportPreparedFact(ModelExportService.PreparedExport prepared,
-                                      Throwable failure) implements Fact {
+    private record ExportPreparedFact(ModelExportService.PreparedExport prepared, Throwable failure) implements Fact {
     }
 
     private record TargetFact(RenderInput input, Throwable failure) implements Fact {
     }
 
-    private record DetachedFact(ResourceRequest request,
-                                ModelRenderTargetLoader.ModelCandidate candidate,
-                                Throwable failure) implements Fact {
+    private record DetachedFact(ResourceRequest request, ModelRenderTargetLoader.ModelCandidate candidate,
+        Throwable failure) implements Fact {
     }
 
-    private record PixelsFact(NativeImage pixels, Throwable failure) implements Fact {
+    private record PixelsFact(NativeImage pixels,
+        Throwable failure) implements Fact {
     }
 
-    private record PreviewFinishedFact(PreviewStore.EncodedPreview preview,
-                                       Throwable failure) implements Fact {
+    private record EncodedFact(PreviewStore.PendingPreview pending, Throwable failure) implements Fact {
+    }
+
+    private record DecodedFact(PreviewStore.EncodedPreview preview, boolean generated,
+        Throwable failure) implements Fact {
     }
 
     private record ExportFinishedFact(Path output, Throwable failure) implements Fact {
@@ -834,6 +996,7 @@ public final class ClientPreviewGenerator implements Closeable {
         private final Submission submission;
         private FactSlot slot;
         private ClientModelRenderTargetManager.ReadyAcquisition acquisition;
+        private CompletableFuture<ModelRenderTargetLoader.ModelCandidate> detachedLoad;
         private ModelExportService.PreparedExport export;
         private boolean cancellationRequested;
 
@@ -865,13 +1028,20 @@ public final class ClientPreviewGenerator implements Closeable {
             if (submission instanceof GeneratedPreviewSubmission generated) {
                 return generated.content();
             }
+            if (submission instanceof EncodedPreviewSubmission encoded)
+                return encoded.content();
+            if (submission instanceof RawPreviewSubmission raw)
+                return raw.content();
             throw new IllegalStateException("Export content has not been prepared");
         }
 
         private void requestCancellation() {
-            if (!cancellationRequested && acquisition != null) {
+            if (!cancellationRequested) {
                 cancellationRequested = true;
-                acquisition.cancel();
+                if (acquisition != null)
+                    acquisition.cancel();
+                if (detachedLoad != null)
+                    detachedLoad.cancel(false);
             }
         }
 
@@ -888,6 +1058,19 @@ public final class ClientPreviewGenerator implements Closeable {
         private static final Object CONSUMED = new Object();
         private static final Object CLOSED = new Object();
         private final AtomicReference<Object> state = new AtomicReference<>(WAITING);
+        private final AtomicReference<Runnable> cancellation = new AtomicReference<>();
+
+        private void onClose(Runnable cleanup) {
+            cancellation.set(cleanup);
+            if (isClosed())
+                releasePendingHost();
+        }
+
+        private void releasePendingHost() {
+            var cleanup = cancellation.getAndSet(null);
+            if (cleanup != null)
+                cleanup.run();
+        }
 
         private void publish(Fact fact) {
             Objects.requireNonNull(fact, "fact");
@@ -910,6 +1093,7 @@ public final class ClientPreviewGenerator implements Closeable {
 
         private void close() {
             var value = state.getAndSet(CLOSED);
+            releasePendingHost();
             if (value instanceof Fact fact) {
                 dispose(fact);
             }
@@ -922,13 +1106,17 @@ public final class ClientPreviewGenerator implements Closeable {
         private final ModelRenderTargetLoader.ModelCandidate owner;
         private final AtomicBoolean closed = new AtomicBoolean();
 
-        private DetachedTargetLease(
-                ResourceRequest request,
-                ModelRenderTarget target,
-                ModelRenderTargetLoader.ModelCandidate owner) {
+        private DetachedTargetLease(ResourceRequest request, ModelRenderTarget target,
+            ModelRenderTargetLoader.ModelCandidate owner) {
             this.request = request;
             this.target = target;
             this.owner = owner;
+        }
+
+        @Override
+        public ModelResourcePurpose purpose() {
+            requireOpen();
+            return request.purpose();
         }
 
         @Override

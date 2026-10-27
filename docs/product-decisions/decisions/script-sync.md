@@ -6,8 +6,9 @@
   - 同步范围与漂移: [DD.tracking-scopes-state-sync](player-state-sync.md#ddtracking-scopes-state-sync)
   - 服务端校验: [DD.validate-client-before-effect](trust-boundaries.md#ddvalidate-client-before-effect)
 - Landing:
-  - [architecture](../../architecture/animation/state-inputs-and-sync.md#roaming)
-  - [architecture](../../architecture/animation/state-inputs-and-sync.md)
+  - [implementation](../../architecture/animation/implementation/state-inputs-and-sync.md#roaming)
+  - [implementation](../../architecture/animation/implementation/state-inputs-and-sync.md)
+  - [design](../../architecture/animation/overview.md)
 
 ## DD.script-selects-sync-values
 
@@ -21,6 +22,10 @@
 ### BC.roaming-carries-accumulated-state
 
 - Claim: 模型需要累积并供后续观察者取得的同步值由 roaming 变量机制承担，沿追踪关系提供当前状态与后续变化；它仍服从服务端校验、表现用途和 best-effort 边界。
+
+### BC.only-local-player-roaming-persists
+
+- Claim: 每个客户端都按模型脚本推进当前实体实例的 roaming，但只有 LocalPlayer 的写入被本机保留并上报；其他实体的本地写入不反向同步、不保证跨实例保留，并可被服务端后续状态修正。
 
 ### BC.creator-defines-synchronized-state
 

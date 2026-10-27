@@ -1,8 +1,8 @@
 package com.elfmcys.ysm.client.model.locator;
 
 import com.elfmcys.ysm.YesSteveModel;
-import com.elfmcys.ysm.api.model.v0.ModelKind;
-import com.elfmcys.ysm.api.model.v0.event.RegisterModelLocatorEvent;
+import com.elfmcys.ysm.api.model.ModelKind;
+import com.elfmcys.ysm.api.model.event.RegisterModelLocatorEvent;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoLocator;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoLocatorType;
 import net.minecraft.resources.ResourceLocation;
@@ -24,7 +24,8 @@ public class FirstPersonLocator extends GeoLocatorType {
             synchronized (FirstPersonLocator.class) {
                 if (INSTANCE == null) {
                     INSTANCE = new FirstPersonLocator();
-                    YesSteveModel.postEvent(new RegisterModelLocatorEvent(ModelKind.HUMANOID_FIRST_PERSON, INSTANCE::register));
+                    YesSteveModel
+                        .postEvent(new RegisterModelLocatorEvent(ModelKind.HUMANOID_FIRST_PERSON, INSTANCE::register));
                     INSTANCE.freeze();
                 }
             }

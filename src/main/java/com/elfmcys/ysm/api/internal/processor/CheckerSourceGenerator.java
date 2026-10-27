@@ -6,11 +6,9 @@ import java.nio.charset.StandardCharsets;
 import javax.annotation.processing.Filer;
 
 final class CheckerSourceGenerator {
-    private static final String TEMPLATE_RESOURCE =
-            "/META-INF/checker-template.java.txt";
+    private static final String TEMPLATE_RESOURCE = "/META-INF/checker-template.java.txt";
 
-    private CheckerSourceGenerator() {
-    }
+    private CheckerSourceGenerator() {}
 
     static void generate(Filer filer, ExtensionPlan plan) throws IOException {
         String template;
@@ -23,23 +21,15 @@ final class CheckerSourceGenerator {
 
         StringBuilder methods = new StringBuilder();
         for (ExtensionPlan.CheckGroup group : plan.effectiveGroups()) {
-            methods.append("    public static Result ")
-                    .append(group.checkerMethodName)
-                    .append("() {\n")
-                    .append("        return RuntimeCheck.check(\"")
-                    .append(escape(group.key))
-                    .append("\");\n")
-                    .append("    }\n\n");
+            methods.append("    public static Result ").append(group.checkerMethodName).append("() {\n")
+                .append("        return RuntimeCheck.check(\"").append(escape(group.key)).append("\");\n")
+                .append("    }\n\n");
         }
 
-        String packageDeclaration = plan.packageName.isEmpty()
-                ? ""
-                : "package " + plan.packageName + ";\n";
-        String source = template
-                .replace("{{PACKAGE}}", packageDeclaration)
-                .replace("{{CHECKER}}", plan.checkerSimpleName)
-                .replace("{{RESOURCE}}", escape(plan.manifestPath()))
-                .replace("{{METHODS}}", methods.toString().stripTrailing());
+        String packageDeclaration = plan.packageName.isEmpty() ? "" : "package " + plan.packageName + ";\n";
+        String source = template.replace("{{PACKAGE}}", packageDeclaration)
+            .replace("{{CHECKER}}", plan.checkerSimpleName).replace("{{RESOURCE}}", escape(plan.manifestPath()))
+            .replace("{{METHODS}}", methods.toString().stripTrailing());
 
         try (Writer writer = filer.createSourceFile(plan.checkerBinaryName()).openWriter()) {
             writer.write(source);

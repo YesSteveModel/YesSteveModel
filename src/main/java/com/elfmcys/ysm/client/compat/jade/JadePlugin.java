@@ -16,10 +16,10 @@ import snownee.jade.api.config.IPluginConfig;
 public class JadePlugin implements IWailaPlugin {
     @Override
     public void registerClient(IWailaClientRegistration reg) {
-        reg.registerEntityComponent(new YSMProvider(), Entity.class);
+        reg.registerEntityComponent(new ModelInfoProvider(), Entity.class);
     }
 
-    private static class YSMProvider implements IEntityComponentProvider {
+    private static class ModelInfoProvider implements IEntityComponentProvider {
         @SuppressWarnings("removal")
         private static final ResourceLocation UID = new ResourceLocation(YesSteveModel.MOD_ID, "model_info");
 
@@ -27,16 +27,18 @@ public class JadePlugin implements IWailaPlugin {
         public void appendTooltip(ITooltip tooltip, EntityAccessor entityAccessor, IPluginConfig config) {
             if (entityAccessor.getEntity() instanceof Player player) {
                 player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
-                    if (cap.isInitializedAndEnabled()) {
+                    if (cap.isPresentationAllowed() && cap.hasInstalledModel()) {
                         tooltip.add(Component.translatable("top.yes_steve_model.model_info.id")
-                                .append(cap.getModelRenderTarget().getDisplayName(ModelIdUtil.getFileNameFromPath(cap.getModelId()))));
+                            .append(cap.getModelRenderTarget()
+                                .getDisplayName(ModelIdUtil.getFileNameFromPath(cap.getInstalledModelId()))));
                     }
                 });
             } else {
                 entityAccessor.getEntity().getCapability(VehicleAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
-                    if (cap.isInitialized() && cap.isModelPresent()) {
+                    if (cap.isPresentationAllowed() && cap.hasInstalledModel()) {
                         tooltip.add(Component.translatable("top.yes_steve_model.model_info.id")
-                                .append(cap.getModelRenderTarget().getDisplayName(ModelIdUtil.getFileNameFromPath(cap.getModelId()))));
+                            .append(cap.getModelRenderTarget()
+                                .getDisplayName(ModelIdUtil.getFileNameFromPath(cap.getInstalledModelId()))));
                     }
                 });
             }

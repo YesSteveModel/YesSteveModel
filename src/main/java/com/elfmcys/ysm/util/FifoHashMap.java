@@ -28,8 +28,8 @@ public class FifoHashMap<K, V> implements Map<K, V> {
 
     @SuppressWarnings("unchecked")
     public FifoHashMap(Object2ObjectArrayMap<K, V> map) {
-        K[] keys = map.keySet().toArray((K[]) new Object[0]);
-        V[] values = map.values().toArray((V[]) new Object[0]);
+        K[] keys = map.keySet().toArray((K[])new Object[0]);
+        V[] values = map.values().toArray((V[])new Object[0]);
         this.keys = ObjectLists.unmodifiable(ObjectArrayList.wrap(keys));
         this.values = ObjectLists.unmodifiable(ObjectArrayList.wrap(values));
         this.orderMap = new Object2ObjectArrayMap<>(keys, values);

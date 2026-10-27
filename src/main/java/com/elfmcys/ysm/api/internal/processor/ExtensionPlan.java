@@ -60,23 +60,11 @@ final class ExtensionPlan {
     }
 
     enum RequirementKind {
-        CLASS,
-        CLASS_OWNER,
-        EXTENDABLE_CLASS,
-        INTERFACE,
-        INSTANTIABLE_CLASS,
-        METHOD,
-        FIELD,
-        CONSTRUCTOR
+        CLASS, CLASS_OWNER, EXTENDABLE_CLASS, INTERFACE, INSTANTIABLE_CLASS, METHOD, FIELD, CONSTRUCTOR
     }
 
-    record Requirement(
-            RequirementKind kind,
-            String owner,
-            String name,
-            String descriptor,
-            boolean declaredOnly,
-            boolean staticMember) {
+    record Requirement(RequirementKind kind, String owner, String name, String descriptor, boolean declaredOnly,
+        boolean staticMember) {
         static Requirement clazz(String internalName) {
             return new Requirement(RequirementKind.CLASS, internalName, "", "", false, false);
         }
@@ -84,7 +72,7 @@ final class ExtensionPlan {
         String display() {
             return switch (kind) {
                 case CLASS, CLASS_OWNER, EXTENDABLE_CLASS, INTERFACE, INSTANTIABLE_CLASS ->
-                        DescriptorUtil.binaryName(owner);
+                    DescriptorUtil.binaryName(owner);
                 case METHOD, CONSTRUCTOR -> DescriptorUtil.binaryName(owner) + '#' + name + descriptor;
                 case FIELD -> DescriptorUtil.binaryName(owner) + '#' + name + ':' + descriptor;
             };

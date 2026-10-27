@@ -1,158 +1,208 @@
 package com.elfmcys.ysm.model.catalog.source;
 
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
-import com.elfmcys.ysm.format.legacy.LegacyYsmHeader;
+import com.elfmcys.ysm.format.legacy.LegacyContainerHeader;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.domain.ModelScanError;
 
 import java.io.IOException;
-import java.nio.file.FileVisitResult;
+import java.io.InterruptedIOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Set;
 
-/** Deterministic source discovery shared by runtime scanning and build-time builtin indexing. */
+/** Logical source names and bounded, scan-local observations of their readable targets. */
 public final class ModelSourceDiscovery {
     private static final Set<String> FILE_EXTENSIONS = Set.of(".mxc", ".ysm", ".zip", ".7z");
 
-    private ModelSourceDiscovery() {
-    }
+    private ModelSourceDiscovery() {}
 
     public static RootInventoryState inventory(ModelCatalogSource source) {
         var configured = source.path().toAbsolutePath().normalize();
-        CatalogRootIdentity identity = new CatalogRootIdentity(
-                source.rootKind(), configured, "");
+        var identity = source.identity();
+        var models = new LinkedHashMap<ModelSourceKey, SourceObservation>();
+        var packs = new LinkedHashMap<ModelPackSourceKey, PackObservation>();
+        var errors = new ArrayList<ModelScanError>();
         try {
-            if (source.createIfMissing()) {
-                Files.createDirectories(configured);
-            }
-            var canonical = configured.toRealPath();
-            var attributes = Files.readAttributes(canonical, BasicFileAttributes.class,
-                    LinkOption.NOFOLLOW_LINKS);
-            if (!attributes.isDirectory()) {
-                throw new IOException("Model root is not a directory: " + configured);
-            }
-            identity = new CatalogRootIdentity(source.rootKind(), canonical,
-                    Objects.toString(attributes.fileKey(), ""));
-
-            var discovered = discover(canonical);
-            if (!discovered.failures().isEmpty()) {
-                var failure = discovered.failures().get(0);
-                throw new IOException("Model root traversal is incomplete at " + failure.path(),
-                        failure.error());
-            }
-
-            var models = new LinkedHashMap<ModelSourceKey, SourceObservation>();
-            for (var path : discovered.models()) {
-                var real = requireInside(canonical, path);
-                var kind = sourceKind(real);
-                var relative = ModelPath.relativeTo(canonical, real);
-                var key = new ModelSourceKey(identity, relative, kind);
-                var stamp = Files.isDirectory(real, LinkOption.NOFOLLOW_LINKS)
-                        ? SourceStamp.captureDirectory(real) : SourceStamp.captureFile(real);
-                var estimatedBytes = stamp instanceof SourceStamp.File file
-                        ? file.size() : ((SourceStamp.RawDirectory) stamp).totalBytes();
-                models.put(key, new SourceObservation(key, real, stamp, estimatedBytes));
-            }
-
-            var packs = new LinkedHashMap<ModelPackSourceKey, PackObservation>();
-            for (var directory : discovered.packDirectories()) {
-                var real = requireInside(canonical, directory);
-                var manifest = real.resolve("ysm-pack.json");
-                if (!Files.isRegularFile(manifest, LinkOption.NOFOLLOW_LINKS)) {
-                    continue;
+            try {
+                Files.readAttributes(configured, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (NoSuchFileException absent) {
+                if (source.createIfMissing()) {
+                    Files.createDirectories(configured);
+                } else if (source.rootKind() == CatalogRootKind.AUTH) {
+                    return new RootInventoryState.Complete(identity, models, packs);
+                } else {
+                    throw absent;
                 }
-                var hierarchy = real.equals(canonical)
-                        ? "" : ModelPath.relativeTo(canonical, real).value() + "/";
-                var key = new ModelPackSourceKey(identity, hierarchy);
-                var cover = real.resolve("ysm-pack.png");
-                packs.put(key, new PackObservation(key, real,
-                        SourceStamp.captureFile(manifest),
-                        Files.isRegularFile(cover, LinkOption.NOFOLLOW_LINKS)
-                                ? SourceStamp.captureFile(cover) : null));
             }
-            return new RootInventoryState.Complete(identity, models, packs);
-        } catch (IOException | RuntimeException error) {
-            return new RootInventoryState.Incomplete(identity,
-                    ModelScanError.infrastructure(source.rootKind(), configured.toString(),
-                            "ROOT_INVENTORY_INCOMPLETE", error));
+            var discovered = discover(configured);
+            for (var failure : discovered.failures()) {
+                errors.add(inventoryError(source, failure.path(), failure.error()));
+            }
+            for (var path : discovered.models()) {
+                checkInterrupted();
+                try {
+                    var relative = ModelPath.relativeTo(configured, path);
+                    var target = path.toRealPath();
+                    var kind = sourceKind(path, target);
+                    var key = new ModelSourceKey(identity, relative, kind);
+                    models.put(key, observe(key, path));
+                } catch (IOException | RuntimeException failure) {
+                    errors.add(inventoryError(source, path, failure));
+                }
+            }
+            for (var directory : discovered.packDirectories()) {
+                checkInterrupted();
+                try {
+                    if (Files.notExists(directory.resolve("ysm-pack.json"), LinkOption.NOFOLLOW_LINKS)) {
+                        continue;
+                    }
+                    var hierarchy =
+                        directory.equals(configured) ? "" : ModelPath.relativeTo(configured, directory).value() + "/";
+                    var key = new ModelPackSourceKey(identity, hierarchy);
+                    packs.put(key, observePack(key, directory));
+                } catch (IOException | RuntimeException failure) {
+                    errors.add(inventoryError(source, directory, failure));
+                }
+            }
+        } catch (IOException | RuntimeException failure) {
+            errors.add(inventoryError(source, configured, failure));
         }
+        return errors.isEmpty() ? new RootInventoryState.Complete(identity, models, packs)
+            : new RootInventoryState.Incomplete(identity, models, packs, errors);
     }
 
-    public static SourceObservation observe(ModelSourceKey expectedKey, Path path)
-            throws IOException {
-        var real = requireInside(expectedKey.root().canonicalAbsoluteRoot(), path);
-        var actualKind = sourceKind(real);
-        if (actualKind != expectedKey.sourceKind()) {
-            throw new IOException("Model source kind changed while loading: " + path);
+    private static ModelScanError inventoryError(ModelCatalogSource source, Path path, Throwable failure) {
+        var relative = new java.util.StringJoiner("/");
+        var code = "ROOT_INVENTORY_INCOMPLETE";
+        for (var segment : source.path().toAbsolutePath().normalize().relativize(path.toAbsolutePath().normalize())) {
+            if (segment.toString().isEmpty())
+                continue;
+            try {
+                relative.add(new ModelPath(segment.toString()).value());
+            } catch (IllegalArgumentException invalid) {
+                code = "INVALID_SOURCE_LOCATION";
+                break;
+            }
         }
-        var stamp = Files.isDirectory(real, LinkOption.NOFOLLOW_LINKS)
-                ? SourceStamp.captureDirectory(real) : SourceStamp.captureFile(real);
-        var estimatedBytes = stamp instanceof SourceStamp.File file
-                ? file.size() : ((SourceStamp.RawDirectory) stamp).totalBytes();
-        return new SourceObservation(expectedKey, real, stamp, estimatedBytes);
+        var entry = relative.toString();
+        return ModelScanError.infrastructure(source.rootKind(), new CatalogLocation(source.publicRoot(), entry).value(),
+            code, new IOException("Failed to observe source entry: " + path, failure));
+    }
+
+    public static SourceObservation observe(ModelSourceKey expectedKey, Path path) throws IOException {
+        checkInterrupted();
+        var logical = path.toAbsolutePath().normalize();
+        var target = logical.toRealPath();
+        if (sourceKind(logical, target) != expectedKey.sourceKind()) {
+            throw new IOException("Model source kind changed while loading: " + logical);
+        }
+        var stamp = expectedKey.sourceKind() == ModelSourceKind.CURRENT_RAW_DIRECTORY
+            ? SourceStamp.captureDirectory(target) : SourceStamp.captureFile(target);
+        var size =
+            stamp instanceof SourceStamp.File file ? file.size() : ((SourceStamp.RawDirectory)stamp).totalBytes();
+        return new SourceObservation(expectedKey, logical, target, stamp, size);
+    }
+
+    public static PackObservation observePack(ModelPackSourceKey key, Path directory) throws IOException {
+        checkInterrupted();
+        var manifest = observePackFile(directory.resolve("ysm-pack.json"));
+        var cover = directory.resolve("ysm-pack.png");
+        return new PackObservation(key, directory, manifest,
+            Files.notExists(cover, LinkOption.NOFOLLOW_LINKS) ? null : observePackFile(cover));
+    }
+
+    private static PackObservation.File observePackFile(Path logical) throws IOException {
+        var target = logical.toRealPath();
+        return new PackObservation.File(target, SourceStamp.captureFile(target));
     }
 
     public static Result discover(Path root) throws IOException {
+        root = root.toAbsolutePath().normalize();
         var models = new ArrayList<Path>();
         var packDirectories = new ArrayList<Path>();
         var failures = new ArrayList<Failure>();
-
-        Files.walkFileTree(root, new SimpleFileVisitor<>() {
-            @Override
-            public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
-                if (attributes.isSymbolicLink() || attributes.isOther()) {
-                    failures.add(new Failure(directory,
-                            new IOException("Links and special directories are not allowed")));
-                    return FileVisitResult.SKIP_SUBTREE;
+        var stack = new ArrayDeque<Frame>();
+        Path next = root;
+        while (next != null) {
+            checkInterrupted();
+            try {
+                var target = next.toRealPath();
+                var attributes = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                if (attributes.isDirectory()) {
+                    var identity = new TargetIdentity(target, attributes.fileKey());
+                    for (var ancestor : stack) {
+                        if (identity.sameTarget(ancestor.identity())) {
+                            throw new IOException("Ancestor directory cycle at " + next);
+                        }
+                    }
+                    if (!next.equals(root) && isRawDirectory(next)) {
+                        models.add(next);
+                    } else {
+                        packDirectories.add(next);
+                        var children = new ArrayList<Path>();
+                        try (var stream = Files.newDirectoryStream(target)) {
+                            for (var child : stream) {
+                                checkInterrupted();
+                                children.add(next.resolve(child.getFileName().toString()));
+                            }
+                        } catch (IOException | RuntimeException failure) {
+                            failures.add(
+                                new Failure(next, failure instanceof IOException io ? io : new IOException(failure)));
+                        }
+                        stack.push(new Frame(identity, children.iterator()));
+                    }
+                } else if (attributes.isRegularFile()) {
+                    if (next.equals(root)) {
+                        throw new IOException("Model root is not a directory: " + root);
+                    }
+                    if (isArchive(next)) {
+                        models.add(next);
+                    }
+                } else {
+                    throw new IOException("Unsupported model source entry: " + next);
                 }
-                if (!directory.equals(root) && isRawDirectory(directory)) {
-                    models.add(directory);
-                    return FileVisitResult.SKIP_SUBTREE;
+            } catch (IOException | RuntimeException failure) {
+                failures.add(new Failure(next, failure instanceof IOException io ? io : new IOException(failure)));
+            }
+            next = null;
+            while (!stack.isEmpty()) {
+                if (stack.peek().children().hasNext()) {
+                    next = stack.peek().children().next();
+                    break;
                 }
-                packDirectories.add(directory);
-                return FileVisitResult.CONTINUE;
+                stack.pop();
             }
-
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-                if (attributes.isSymbolicLink() || attributes.isOther()) {
-                    failures.add(new Failure(file,
-                            new IOException("Links and special files are not allowed")));
-                } else if (attributes.isRegularFile() && isArchive(file)) {
-                    models.add(file);
-                }
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            public FileVisitResult visitFileFailed(Path file, IOException error) {
-                failures.add(new Failure(file, error));
-                return FileVisitResult.CONTINUE;
-            }
-        });
-
-        Comparator<Path> byRelativePath = Comparator.comparing(
-                path -> normalizedRelative(root, path));
+        }
+        var logicalRoot = root;
+        Comparator<Path> byRelativePath = Comparator.comparing(path -> normalizedRelative(logicalRoot, path));
         models.sort(byRelativePath);
         packDirectories.sort(byRelativePath);
-        failures.sort(Comparator.comparing(failure -> normalizedRelative(root, failure.path())));
+        failures.sort(Comparator.comparing(failure -> normalizedRelative(logicalRoot, failure.path())));
         return new Result(models, packDirectories, failures);
     }
 
-    private static boolean isRawDirectory(Path directory) {
-        return Files.isRegularFile(directory.resolve("ysm.json"), LinkOption.NOFOLLOW_LINKS)
-                || Files.isRegularFile(directory.resolve("main.json"), LinkOption.NOFOLLOW_LINKS);
+    private static boolean isRawDirectory(Path directory) throws IOException {
+        // A linked manifest still marks a raw boundary, where capture must reject it.
+        for (var name : List.of("ysm.json", "main.json")) {
+            var manifest = directory.resolve(name);
+            if (!Files.notExists(manifest, LinkOption.NOFOLLOW_LINKS)) {
+                Files.readAttributes(manifest, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isArchive(Path file) {
@@ -160,51 +210,62 @@ public final class ModelSourceDiscovery {
         return FILE_EXTENSIONS.stream().anyMatch(name::endsWith);
     }
 
-    private static ModelSourceKind sourceKind(Path source) throws IOException {
-        if (Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
+    private static ModelSourceKind sourceKind(Path logical, Path target) throws IOException {
+        var attributes = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (attributes.isDirectory()) {
             return ModelSourceKind.CURRENT_RAW_DIRECTORY;
         }
-        var name = source.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (!attributes.isRegularFile()) {
+            throw new IOException("Model source is not a regular file: " + logical);
+        }
+        var name = logical.getFileName().toString().toLowerCase(Locale.ROOT);
         if (name.endsWith(".mxc")) {
             return ModelSourceKind.DIRECT_CONTAINER;
         }
         if (name.endsWith(".ysm")) {
-            try {
-                if (hasCurrentContainerMagic(source)) {
-                    return ModelSourceKind.DIRECT_CONTAINER;
-                }
-                return switch (LegacyYsmHeader.probe(source)) {
-                    case V1_RAW, V2_RAW -> ModelSourceKind.CURRENT_RAW_ARCHIVE;
-                    case V3_ENCRYPTED -> ModelSourceKind.LEGACY_ARCHIVE;
-                    case UNSUPPORTED -> ModelSourceKind.UNSUPPORTED_YSM;
-                };
-            } catch (IOException invalid) {
-                return ModelSourceKind.UNSUPPORTED_YSM;
+            if (hasCurrentContainerMagic(target)) {
+                return ModelSourceKind.DIRECT_CONTAINER;
             }
+            return switch (LegacyContainerHeader.probe(target)) {
+                case V1_RAW, V2_RAW -> ModelSourceKind.CURRENT_RAW_ARCHIVE;
+                case V3_ENCRYPTED -> ModelSourceKind.LEGACY_ARCHIVE;
+                case UNSUPPORTED -> ModelSourceKind.UNSUPPORTED_YSM;
+            };
+        }
+        if (!isArchive(logical)) {
+            throw new IOException("Unsupported model source name: " + logical);
         }
         return ModelSourceKind.CURRENT_RAW_ARCHIVE;
     }
 
     private static boolean hasCurrentContainerMagic(Path source) throws IOException {
         try (var input = Files.newInputStream(source)) {
-            return Arrays.equals(input.readNBytes(AssetContainerConstant.HEAD.length),
-                    AssetContainerConstant.HEAD);
+            return Arrays.equals(input.readNBytes(AssetContainerConstant.HEAD.length), AssetContainerConstant.HEAD);
         }
     }
 
-    private static Path requireInside(Path root, Path candidate) throws IOException {
-        var real = candidate.toRealPath();
-        if (!real.startsWith(root)) {
-            throw new IOException("Model source escapes its root: " + candidate);
+    private static void checkInterrupted() throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedIOException("Model source observation cancelled");
         }
-        return real;
     }
 
     private static String normalizedRelative(Path root, Path path) {
-        try {
-            return root.relativize(path).toString().replace('\\', '/');
-        } catch (IllegalArgumentException ignored) {
-            return path.toString().replace('\\', '/');
+        return root.relativize(path).toString();
+    }
+
+    private record Frame(TargetIdentity identity, Iterator<Path> children) {
+    }
+
+    private record TargetIdentity(Path target, Object fileKey) {
+        boolean sameTarget(TargetIdentity other) throws IOException {
+            if (target.equals(other.target)) {
+                return true;
+            }
+            if (fileKey != null && other.fileKey != null && target.getFileSystem() == other.target.getFileSystem()) {
+                return fileKey.equals(other.fileKey);
+            }
+            return Files.isSameFile(target, other.target);
         }
     }
 

@@ -15,7 +15,7 @@ public final class ModelFailureRegistry {
     private final Map<FailureKey, Throwable> failures = new ConcurrentHashMap<>();
 
     public ModelResourceFailureGate gate(ModelContent version, Stage stage, String resource,
-                                         Consumer<Throwable> firstFailure) {
+        Consumer<Throwable> firstFailure) {
         var key = key(version, stage, resource);
         return new ModelResourceFailureGate() {
             @Override
@@ -37,11 +37,10 @@ public final class ModelFailureRegistry {
         failures.keySet().removeIf(key -> key.identity().equals(identity));
     }
 
-    public boolean hasMatching(ModelContent version, Stage stage,
-                               Predicate<String> resource) {
+    public boolean hasMatching(ModelContent version, Stage stage, Predicate<String> resource) {
         var identity = identity(version);
-        return failures.keySet().stream().anyMatch(key -> key.identity().equals(identity)
-                && key.stage() == stage && resource.test(key.resource()));
+        return failures.keySet().stream()
+            .anyMatch(key -> key.identity().equals(identity) && key.stage() == stage && resource.test(key.resource()));
     }
 
     public void clear() {
@@ -53,13 +52,11 @@ public final class ModelFailureRegistry {
     }
 
     private static ModelFileIdentity identity(ModelContent content) {
-        return Objects.requireNonNull(content, "content")
-                .representation().identity();
+        return Objects.requireNonNull(content, "content").representation().identity();
     }
 
     public enum Stage {
-        TEXTURE,
-        ANIMATION
+        TEXTURE, ANIMATION
     }
 
     public record FailureKey(ModelFileIdentity identity, Stage stage, String resource) {

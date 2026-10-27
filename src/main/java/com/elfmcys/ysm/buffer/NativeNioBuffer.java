@@ -2,7 +2,7 @@ package com.elfmcys.ysm.buffer;
 
 import com.elfmcys.ysm.util.CleanerUtil;
 import com.elfmcys.ysm.util.UnsafeUtil;
-import org.lwjgl.system.MemoryUtil;
+import io.netty.util.internal.PlatformDependent;
 
 import java.lang.ref.Cleaner;
 import java.nio.ByteBuffer;
@@ -20,7 +20,7 @@ class NativeNioBuffer implements NativeBuffer {
         }
         var view = data.slice();
         this.data = view;
-        headPtr = MemoryUtil.memAddress(view);
+        headPtr = PlatformDependent.directBufferAddress(view);
         ownership = owning ? new Ownership(new Backing(data)) : null;
     }
 
@@ -53,7 +53,7 @@ class NativeNioBuffer implements NativeBuffer {
             throw new IndexOutOfBoundsException();
         }
         var sliced = data.slice(offset, size);
-        return new NativeNioBuffer(sliced, MemoryUtil.memAddress(sliced), ownership);
+        return new NativeNioBuffer(sliced, PlatformDependent.directBufferAddress(sliced), ownership);
     }
 
     @Override

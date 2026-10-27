@@ -6,8 +6,9 @@
   - 远端与本地补充输入: [DD.game-state-plus-mod-projection](player-state-sync.md#ddgame-state-plus-mod-projection)
   - 更换采样策略: [DD.explicit-support-is-stable](model-compatibility.md#ddexplicit-support-is-stable)
 - Landing:
-  - [architecture](../../architecture/animation/entity-and-frame-state.md#时间与更新频率)
-  - [architecture](../../architecture/animation/state-inputs-and-sync.md#输入分类)
+  - [implementation](../../architecture/animation/implementation/entity-and-frame-state.md#时间与更新频率)
+  - [implementation](../../architecture/animation/implementation/state-inputs-and-sync.md#输入分类)
+  - [design](../../architecture/animation/overview.md)
 
 ## DD.client-evaluates-visible-state
 

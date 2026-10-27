@@ -32,12 +32,9 @@ final class ProbeGenerator {
         this.analyzer = analyzer;
     }
 
-    PreparedSpec prepare(
-            ExtensionPlan plan,
-            Map<String, ExtensionPlan.AnalysisResult> analysisByGroup) throws IOException {
-        String probePackage = plan.packageName.isEmpty()
-                ? "__ysmcompat"
-                : plan.packageName + ".__ysmcompat";
+    PreparedSpec prepare(ExtensionPlan plan, Map<String, ExtensionPlan.AnalysisResult> analysisByGroup)
+        throws IOException {
+        String probePackage = plan.packageName.isEmpty() ? "__ysmcompat" : plan.packageName + ".__ysmcompat";
         String prefix = probePackage + '.' + plan.checkerSimpleName;
 
         String canaryProbe = emitCanary(prefix, analysisByGroup);
@@ -49,14 +46,11 @@ final class ProbeGenerator {
         return new PreparedSpec(canaryProbe, groups);
     }
 
-    private PreparedSpec.PreparedGroup prepareGroup(
-            String prefix,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.AnalysisResult analysis) throws IOException {
-        List<ExtensionPlan.Requirement> requirements = analysis.requirements.stream()
-                .sorted(Comparator.comparing(ExtensionPlan.Requirement::display)
-                        .thenComparing(requirement -> requirement.kind().name()))
-                .toList();
+    private PreparedSpec.PreparedGroup prepareGroup(String prefix, ExtensionPlan.CheckGroup group,
+        ExtensionPlan.AnalysisResult analysis) throws IOException {
+        List<ExtensionPlan.Requirement> requirements =
+            analysis.requirements.stream().sorted(Comparator.comparing(ExtensionPlan.Requirement::display)
+                .thenComparing(requirement -> requirement.kind().name())).toList();
 
         Set<String> reobfuscatedTypes = new LinkedHashSet<>();
         for (ExtensionPlan.Requirement requirement : requirements) {
@@ -86,7 +80,7 @@ final class ProbeGenerator {
             if (requirement.kind() == ExtensionPlan.RequirementKind.FIELD) {
                 fieldType = typeToken(Type.getType(requirement.descriptor()), typeProbes);
             } else if (requirement.kind() == ExtensionPlan.RequirementKind.METHOD
-                    || requirement.kind() == ExtensionPlan.RequirementKind.CONSTRUCTOR) {
+                || requirement.kind() == ExtensionPlan.RequirementKind.CONSTRUCTOR) {
                 Type methodType = Type.getMethodType(requirement.descriptor());
                 returnType = typeToken(methodType.getReturnType(), typeProbes);
                 parameterTypes = new ArrayList<>();
@@ -95,25 +89,17 @@ final class ProbeGenerator {
                 }
                 parameterTypes = List.copyOf(parameterTypes);
             }
-            prepared.add(new PreparedSpec.PreparedRequirement(
-                    requirement.kind(),
-                    DescriptorUtil.binaryName(requirement.owner()),
-                    requirement.name(),
-                    requirement.descriptor(),
-                    requirement.declaredOnly(),
-                    requirement.staticMember(),
-                    mappedNameProbe,
-                    fieldType,
-                    returnType,
-                    parameterTypes));
+            prepared.add(
+                new PreparedSpec.PreparedRequirement(requirement.kind(), DescriptorUtil.binaryName(requirement.owner()),
+                    requirement.name(), requirement.descriptor(), requirement.declaredOnly(),
+                    requirement.staticMember(), mappedNameProbe, fieldType, returnType, parameterTypes));
         }
 
         if (!group.side.equals("CLIENT")) {
             for (String reobfuscatedType : reobfuscatedTypes) {
                 if (CompatibilityAnalyzer.isClientOnlyPlatformType(reobfuscatedType)) {
-                    analysis.issues.add(new ExtensionPlan.CoverageIssue(
-                            "SIDE_MISMATCH",
-                            DescriptorUtil.binaryName(reobfuscatedType),
+                    analysis.issues.add(
+                        new ExtensionPlan.CoverageIssue("SIDE_MISMATCH", DescriptorUtil.binaryName(reobfuscatedType),
                             "A client-only Minecraft/Mojang type is used by a " + group.side + " check."));
                 }
             }
@@ -121,26 +107,23 @@ final class ProbeGenerator {
         return new PreparedSpec.PreparedGroup(group.side, prepared, List.copyOf(analysis.issues));
     }
 
-    private Map<String, TypeProbeRef> emitTypeProbe(
-            String prefix,
-            ExtensionPlan.CheckGroup group,
-            Set<String> reobfuscatedTypes) throws IOException {
+    private Map<String, TypeProbeRef> emitTypeProbe(String prefix, ExtensionPlan.CheckGroup group,
+        Set<String> reobfuscatedTypes) throws IOException {
         if (reobfuscatedTypes.isEmpty()) {
             return Map.of();
         }
         String binaryName = prefix + "__TypeProbe_" + shortHash(group.key);
         String internalName = DescriptorUtil.internalName(binaryName);
         ClassWriter writer = new ClassWriter(0);
-        writer.visit(Opcodes.V17,
-                Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER | Opcodes.ACC_SYNTHETIC,
-                internalName, null, "java/lang/Object", null);
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER | Opcodes.ACC_SYNTHETIC,
+            internalName, null, "java/lang/Object", null);
 
         Map<String, TypeProbeRef> result = new LinkedHashMap<>();
         int index = 0;
         for (String reobfuscatedType : reobfuscatedTypes.stream().sorted().toList()) {
             String fieldName = "t" + index++;
-            writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_SYNTHETIC,
-                    fieldName, 'L' + reobfuscatedType + ';', null, null).visitEnd();
+            writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_SYNTHETIC, fieldName,
+                'L' + reobfuscatedType + ';', null, null).visitEnd();
             result.put(reobfuscatedType, new TypeProbeRef(binaryName, fieldName));
         }
         writer.visitEnd();
@@ -148,13 +131,10 @@ final class ProbeGenerator {
         return result;
     }
 
-    private String emitMethodProbe(
-            String prefix,
-            ExtensionPlan.CheckGroup group,
-            ExtensionPlan.Requirement requirement,
-            CompatibilityAnalyzer.ResolvedMethod root) throws IOException {
-        String identity = group.key + ':' + root.owner().name + ':' + requirement.name()
-                + ':' + requirement.descriptor();
+    private String emitMethodProbe(String prefix, ExtensionPlan.CheckGroup group, ExtensionPlan.Requirement requirement,
+        CompatibilityAnalyzer.ResolvedMethod root) throws IOException {
+        String identity =
+            group.key + ':' + root.owner().name + ':' + requirement.name() + ':' + requirement.descriptor();
         String binaryName = prefix + "__MethodProbe_" + shortHash(identity);
         String internalName = DescriptorUtil.internalName(binaryName);
         boolean rootIsInterface = (root.owner().access & Opcodes.ACC_INTERFACE) != 0;
@@ -162,43 +142,38 @@ final class ProbeGenerator {
         ClassWriter writer = new ClassWriter(0);
         if (rootIsInterface) {
             writer.visit(Opcodes.V17,
-                    Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_INTERFACE
-                            | Opcodes.ACC_SYNTHETIC,
-                    internalName, null, "java/lang/Object", new String[]{root.owner().name});
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_INTERFACE | Opcodes.ACC_SYNTHETIC, internalName,
+                null, "java/lang/Object", new String[] {root.owner().name});
         } else {
             writer.visit(Opcodes.V17,
-                    Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_SUPER
-                            | Opcodes.ACC_SYNTHETIC,
-                    internalName, null, root.owner().name, null);
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_SUPER | Opcodes.ACC_SYNTHETIC, internalName,
+                null, root.owner().name, null);
         }
-        writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT,
-                requirement.name(), requirement.descriptor(), null, null).visitEnd();
+        writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT, requirement.name(), requirement.descriptor(),
+            null, null).visitEnd();
         writer.visitEnd();
         writeClass(binaryName, writer.toByteArray());
         return binaryName;
     }
 
-    private String emitCanary(
-            String prefix,
-            Map<String, ExtensionPlan.AnalysisResult> analysisByGroup) throws IOException {
+    private String emitCanary(String prefix, Map<String, ExtensionPlan.AnalysisResult> analysisByGroup)
+        throws IOException {
         var canary = analyzer.resolveMethod(CANARY_OWNER, CANARY_NAME, CANARY_DESCRIPTOR);
         if (canary.isEmpty()) {
             for (ExtensionPlan.AnalysisResult analysis : analysisByGroup.values()) {
-                analysis.issues.add(new ExtensionPlan.CoverageIssue(
-                        "REOBF_CANARY_UNAVAILABLE",
-                        DescriptorUtil.binaryName(CANARY_OWNER) + '#' + CANARY_NAME + CANARY_DESCRIPTOR,
-                        "The standard Forge reobf canary could not be generated."));
+                analysis.issues.add(new ExtensionPlan.CoverageIssue("REOBF_CANARY_UNAVAILABLE",
+                    DescriptorUtil.binaryName(CANARY_OWNER) + '#' + CANARY_NAME + CANARY_DESCRIPTOR,
+                    "The standard Forge reobf canary could not be generated."));
             }
             return "";
         }
 
         String binaryName = prefix + "__ReobfCanary_" + shortHash(prefix);
         ClassWriter writer = new ClassWriter(0);
-        writer.visit(Opcodes.V17,
-                Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_SUPER | Opcodes.ACC_SYNTHETIC,
-                DescriptorUtil.internalName(binaryName), null, CANARY_OWNER, null);
-        writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT,
-                CANARY_NAME, CANARY_DESCRIPTOR, null, null).visitEnd();
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_SUPER | Opcodes.ACC_SYNTHETIC,
+            DescriptorUtil.internalName(binaryName), null, CANARY_OWNER, null);
+        writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT, CANARY_NAME, CANARY_DESCRIPTOR, null, null)
+            .visitEnd();
         writer.visitEnd();
         writeClass(binaryName, writer.toByteArray());
         return binaryName;
@@ -228,17 +203,16 @@ final class ProbeGenerator {
         if (!emittedClassNames.add(binaryName)) {
             return;
         }
-        try (OutputStream output = filer.createResource(
-                StandardLocation.CLASS_OUTPUT, "",
-                DescriptorUtil.internalName(binaryName) + ".class").openOutputStream()) {
+        try (OutputStream output =
+            filer.createResource(StandardLocation.CLASS_OUTPUT, "", DescriptorUtil.internalName(binaryName) + ".class")
+                .openOutputStream()) {
             output.write(bytes);
         }
     }
 
     private static String shortHash(String value) {
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(StandardCharsets.UTF_8));
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
             StringBuilder result = new StringBuilder(16);
             for (int index = 0; index < 8; index++) {
                 result.append(String.format("%02x", digest[index]));

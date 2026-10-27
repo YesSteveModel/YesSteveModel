@@ -1,0 +1,9 @@
+modLoader="javafml"
+loaderVersion="[46,)"
+license="Apache-2.0"
+
+[[mods]]
+modId="ysm_mock_vanilla"
+version="1"
+displayName="Non-participant Host Probe"
+description="Verification client without YSM or its network channel."

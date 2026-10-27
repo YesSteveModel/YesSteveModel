@@ -15,7 +15,7 @@
 | 任务涉及 | 决策包 |
 |---|---|
 | 按需验证与分发、已有内容复用 | [model-distribution](../decisions/model-distribution.md) |
-| 选择/资产/展示权限、RESTRICTED_AUTH、接纳后撤权 | [model-authorization](../decisions/model-authorization.md) |
+| 选择/资产/展示权限、RESTRICTED_AUTH、主目标管理例外、独立请求与接纳后撤权 | [model-authorization](../decisions/model-authorization.md) |
 | 会话归属与迟到结果 | [session-isolation](../decisions/session-isolation.md) |
 | 观察者状态取得、best-effort、游戏事实与本地输入 | [player-state-sync](../decisions/player-state-sync.md) |
 | roaming 累积状态、ysm.sync 瞬时事件 | [script-sync](../decisions/script-sync.md) |

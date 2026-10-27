@@ -6,8 +6,7 @@ import org.joml.Vector3f;
 public class AnimationVec3 extends Vector3f {
     public float endingTransitionPercentProgress = 1f;
 
-    public AnimationVec3() {
-    }
+    public AnimationVec3() {}
 
     public AnimationVec3(float x, float y, float z) {
         super(x, y, z);

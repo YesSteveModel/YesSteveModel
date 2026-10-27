@@ -6,6 +6,7 @@ import com.elfmcys.ysm.model.storage.ModelHashing;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -18,32 +19,27 @@ import java.util.Objects;
 
 public sealed interface SourceStamp permits SourceStamp.File, SourceStamp.RawDirectory {
     static File captureFile(Path path) throws IOException {
-        var attributes = Files.readAttributes(path, BasicFileAttributes.class,
-                LinkOption.NOFOLLOW_LINKS);
+        var attributes = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
         if (!attributes.isRegularFile() || attributes.isSymbolicLink()) {
             throw new IOException("Model source is not a regular non-link file: " + path);
         }
         return new File(attributes.size(), attributes.lastModifiedTime().toMillis(),
-                Objects.toString(attributes.fileKey(), ""));
+            Objects.toString(attributes.fileKey(), ""));
     }
 
     static RawDirectory captureDirectory(Path root) throws IOException {
         var entries = new ArrayList<DirectoryEntry>();
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override
-            public FileVisitResult preVisitDirectory(Path directory,
-                                                     BasicFileAttributes attributes)
-                    throws IOException {
+            public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes)
+                throws IOException {
                 rejectLink(directory, attributes);
-                if (!directory.equals(root)) {
-                    entries.add(DirectoryEntry.directory(relative(root, directory), attributes));
-                }
+                entries.add(DirectoryEntry.directory(relative(root, directory), attributes));
                 return FileVisitResult.CONTINUE;
             }
 
             @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
-                    throws IOException {
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
                 rejectLink(file, attributes);
                 if (!attributes.isRegularFile()) {
                     throw new IOException("Unsupported entry in raw model source: " + file);
@@ -53,8 +49,7 @@ public sealed interface SourceStamp permits SourceStamp.File, SourceStamp.RawDir
             }
 
             @Override
-            public FileVisitResult visitFileFailed(Path file, IOException error)
-                    throws IOException {
+            public FileVisitResult visitFileFailed(Path file, IOException error) throws IOException {
                 throw new IOException("Failed to observe raw model source entry: " + file, error);
             }
         });
@@ -64,6 +59,9 @@ public sealed interface SourceStamp permits SourceStamp.File, SourceStamp.RawDir
         var fileCount = 0;
         try (var output = new DataOutputStream(bytes)) {
             for (var entry : entries) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedIOException("Raw source observation cancelled");
+                }
                 output.writeUTF(entry.path);
                 output.writeByte(entry.type);
                 output.writeLong(entry.size);
@@ -79,13 +77,20 @@ public sealed interface SourceStamp permits SourceStamp.File, SourceStamp.RawDir
     }
 
     private static void rejectLink(Path path, BasicFileAttributes attributes) throws IOException {
-        if (attributes.isSymbolicLink() || attributes.isOther()) {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedIOException("Raw source observation cancelled");
+        }
+        if (attributes.isSymbolicLink() || attributes.isOther()
+            || !path.toRealPath().equals(path.toAbsolutePath().normalize())) {
             throw new IOException("Links and special entries are not allowed in model sources: " + path);
         }
     }
 
     private static String relative(Path root, Path path) {
-        return root.relativize(path).toString().replace('\\', '/');
+        var names = new java.util.StringJoiner("/");
+        for (var segment : root.relativize(path))
+            names.add(segment.toString());
+        return names.toString();
     }
 
     record File(long size, long lastModifiedMillis, String fileKey) implements SourceStamp {
@@ -97,8 +102,7 @@ public sealed interface SourceStamp permits SourceStamp.File, SourceStamp.RawDir
         }
     }
 
-    record RawDirectory(Hash256 metadataDigest, int fileCount, long totalBytes)
-            implements SourceStamp {
+    record RawDirectory(Hash256 metadataDigest, int fileCount, long totalBytes) implements SourceStamp {
         public RawDirectory {
             Objects.requireNonNull(metadataDigest, "metadataDigest");
             if (fileCount < 0 || totalBytes < 0) {
@@ -107,19 +111,15 @@ public sealed interface SourceStamp permits SourceStamp.File, SourceStamp.RawDir
         }
     }
 
-    record DirectoryEntry(String path, int type, long size, long lastModifiedMillis,
-                          String fileKey) {
+    record DirectoryEntry(String path, int type, long size, long lastModifiedMillis, String fileKey) {
         static DirectoryEntry file(String path, BasicFileAttributes attributes) {
-            return new DirectoryEntry(path, 1, attributes.size(),
-                    attributes.lastModifiedTime().toMillis(),
-                    Objects.toString(attributes.fileKey(), ""));
+            return new DirectoryEntry(path, 1, attributes.size(), attributes.lastModifiedTime().toMillis(),
+                Objects.toString(attributes.fileKey(), ""));
         }
 
         static DirectoryEntry directory(String path, BasicFileAttributes attributes) {
             // Windows can settle directory mtimes after child creation has completed.
-            return new DirectoryEntry(path, 0, 0,
-                    0,
-                    Objects.toString(attributes.fileKey(), ""));
+            return new DirectoryEntry(path, 0, 0, 0, Objects.toString(attributes.fileKey(), ""));
         }
     }
 }

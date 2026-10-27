@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.client.compat.bettercombat;
 
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
+import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraftforge.fml.loading.LoadingModList;
 import org.apache.commons.lang3.StringUtils;
 
@@ -19,18 +19,20 @@ public class BetterCombatCompat {
         return INSTALLED;
     }
 
-    public static void addBinding(CtrlBinding binding) {
-        if (isInstalled()) {
-            BetterCombatCompatInner.addInnerBinding(binding);
-        } else {
-            addEmptyBinding(binding);
-        }
+    public static String getAttackAnimation(AbstractClientPlayer player) {
+        return INSTALLED ? BetterCombatCompatInner.getAttackAnimation(player) : StringUtils.EMPTY;
     }
 
     /**
-     * 没有安装此模组时，这些 molang 应该存在，否则会报错
+     * Attack animation of one borrowed render entity, or the empty string when this entity is not a client player or
+     * the adapter is unavailable.
+     *
+     * <p>
+     * This is the capability-facing form: it owns the entity narrowing so a caller never has to reach the optional
+     * adapter itself.
      */
-    private static void addEmptyBinding(CtrlBinding binding) {
-        binding.clientPlayerVar("bcombat_attack_animation", ctx -> StringUtils.EMPTY);
+    public static String attackAnimation(net.minecraft.world.entity.Entity entity) {
+        return entity instanceof AbstractClientPlayer player ? getAttackAnimation(player) : StringUtils.EMPTY;
     }
+
 }

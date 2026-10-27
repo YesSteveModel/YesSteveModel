@@ -7,9 +7,8 @@ public class ClientLazyCapability {
     @Nullable
     private final ProjectileAnimatableCapabilityProvider projectileAnimatableCapabilityProvider;
 
-    public ClientLazyCapability(
-            VehicleAnimatableCapabilityProvider vehicleAnimatableCapabilityProvider,
-            @Nullable ProjectileAnimatableCapabilityProvider projectileAnimatableCapabilityProvider) {
+    public ClientLazyCapability(VehicleAnimatableCapabilityProvider vehicleAnimatableCapabilityProvider,
+        @Nullable ProjectileAnimatableCapabilityProvider projectileAnimatableCapabilityProvider) {
         this.vehicleAnimatableCapabilityProvider = vehicleAnimatableCapabilityProvider;
         this.projectileAnimatableCapabilityProvider = projectileAnimatableCapabilityProvider;
     }

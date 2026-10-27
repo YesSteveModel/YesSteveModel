@@ -47,15 +47,21 @@ public class FlatColorButton extends Button {
         Minecraft minecraft = Minecraft.getInstance();
         Font font = minecraft.font;
         if (isSelect) {
-            graphics.fillGradient(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, 0xff_1E90FF, 0xff_1E90FF);
+            graphics.fillGradient(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height,
+                0xff_1E90FF, 0xff_1E90FF);
         } else {
-            graphics.fillGradient(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, 0xff_434242, 0xff_434242);
+            graphics.fillGradient(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height,
+                0xff_434242, 0xff_434242);
         }
         if (this.isHoveredOrFocused()) {
-            graphics.fillGradient(this.getX(), this.getY() + 1, this.getX() + 1, this.getY() + this.height - 1, 0xff_F3EFE0, 0xff_F3EFE0);
-            graphics.fillGradient(this.getX(), this.getY(), this.getX() + this.width, this.getY() + 1, 0xff_F3EFE0, 0xff_F3EFE0);
-            graphics.fillGradient(this.getX() + this.width - 1, this.getY() + 1, this.getX() + this.width, this.getY() + this.height - 1, 0xff_F3EFE0, 0xff_F3EFE0);
-            graphics.fillGradient(this.getX(), this.getY() + this.height - 1, this.getX() + this.width, this.getY() + this.height, 0xff_F3EFE0, 0xff_F3EFE0);
+            graphics.fillGradient(this.getX(), this.getY() + 1, this.getX() + 1, this.getY() + this.height - 1,
+                0xff_F3EFE0, 0xff_F3EFE0);
+            graphics.fillGradient(this.getX(), this.getY(), this.getX() + this.width, this.getY() + 1, 0xff_F3EFE0,
+                0xff_F3EFE0);
+            graphics.fillGradient(this.getX() + this.width - 1, this.getY() + 1, this.getX() + this.width,
+                this.getY() + this.height - 1, 0xff_F3EFE0, 0xff_F3EFE0);
+            graphics.fillGradient(this.getX(), this.getY() + this.height - 1, this.getX() + this.width,
+                this.getY() + this.height, 0xff_F3EFE0, 0xff_F3EFE0);
         }
         this.renderScrollingString(graphics, font, 2, 0xF3EFE0);
     }

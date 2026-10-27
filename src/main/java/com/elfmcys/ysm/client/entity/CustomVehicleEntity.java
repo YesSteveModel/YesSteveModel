@@ -1,5 +1,10 @@
 package com.elfmcys.ysm.client.entity;
 
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
+import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
+import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
+import com.elfmcys.ysm.config.ClientConfig;
+
 import com.elfmcys.ysm.client.controller.VehicleOriginController;
 import com.elfmcys.ysm.client.controller.collections.VehicleControllerCollection;
 import com.elfmcys.ysm.geckolib3.core.builder.Animation;
@@ -15,11 +20,10 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import java.util.Objects;
 import org.joml.Vector3f;
 
-public class CustomVehicleEntity extends CustomEntity<Entity> {
-    private VehicleModelResources vehicleResources;
-    private VehicleOriginController originController;
+public class CustomVehicleEntity extends AnimatableEntity<Entity> {
 
     public CustomVehicleEntity(Entity vehicle) {
         super(vehicle, true);
@@ -29,9 +33,8 @@ public class CustomVehicleEntity extends CustomEntity<Entity> {
     protected String requestedRenderTargetId() {
         var hash = getModelHash();
         return hash == null ? null : ClientModelService.instance()
-                .findRenderTarget(hash,
-                        RenderTargetKind.RENDER_TARGET_KIND_VEHICLE,
-                        entity.getType().builtInRegistryHolder().key().location()).orElse(null);
+            .findRenderTarget(hash, RenderTargetKind.VEHICLE, entity.getType().builtInRegistryHolder().key().location())
+            .orElse(null);
     }
 
     @Override
@@ -40,55 +43,33 @@ public class CustomVehicleEntity extends CustomEntity<Entity> {
     }
 
     @Override
-    protected void onSetupAnimationController() {
-        if (vehicleResources != null) {
-            vehicleResources.controllerFactory().accept(this);
-            originController = (VehicleOriginController) getAnimationData().getAnimationController(VehicleControllerCollection.NAME_ORIGIN);
-        }
+    protected void prepareAnimationControllers(ModelRenderTarget target, AnimationData animations) {
+        Objects.requireNonNull(target.vehicleResources(), "vehicle resources").controllerFactory().accept(this,
+            animations);
+    }
+
+    @Override
+    protected boolean presentationPermission() {
+        return !ClientConfig.DISABLE_VEHICLE_MODEL.get();
+    }
+
+    @Override
+    protected AnimationControllerData resolveControllerData(ModelRenderTarget target, String name) {
+        return target.vehicleResources().controllers().get(name);
     }
 
     @Nullable
     public Vector3f getRotation() {
-        if (originController != null) {
-            return originController.getRotation();
-        }
-        return null;
-    }
-
-    @Override
-    @SuppressWarnings("deprecation")
-    protected @Nullable ResourceHolder createResourceHolder(ResourceLease lease, boolean isFallback) {
-        if (!(lease.poll() instanceof AcquireResult.Ready ready)) {
+        if (!hasInstalledModel())
             return null;
-        }
-        var model = ready.target();
-        var vehicleResources = model.vehicleResources();
-        if (vehicleResources != null) {
-            return new ResourceHolder(lease, isFallback);
-        }
-        return null;
-    }
-
-    /**
-     * 当前载具没有模型时，由于跳过渲染而不会检查模型更新，此时依赖于异步更新的机制检查。
-     */
-    @Override
-    @SuppressWarnings("deprecation")
-    protected void onModelRenderTargetLoaded(ModelRenderTarget newModel) {
-        super.onModelRenderTargetLoaded(newModel);
-        vehicleResources = newModel.vehicleResources();
+        var origin =
+            (VehicleOriginController)getAnimationData().getAnimationController(VehicleControllerCollection.NAME_ORIGIN);
+        return origin == null ? null : origin.getRotation();
     }
 
     @Override
-    public void resetModelRenderTarget() {
-        super.resetModelRenderTarget();
-        this.vehicleResources = null;
-        this.originController = null;
-    }
-
-    @Override
-    protected GeoModel getYsmGeoModel() {
-        return vehicleResources.model();
+    protected GeoModel resolveGeoModel(ModelRenderTarget target, String texture) {
+        return Objects.requireNonNull(target.vehicleResources(), "vehicle resources").model();
     }
 
     @Override
@@ -98,18 +79,18 @@ public class CustomVehicleEntity extends CustomEntity<Entity> {
     }
 
     @Override
+    protected AnimationStore animationSource() {
+        return getModelRenderTarget().vehicleResources().animations();
+    }
+
+    @Override
     public Animation getAnimation(String name) {
-        return vehicleResources.animations().get(name);
+        return readAnimation(getModelRenderTarget().vehicleResources().animations(), name);
     }
 
     @Override
     public @Nullable AnimationControllerData getAnimationControllerData(String animationControllerName) {
-        return vehicleResources.controllers().get(animationControllerName);
-    }
-
-    @Override
-    public boolean isModelPresent() {
-        return super.isModelPresent() && vehicleResources != null && getResourceHolder().isLoaded();
+        return getModelRenderTarget().vehicleResources().controllers().get(animationControllerName);
     }
 
     @Override

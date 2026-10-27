@@ -14,20 +14,18 @@ import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 
 final class NativeLegacyImporter {
-    private NativeLegacyImporter() {
-    }
+    private NativeLegacyImporter() {}
 
     static NativeLegacyProtocol.Response invoke(Path source) {
         Objects.requireNonNull(source, "source");
         try {
             var size = Files.size(source);
             if (size > UniBuffer.MAX_SIZE) {
-                return new NativeLegacyProtocol.Failure(
-                        NativeLegacyStatus.RESOURCE_LIMIT,
-                        "Legacy source exceeds the Java buffer limit");
+                return new NativeLegacyProtocol.Failure(NativeLegacyStatus.RESOURCE_LIMIT,
+                    "Legacy source exceeds the Java buffer limit");
             }
             try (var bytes = NativeBuffer.allocate(Math.toIntExact(size));
-                 var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+                var channel = FileChannel.open(source, StandardOpenOption.READ)) {
                 var destination = bytes.nio();
                 while (destination.hasRemaining()) {
                     if (channel.read(destination) < 0) {
@@ -37,27 +35,21 @@ final class NativeLegacyImporter {
                 return invoke(bytes);
             }
         } catch (IOException | SecurityException failure) {
-            return new NativeLegacyProtocol.Failure(
-                    NativeLegacyStatus.SOURCE_IO,
-                    "Unable to read legacy source");
+            return new NativeLegacyProtocol.Failure(NativeLegacyStatus.SOURCE_IO, "Unable to read legacy source");
         }
     }
 
     private static NativeLegacyProtocol.Response invoke(NativeBuffer source) {
         var input = BufferArgument.packInput(source);
         try {
-            return NativeLegacyProtocol.accept(nImport(input.obj(), input.flags()));
+            var result = NativeLegacyImportResult.read(() -> nImport(input.obj(), input.flags()));
+            return NativeLegacyProtocol.accept(result);
         } finally {
             Reference.reachabilityFence(source);
         }
     }
 
-    static void release(long handle) {
-        nRelease(handle);
-    }
+    private static native NativeLegacyImportResult.Output nImport(Object source, long sourceFlags);
 
-    private static native NativeLegacyImportResult nImport(
-            Object source, long sourceFlags);
-
-    private static native void nRelease(long handle);
+    static native long nShare(long handle);
 }

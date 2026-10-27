@@ -10,14 +10,8 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /** The single parse, direction, size, attachment and handler binding for one wire message. */
-public record ProtocolMessageSpec<T extends ProtoMessage<T>>(
-        int id,
-        MessageDirection direction,
-        Class<T> messageType,
-        int maxEncodedBytes,
-        AttachmentPolicy attachmentPolicy,
-        Parser<T> parser,
-        Handler<T> handler) {
+public record ProtocolMessageSpec<T extends ProtoMessage<T>>(int id, MessageDirection direction, Class<T> messageType,
+    int maxEncodedBytes, AttachmentPolicy attachmentPolicy, Parser<T> parser, Handler<T> handler) {
     public ProtocolMessageSpec {
         if (id < 0 || id > 127) {
             throw new IllegalArgumentException("Protocol message id must be in [0, 127]");
@@ -33,9 +27,7 @@ public record ProtocolMessageSpec<T extends ProtoMessage<T>>(
     }
 
     public enum AttachmentPolicy {
-        FORBIDDEN,
-        REQUIRED,
-        CONDITIONAL;
+        FORBIDDEN, REQUIRED, CONDITIONAL;
 
         public void validate(int size) {
             if (size < 0) {

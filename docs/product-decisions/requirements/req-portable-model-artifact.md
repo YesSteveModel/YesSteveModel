@@ -9,9 +9,9 @@
 | 任务涉及 | 决策包 |
 |---|---|
 | 单文件制品与完整模型定义 | [container-definition](../decisions/container-definition.md) |
-| Raw 导出验证、消歧与去除无关文件 | [export-preprocessing](../decisions/export-preprocessing.md) |
+| Raw 资产预处理、集成环境单项与固定集合完整导出 | [export-preprocessing](../decisions/export-preprocessing.md) |
 | 整体视觉保真、输入兼容与处理成本 | [image-policy](../decisions/image-policy.md) |
-| 用户来源只读与缓存处置边界 | [artifact-storage](../decisions/artifact-storage.md) |
+| 用户来源只读、独立 preview 持久提交与缓存处置边界 | [artifact-storage](../decisions/artifact-storage.md) |
 
 ## Uses
 

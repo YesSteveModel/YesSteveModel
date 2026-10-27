@@ -27,12 +27,10 @@ public final class SessionPublicationPacket implements LogicalPacket {
         try {
             for (var message : messages) {
                 var value = Objects.requireNonNull(message, "message");
-                var spec = ProtocolMessages.REGISTRY.find(value.getClass()).orElseThrow(() ->
-                        new IllegalArgumentException("Unregistered publication message"));
-                if (spec.attachmentPolicy()
-                        != ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN) {
-                    throw new IllegalArgumentException(
-                            "Session publication message must forbid attachments");
+                var spec = ProtocolMessages.REGISTRY.find(value.getClass())
+                    .orElseThrow(() -> new IllegalArgumentException("Unregistered publication message"));
+                if (spec.attachmentPolicy() != ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN) {
+                    throw new IllegalArgumentException("Session publication message must forbid attachments");
                 }
                 var protobuf = ProtocolBuffer.serialize(value);
                 if (protobuf.size() >= FrameCodec.MAX_BODY_BYTES) {

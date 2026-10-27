@@ -32,4 +32,4 @@ CPU 与 GPU 可以使用不同布局和浮点中间值，但可见面、UV、双
 - 普通/反向 cube、透明、非均匀缩放、PBR、`level` / GUI、Vanilla / Iris / shadow 通过 CPU 对照和 Blockbench 语义验收；
 - 性能与内存上限经真实负载验证，且没有把 CPU 派生格式固化为 GPU ABI。
 
-当前 CPU 语义见[渲染架构](../architecture/rendering/README.md)。
+当前 CPU 语义见[渲染架构](../architecture/rendering/overview.md)。

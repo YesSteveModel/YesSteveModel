@@ -11,29 +11,23 @@ import java.util.function.Supplier;
 
 /** Validates and publishes one complete inbound message before invoking its handler. */
 final class ProtocolInbound {
-    private ProtocolInbound() {
-    }
+    private ProtocolInbound() {}
 
     static boolean accepts(int messageId, MessageDirection direction) {
-        return ProtocolMessages.REGISTRY.find(messageId)
-                .filter(spec -> spec.direction() == direction)
-                .isPresent();
+        return ProtocolMessages.REGISTRY.find(messageId).filter(spec -> spec.direction() == direction).isPresent();
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    static void dispatch(FrameCodec.DecodedFrame frame,
-                         ProtocolMessageSpec<?> spec,
-                         Supplier<NetworkEvent.Context> context) {
+    static void dispatch(FrameCodec.DecodedFrame frame, ProtocolMessageSpec<?> spec,
+        Supplier<NetworkEvent.Context> context) {
         if (frame.messageId() != spec.id()) {
             throw new IllegalArgumentException("Frame and protocol spec ids do not match");
         }
-        dispatchTyped(frame, (ProtocolMessageSpec) spec, context);
+        dispatchTyped(frame, (ProtocolMessageSpec)spec, context);
     }
 
-    private static <T extends ProtoMessage<T>> void dispatchTyped(
-            FrameCodec.DecodedFrame frame,
-            ProtocolMessageSpec<T> spec,
-            Supplier<NetworkEvent.Context> context) {
+    private static <T extends ProtoMessage<T>> void dispatchTyped(FrameCodec.DecodedFrame frame,
+        ProtocolMessageSpec<T> spec, Supplier<NetworkEvent.Context> context) {
         var protobuf = frame.protobuf();
         var attachment = frame.attachment();
         if (protobuf.size() > spec.maxEncodedBytes()) {
@@ -41,9 +35,8 @@ final class ProtocolInbound {
         }
         spec.attachmentPolicy().validate(attachment.size());
         var message = ProtocolBuffer.parse(protobuf, spec.parser());
-        NetworkPayload<T> payload = attachment.size() == 0
-                ? NetworkPayload.protobuf(message)
-                : NetworkPayload.withRaw(message, attachment.acquire());
+        NetworkPayload<T> payload = attachment.size() == 0 ? NetworkPayload.protobuf(message)
+            : NetworkPayload.withRaw(message, attachment.acquire());
         try {
             spec.handler().handle(payload, context);
         } catch (Throwable error) {

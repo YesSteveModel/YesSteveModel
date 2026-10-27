@@ -12,8 +12,7 @@ import java.util.Objects;
 public final class BonePoseView {
     static final int STRIDE = 128;
 
-    private static final ByteBuffer EMPTY_BUFFER =
-            ByteBuffer.allocateDirect(0).order(ByteOrder.nativeOrder());
+    private static final ByteBuffer EMPTY_BUFFER = ByteBuffer.allocateDirect(0).order(ByteOrder.nativeOrder());
     private static final int NORMAL_OFFSET = 64;
     private static final int UNIFORM_SCALE_OFFSET = 100;
     private static final int TANGENT_ORIENTATION_OFFSET = 104;
@@ -32,8 +31,7 @@ public final class BonePoseView {
         if (byteCount != 0 && ptr == 0) {
             throw new IllegalStateException("Native bone pose pointer is null");
         }
-        data = byteCount == 0 ? EMPTY_BUFFER :
-                MemoryUtil.memByteBuffer(ptr, byteCount);
+        data = byteCount == 0 ? EMPTY_BUFFER : MemoryUtil.memByteBuffer(ptr, byteCount);
         data.order(ByteOrder.nativeOrder());
         this.boneCount = boneCount;
     }
@@ -82,8 +80,7 @@ public final class BonePoseView {
 
     private int offset(int boneIndex) {
         if (boneIndex < 0 || boneIndex >= boneCount) {
-            throw new IndexOutOfBoundsException(
-                    "bone index " + boneIndex + " out of bounds for " + boneCount);
+            throw new IndexOutOfBoundsException("bone index " + boneIndex + " out of bounds for " + boneCount);
         }
         return boneIndex * STRIDE;
     }

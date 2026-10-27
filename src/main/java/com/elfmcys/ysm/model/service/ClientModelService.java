@@ -1,157 +1,152 @@
 package com.elfmcys.ysm.model.service;
 
-import com.elfmcys.ysm.AssetPaths;
-import com.elfmcys.ysm.YesSteveModel;
-import com.elfmcys.ysm.client.sound.stream.AudioStreamProvider;
-import com.elfmcys.ysm.client.texture.CustomTexture;
-import com.elfmcys.ysm.model.ModelRuntime;
-import com.elfmcys.ysm.model.catalog.client.ClientCatalogManager;
-import com.elfmcys.ysm.model.catalog.client.ClientCatalogSnapshot;
-import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
-import com.elfmcys.ysm.model.domain.RenderTargetIds;
-import com.elfmcys.ysm.model.resource.RuntimeContentStore;
+import com.elfmcys.ysm.expression.host.MolangExtensionLoader;
+import com.elfmcys.ysm.model.resource.client.asset.ClientAssetBatch;
 import com.elfmcys.ysm.model.resource.client.BakeProfile;
-import com.elfmcys.ysm.model.resource.client.ClientModelRenderTargetManager;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.model.resource.client.ResourceLease;
 import com.elfmcys.ysm.model.resource.client.ResourceRequest;
-import com.elfmcys.ysm.model.resource.client.SoundSource;
-import com.elfmcys.ysm.model.resource.client.asset.ClientAssetBatch;
+import com.elfmcys.ysm.model.resource.client.work.ClientResourceScheduler;
+import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
+
+import com.elfmcys.ysm.YesSteveModel;
+import com.elfmcys.ysm.api.client.audio.AudioBackends;
+import com.elfmcys.ysm.client.sound.instance.AudioPlaybackFactory;
+import com.elfmcys.ysm.client.sound.instance.MinecraftAudioHost;
+import com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics;
+import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory;
+import com.elfmcys.ysm.expression.host.HostAvailability;
+import com.elfmcys.ysm.model.catalog.client.ClientCatalogSnapshot;
+import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.resource.client.asset.ClientAssetRepository;
+import com.elfmcys.ysm.model.catalog.client.ClientCatalogManager;
+import com.elfmcys.ysm.model.session.client.RemoteCatalogActivation;
+import com.elfmcys.ysm.model.resource.client.ClientModelRenderTargetManager;
+import com.elfmcys.ysm.model.resource.client.SoundSource;
 import com.elfmcys.ysm.model.resource.client.audio.ClientAudioRuntime;
 import com.elfmcys.ysm.model.resource.client.preview.ClientPreviewGenerator;
-import com.elfmcys.ysm.model.resource.client.remote.RemoteChunkFetcher;
-import com.elfmcys.ysm.model.resource.client.remote.RemoteMetadataFetcher;
-import com.elfmcys.ysm.model.resource.client.remote.RemoteModelStore;
-import com.elfmcys.ysm.model.resource.client.render.BakedAnimationCache;
-import com.elfmcys.ysm.model.resource.client.render.BakedModelCache;
-import com.elfmcys.ysm.model.resource.client.render.DefaultAnimationRuntime;
 import com.elfmcys.ysm.model.resource.client.render.ModelRenderTargetLoader;
-import com.elfmcys.ysm.model.session.client.RemoteCatalogActivation;
-import com.elfmcys.ysm.model.session.client.state.ActivationSnapshot;
-import com.elfmcys.ysm.model.storage.AtomicSharedCache;
+import com.elfmcys.ysm.model.resource.client.render.DefaultAnimationRuntime;
+import com.elfmcys.ysm.client.texture.CustomTexture;
+import com.elfmcys.ysm.model.ModelSystem;
+import com.elfmcys.ysm.util.ThreadScheduling;
+import com.elfmcys.ysm.util.ThreadScheduling.ThreadRole;
+import com.elfmcys.ysm.util.ThreadScheduling.ThreadPolicy;
+import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.RenderTargetIds;
+import com.elfmcys.ysm.model.resource.client.remote.RemoteModelStore;
+import com.elfmcys.ysm.model.resource.RuntimeContentStore;
 import com.elfmcys.ysm.model.storage.PreviewStore;
 import com.elfmcys.ysm.natives.image.ImageSource;
-import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind;
-import com.elfmcys.ysm.util.Closeable;
+import com.elfmcys.ysm.natives.NativeRuntime;
+import net.minecraft.client.Minecraft;
+
 import java.io.IOException;
 import java.nio.file.Path;
+import net.minecraft.resources.ResourceLocation;
+
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import net.minecraft.client.Minecraft;
-import net.minecraft.resources.ResourceLocation;
 
 public final class ClientModelService implements AutoCloseable {
     private static volatile ClientModelService INSTANCE;
 
-    private final ScheduledThreadPoolExecutor workers;
+    private final ModelSystem system;
+    private final ClientResourceScheduler scheduler;
+    private final ScheduledThreadPoolExecutor notificationTimer;
     private final ClientCatalogManager catalogManager;
     private final ClientAssetRepository assetRepository;
     private final ClientModelRenderTargetManager renderTargetManager;
     private final ClientAudioRuntime audioRuntime;
     private final ClientPreviewGenerator previewOperations;
-    private final Closeable exportPreviewRegistration;
+    private final com.elfmcys.ysm.client.demand.ClientDemandCoordinator demands;
     private final Path gameDirectory;
     private RemoteModelStore remoteStore;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private int resourceDiagnosticTicks;
 
-    private ClientModelService(ScheduledThreadPoolExecutor workers,
-                               ClientCatalogManager catalogManager,
-                               ClientAssetRepository assetRepository,
-                               ClientModelRenderTargetManager renderTargetManager,
-                               ClientPreviewGenerator previewOperations,
-                               Closeable exportPreviewRegistration,
-                               Path gameDirectory) {
-        this.workers = workers;
+    private ClientModelService(ModelSystem system, ClientResourceScheduler scheduler,
+        ScheduledThreadPoolExecutor notificationTimer, ClientCatalogManager catalogManager,
+        ClientAssetRepository assetRepository, ClientModelRenderTargetManager renderTargetManager,
+        ClientPreviewGenerator previewOperations, Path gameDirectory) {
+        this.system = java.util.Objects.requireNonNull(system, "system");
+        this.scheduler = scheduler;
+        this.notificationTimer = notificationTimer;
         this.catalogManager = catalogManager;
         this.assetRepository = assetRepository;
         this.renderTargetManager = renderTargetManager;
-        this.audioRuntime = new ClientAudioRuntime(
-                workers, renderTargetManager::resolveSound);
+        this.audioRuntime = new ClientAudioRuntime(scheduler.backgroundExecutor(), renderTargetManager::resolveSound,
+            new MinecraftAudioHost(), AudioBackends.freeze().orElse(null));
         this.previewOperations = previewOperations;
-        this.exportPreviewRegistration = exportPreviewRegistration;
         this.gameDirectory = gameDirectory;
+        this.demands = new com.elfmcys.ysm.client.demand.ClientDemandCoordinator(() -> System.nanoTime() / 1_000_000L,
+            new com.elfmcys.ysm.model.resource.client.ClientDemandResources(this),
+            new com.elfmcys.ysm.network.forge.ClientDemandSelections(),
+            () -> com.elfmcys.ysm.config.ClientConfig.MODEL_SCREEN_EAGER_LOADING.get());
     }
 
-    private ClientModelService(ScheduledThreadPoolExecutor workers,
-                               ClientCatalogManager catalogManager,
-                               ClientAssetRepository assetRepository,
-                               ClientModelRenderTargetManager renderTargetManager,
-                               Path gameDirectory) {
-        this(workers, catalogManager, assetRepository, renderTargetManager,
-                null, () -> { }, gameDirectory);
+    private ClientModelService(ModelSystem system, ClientResourceScheduler scheduler,
+        ScheduledThreadPoolExecutor notificationTimer, ClientCatalogManager catalogManager,
+        ClientAssetRepository assetRepository, ClientModelRenderTargetManager renderTargetManager, Path gameDirectory) {
+        this(system, scheduler, notificationTimer, catalogManager, assetRepository, renderTargetManager, null,
+            gameDirectory);
     }
 
-    private static BootstrapCandidate createCandidate() {
-        var threadCount = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
-        var candidateWorkers = new ScheduledThreadPoolExecutor(threadCount, runnable -> {
-            var thread = new Thread(runnable, "YSM Client Model Worker");
-            thread.setDaemon(true);
-            thread.setPriority(Math.max(Thread.MIN_PRIORITY,
-                    Thread.NORM_PRIORITY - 1));
-            return thread;
-        });
-        candidateWorkers.setRemoveOnCancelPolicy(true);
+    private static BootstrapCandidate createCandidate(ModelSystem system, HostAvailability availability) {
+        var threadCount = Math.max(2, Math.min(8, NativeRuntime.availableProcessors() / 2));
+        var candidateScheduler = new ClientResourceScheduler(threadCount);
+        ScheduledThreadPoolExecutor candidateTimer = null;
+        ModelRenderTargetLoader candidateLoader = null;
         ClientCatalogManager candidateCatalog = null;
         ClientModelRenderTargetManager candidateTargets = null;
         ClientPreviewGenerator candidatePreviews = null;
-        Closeable candidateExportRegistration = null;
         try {
-            var system = ModelRuntime.system();
+            candidateTimer = new ScheduledThreadPoolExecutor(1, runnable -> {
+                var thread = new Thread(
+                    ThreadScheduling.entry(ThreadRole.CLIENT_NOTIFICATION_TIMER, ThreadPolicy.BELOW_NORMAL, runnable),
+                    "YSM Client Notification Timer");
+                thread.setDaemon(true);
+                return thread;
+            });
+            candidateTimer.setRemoveOnCancelPolicy(true);
+            candidateTimer.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+            candidateTimer.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
+            var background = candidateScheduler.backgroundExecutor();
             var storage = system.storage();
-            var gameCacheRoot = storage.gameCacheRoot();
-            var shared = storage.cache();
-            var gameDirectory = Minecraft.getInstance().gameDirectory.toPath();
-            var bakedRoot = AssetPaths.bakedRoot(gameDirectory);
-            var bakedShared = new AtomicSharedCache(bakedRoot);
+            var gameDirectory = system.paths().gameDirectory();
             var builtins = system.builtins();
             candidateCatalog = new ClientCatalogManager(system.catalog());
             var defaultAnimations = new DefaultAnimationRuntime(system.builtinContract());
-            var renderTargetLoader = new ModelRenderTargetLoader(
-                    new BakedModelCache(bakedRoot, bakedShared),
-                    new BakedAnimationCache(bakedRoot, bakedShared), candidateWorkers,
-                    defaultAnimations);
-            var contentStore = new RuntimeContentStore(error ->
-                    YesSteveModel.LOGGER.warn(
-                            "Model source instance became corrupted", error));
-            candidateTargets = new ClientModelRenderTargetManager(
-                    candidateCatalog, renderTargetLoader,
-                    defaultAnimations, candidateWorkers,
-                    ClientModelService::executeOnRenderThread, contentStore);
-            var previewStore = new PreviewStore(gameCacheRoot, shared);
-            var previews = new ClientPreviewGenerator(candidateCatalog, candidateTargets,
-                    renderTargetLoader, previewStore,
-                    ClientModelService::executeOnRenderThread, candidateWorkers);
+            var expressionModules = new RenderTargetExpressionModuleFactory(storage.local().expressions(),
+                MolangExtensionLoader.createHost(availability), new ExpressionEngineMetrics());
+            var renderTargetLoader =
+                new ModelRenderTargetLoader(storage, expressionModules, candidateScheduler, defaultAnimations);
+            candidateLoader = renderTargetLoader;
+            var contentStore = new RuntimeContentStore(
+                error -> YesSteveModel.LOGGER.warn("Model source instance became corrupted", error));
+            candidateTargets =
+                new ClientModelRenderTargetManager(candidateCatalog, renderTargetLoader, defaultAnimations,
+                    candidateScheduler, candidateTimer, ClientModelService::executeOnRenderThread, contentStore);
+            var previewStore = system.previews();
+            var previews = new ClientPreviewGenerator(candidateCatalog, candidateTargets, renderTargetLoader,
+                previewStore, ClientModelService::executeOnRenderThread, candidateScheduler);
             candidatePreviews = previews;
-            var candidateAssets = new ClientAssetRepository(candidateCatalog, contentStore,
-                    previewStore, candidateWorkers,
-                    previews::resolveLocal, previews::probeRemote);
-            candidateExportRegistration = ModelExportService.registerExporter(
-                    previews::export);
+            var candidateAssets = new ClientAssetRepository(candidateCatalog, contentStore, previewStore, background,
+                content -> previews.resolveLocal(content,
+                    !com.elfmcys.ysm.config.ClientConfig.MODEL_SCREEN_EAGER_LOADING.get()),
+                previews::probeRemote, previews::resolveRaw);
             candidateCatalog.setListener(candidateTargets::catalogChanged);
             var required = candidateTargets.startRequired(candidateCatalog.initialize());
-            return new BootstrapCandidate(new ClientModelService(
-                    candidateWorkers, candidateCatalog, candidateAssets, candidateTargets,
-                    candidatePreviews, candidateExportRegistration,
-                    gameDirectory),
-                    required);
+            return new BootstrapCandidate(new ClientModelService(system, candidateScheduler, candidateTimer,
+                candidateCatalog, candidateAssets, candidateTargets, candidatePreviews, gameDirectory), required);
         } catch (Throwable error) {
             var failure = unwrap(error);
-            if (candidateExportRegistration != null) {
-                try {
-                    candidateExportRegistration.close();
-                } catch (Throwable closeFailure) {
-                    failure.addSuppressed(closeFailure);
-                }
-            }
             if (candidatePreviews != null) {
                 try {
                     candidatePreviews.close();
@@ -166,6 +161,13 @@ public final class ClientModelService implements AutoCloseable {
                     failure.addSuppressed(closeFailure);
                 }
             }
+            if (candidateTargets == null && candidateLoader != null) {
+                try {
+                    candidateLoader.close();
+                } catch (Throwable closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
             if (candidateCatalog != null) {
                 try {
                     candidateCatalog.close();
@@ -174,7 +176,7 @@ public final class ClientModelService implements AutoCloseable {
                 }
             }
             try {
-                candidateWorkers.shutdownNow();
+                finishExecutors(candidateScheduler, candidateTimer);
             } catch (Throwable closeFailure) {
                 failure.addSuppressed(closeFailure);
             }
@@ -182,13 +184,15 @@ public final class ClientModelService implements AutoCloseable {
         }
     }
 
-    public static synchronized ClientModelService start() {
+    public static synchronized ClientModelService start(ModelSystem system, HostAvailability availability) {
+        java.util.Objects.requireNonNull(system, "system");
+        java.util.Objects.requireNonNull(availability, "availability");
         if (INSTANCE != null) {
             return INSTANCE;
         }
-        var candidate = publishRequired(ClientModelService::createCandidate,
-                ClientModelService::completeRequired,
-                value -> INSTANCE = value.service);
+        var candidate = publishRequired(() -> createCandidate(system, availability),
+            ClientModelService::completeRequired, value -> system.attachClientRuntime(value.service),
+            value -> INSTANCE = value.service, () -> system.catalog().activate());
         return candidate.service;
     }
 
@@ -211,13 +215,13 @@ public final class ClientModelService implements AutoCloseable {
         minecraft.tell(task);
     }
 
-    static <T extends AutoCloseable> T publishRequired(
-            Supplier<T> factory, Consumer<T> completeRequired,
-            Consumer<T> publish) {
+    static <T extends AutoCloseable> T publishRequired(Supplier<T> factory, Consumer<T> completeRequired,
+        Consumer<T> attach, Consumer<T> publish, Runnable activate) {
         T candidate = null;
         try {
             candidate = factory.get();
             completeRequired.accept(candidate);
+            attach.accept(candidate);
         } catch (Throwable error) {
             var failure = unwrap(error);
             if (candidate != null) {
@@ -230,6 +234,7 @@ public final class ClientModelService implements AutoCloseable {
             throw sneakyThrow(failure);
         }
         publish.accept(candidate);
+        activate.run();
         return candidate;
     }
 
@@ -245,27 +250,34 @@ public final class ClientModelService implements AutoCloseable {
         return Optional.ofNullable(INSTANCE);
     }
 
+    public CompletableFuture<PreviewStore.EncodedPreview> managementPreview(ModelContent content,
+        com.elfmcys.ysm.model.resource.client.remote.RemoteChunkFetcher fetcher) {
+        if (closed.get() || previewOperations == null)
+            return CompletableFuture
+                .failedFuture(new java.util.concurrent.CancellationException("Client preview owner is closed"));
+        return previewOperations.resolveEncoded(content, fetcher);
+    }
+
     public ClientCatalogSnapshot catalog() {
         return catalogManager.snapshot();
     }
 
     public Object beginConnection() {
-        ModelRuntime.system().activateCatalog();
+        system.catalog().reload();
         return renderTargetManager.beginSession();
     }
 
     public RemoteCatalogActivation beginRemoteActivation(
-            RemoteMetadataFetcher fetcher,
-            RemoteChunkFetcher chunkFetcher,
-            Object sessionOwner) throws IOException {
+        com.elfmcys.ysm.model.resource.client.remote.RemoteMetadataFetcher fetcher,
+        com.elfmcys.ysm.model.resource.client.remote.RemoteChunkFetcher chunkFetcher, Object sessionOwner)
+        throws IOException {
         renderTargetManager.bindRemoteFetcher(sessionOwner, chunkFetcher);
         var active = catalogManager.beginRemote();
-        return new RemoteCatalogActivation(catalogManager::localIndex, active,
-                remoteStore(), fetcher, workers);
+        return new RemoteCatalogActivation(catalogManager::localIndex, active, remoteStore(), fetcher,
+            scheduler.backgroundExecutor());
     }
 
-    public void publishSessionActivation(
-            ActivationSnapshot activation) {
+    public void publishSessionActivation(com.elfmcys.ysm.model.session.client.state.ActivationSnapshot activation) {
         catalogManager.publishSession(activation);
     }
 
@@ -278,8 +290,7 @@ public final class ClientModelService implements AutoCloseable {
     }
 
     public Optional<String> findRenderTarget(Hash256 hash,
-                                             RenderTargetKind kind,
-                                             ResourceLocation entityType) {
+        com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind kind, ResourceLocation entityType) {
         return catalogManager.findRenderTarget(hash, kind, entityType);
     }
 
@@ -307,26 +318,55 @@ public final class ClientModelService implements AutoCloseable {
         return renderTargetManager.request(modelId, targetId, textureName);
     }
 
+    public ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName,
+        com.elfmcys.ysm.model.resource.client.ModelResourcePurpose purpose, Class<?> subjectType) {
+        return renderTargetManager.request(modelId, targetId, textureName, purpose, subjectType);
+    }
+
     public ResourceRequest defaultResourceRequest(String targetId) {
         return renderTargetManager.defaultRequest(targetId);
     }
 
+    public ResourceRequest defaultResourceRequest(String targetId,
+        com.elfmcys.ysm.model.resource.client.ModelResourcePurpose purpose, Class<?> subjectType) {
+        return renderTargetManager.defaultRequest(targetId, purpose, subjectType);
+    }
+
     public ResourceLease getOrStart(ResourceRequest request) {
-        return renderTargetManager.getOrStart(request);
+        return getOrStart(request, WorkPriority.BACKGROUND);
+    }
+
+    public ResourceLease getOrStart(ResourceRequest request, WorkPriority priority) {
+        return renderTargetManager.getOrStart(request, priority);
+    }
+
+    public boolean permitsAcquisition(ResourceRequest request) {
+        return renderTargetManager.permitsAcquisition(request);
     }
 
     public Optional<ResourceLease> findReady(ResourceRequest request) {
         return renderTargetManager.findReady(request);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(
-            ResourceRequest request) {
-        return renderTargetManager.getOrStartOffline(request);
+    public com.elfmcys.ysm.client.demand.ClientDemandCoordinator demands() {
+        return demands;
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(
-            ResourceRequest request) {
-        return renderTargetManager.getOrStartCached(request);
+    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request) {
+        return getOrStartOffline(request, WorkPriority.BACKGROUND);
+    }
+
+    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request,
+        WorkPriority priority) {
+        return renderTargetManager.getOrStartOffline(request, priority);
+    }
+
+    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request) {
+        return getOrStartCached(request, WorkPriority.BACKGROUND);
+    }
+
+    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkPriority priority) {
+        return renderTargetManager.getOrStartCached(request, priority);
     }
 
     public void reportActiveModelFailure(ModelContent version, boolean fallbackAvailable) {
@@ -345,29 +385,35 @@ public final class ClientModelService implements AutoCloseable {
         return new CustomTexture(source);
     }
 
-    public AudioStreamProvider createSoundPlayback(SoundSource source) {
+    public AudioPlaybackFactory createSoundPlayback(SoundSource source) {
         return audioRuntime.createPlayback(source);
     }
 
     public void disconnect(Object sessionOwner) {
+        demands.reset();
         audioRuntime.stopAll();
         renderTargetManager.disconnect(sessionOwner);
         catalogManager.endRemote();
     }
 
     public void tick() {
-        var system = ModelRuntime.system();
         system.tickCatalog();
         system.tickServerRuntime();
         renderTargetManager.tick();
         audioRuntime.maintain();
+        if (com.elfmcys.ysm.util.ResourceDiagnostics.isEnabled() && ++resourceDiagnosticTicks % 20 == 0) {
+            ExpressionEngineMetrics.pollCollectedLoaders();
+            com.elfmcys.ysm.util.ResourceDiagnostics.pollCollections();
+        }
         if (previewOperations != null) {
             previewOperations.tick();
         }
+        com.elfmcys.ysm.network.forge.ClientSessionRuntime.tick();
+        demands.tick();
     }
 
-    public int loadingCount() {
-        return renderTargetManager.loadingCount();
+    public com.elfmcys.ysm.model.catalog.CatalogScanProgress catalogProgress() {
+        return catalogManager.scanProgress();
     }
 
     @Override
@@ -384,37 +430,76 @@ public final class ClientModelService implements AutoCloseable {
     }
 
     private void closeResourcesUnchecked() {
+        Throwable failure = null;
+        failure = closeOwned(demands, failure);
+        failure = closeOwned(audioRuntime, failure);
+        failure = closeOwned(previewOperations, failure);
+        failure = closeOwned(renderTargetManager, failure);
+        failure = closeOwned(catalogManager, failure);
+        failure = closeOwned(detachRemoteStore(), failure);
         try {
-            audioRuntime.close();
-        } finally {
+            finishExecutors(scheduler, notificationTimer);
+        } catch (Throwable closeFailure) {
+            if (failure == null)
+                failure = closeFailure;
+            else
+                failure.addSuppressed(closeFailure);
+        }
+        if (failure != null)
+            throw sneakyThrow(failure);
+    }
+
+    private static Throwable closeOwned(AutoCloseable owner, Throwable failure) {
+        if (owner != null) {
             try {
-                exportPreviewRegistration.close();
-            } finally {
-                try {
-                    if (previewOperations != null) {
-                        previewOperations.close();
-                    }
-                } finally {
+                owner.close();
+            } catch (Throwable closeFailure) {
+                if (failure == null)
+                    return closeFailure;
+                failure.addSuppressed(closeFailure);
+            }
+        }
+        return failure;
+    }
+
+    private static void finishExecutors(ClientResourceScheduler scheduler, ScheduledThreadPoolExecutor timer) {
+        try {
+            if (timer != null)
+                timer.shutdown();
+        } finally {
+            scheduler.shutdown();
+        }
+        var interrupted = false;
+        try {
+            if (timer != null) {
+                while (!timer.isTerminated()) {
                     try {
-                        renderTargetManager.close();
-                    } finally {
-                        try {
-                            catalogManager.close();
-                        } finally {
-                            try {
-                                var store = detachRemoteStore();
-                                if (store != null) {
-                                    store.close();
-                                }
-                            } finally {
-                                workers.shutdown();
-                                awaitTermination(workers);
-                            }
-                        }
+                        timer.awaitTermination(Long.MAX_VALUE, java.util.concurrent.TimeUnit.NANOSECONDS);
+                    } catch (InterruptedException ignored) {
+                        interrupted = true;
                     }
                 }
             }
+            while (true) {
+                try {
+                    scheduler.awaitTermination();
+                    break;
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted)
+                Thread.currentThread().interrupt();
         }
+    }
+
+    static ModelExportService.Environment createExportEnvironment(net.minecraft.server.MinecraftServer server,
+        java.util.function.Supplier<com.elfmcys.ysm.model.catalog.snapshot.ServerCatalog> catalog) {
+        var service = instance();
+        return new ModelExportService.Environment(server,
+            () -> !service.closed.get() && Minecraft.getInstance().getSingleplayerServer() == server, catalog,
+            service.previewOperations::export);
     }
 
     private synchronized RemoteModelStore remoteStore() throws IOException {
@@ -422,7 +507,7 @@ public final class ClientModelService implements AutoCloseable {
             throw new IllegalStateException("Client model service is closed");
         }
         if (remoteStore == null) {
-            remoteStore = RemoteModelStore.create(gameDirectory);
+            remoteStore = RemoteModelStore.create(system.storage());
         }
         return remoteStore;
     }
@@ -433,28 +518,10 @@ public final class ClientModelService implements AutoCloseable {
         return store;
     }
 
-    private static void awaitTermination(ScheduledThreadPoolExecutor workers) {
-        var interrupted = false;
-        while (!workers.isTerminated()) {
-            try {
-                if (workers.awaitTermination(Long.MAX_VALUE,
-                        TimeUnit.NANOSECONDS)) {
-                    break;
-                }
-            } catch (InterruptedException ignored) {
-                interrupted = true;
-            }
-        }
-        if (interrupted) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
     private static Throwable unwrap(Throwable error) {
         var current = error;
-        while ((current instanceof CompletionException
-                || current instanceof ExecutionException)
-                && current.getCause() != null) {
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+            && current.getCause() != null) {
             current = current.getCause();
         }
         return current;
@@ -467,12 +534,11 @@ public final class ClientModelService implements AutoCloseable {
 
     @SuppressWarnings("unchecked")
     private static <E extends Throwable> void throwUnchecked(Throwable error) throws E {
-        throw (E) error;
+        throw (E)error;
     }
 
-    private record BootstrapCandidate(
-            ClientModelService service,
-            CompletableFuture<Void> required) implements AutoCloseable {
+    private record BootstrapCandidate(ClientModelService service,
+        CompletableFuture<Void> required) implements AutoCloseable {
         @Override
         public void close() {
             service.close();

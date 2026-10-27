@@ -16,12 +16,9 @@ import org.lwjgl.glfw.GLFW;
 
 @Mod.EventBusSubscriber(value = Dist.CLIENT)
 public class ExtraPlayerConfigKey {
-    public static final KeyMapping EXTRA_PLAYER_RENDER_KEY = new KeyMapping("key.yes_steve_model.open_extra_player_render.desc",
-            KeyConflictContext.IN_GAME,
-            KeyModifier.ALT,
-            InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_P,
-            "key.category.yes_steve_model");
+    public static final KeyMapping EXTRA_PLAYER_RENDER_KEY =
+        new KeyMapping("key.yes_steve_model.open_extra_player_render.desc", KeyConflictContext.IN_GAME, KeyModifier.ALT,
+            InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_P, "key.category.yes_steve_model");
 
     @SubscribeEvent
     public static void onKeyboardInput(InputEvent.Key event) {

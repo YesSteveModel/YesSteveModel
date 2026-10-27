@@ -1,4 +1,3 @@
 package com.elfmcys.ysm.format.parser.thumnbail;
 
-public class ThumbGenerator {
-}
+public class ThumbGenerator {}

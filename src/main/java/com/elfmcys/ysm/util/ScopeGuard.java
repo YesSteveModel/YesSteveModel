@@ -28,7 +28,7 @@ public final class ScopeGuard<T extends AutoCloseable> implements AutoCloseable 
         if (!released) {
             try {
                 obj.close();
-            } catch (Exception e) {     // 为什么析构要抛异常？
+            } catch (Exception e) { // 为什么析构要抛异常？
                 throw new RuntimeException(e);
             }
         }

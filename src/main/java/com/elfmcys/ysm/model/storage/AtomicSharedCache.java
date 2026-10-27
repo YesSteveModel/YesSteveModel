@@ -1,32 +1,24 @@
 package com.elfmcys.ysm.model.storage;
 
-import com.elfmcys.ysm.YesSteveModel;
+import com.elfmcys.ysm.util.ResourceDiagnostics;
 import com.elfmcys.ysm.format.AssetLoadException;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Cross-process, immutable-object writer used by the preview, converted and baked caches. One
- * instance guards one physical store root: targets must stay inside it and its key locks live
- * under {@code <root>/locks}, so caches in different roots never share a lock directory.
+ * Cross-process, immutable-object writer used by the preview, converted and baked caches. One instance guards one
+ * physical store root: targets must stay inside it and its key locks live under {@code <root>/locks}, so caches in
+ * different roots never share a lock directory.
  */
 public final class AtomicSharedCache {
-    private static final ConcurrentHashMap<Path, JvmLock> JVM_LOCKS =
-            new ConcurrentHashMap<>();
     private static final String LOCK_SUFFIX = ".lck";
 
     /** Key-lock directory inside one shared-cache root. */
@@ -34,15 +26,83 @@ public final class AtomicSharedCache {
 
     private final Path cacheRoot;
     private final AtomicMove atomicMove;
+    private final StagingFlush stagingFlush;
+    private volatile CacheDirectoryGuard guard;
+    private final DerivedStorageWork derivedWork;
 
     public AtomicSharedCache(Path cacheRoot) {
-        this(cacheRoot, AtomicSharedCache::moveCommitted);
+        this(cacheRoot, AtomicReplacement::run);
     }
 
-    AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove) {
-        this.cacheRoot = Objects.requireNonNull(cacheRoot, "cacheRoot")
-                .toAbsolutePath().normalize();
+    public AtomicSharedCache(CacheDirectoryGuard guard) {
+        this(guard, AtomicReplacement::run);
+    }
+
+    public AtomicSharedCache(CacheDirectoryGuard guard, AtomicMove atomicMove) {
+        this(guard.root(), atomicMove);
+        this.guard = guard;
+    }
+
+    public CacheDirectoryGuard guard() throws IOException {
+        var current = guard;
+        if (current != null)
+            return current;
+        synchronized (this) {
+            if (guard == null)
+                guard = CacheDirectoryGuard.open(cacheRoot);
+            return guard;
+        }
+    }
+
+    public CacheDirectoryGuard.Observation observe(Path target, boolean createParents) throws IOException {
+        var owner = guard();
+        var absolute = target.toAbsolutePath().normalize();
+        if (absolute.startsWith(cacheRoot))
+            absolute = owner.root().resolve(cacheRoot.relativize(absolute));
+        return owner.observe(absolute, createParents);
+    }
+
+    public FileChannel openRead(Path target) throws IOException {
+        try {
+            return observe(target, false).open(java.util.Set.of(StandardOpenOption.READ));
+        } catch (java.nio.file.NoSuchFileException absent) {
+            throw absent;
+        } catch (IOException | SecurityException failure) {
+            throw AssetLoadException.access("Failed to open guarded cache data: " + target, failure);
+        }
+    }
+
+    public AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove) {
+        this(cacheRoot, atomicMove, new DerivedStorageWork());
+    }
+
+    public AtomicSharedCache(Path cacheRoot, DerivedStorageWork derivedWork) {
+        this(cacheRoot, AtomicReplacement::run, derivedWork);
+    }
+
+    public AtomicSharedCache(CacheDirectoryGuard guard, DerivedStorageWork derivedWork) {
+        this(guard.root(), AtomicReplacement::run, derivedWork);
+        this.guard = guard;
+    }
+
+    AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove, StagingFlush stagingFlush) {
+        this(cacheRoot, atomicMove, new DerivedStorageWork(), stagingFlush);
+    }
+
+    private AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove, DerivedStorageWork derivedWork) {
+        this(cacheRoot, atomicMove, derivedWork, CacheFile::force);
+    }
+
+    private AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove, DerivedStorageWork derivedWork,
+        StagingFlush stagingFlush) {
+        this.cacheRoot = Objects.requireNonNull(cacheRoot, "cacheRoot").toAbsolutePath().normalize();
         this.atomicMove = Objects.requireNonNull(atomicMove, "atomicMove");
+        this.stagingFlush = Objects.requireNonNull(stagingFlush, "stagingFlush");
+        this.derivedWork = Objects.requireNonNull(derivedWork, "derivedWork");
+    }
+
+    public DerivedStorageWork derivedWork() {
+        return derivedWork;
     }
 
     /** Key-lock directory of one shared-cache root. */
@@ -50,121 +110,100 @@ public final class AtomicSharedCache {
         return cacheRoot.resolve(LOCK_DIRECTORY);
     }
 
-    public void materialize(String namespace, String key, Path target,
-                            CacheValidator validator, CacheWriter writer) throws IOException {
+    public void materialize(String namespace, String key, Path target, CacheValidator validator, CacheWriter writer)
+        throws IOException {
         materialize(namespace, key, target, validator, writer, true);
     }
 
     /** Keeps an old exact object addressable until its verified replacement can commit. */
-    public void materializeReplacing(String namespace, String key, Path target,
-                                     CacheValidator validator, CacheWriter writer)
-            throws IOException {
+    public void materializeReplacing(String namespace, String key, Path target, CacheValidator validator,
+        CacheWriter writer) throws IOException {
         materialize(namespace, key, target, validator, writer, false);
     }
 
-    private void materialize(String namespace, String key, Path target,
-                             CacheValidator validator, CacheWriter writer,
-                             boolean quarantineInvalid) throws IOException {
-        target = checkedTarget(target);
-        if (isValid(target, validator)) {
-            YesSteveModel.LOGGER.debug("Shared cache hit namespace={} key={} target={}",
-                    namespace, key, target);
-            return;
-        }
+    /** The caller linearizes the final replacement with retirement of its effect capability. */
+    public void replaceValidated(String namespace, String key, Path target, CacheValidator validator,
+        CacheWriter writer, CommitGate gate) throws IOException {
+        materialize(namespace, key, target, validator, writer, false, Objects.requireNonNull(gate, "gate"), true);
+    }
 
-        var checked = target;
+    private void materialize(String namespace, String key, Path target, CacheValidator validator, CacheWriter writer,
+        boolean quarantineInvalid) throws IOException {
+        materialize(namespace, key, target, validator, writer, quarantineInvalid, AtomicReplacement::run, false);
+    }
+
+    private void materialize(String namespace, String key, Path target, CacheValidator validator, CacheWriter writer,
+        boolean quarantineInvalid, CommitGate gate, boolean replace) throws IOException {
+        var observation = observe(target, true);
         withKeyLock(namespace, key, () -> {
-                if (isValid(checked, validator)) {
-                    YesSteveModel.LOGGER.debug(
-                            "Shared cache hit after lock namespace={} key={} target={}",
-                            namespace, key, checked);
+            try (var parent = observation.acquire()) {
+                var name = observation.target().getFileName().toString();
+                if (!replace && isValid(parent, name, validator))
                     return null;
-                }
-                if (quarantineInvalid && quarantineInvalid(checked)) {
-                    YesSteveModel.LOGGER.debug(
-                            "Quarantined invalid shared cache object namespace={} key={} target={}",
-                            namespace, key, checked);
-                }
-                Files.createDirectories(checked.getParent());
-                var temporary = checked.resolveSibling(checked.getFileName() + ".tmp-"
-                        + ProcessHandle.current().pid() + "-" + UUID.randomUUID());
-                var startedAt = System.nanoTime();
-                try {
-                    writer.write(temporary);
-                    if (!isValid(temporary, validator)) {
-                        throw AssetLoadException.content(
-                                "Cache writer produced an invalid object: " + checked);
+                if (quarantineInvalid) {
+                    try {
+                        parent.move(name, parent.fileIdentity(name), parent, name + ".corrupt-" + UUID.randomUUID());
+                    } catch (java.nio.file.NoSuchFileException absent) {
                     }
-                    atomicMove.move(temporary, checked);
-                    YesSteveModel.LOGGER.debug(
-                            "Materialized shared cache object namespace={} key={} target={} elapsedMs={}",
-                            namespace, key, checked,
-                            Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
-                } finally {
-                    Files.deleteIfExists(temporary);
                 }
-                return null;
+                var staging = new CacheFile(parent, name + ".tmp-" + UUID.randomUUID());
+                boolean committed = false;
+                Throwable failure = null;
+                try {
+                    writer.write(staging);
+                    observation.verify();
+                    staging.position(0);
+                    if (!validator.validate(staging))
+                        throw AssetLoadException
+                            .content("Cache writer produced an invalid object: " + observation.target());
+                    stagingFlush.force(staging);
+                    gate.commit(() -> {
+                        observation.verify();
+                        atomicMove.move(() -> parent.move(staging.name(), staging.identity(), parent, name));
+                    });
+                    committed = true;
+                    if ("baked".equals(namespace) || "baked-animation".equals(namespace))
+                        ResourceDiagnostics.log("bake cache commit: {} namespace={} key={}", observation.target(),
+                            namespace, key);
+                } catch (IOException | RuntimeException | Error error) {
+                    failure = error;
+                    throw error;
+                } finally {
+                    try {
+                        staging.release();
+                        if (!committed)
+                            staging.delete();
+                    } catch (IOException cleanup) {
+                        if (failure != null)
+                            failure.addSuppressed(cleanup);
+                        else
+                            throw cleanup;
+                    }
+                }
+            }
+            return null;
         });
     }
 
-    public <T> T withKeyLock(String namespace, String key, LockedOperation<T> operation)
-            throws IOException {
+    public <T> T withKeyLock(String namespace, String key, LockedOperation<T> operation) throws IOException {
         var lockFile = lockPath(namespace, key);
-        Files.createDirectories(lockFile.getParent());
-        var jvmLock = acquireJvmLock(lockFile);
-        try {
-            try (var lockChannel = FileChannel.open(lockFile,
-                    StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-                 var ignored = lockChannel.lock()) {
-                return operation.run();
-            }
-        } finally {
-            releaseJvmLock(lockFile, jvmLock);
-        }
-    }
-
-    Path checkedTarget(Path target) {
-        var checked = target.toAbsolutePath().normalize();
-        if (!checked.startsWith(cacheRoot)) {
-            throw new IllegalArgumentException("Shared cache target escapes its root: " + target);
-        }
-        var current = cacheRoot;
-        if (Files.isSymbolicLink(current)) {
-            throw new IllegalArgumentException("Shared cache root must not be a link: " + current);
-        }
-        for (var part : cacheRoot.relativize(checked)) {
-            current = current.resolve(part);
-            if (Files.isSymbolicLink(current)) {
-                throw new IllegalArgumentException(
-                        "Shared cache target traverses a link: " + current);
-            }
-        }
-        return checked;
+        var observation = observe(lockFile, true);
+        return SharedCacheLocks.withLock(observation, operation);
     }
 
     private Path lockPath(String namespace, String key) {
         var digest = securityDigest((namespace + "\0" + key).getBytes(StandardCharsets.UTF_8));
         return locksRoot(cacheRoot).resolve(sanitize(namespace))
-                .resolve(HexFormat.of().formatHex(digest) + LOCK_SUFFIX);
+            .resolve(HexFormat.of().formatHex(digest) + LOCK_SUFFIX);
     }
 
-    private static boolean isValid(Path path, CacheValidator validator) throws IOException {
-        return Files.isRegularFile(path) && validator.validate(path);
-    }
-
-    static boolean quarantineInvalid(Path target) throws IOException {
-        if (!Files.exists(target)) {
+    private static boolean isValid(com.elfmcys.ysm.util.DirectoryAccess parent, String name, CacheValidator validator)
+        throws IOException {
+        try (var channel = parent.file(name, false, false, false)) {
+            return validator.validate(new CacheFile(channel));
+        } catch (java.nio.file.NoSuchFileException absent) {
             return false;
         }
-        var quarantine = target.resolveSibling(target.getFileName() + ".corrupt-"
-                + Instant.now().toEpochMilli());
-        Files.move(target, quarantine, StandardCopyOption.REPLACE_EXISTING);
-        return true;
-    }
-
-    public static void moveCommitted(Path temporary, Path target) throws IOException {
-        Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING);
     }
 
     private static String sanitize(String value) {
@@ -173,12 +212,12 @@ public final class AtomicSharedCache {
 
     @FunctionalInterface
     public interface CacheValidator {
-        boolean validate(Path path) throws IOException;
+        boolean validate(CacheFile file) throws IOException;
     }
 
     @FunctionalInterface
     public interface CacheWriter {
-        void write(Path path) throws IOException;
+        void write(CacheFile file) throws IOException;
     }
 
     @FunctionalInterface
@@ -187,8 +226,23 @@ public final class AtomicSharedCache {
     }
 
     @FunctionalInterface
-    interface AtomicMove {
-        void move(Path temporary, Path target) throws IOException;
+    public interface CommitGate {
+        void commit(AtomicReplacement replacement) throws IOException;
+    }
+
+    @FunctionalInterface
+    public interface AtomicReplacement {
+        void run() throws IOException;
+    }
+
+    @FunctionalInterface
+    public interface AtomicMove {
+        void move(AtomicReplacement replacement) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface StagingFlush {
+        void force(CacheFile file) throws IOException;
     }
 
     private static byte[] securityDigest(byte[] input) {
@@ -199,29 +253,4 @@ public final class AtomicSharedCache {
         }
     }
 
-    private static JvmLock acquireJvmLock(Path path) {
-        var value = JVM_LOCKS.compute(path, (ignored, current) -> {
-            var result = current == null ? new JvmLock() : current;
-            result.users++;
-            return result;
-        });
-        value.lock.lock();
-        return value;
-    }
-
-    private static void releaseJvmLock(Path path, JvmLock value) {
-        value.lock.unlock();
-        JVM_LOCKS.compute(path, (ignored, current) -> {
-            if (current != value || value.users <= 0) {
-                throw new IllegalStateException("Unbalanced shared-cache JVM lock");
-            }
-            value.users--;
-            return value.users == 0 ? null : value;
-        });
-    }
-
-    private static final class JvmLock {
-        private final ReentrantLock lock = new ReentrantLock();
-        private int users;
-    }
 }

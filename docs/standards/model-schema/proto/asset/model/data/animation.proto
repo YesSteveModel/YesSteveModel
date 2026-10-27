@@ -3,7 +3,7 @@ syntax = "proto3";
 
 package mixel.asset.model.data;
 
-import "common/program.proto";
+import "expression/program.proto";
 
 message AnimationFile {
   repeated Animation animations = 1;
@@ -12,7 +12,7 @@ message AnimationFile {
 message Animation {
   string name = 1;
   float length = 2;
-  optional LoopType loop = 3;
+  LoopType loop = 3;
   optional ExpressionValue blend_weight = 4;
   repeated BoneAnimation bone_animations = 5;
   repeated InstructionKeyFrame instruction_keyframes = 6;
@@ -22,7 +22,7 @@ message Animation {
 message ExpressionValue {
   oneof value {
     float num = 1;
-    common.Program program = 2;
+    expression.program.EncodedProgram program = 2;
   }
 }
 
@@ -46,7 +46,7 @@ message EventKeyFrame {
 }
 
 message InstructionKeyFrame {
-  common.Program programs = 1;
+  repeated expression.program.EncodedProgram programs = 1;
   float start_tick = 2;
 }
 

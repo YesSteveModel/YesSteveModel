@@ -39,7 +39,7 @@ Info 聚合语言文件、选择界面设置、metadata、properties、export �
 
 ## Exact tuple 与 representation 激活
 
-Exact tuple 是 `(ModelId, ContainerId)`，分别标识模型与精确容器表示；产品含义见[模型身份](../../product-decisions/decisions/model-identity.md)。Java 对象及所有权见[Catalog 与来源](../../architecture/model-management/catalog-and-sources.md)。
+Exact tuple 是 `(ModelId, ContainerId)`，分别标识模型与精确容器表示；产品含义见[模型身份](../../product-decisions/decisions/model-identity.md)。Java 对象及所有权见[Catalog 与来源](../../architecture/model-management/catalog/overview.md)。
 
 Remote cache、网络下载和其他远端来源只能以 exact tuple 满足 publication。本地来源是唯一例外：完整打开容器、校验 Manifest 并证明 `ModelId` 相同后，可以用不同 `ContainerId` 的本地 representation 满足 publication。该例外由 local discovery/index 来源证明，不能根据磁盘路径或 cache 落盘位置推断。
 
@@ -97,7 +97,7 @@ Legacy v3 conversion adapter 是唯一例外。其 original source-file closure 
 
 重编码或重封装工具必须保留既有 `ModelId`；直接创建新原始来源的工具必须按上述算法生成身份，并避免把同一身份指向不同内容。
 
-`free` 是模型声明的使用属性，不替代许可证判断。`origin_ver` 是 producer-defined provenance hint，不是可靠的原始模型版本，也不参与 compatibility 或 identity 判断。
+`free` 是模型声明的使用属性，不替代许可证判断。`origin_ver` 是 producer-defined 来源版本字符串；Schema 不用它判断格式兼容或身份。Producer 可以用代表版本保留历史行为级别，因此该字段不保证还原实际导出工具版本。导出模组名称、ID 与版本由容器 property 1 记录，签名由 property 3 单独记录。
 
 M1 consumer 在模型进入 catalog、同步或缓存身份域前必须验证 `model_id` 长度。容器 verification 或 Manifest payload hash 不能替代此检查。
 

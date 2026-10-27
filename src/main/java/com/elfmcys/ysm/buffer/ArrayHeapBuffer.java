@@ -18,7 +18,7 @@ class ArrayHeapBuffer implements ArrayBuffer {
             throw new IllegalArgumentException("Size too large");
         }
         data = pooled ? PooledByteBufAllocator.DEFAULT.heapBuffer(size, size).writerIndex(size)
-                : Unpooled.wrappedBuffer(new byte[size], 0, size).writerIndex(size);
+            : Unpooled.wrappedBuffer(new byte[size], 0, size).writerIndex(size);
         ownership = new Ownership(data);
     }
 
@@ -31,9 +31,8 @@ class ArrayHeapBuffer implements ArrayBuffer {
         if (!buffer.hasArray()) {
             throw new IllegalArgumentException("Buffer has no backing array");
         }
-        data = Unpooled.wrappedBuffer(buffer.array(),
-                buffer.arrayOffset() + buffer.position(), buffer.remaining())
-                .writerIndex(buffer.remaining());
+        data = Unpooled.wrappedBuffer(buffer.array(), buffer.arrayOffset() + buffer.position(), buffer.remaining())
+            .writerIndex(buffer.remaining());
         ownership = owning ? new Ownership(data) : null;
     }
 

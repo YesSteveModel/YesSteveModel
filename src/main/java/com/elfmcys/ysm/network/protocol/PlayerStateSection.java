@@ -1,8 +1,5 @@
 package com.elfmcys.ysm.network.protocol;
 
 public enum PlayerStateSection {
-    GAMEPLAY,
-    EFFECTS,
-    ANIMATION,
-    ROAMING
+    GAMEPLAY, EFFECTS, ANIMATION, ROAMING
 }

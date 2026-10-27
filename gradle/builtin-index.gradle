@@ -1,16 +1,15 @@
 import com.elfmcys.ysm.gradle.BuiltinModelToolTask
 
 sourceSets {
-    builtinIndexTool {
-        java.srcDir 'src/builtinIndexTool/java'
+    buildTool {
         compileClasspath += sourceSets.main.output.classesDirs + sourceSets.main.compileClasspath
-        runtimeClasspath = output + sourceSets.main.output.classesDirs + configurations.runtimeClasspath
+        runtimeClasspath = output + sourceSets.main.output.classesDirs + sourceSets.declaration.output + configurations.runtimeClasspath
     }
 }
 
 sourceSets.test {
-    compileClasspath += sourceSets.builtinIndexTool.output
-    runtimeClasspath += sourceSets.builtinIndexTool.output
+    compileClasspath += sourceSets.buildTool.output
+    runtimeClasspath += sourceSets.buildTool.output
 }
 
 def builtinModelRoot = layout.projectDirectory.dir('src/main/resources/assets/ysm/builtin')
@@ -29,7 +28,7 @@ def builtinToolLauncher = javaToolchains.launcherFor {
 
 def configureBuiltinToolTask = { BuiltinModelToolTask task, String command ->
     task.command.set(command)
-    task.toolClasspath.from(sourceSets.builtinIndexTool.runtimeClasspath)
+    task.toolClasspath.from(sourceSets.buildTool.runtimeClasspath)
     task.nativeLibrary.set(ysmNativeLibraryFile)
     task.operatingSystem.set(providers.systemProperty('os.name'))
     task.architecture.set(providers.systemProperty('os.arch'))
@@ -47,7 +46,7 @@ def configureBuiltinToolTask = { BuiltinModelToolTask task, String command ->
 tasks.register('generateBuiltinDefaultContract', BuiltinModelToolTask) {
     group = 'build'
     description = 'Materializes builtin/default and generates its reusable identity contract.'
-    dependsOn tasks.named('compileJava'), tasks.named('compileBuiltinIndexToolJava')
+    dependsOn tasks.named('compileJava'), tasks.named('compileBuildToolJava')
     configureBuiltinToolTask(delegate, BuiltinModelToolTask.GENERATE_DEFAULT_CONTRACT)
     sourceRoot.set(builtinDefaultRoot)
     sourceFiles.from(builtinDefaultRoot.asFileTree)
@@ -95,7 +94,7 @@ tasks.named('check') {
 }
 
 tasks.withType(Jar).configureEach {
-    if (name != 'relocateProcessorAsm') {
+    if (!(name in ['relocateProcessorAsm', 'declarationProcessorJar'])) {
         dependsOn tasks.named('verifyBuiltinModelIndex')
     }
 }

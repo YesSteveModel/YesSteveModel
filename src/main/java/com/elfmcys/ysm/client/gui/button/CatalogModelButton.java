@@ -4,7 +4,8 @@ import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.capability.StarModelsCapabilityProvider;
 import com.elfmcys.ysm.client.event.RegisterEntityRenderersEvent;
 import com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity;
-import com.elfmcys.ysm.model.resource.client.asset.ClientAssetBatch;
+import com.elfmcys.ysm.model.resource.client.asset.PageImages;
+import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.model.catalog.client.entry.CatalogModelMetadata;
 import com.elfmcys.ysm.model.catalog.client.entry.ClientCatalogEntry;
@@ -21,16 +22,14 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.resources.language.I18n;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FormattedCharSequence;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
 import java.util.List;
 
-/** A catalog entry that progresses from loading indicator to preview image to a full local renderTarget. */
+/** Keeps images independent from the card's temporary live presentation. */
 public final class CatalogModelButton extends Button implements AutoCloseable {
     private static final ResourceLocation ICON = new ResourceLocation(YesSteveModel.MOD_ID, "texture/icon.png");
     private static final int CARD_OVERLAY_Z = 3500;
@@ -39,25 +38,28 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
     private final ClientCatalogEntry entry;
     private final CatalogModelMetadata metadata;
     private final CustomGuiPlayerEntity entity;
-    private final boolean needAuth;
+    private final java.util.function.BooleanSupplier authorizationRequired;
     private final SelectionHandler selection;
     private final RenderTargetHandler openRenderTarget;
     private final Component pathName;
     private final CatalogModelCardState state;
+    private final java.util.function.BooleanSupplier navigation;
 
-    public CatalogModelButton(int x, int y, ClientCatalogEntry entry, boolean needAuth,
-                              ClientAssetBatch assets,
-                              CustomGuiPlayerEntity entity, SelectionHandler selection,
-                              RenderTargetHandler openRenderTarget) {
-        super(x, y, 52, 90, name(CatalogModelMetadata.from(entry)), ignored -> { }, DEFAULT_NARRATION);
+    public CatalogModelButton(int x, int y, ClientCatalogEntry entry,
+        java.util.function.BooleanSupplier authorizationRequired, PageImages assets,
+        ClientDemandCoordinator.PageScope page, CustomGuiPlayerEntity entity, SelectionHandler selection,
+        RenderTargetHandler openRenderTarget, java.util.function.BooleanSupplier navigation) {
+        super(x, y, 52, 90, name(CatalogModelMetadata.from(entry)), ignored -> {
+        }, DEFAULT_NARRATION);
         this.entry = entry;
         this.metadata = CatalogModelMetadata.from(entry);
         this.entity = entity;
-        this.needAuth = needAuth;
+        this.authorizationRequired = authorizationRequired;
         this.selection = selection;
         this.openRenderTarget = openRenderTarget;
+        this.navigation = navigation;
         this.pathName = Component.literal(ModelIdUtil.getFileNameFromPath(metadata.path()));
-        this.state = new CatalogModelCardState(assets, entry, metadata, entity);
+        this.state = new CatalogModelCardState(assets, page, entry, metadata, entity);
     }
 
     public Hash256 modelHash() {
@@ -68,8 +70,8 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
         return state.renderTarget();
     }
 
-    public void updateDemand(long hoverGeneration, boolean bakeEligible) {
-        state.updateDemand(hoverGeneration, bakeEligible);
+    public ClientDemandCoordinator.Target target() {
+        return state.target();
     }
 
     @Override
@@ -79,25 +81,45 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
 
     @Override
     public void onPress() {
-        if (!needAuth) {
+        if (!authorizationRequired.getAsBoolean()) {
             selection.select(entry.modelHash(), metadata.path(), metadata.defaultTexture(), state.renderTarget());
         }
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        var renderTarget = state.renderTarget();
-        if (button == 1 && isMouseOver(mouseX, mouseY) && renderTarget != null) {
-            openRenderTarget.open(entry.modelHash(), metadata.path(), renderTarget);
+        if (isMouseOver(mouseX, mouseY) && Minecraft.getInstance() != null && Screen.hasControlDown()
+            && CatalogCardActions.click(true, button, metadata.path(), entry,
+                Minecraft.getInstance().hasSingleplayerServer(),
+                value -> Minecraft.getInstance().keyboardHandler.setClipboard(value),
+                CatalogModelButton::openDirectory))
+            return true;
+        if (button == 1 && isMouseOver(mouseX, mouseY) && !authorizationRequired.getAsBoolean()
+            && navigation.getAsBoolean()) {
+            openRenderTarget.open(target());
             return true;
         }
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
+    private static void openDirectory(java.nio.file.Path directory) {
+        try {
+            if (!java.nio.file.Files.readAttributes(directory, java.nio.file.attribute.BasicFileAttributes.class)
+                .isDirectory())
+                throw new java.io.IOException("Model entry directory is unavailable");
+            Util.getPlatform().openFile(directory.toFile());
+        } catch (java.io.IOException | RuntimeException failure) {
+            YesSteveModel.LOGGER.error("Failed to open model entry directory", failure);
+            var player = Minecraft.getInstance().player;
+            if (player != null)
+                player.displayClientMessage(Component.literal("Unable to open the model directory"), false);
+        }
+    }
+
     @Override
     public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         state.updatePreviewAnimations(isHovered(), isFocused(), Util.getMillis());
-        var color = needAuth ? 0x7F000000 : 0xFF434242;
+        var color = authorizationRequired.getAsBoolean() ? 0x7F000000 : 0xFF434242;
         graphics.fillGradient(getX(), getY(), getX() + width, getY() + height, color, color);
         var renderTarget = state.renderTarget();
         if (renderTarget != null) {
@@ -108,8 +130,11 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
             var preview = state.preview();
             if (preview != null) {
                 renderImage(graphics, preview);
-            } else {
+            } else if (state.loading()) {
                 renderLoading(graphics);
+            } else {
+                graphics.drawCenteredString(Minecraft.getInstance().font, "?", getX() + width / 2,
+                    getY() + (height - 20) / 2, 0xFFAAAAAA);
             }
         }
         renderName(graphics);
@@ -122,17 +147,13 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
         }
         var locale = Minecraft.getInstance().getLanguageManager().getSelected();
         var input = CatalogModelTooltipFormatter.input(metadata, entry, locale, state.loadError());
-        var lines = CatalogModelTooltipFormatter.format(input, Screen.hasShiftDown(), I18n::get);
-        var wrapped = new ArrayList<FormattedCharSequence>();
-        for (var line : lines) {
-            wrapped.addAll(screen.getMinecraft().font.split(
-                    Component.literal(line.text()).withStyle(line.color()),
-                    CatalogModelTooltipFormatter.MAX_WIDTH));
-        }
+        var player = Minecraft.getInstance().player;
+        var lines = CatalogModelTooltipFormatter.format(input, Screen.hasShiftDown(), Component::translatable,
+            state.missingPreview(), player != null && player.hasPermissions(2));
         graphics.pose().pushPose();
         try {
             graphics.pose().translate(0, 0, TOOLTIP_Z);
-            graphics.renderTooltip(screen.getMinecraft().font, wrapped, mouseX, mouseY);
+            graphics.renderComponentTooltip(screen.getMinecraft().font, lines, mouseX, mouseY);
         } finally {
             graphics.pose().popPose();
         }
@@ -140,7 +161,7 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
 
     @Override
     protected boolean clicked(double mouseX, double mouseY) {
-        return !needAuth && super.clicked(mouseX, mouseY);
+        return !authorizationRequired.getAsBoolean() && super.clicked(mouseX, mouseY);
     }
 
     @Override
@@ -151,14 +172,15 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
     private void renderEntity(GuiGraphics graphics) {
         Window window = Minecraft.getInstance().getWindow();
         double scale = window.getGuiScale();
-        RenderSystem.enableScissor((int) (getX() * scale),
-                (int) (window.getHeight() - ((getY() + height - 20) * scale)),
-                (int) (width * scale), (int) ((height - 20) * scale));
-        RenderUtil.renderModelInGui(getX() + width / 2f, getY() + height / 2f + 20f, 30f,
-                Minecraft.getInstance().getFrameTime(), entity,
-                RegisterEntityRenderersEvent.getPlayerRenderer(),
+        RenderSystem.enableScissor((int)(getX() * scale), (int)(window.getHeight() - ((getY() + height - 20) * scale)),
+            (int)(width * scale), (int)((height - 20) * scale));
+        try {
+            RenderUtil.renderModelInGui(getX() + width / 2.0F, getY() + height / 2.0F + 20.0F, 30.0F,
+                Minecraft.getInstance().getFrameTime(), entity, RegisterEntityRenderersEvent.getPlayerRenderer(),
                 metadata.info().getSettings().disablePreviewRotation(), true);
-        RenderSystem.disableScissor();
+        } finally {
+            RenderSystem.disableScissor();
+        }
     }
 
     private void renderImage(GuiGraphics graphics, @Nullable TextureHolder image) {
@@ -172,10 +194,10 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
     }
 
     private void renderLoading(GuiGraphics graphics) {
-        var phase = (int) ((Util.getMillis() / 250L) % 4L);
+        var phase = (int)((Util.getMillis() / 250L) % 4L);
         var dots = ".".repeat(phase);
-        graphics.drawCenteredString(Minecraft.getInstance().font, dots, getX() + width / 2,
-                getY() + (height - 20) / 2, 0xFFF3EFE0);
+        graphics.drawCenteredString(Minecraft.getInstance().font, dots, getX() + width / 2, getY() + (height - 20) / 2,
+            0xFFF3EFE0);
     }
 
     private void renderName(GuiGraphics graphics) {
@@ -191,18 +213,16 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
 
     private void renderState(GuiGraphics graphics) {
         var z = CARD_OVERLAY_Z;
-        if (!needAuth && isHoveredOrFocused()) {
-            graphics.fillGradient(getX(), getY() + 1, getX() + 1, getY() + height - 1,
-                    z, 0xFFF3EFE0, 0xFFF3EFE0);
+        if (!authorizationRequired.getAsBoolean() && isHoveredOrFocused() && navigation.getAsBoolean()) {
+            graphics.fillGradient(getX(), getY() + 1, getX() + 1, getY() + height - 1, z, 0xFFF3EFE0, 0xFFF3EFE0);
             graphics.fillGradient(getX(), getY(), getX() + width, getY() + 1, z, 0xFFF3EFE0, 0xFFF3EFE0);
-            graphics.fillGradient(getX() + width - 1, getY() + 1, getX() + width, getY() + height - 1,
-                    z, 0xFFF3EFE0, 0xFFF3EFE0);
-            graphics.fillGradient(getX(), getY() + height - 1, getX() + width, getY() + height,
-                    z, 0xFFF3EFE0, 0xFFF3EFE0);
+            graphics.fillGradient(getX() + width - 1, getY() + 1, getX() + width, getY() + height - 1, z, 0xFFF3EFE0,
+                0xFFF3EFE0);
+            graphics.fillGradient(getX(), getY() + height - 1, getX() + width, getY() + height, z, 0xFFF3EFE0,
+                0xFFF3EFE0);
         }
-        if (needAuth) {
-            graphics.fillGradient(getX(), getY(), getX() + width, getY() + height,
-                    z, 0x9F222222, 0x9F222222);
+        if (authorizationRequired.getAsBoolean()) {
+            graphics.fillGradient(getX(), getY(), getX() + width, getY() + height, z, 0x9F222222, 0x9F222222);
         }
         var player = Minecraft.getInstance().player;
         if (player != null) {
@@ -216,7 +236,7 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
 
     private static Component name(CatalogModelMetadata metadata) {
         return Component.literal(CatalogModelTooltipFormatter.displayName(metadata,
-                Minecraft.getInstance().getLanguageManager().getSelected()));
+            Minecraft.getInstance().getLanguageManager().getSelected()));
     }
 
     @FunctionalInterface
@@ -226,6 +246,6 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
 
     @FunctionalInterface
     public interface RenderTargetHandler {
-        void open(Hash256 hash, String path, ModelRenderTarget renderTarget);
+        void open(ClientDemandCoordinator.Target target);
     }
 }

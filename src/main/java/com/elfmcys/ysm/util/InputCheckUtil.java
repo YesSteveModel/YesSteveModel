@@ -9,7 +9,7 @@ public class InputCheckUtil {
     @SuppressWarnings("removal")
     public static boolean keyIsMatch(InputEvent.Key event, KeyMapping keyMapping) {
         return keyMapping.matches(event.getKey(), event.getScanCode())
-               && keyMapping.getKeyModifier().equals(KeyModifier.getActiveModifier());
+            && keyMapping.getKeyModifier().equals(KeyModifier.getActiveModifier());
     }
 
     public static boolean isInGame() {

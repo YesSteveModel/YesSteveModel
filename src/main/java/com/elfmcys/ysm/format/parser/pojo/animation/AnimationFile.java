@@ -18,9 +18,7 @@ public class AnimationFile {
     public List<Animation> animations = new ArrayList<>();
 
     public static Gson createGson(boolean mergeInstKeyframeLines) {
-        return new GsonBuilder()
-                .registerTypeAdapter(AnimationFile.class, new Adapter(mergeInstKeyframeLines))
-                .create();
+        return new GsonBuilder().registerTypeAdapter(AnimationFile.class, new Adapter(mergeInstKeyframeLines)).create();
     }
 
     public static final class Adapter implements JsonDeserializer<AnimationFile> {
@@ -36,7 +34,7 @@ public class AnimationFile {
 
         @Override
         public AnimationFile deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context)
-                throws JsonParseException {
+            throws JsonParseException {
             var file = new AnimationFile();
             if (json == null || json.isJsonNull() || !json.isJsonObject()) {
                 return file;
@@ -49,11 +47,7 @@ public class AnimationFile {
                 if (item.getValue() == null || item.getValue().isJsonNull() || !item.getValue().isJsonObject()) {
                     continue;
                 }
-                var animation = Animation.Adapter.deserializeAnimation(
-                        item.getValue(),
-                        context,
-                        mergeInstKeyframeLines
-                );
+                var animation = Animation.Adapter.deserializeAnimation(item.getValue(), mergeInstKeyframeLines);
                 animation.animationName = item.getKey();
                 file.animations.add(animation);
             }

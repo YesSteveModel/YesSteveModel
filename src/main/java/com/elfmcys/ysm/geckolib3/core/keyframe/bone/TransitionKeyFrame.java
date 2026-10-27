@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.geckolib3.core.keyframe.bone;
 
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
+import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
 import org.joml.Vector3f;
 
 public class TransitionKeyFrame extends BoneKeyFrame {
@@ -12,15 +12,15 @@ public class TransitionKeyFrame extends BoneKeyFrame {
     }
 
     @Override
-    public Vector3f getLerpPoint(ExpressionEvaluator<?> evaluator, float percentCompleted) {
+    public Vector3f getLerpPoint(EntityExpressionRuntime.Evaluation evaluation, float percentCompleted) {
         if (!isEnd(percentCompleted)) {
-            return beginPoint.eval(evaluator);
+            return beginPoint.eval(evaluation);
         } else {
-            return postPoint.eval(evaluator);
+            return postPoint.eval(evaluation);
         }
     }
 
-    public Vector3f getTransitionDst(ExpressionEvaluator<?> evaluator) {
-        return this.beginPoint.eval(evaluator);
+    public Vector3f getTransitionDst(EntityExpressionRuntime.Evaluation evaluation) {
+        return this.beginPoint.eval(evaluation);
     }
 }

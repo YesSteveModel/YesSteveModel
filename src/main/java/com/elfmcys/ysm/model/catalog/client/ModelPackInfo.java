@@ -7,11 +7,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Map;
 
 public class ModelPackInfo {
-    /**
-     * 示例：dir1/dir2/dir3/，
-     * 开头必定没有 '/' 而末尾必定有,
-     * 不论当前操作系统是什么都以 '/' 作为分隔符。
-     */
+    /** Full canonical directory address; source prefixes do not create navigation nodes. */
     private final String hierarchy;
     private final String name;
     private final String desc;
@@ -21,7 +17,8 @@ public class ModelPackInfo {
     private volatile @Nullable AbstractTexture icon;
     private final @Nullable Map<String, Map<String, String>> lang;
 
-    public ModelPackInfo(String hierarchy, String name, String desc, @Nullable AbstractTexture icon, @Nullable Map<String, Map<String, String>> lang) {
+    public ModelPackInfo(String hierarchy, String name, String desc, @Nullable AbstractTexture icon,
+        @Nullable Map<String, Map<String, String>> lang) {
         this.hierarchy = hierarchy;
         this.name = name;
         this.desc = desc;

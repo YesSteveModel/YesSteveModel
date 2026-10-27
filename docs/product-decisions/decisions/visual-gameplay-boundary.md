@@ -6,7 +6,7 @@
   - 涉及外部模组状态与呈现: [BC.integration-does-not-redefine-gameplay](mod-integration.md#bcintegration-does-not-redefine-gameplay)
   - 确定授权范围: [CON.visual-only-scope](../shared.md#convisual-only-scope)
 - Landing:
-  - [concept](../../concepts/rendering.md#设计目标)
+  - [design](../../architecture/rendering/overview.md#设计目标)
 
 ## DD.rendering-only-replacement
 

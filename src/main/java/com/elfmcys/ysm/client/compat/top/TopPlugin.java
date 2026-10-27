@@ -5,9 +5,9 @@ import com.elfmcys.ysm.capability.ModelInfoCapabilityProvider;
 import com.elfmcys.ysm.capability.VehicleModelInfoCapabilityProvider;
 import com.elfmcys.ysm.model.service.ServerModelService;
 import com.elfmcys.ysm.network.NetworkHandler;
-import com.elfmcys.ysm.proto.mixel.manifest.Manifest;
+import com.elfmcys.ysm.proto.mixel.manifest.ManifestProto;
 import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind;
-import com.elfmcys.ysm.proto.mixel.manifest.info.Metadata;
+import com.elfmcys.ysm.proto.mixel.manifest.info.MetadataProto;
 import com.elfmcys.ysm.util.ModelIdUtil;
 import java.util.function.Function;
 import mcjty.theoneprobe.api.ElementAlignment;
@@ -30,17 +30,18 @@ public final class TopPlugin implements Function<ITheOneProbe, Void> {
     @Override
     public Void apply(@Nullable ITheOneProbe probe) {
         if (probe != null) {
-            probe.registerEntityProvider(new YSMProvider());
+            probe.registerEntityProvider(new ModelInfoProvider());
         }
         return null;
     }
 
-    private static class YSMProvider implements IProbeInfoEntityProvider {
+    private static class ModelInfoProvider implements IProbeInfoEntityProvider {
         @SuppressWarnings("removal")
         private static final String ID = (new ResourceLocation(YesSteveModel.MOD_ID, "model_info")).toString();
 
         @Override
-        public void addProbeEntityInfo(ProbeMode probeMode, IProbeInfo probeInfo, Player sourcePlayer, Level world, Entity entity, IProbeHitEntityData iProbeHitEntityData) {
+        public void addProbeEntityInfo(ProbeMode probeMode, IProbeInfo probeInfo, Player sourcePlayer, Level world,
+            Entity entity, IProbeHitEntityData iProbeHitEntityData) {
             if (entity instanceof ServerPlayer player) {
                 player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(cap -> {
                     if (cap.isMandatory() || NetworkHandler.isPlayerChannelPresent(player)) {
@@ -48,14 +49,16 @@ public final class TopPlugin implements Function<ITheOneProbe, Void> {
                         if (hash == null) {
                             return;
                         }
-                        ServerModelService.instance().catalog().flatMap(snapshot -> snapshot.find(hash)).ifPresent(m -> {
-                            var metadata = m.view().getManifest().info().metadata()
-                                    .map(Metadata::name).orElse("");
-                            probeInfo.horizontal(probeInfo.defaultLayoutStyle().alignment(ElementAlignment.ALIGN_CENTER))
-                                    .text(Component.translatable("top.yes_steve_model.model_info.id").append(
-                                            StringUtils.defaultIfBlank(metadata, ModelIdUtil.getFileNameFromPath(
-                                                    m.location().path().value()))));
-                        });
+                        ServerModelService.instance().catalog().flatMap(snapshot -> snapshot.find(hash))
+                            .ifPresent(m -> {
+                                var metadata =
+                                    m.view().getManifest().info().metadata().map(MetadataProto::name).orElse("");
+                                probeInfo
+                                    .horizontal(probeInfo.defaultLayoutStyle().alignment(ElementAlignment.ALIGN_CENTER))
+                                    .text(Component.translatable("top.yes_steve_model.model_info.id")
+                                        .append(StringUtils.defaultIfBlank(metadata,
+                                            ModelIdUtil.getFileNameFromPath(m.location().path().value()))));
+                            });
                     }
                 });
             } else {
@@ -66,14 +69,15 @@ public final class TopPlugin implements Function<ITheOneProbe, Void> {
                             return;
                         }
                         ServerModelService.instance().catalog().flatMap(snapshot -> snapshot.find(hash))
-                                .filter(m -> hasVehicle(m.view().getManifest(), entity))
-                                .ifPresent(m -> {
-                                    var metadata = m.view().getManifest().info().metadata()
-                                            .map(Metadata::name).orElse("");
-                                    probeInfo.horizontal(probeInfo.defaultLayoutStyle().alignment(ElementAlignment.ALIGN_CENTER))
-                                            .text(Component.translatable("top.yes_steve_model.model_info.id").append(
-                                                    StringUtils.defaultIfBlank(metadata, ModelIdUtil.getFileNameFromPath(m.location().path().value()))));
-                                });
+                            .filter(m -> hasVehicle(m.view().getManifest(), entity)).ifPresent(m -> {
+                                var metadata =
+                                    m.view().getManifest().info().metadata().map(MetadataProto::name).orElse("");
+                                probeInfo
+                                    .horizontal(probeInfo.defaultLayoutStyle().alignment(ElementAlignment.ALIGN_CENTER))
+                                    .text(Component.translatable("top.yes_steve_model.model_info.id")
+                                        .append(StringUtils.defaultIfBlank(metadata,
+                                            ModelIdUtil.getFileNameFromPath(m.location().path().value()))));
+                            });
                     }
                 });
             }
@@ -84,11 +88,10 @@ public final class TopPlugin implements Function<ITheOneProbe, Void> {
             return ID;
         }
 
-        private static boolean hasVehicle(Manifest manifest,
-                                          Entity entity) {
+        private static boolean hasVehicle(ManifestProto manifest, Entity entity) {
             var id = entity.getType().builtInRegistryHolder().key().location();
             for (var replacement : manifest.renderTargets()) {
-                if (replacement.kind() != RenderTargetKind.RENDER_TARGET_KIND_VEHICLE) {
+                if (replacement.kind() != RenderTargetKind.VEHICLE) {
                     continue;
                 }
                 if (replacement.match().isEmpty()) {

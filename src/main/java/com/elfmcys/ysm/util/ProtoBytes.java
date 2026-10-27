@@ -4,8 +4,7 @@ import com.elfmcys.ysm.model.domain.Hash256;
 import java.nio.ByteBuffer;
 
 public final class ProtoBytes {
-    private ProtoBytes() {
-    }
+    private ProtoBytes() {}
 
     public static byte[] copy(ByteBuffer bytes) {
         var source = bytes.duplicate();

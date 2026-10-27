@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.client.compat.backpack.sophisticated;
 
-import com.elfmcys.ysm.client.animation.molang.CtrlBinding;
 import com.elfmcys.ysm.client.compat.curios.CuriosCompat;
 import com.elfmcys.ysm.client.event.RegisterEntityRenderersEvent;
 import com.elfmcys.ysm.config.ClientConfig;
@@ -49,7 +48,7 @@ public class SophisticatedCompat {
 
     public static void addLayer() {
         if (INSTALLED) {
-            RegisterEntityRenderersEvent.getPlayerRenderer().addLayer(new YsmBackpackLayerRenderer());
+            RegisterEntityRenderersEvent.getPlayerRenderer().addLayer(new SophisticatedBackpackLayerRenderer());
         }
     }
 
@@ -57,19 +56,16 @@ public class SophisticatedCompat {
         return INSTALLED;
     }
 
-    public static void addBinding(CtrlBinding binding) {
-        if (isInstalled()) {
-            SophisticatedCtrlBinding.addInnerBinding(binding);
-        } else {
-            addEmptyBinding(binding);
-        }
-    }
-
     /**
-     * 没有安装此模组时，这些 molang 应该存在，否则会报错
+     * Whether one borrowed entity currently has a Sophisticated Backpacks backpack, or {@code false} when this entity
+     * is not a living entity or the adapter is unavailable.
+     *
+     * <p>
+     * This is the capability-facing form: it owns the living-entity narrowing so a caller never has to reach the
+     * optional adapter itself.
      */
-    private static void addEmptyBinding(CtrlBinding binding) {
-        binding.livingEntityVar("has_sophisticated_backpack", ctx -> false);
+    public static boolean hasBackpack(net.minecraft.world.entity.Entity entity) {
+        return entity instanceof LivingEntity living && isInstalled() && getBackpackItemStack(living) != null;
     }
 
     @Nullable
@@ -83,15 +79,13 @@ public class SophisticatedCompat {
         }
         // 然后才是玩家护甲栏的背包
         if (livingEntity instanceof Player player) {
-            return PlayerInventoryProvider.get().getBackpackFromRendered(player)
-                    .map(backpackRenderInfo -> {
-                        var itemStack = backpackRenderInfo.getBackpack();
-                        if (!itemStack.isEmpty()) {
-                            return itemStack;
-                        }
-                        return null;
-                    })
-                    .orElse(null);
+            return PlayerInventoryProvider.get().getBackpackFromRendered(player).map(backpackRenderInfo -> {
+                var itemStack = backpackRenderInfo.getBackpack();
+                if (!itemStack.isEmpty()) {
+                    return itemStack;
+                }
+                return null;
+            }).orElse(null);
         }
         return null;
     }

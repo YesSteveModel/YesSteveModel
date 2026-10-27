@@ -105,7 +105,8 @@ public class ConditionalSwing {
         if (tags == null) {
             return EMPTY;
         }
-        return tagTest.stream().filter(itemInHand::is).findFirst().map(itemTagKey -> tagPre + itemTagKey.location()).orElse(EMPTY);
+        return tagTest.stream().filter(itemInHand::is).findFirst().map(itemTagKey -> tagPre + itemTagKey.location())
+            .orElse(EMPTY);
     }
 
     private String doExtraTest(LivingEntity livingEntity, InteractionHand hand) {

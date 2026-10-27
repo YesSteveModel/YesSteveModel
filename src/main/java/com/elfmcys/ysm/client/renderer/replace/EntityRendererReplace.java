@@ -12,12 +12,12 @@ import net.minecraft.world.phys.Vec3;
 
 public class EntityRendererReplace {
     public static boolean renderInMixin(Entity entity, float yawIn, float partialTick, PoseStack poseStack,
-                                        MultiBufferSource bufferSource, int packedLight) {
+        MultiBufferSource bufferSource, int packedLight) {
         return entity.getCapability(VehicleAnimatableCapabilityProvider.CAP).map(cap -> {
-            if (cap.isInitialized() && cap.isModelPresent()) {
+            if (cap.isPresentationAllowed()) {
                 float yaw = getYaw(entity, yawIn, partialTick);
-                RegisterEntityRenderersEvent.getVehicleRenderer().render(cap, yaw, partialTick, poseStack, bufferSource, packedLight);
-                return false;
+                return !RegisterEntityRenderersEvent.getVehicleRenderer().renderReplacement(cap, yaw, partialTick,
+                    poseStack, bufferSource, packedLight);
             }
             return true;
         }).orElse(true);
@@ -38,7 +38,8 @@ public class EntityRendererReplace {
         float yaw = Mth.rotLerp(partialTick, livingEntity.yBodyRotO, livingEntity.yBodyRot);
         float headYaw = Mth.rotLerp(partialTick, livingEntity.yHeadRotO, livingEntity.yHeadRot);
 
-        boolean shouldSit = livingEntity.isPassenger() && (livingEntity.getVehicle() != null && livingEntity.getVehicle().shouldRiderSit());
+        boolean shouldSit = livingEntity.isPassenger()
+            && (livingEntity.getVehicle() != null && livingEntity.getVehicle().shouldRiderSit());
         if (shouldSit && livingEntity.getVehicle() instanceof LivingEntity vehicle) {
             yaw = Mth.rotLerp(partialTick, vehicle.yBodyRotO, vehicle.yBodyRot);
 
@@ -70,7 +71,7 @@ public class EntityRendererReplace {
             }
             Vec3 offset = posBack.add(-posFront.x, -posFront.y, -posFront.z);
             if (offset.length() != 0) {
-                yaw = (float) (Math.atan2(offset.z, offset.x) * 180 / Math.PI);
+                yaw = (float)(Math.atan2(offset.z, offset.x) * 180 / Math.PI);
             }
         }
         return yaw;

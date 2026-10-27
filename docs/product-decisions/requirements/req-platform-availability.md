@@ -9,4 +9,4 @@
 | 任务涉及 | 决策包 |
 |---|---|
 | OS/ISA 基线、native 依赖、社区与 Android 启动器 | [platform-baselines](../decisions/platform-baselines.md) |
-| 受限设备基础可用性、高端效果、帧率边界 | [device-quality](../decisions/device-quality.md) |
+| 受限设备基础可用性、高端效果、帧率边界、设备配置默认 | [device-quality](../decisions/device-quality.md) |

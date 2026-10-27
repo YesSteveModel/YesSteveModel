@@ -15,8 +15,7 @@ public class LoggedOutEvent {
             return;
         }
         if (event.getEntity() instanceof ServerPlayer serverPlayer) {
-            ServerModelService.current().ifPresent(service ->
-                    service.closeSession(serverPlayer));
+            ServerModelService.current().ifPresent(service -> service.closeSession(serverPlayer));
         }
     }
 }

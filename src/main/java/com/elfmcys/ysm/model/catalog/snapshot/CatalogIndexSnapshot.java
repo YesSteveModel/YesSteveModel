@@ -18,17 +18,15 @@ public final class CatalogIndexSnapshot {
     private final List<ModelPackDescriptor> packs;
     private final ModelScanReport report;
 
-    public CatalogIndexSnapshot(List<CatalogIndexEntry> entries,
-                                List<ModelPackDescriptor> packs,
-                                ModelScanReport report) {
+    public CatalogIndexSnapshot(List<CatalogIndexEntry> entries, List<ModelPackDescriptor> packs,
+        ModelScanReport report) {
         this.entries = List.copyOf(entries);
         this.packs = List.copyOf(packs);
         this.report = Objects.requireNonNull(report, "report");
         var candidates = new LinkedHashMap<Hash256, ArrayList<CatalogIndexEntry>>();
         for (var entry : this.entries) {
             Objects.requireNonNull(entry, "entry");
-            candidates.computeIfAbsent(entry.modelId(),
-                    ignored -> new ArrayList<>()).add(entry);
+            candidates.computeIfAbsent(entry.modelId(), ignored -> new ArrayList<>()).add(entry);
         }
         var immutable = new LinkedHashMap<Hash256, List<CatalogIndexEntry>>();
         candidates.forEach((key, value) -> immutable.put(key, List.copyOf(value)));

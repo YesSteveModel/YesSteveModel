@@ -21,7 +21,8 @@ public class CommandUtil {
 
     // 是否为单人模式，或联机模式下的房主
     public static boolean isLocalPlayer(Entity player) {
-        return player != null && FMLEnvironment.dist == Dist.CLIENT && player.getUUID().equals(Minecraft.getInstance().getUser().getGameProfile().getId());
+        return player != null && FMLEnvironment.dist == Dist.CLIENT
+            && player.getUUID().equals(Minecraft.getInstance().getUser().getGameProfile().getId());
     }
 
     public static boolean hasPermission(@Nullable Entity source, int level) {
@@ -47,7 +48,8 @@ public class CommandUtil {
         return false;
     }
 
-    public static void sendAsyncFeedback(@Nullable final CommandSourceStack oldSource, final Component feedbackMsg, final boolean allowLogging) {
+    public static void sendAsyncFeedback(@Nullable final CommandSourceStack oldSource, final Component feedbackMsg,
+        final boolean allowLogging) {
         final MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
         if (server == null) {
             return;
@@ -60,7 +62,7 @@ public class CommandUtil {
                     commandSource = newSender.createCommandSourceStack();
                 }
             }
-            if(commandSource == null) {
+            if (commandSource == null) {
                 commandSource = server.createCommandSourceStack();
             }
             commandSource.sendSuccess(() -> feedbackMsg, allowLogging);

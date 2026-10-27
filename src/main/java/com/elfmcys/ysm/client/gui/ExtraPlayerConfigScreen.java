@@ -40,20 +40,18 @@ public class ExtraPlayerConfigScreen extends Screen {
     protected void init() {
         this.clearWidgets();
 
-
         int yOffset = -30;
         if (AndroidCompat.isAndroid()) {
             Component reset = Component.translatable("controls.reset");
             this.addRenderableWidget(Button.builder(reset, button -> this.reset())
-                    .bounds(this.width / 2 - 50, this.height - 35, 100, 30)
-                    .build());
+                .bounds(this.width / 2 - 50, this.height - 35, 100, 30).build());
             yOffset = -60;
         }
 
         Component name = Component.translatable("gui.yes_steve_model.hide_or_show");
         int nameWidth = this.font.width(name) + 24;
-        this.addRenderableWidget(new Checkbox((this.width - nameWidth) / 2, this.height + yOffset, nameWidth, 20,
-                name, ExtraPlayerScreenConfig.DISABLE_PLAYER_RENDER.get(), true) {
+        this.addRenderableWidget(new Checkbox((this.width - nameWidth) / 2, this.height + yOffset, nameWidth, 20, name,
+            ExtraPlayerScreenConfig.DISABLE_PLAYER_RENDER.get(), true) {
             @Override
             public void onPress() {
                 super.onPress();
@@ -66,8 +64,8 @@ public class ExtraPlayerConfigScreen extends Screen {
     public void render(GuiGraphics graphics, int pMouseX, int pMouseY, float frameDeltaTime) {
         int startX = this.posX;
         int startY = this.posY;
-        int endX = (int) (startX + this.scale * 1);
-        int endY = (int) (startY + this.scale * 2);
+        int endX = (int)(startX + this.scale * 1);
+        int endY = (int)(startY + this.scale * 2);
 
         graphics.pose().pushPose();
         graphics.pose().translate(0, 0, -500 - (50 * this.scale / 40));
@@ -87,8 +85,10 @@ public class ExtraPlayerConfigScreen extends Screen {
 
         graphics.fillGradient(startX, startY, endX, endY, 0x4fffffff, 0x4fffffff);
 
-        graphics.fillGradient(startX - this.controlSize, startY - this.controlSize, startX + this.controlSize, startY + this.controlSize, 0xFF00FF9F, 0xFF00FF9F);
-        graphics.fillGradient(endX - this.controlSize, endY - this.controlSize, endX + this.controlSize, endY + this.controlSize, 0xFF00009F, 0xFF00009F);
+        graphics.fillGradient(startX - this.controlSize, startY - this.controlSize, startX + this.controlSize,
+            startY + this.controlSize, 0xFF00FF9F, 0xFF00FF9F);
+        graphics.fillGradient(endX - this.controlSize, endY - this.controlSize, endX + this.controlSize,
+            endY + this.controlSize, 0xFF00009F, 0xFF00009F);
 
         int y = 15;
         MutableComponent component = Component.translatable("gui.yes_steve_model.extra_player_render.tips");
@@ -102,7 +102,8 @@ public class ExtraPlayerConfigScreen extends Screen {
         graphics.pose().popPose();
 
         if (getMinecraft().player != null && !ExtraPlayerScreenConfig.DISABLE_PLAYER_RENDER.get()) {
-            RenderUtil.renderExtraPlayerEntity(graphics, getMinecraft().player, this.posX, this.posY, this.scale, this.yawOffset, -500, minecraft.getFrameTime());
+            RenderUtil.renderExtraPlayerEntity(graphics, getMinecraft().player, this.posX, this.posY, this.scale,
+                this.yawOffset, -500, minecraft.getFrameTime());
         }
 
         super.render(graphics, pMouseX, pMouseY, frameDeltaTime);
@@ -115,8 +116,8 @@ public class ExtraPlayerConfigScreen extends Screen {
         if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT && xIn && yIn) {
             this.isChangePos = true;
         }
-        int endX = (int) (this.posX + this.scale * 1);
-        int endY = (int) (this.posY + this.scale * 2);
+        int endX = (int)(this.posX + this.scale * 1);
+        int endY = (int)(this.posY + this.scale * 2);
         boolean xIn2 = endX - this.controlSize < mouseX && mouseX < endX + this.controlSize;
         boolean yIn2 = endY - this.controlSize < mouseY && mouseY < endY + this.controlSize;
         if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT && xIn2 && yIn2) {
@@ -137,17 +138,17 @@ public class ExtraPlayerConfigScreen extends Screen {
         if (isChangeScale) {
             double scale1 = mouseX - this.posX;
             double scale2 = (mouseY - this.posY) / 2;
-            this.scale = (float) Math.min(scale1, scale2);
+            this.scale = (float)Math.min(scale1, scale2);
             return true;
         }
         if (isChangePos) {
-            this.posX = (int) mouseX;
-            this.posY = (int) mouseY;
+            this.posX = (int)mouseX;
+            this.posY = (int)mouseY;
             return true;
         }
         // 手机下是左键，桌面端是右键
         if (button == this.yawChangeButton) {
-            this.yawOffset += (float) (deltaX * 2);
+            this.yawOffset += (float)(deltaX * 2);
             return true;
         }
         return false;
@@ -172,8 +173,8 @@ public class ExtraPlayerConfigScreen extends Screen {
     public void onClose() {
         ExtraPlayerScreenConfig.PLAYER_POS_X.set(this.posX);
         ExtraPlayerScreenConfig.PLAYER_POS_Y.set(this.posY);
-        ExtraPlayerScreenConfig.PLAYER_SCALE.set((double) this.scale);
-        ExtraPlayerScreenConfig.PLAYER_YAW_OFFSET.set((double) this.yawOffset);
+        ExtraPlayerScreenConfig.PLAYER_SCALE.set((double)this.scale);
+        ExtraPlayerScreenConfig.PLAYER_YAW_OFFSET.set((double)this.yawOffset);
         super.onClose();
     }
 }

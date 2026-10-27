@@ -4,14 +4,13 @@ import com.elfmcys.ysm.client.entity.CustomPlayerEntity;
 import com.elfmcys.ysm.client.entity.IPreviewEntity;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.molang.runtime.ExpressionEvaluator;
 
 import static com.elfmcys.ysm.client.animation.predicate.IAnimationPredicate.playAnimation;
 import static com.elfmcys.ysm.client.animation.predicate.IAnimationPredicate.playLoopAnimation;
 
 public class CapPredicate implements IAnimationPredicate<CustomPlayerEntity> {
     @Override
-    public PlayState test(AnimationEvent<CustomPlayerEntity> event, ExpressionEvaluator<?> evaluator) {
+    public PlayState test(AnimationEvent<CustomPlayerEntity> event) {
         CustomPlayerEntity animatable = event.getAnimatableEntity();
         if (animatable instanceof IPreviewEntity guiEntity) {
             if (guiEntity.getPreviewInfo().hasPreview()) {

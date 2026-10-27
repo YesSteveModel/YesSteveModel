@@ -13,10 +13,10 @@ public class ClientLazyCapabilityProvider implements ICapabilityProvider {
     public static Capability<ClientLazyCapability> CAP = CapabilityManager.get(new CapabilityToken<>() {});
     private final ClientLazyCapability instance;
 
-    public ClientLazyCapabilityProvider(
-            VehicleAnimatableCapabilityProvider vehicleAnimatableCapabilityProvider,
-            @Nullable ProjectileAnimatableCapabilityProvider projectileAnimatableCapabilityProvider) {
-        this.instance = new ClientLazyCapability(vehicleAnimatableCapabilityProvider, projectileAnimatableCapabilityProvider);
+    public ClientLazyCapabilityProvider(VehicleAnimatableCapabilityProvider vehicleAnimatableCapabilityProvider,
+        @Nullable ProjectileAnimatableCapabilityProvider projectileAnimatableCapabilityProvider) {
+        this.instance =
+            new ClientLazyCapability(vehicleAnimatableCapabilityProvider, projectileAnimatableCapabilityProvider);
     }
 
     @Override

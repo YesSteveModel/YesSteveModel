@@ -26,8 +26,10 @@ public class ConditionArmor {
     private static final Pattern TAG_PRE_REG = Pattern.compile("^(.+?)#(.*?)$");
     private static final String EMPTY = "";
 
-    private final Reference2ReferenceOpenHashMap<EquipmentSlot, ObjectOpenHashSet<ResourceLocation>> idTest = new Reference2ReferenceOpenHashMap<>();
-    private final Reference2ReferenceOpenHashMap<EquipmentSlot, ReferenceArrayList<TagKey<Item>>> tagTest = new Reference2ReferenceOpenHashMap<>();
+    private final Reference2ReferenceOpenHashMap<EquipmentSlot, ObjectOpenHashSet<ResourceLocation>> idTest =
+        new Reference2ReferenceOpenHashMap<>();
+    private final Reference2ReferenceOpenHashMap<EquipmentSlot, ReferenceArrayList<TagKey<Item>>> tagTest =
+        new Reference2ReferenceOpenHashMap<>();
 
     public void addTest(String name) {
         Matcher matcherId = ID_PRE_REG.matcher(name);
@@ -106,11 +108,12 @@ public class ConditionArmor {
         if (tags == null) {
             return EMPTY;
         }
-        return tagListTest.stream().filter(item::is).findFirst().map(itemTagKey -> slot.getName() + "#" + itemTagKey.location()).orElse(EMPTY);
+        return tagListTest.stream().filter(item::is).findFirst()
+            .map(itemTagKey -> slot.getName() + "#" + itemTagKey.location()).orElse(EMPTY);
     }
 
     public boolean hasTest(EquipmentSlot slot) {
-        return tagTest.containsKey(slot) ||  idTest.containsKey(slot);
+        return tagTest.containsKey(slot) || idTest.containsKey(slot);
     }
 
     @Nullable

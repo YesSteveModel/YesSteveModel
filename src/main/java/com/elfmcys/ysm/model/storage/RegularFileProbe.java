@@ -7,8 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 
 final class RegularFileProbe {
-    private RegularFileProbe() {
-    }
+    private RegularFileProbe() {}
 
     static boolean exists(Path file) throws IOException {
         try {
