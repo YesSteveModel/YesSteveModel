@@ -83,6 +83,31 @@ public final class OwnershipHostObservation {
             if (!owner.consumePrepared(data, borrowed -> true))
                 throw new AssertionError("Early consumption requires a current real native result");
             event("early-consumed", owner);
+            if (currentCase == 3) {
+                var runtime = owner.getExpressionRuntime();
+                var request = runtime.prepareTransient(runtime.generation(), "return 1;",
+                    com.elfmcys.ysm.expression.aot.TransientExpressionSession.Privilege.LOCAL_WATCH,
+                    com.elfmcys.ysm.expression.aot.TransientExpressionSession.Purpose.WATCH, "host:return-boundary");
+                var entered = new java.util.concurrent.CountDownLatch(1);
+                compilerRelease = new java.util.concurrent.CountDownLatch(1);
+                var first = new java.util.concurrent.atomic.AtomicBoolean(true);
+                compiler = COMPILER.submit(() -> {
+                    try (request; var session = request.compile(() -> {
+                        if (first.compareAndSet(true, false)) {
+                            entered.countDown();
+                            try {
+                                if (!compilerRelease.await(15, java.util.concurrent.TimeUnit.SECONDS))
+                                    throw new IllegalStateException("Compiler gate timed out");
+                            } catch (InterruptedException failure) { throw new IllegalStateException(failure); }
+                        }
+                        return false;
+                    })) { event("independent-compiler-complete", owner); }
+                    return null;
+                });
+                if (!entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    throw new AssertionError("Independent compiler did not enter");
+                event("independent-compiler-running", owner);
+            }
             var lifecycleField = AnimatableEntity.class.getDeclaredField("lifecycle");
             lifecycleField.setAccessible(true);
             var lifecycle = lifecycleField.get(owner);
@@ -108,30 +133,6 @@ public final class OwnershipHostObservation {
                 }
             }
             if (currentCase == 2) failExecute = owner;
-            if (currentCase == 3) {
-                var request = owner.getExpressionRuntime().prepareTransient(owner.getExpressionRuntime().generation(),
-                    "return 1;", com.elfmcys.ysm.expression.aot.TransientExpressionSession.Privilege.LOCAL_WATCH,
-                    com.elfmcys.ysm.expression.aot.TransientExpressionSession.Purpose.WATCH, "host:return-boundary");
-                var entered = new java.util.concurrent.CountDownLatch(1);
-                compilerRelease = new java.util.concurrent.CountDownLatch(1);
-                var first = new java.util.concurrent.atomic.AtomicBoolean(true);
-                compiler = COMPILER.submit(() -> {
-                    try (request; var session = request.compile(() -> {
-                        if (first.compareAndSet(true, false)) {
-                            entered.countDown();
-                            try {
-                                if (!compilerRelease.await(15, java.util.concurrent.TimeUnit.SECONDS))
-                                    throw new IllegalStateException("Compiler gate timed out");
-                            } catch (InterruptedException failure) { throw new IllegalStateException(failure); }
-                        }
-                        return false;
-                    })) { event("independent-compiler-complete", owner); }
-                    return null;
-                });
-                if (!entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
-                    throw new AssertionError("Independent compiler did not enter");
-                event("independent-compiler-running", owner);
-            }
             var main = Thread.currentThread();
             var release = new Thread(() -> {
                 long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);

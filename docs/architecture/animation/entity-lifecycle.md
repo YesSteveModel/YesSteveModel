@@ -36,13 +36,13 @@ flowchart TD
 
 ## 完整安装与替换
 
-候选应验证当前 request/profile、真实 subject，并完整构造组件、表达式 root、controller、processor、资源 holder 与实际变体。主线程取得旧任务的对应 `get` 后，才可发布新安装。全部候选步骤成功后，主线程先撤销旧安装报告资格，再结束旧状态和自身 lease。
+候选应验证当前 request/profile、真实 subject，并完整构造组件、表达式 root、controller、processor、资源 holder 与实际变体。普通安装由主线程发布。GUI 帧任务可凭单实体许可完整绑定已 Ready target，并在同一次任务内求值；主线程在对应 `join` 前不能访问安装或私有状态。全部候选步骤成功后，安装执行者先撤销旧安装报告资格，再结束旧状态和自身 lease。
 
 ```mermaid
 flowchart LR
     Ready["Ready 与接收者独立 lease"] --> Candidate["私有完整候选"]
     Candidate -->|"失败或激活前过期"| Reject["只关闭候选"]
-    Candidate -->|"主线程验证并发布"| Current["当前完整安装"]
+    Candidate -->|"独占执行者验证并发布"| Current["当前完整安装"]
     Current --> Borrow["同步绘制回调借用"]
     Current --> Seal["撤销效果与输出资格"]
     Seal --> End["对应 get 完成且绘制借用退出"]
@@ -51,7 +51,7 @@ flowchart LR
 
 私有准备失败保留健康旧安装与历史。候选期查询只见完整旧安装或 Unbound；同 owner 切模、reset、retire 和递归求值明确拒绝。发布后的外部绘制回调可改变请求或封口，不能递归安装；通知异常不回滚已发布安装。
 
-安装入口不等待动画 worker。只要任务尚未经过对应 `get`，即使已完成也返回 Busy；绘制借用或候选窗口占用同样返回 Busy，不记录内容失败。协调方保留自己的 Ready anchor，下次 tick 再尝试；纹理导航则直接拒绝本次进入，不保留导航意图。
+普通安装入口不等待动画 worker。只要任务尚未经过对应 `get`，即使已完成也返回 Busy；绘制借用或候选窗口占用同样返回 Busy，不记录内容失败。非 GUI 协调方保留 Ready anchor，下次 tick 再尝试；GUI 帧调度方在取得独立接收 lease 和执行许可后使用内部安装入口。纹理导航直接拒绝本次进入，不保留导航意图。
 
 仅纹理变化时，兼容性应同时满足精确内容、逻辑 target、bake profile、binding、purpose、同一准备结果与 main/arm module 对象身份。旧安装还应健康、属于同一 owner 且无活动借用。兼容候选先私有验证几何与资源关联；激活先撤旧输出，再通知实际 target、刷新资源视图并转移状态关闭权。
 
@@ -68,7 +68,11 @@ flowchart LR
 | retire | 撤销指派，结束当前使用 | 永久终结 owner；重复调用不重复释放，重新指派不能复活 |
 | 异步宿主失活 | 移除预调度登记并 retire | 后续使用应创建新 owner |
 
-主线程拥有指派、安装、reset、reload 和 retire。Worker 与同步求值回调不能重入这些入口；拒绝发生在状态变化之前。同步 owner 的上级在页面或操作结束时显式退休。
+主线程拥有指派、reset、reload 和 retire。GUI 许可只开放指定任务的内部完整安装与 CPU 求值，不开放公共生命周期入口、绘制或其他实体。Worker 与同步求值回调不能重入公共生命周期入口；拒绝发生在状态变化之前。同步 owner 的上级在页面或操作结束时显式退休。
+
+GUI 执行权在主线程预留时封口，提交拒绝时归还。指定任务只能进入一次；任务返回后仍须主线程显式 `join`。任务结束、线程结束或完成标志均不归还执行权。页面失效先停止消费，在所有已接纳任务交接后结束使用。兼容激活失败需要结束旧使用时，任务先标记待结束，由 `join` 完成原 owner 的清理。
+
+GUI 任务交接和最终投影收敛采用帧层的严重错误优先级，原普通失败保留为 suppressed。结束使用清理中的非 OOM `VirtualMachineError` 和 `ThreadDeath` 同样优先传播，原 OOM 聚合规则不变。CPU 求值的局部 OOM 边界不扩展到图片准备或 required-default 安装。
 
 普通结束先取得任务的对应 `get`，在原安装仍有效时完成最终投影接纳，再撤销资格并清理。LocalPlayer 的保留责任见 [Roaming](implementation/state-inputs-and-sync.md#roaming)。`get` 覆盖 worker 的完整 finally；等待中断后继续等待，再恢复中断标志。同步绘制回调是局部例外：回调内 reset/retire 立即撤销消费资格，私有状态和 lease 延后到绘制借用退出才释放。普通求值不使用这条延后释放路径。
 
@@ -92,7 +96,9 @@ flowchart LR
 
 事实查询只描述当前指派、请求、安装、关系、许可与工作。能力查询分别判断播放、求值、准备或精确结果消费的当前资格；不取得资源、不推进动画、不汇合任务、不执行 hook，也不预留未来资格。
 
-未经过对应 `get` 时，外部只能查询主线程维护的调度事实，不能读取实体更新态。Worker 独占自己的执行态；主线程在业务入口显式交接，再调用普通查询。普通 getter 不隐式等待，也不逐次检查跨线程资格。GUI 的准备和消费另要求 Matching；hook 改变选择或许可后旧结果立即失效。宿主取消与实际消费共享本次准备结果，规则见[渲染交接](../rendering/overview.md#三阶段契约)。
+未经过对应 `get` 或 GUI `join` 时，外部只能查询主线程维护的调度事实，不能读取实体更新态。Worker 独占自己的执行态；主线程在业务入口显式交接，再调用普通查询。实例与 runtime 的读取门禁识别 exact 执行者，不隐式等待，也不按线程池身份放行。GUI 的准备和消费另要求 Matching；hook 改变选择或许可后旧结果立即失效。宿主取消与实际消费共享本次准备结果，规则见[渲染交接](../rendering/overview.md#三阶段契约)。
+
+世界主线程可在动画任务交接前取得构造时固定的 subject 引用，供 renderer 检查兼容资格。此读取不取得动画状态，也不归还执行权。GUI 任务会临时改写私有 subject 输入，因此从预留到显式 `join`，subject 仍只供对应任务访问。
 
 未终结工作包括本 owner 的任务和尚未移交的 attempt/lease，不包括已结束的失败或 miss。取消自己的需求不等待共享 Flight 物理终结；自己的工作结束也不证明 target、GPU 或 allocator 已回收。
 

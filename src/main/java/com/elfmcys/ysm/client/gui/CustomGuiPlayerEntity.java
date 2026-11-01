@@ -58,6 +58,7 @@ public final class CustomGuiPlayerEntity extends CustomPlayerEntity implements I
     private ModelResourceDemand.Mode demandMode = ModelResourceDemand.Mode.ONLINE;
 
     public void setResourceDemandMode(ModelResourceDemand.Mode mode) {
+        assertPublicMutationAccess();
         demandMode = mode;
     }
 
@@ -124,16 +125,19 @@ public final class CustomGuiPlayerEntity extends CustomPlayerEntity implements I
 
     @Override
     public @NotNull PreviewAnimationInfo getPreviewInfo() {
+        assertExecutionStateAccess();
         return guiAnimationInfo;
     }
 
     @Override
     public PhysicsManager getPhysicsManager(AnimationEvent<?> event) {
+        assertExecutionStateAccess();
         return physicsManager;
     }
 
     @Override
     public void setAllowEmitting(boolean value) {
+        assertExecutionStateAccess();
         this.allowEmitting = value;
     }
 

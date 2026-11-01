@@ -334,10 +334,13 @@ public final class ClientPreviewGenerator implements Closeable {
         }
         if (previewStore != null) {
             try {
-                var stored = previewStore.forContent(content).readEncoded(content.representation().containerId());
+                var store = previewStore.forContent(content);
+                var containerId = content.representation().containerId();
+                var version = store.observe(containerId);
+                var stored = store.readEncoded(containerId);
                 if (stored.isPresent()) {
                     var bytes = SharedBuffer.adopt(stored.orElseThrow());
-                    return new ProbeFact(PreviewStore.pending(() -> Image.probe(bytes), bytes.size()), true, null);
+                    return new ProbeFact(PreviewStore.pending(() -> Image.probe(bytes), bytes.size()).version(version), true, null);
                 }
             } catch (IOException | RuntimeException invalidCache) {
                 // Standalone previews remain optional; a declared embedded image was handled above.

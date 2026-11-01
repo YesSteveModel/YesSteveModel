@@ -16,6 +16,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.Arguments;
+import java.util.stream.Stream;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,6 +33,344 @@ class ClientDemandCoordinatorTest {
     static void renderOwner() {
         if (!RenderSystem.isOnRenderThread())
             RenderSystem.initRenderThread();
+    }
+
+    static Stream<Arguments> pageAdmissionCases() {
+        return Stream.of(-1L, 0L, 300L, 301L, 699L, 700L, 701L).flatMap(previous ->
+            Stream.of(0L, 299L, 300L, 699L, 700L).map(current -> Arguments.of(previous, current)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("pageAdmissionCases")
+    void pagePublishesTheCompleteIndependentAdmissionMatrix(long previous, long current) throws Exception {
+        try (var f = new Fixture()) {
+            var first = f.coordinator.openPage("first");
+            var start = Math.max(0, previous);
+            f.clock.set(start);
+            var page = previous < 0 ? first : f.coordinator.replacePage(first, "current");
+            var modes = new ArrayList<ModelResourceDemand.Mode>();
+            page.action(new ClientDemandCoordinator.PageAction() {
+                public void advance(ModelResourceDemand.Mode allowed) {
+                    modes.add(allowed);
+                }
+
+                public void close() {}
+            });
+            f.clock.set(start + current);
+            page.advance();
+            var expected = previous < 0 || previous > 700 || current >= 700 ? ModelResourceDemand.Mode.ONLINE
+                : current >= 300 ? ModelResourceDemand.Mode.OFFLINE : ModelResourceDemand.Mode.READY;
+            assertEquals(List.of(expected), modes);
+            assertEquals(0, f.offlineCalls);
+            assertEquals(0, f.onlineCalls, "a page time gate alone never authorizes network work");
+        }
+    }
+
+    @Test
+    void publishedEagerPolicyChangesAtTheNextAdvanceWithoutResettingPageContinuity() throws Exception {
+        try (var f = new Fixture()) {
+            var previous = f.coordinator.openPage("first");
+            f.clock.set(100);
+            var page = f.coordinator.replacePage(previous, List.of("pack", 1, "filter"));
+            var modes = new ArrayList<ModelResourceDemand.Mode>();
+            page.action(new ClientDemandCoordinator.PageAction() {
+                public void advance(ModelResourceDemand.Mode allowed) {
+                    modes.add(allowed);
+                }
+
+                public void close() {}
+            });
+            assertFalse(page.eagerLoading());
+            f.eager = true;
+            assertFalse(page.eagerLoading());
+            f.clock.set(399);
+            page.advance();
+            assertTrue(page.eagerLoading());
+            assertEquals(ModelResourceDemand.Mode.READY, modes.get(modes.size() - 1));
+            f.eager = false;
+            assertTrue(page.eagerLoading());
+            assertSame(page, f.coordinator.replacePage(page, List.of("pack", 1, "filter")));
+            f.clock.set(400);
+            page.advance();
+            assertFalse(page.eagerLoading());
+            assertEquals(ModelResourceDemand.Mode.OFFLINE, modes.get(modes.size() - 1));
+            f.clock.set(800);
+            page.advance();
+            assertEquals(ModelResourceDemand.Mode.ONLINE, modes.get(modes.size() - 1));
+        }
+    }
+
+    @Test
+    void frameInstallationAcquiresIndependentlyAndNeverInstallsFromTick() throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            f.local = true;
+            var scope = f.coordinator.register(receiver);
+            scope.useFrameInstallation();
+            receiver.mode = ModelResourceDemand.Mode.OFFLINE;
+            f.tick();
+            f.ready(A);
+            f.tick();
+            assertNull(receiver.lease);
+            assertTrue(scope.hasReadyInstallation());
+            assertEquals(1, f.interests(A));
+            var eventStart = f.events.size();
+            var claim = Objects.requireNonNull(scope.claimReadyInstallation());
+            assertEquals(List.of("0:acquire:1", "0:release:1"), f.events.subList(eventStart, f.events.size()));
+            assertEquals(1, f.interests(A));
+            assertNull(scope.claimReadyInstallation());
+            var lease = claim.takeLease();
+            assertThrows(IllegalStateException.class, claim::takeLease);
+            var outcome = receiver.install(claim.request(), lease, claim.fallback(), false);
+            assertTrue(scope.hasUnfinishedWork(), "only explicit frame completion ends the handoff");
+            claim.complete(outcome);
+            claim.close();
+            assertSame(lease, receiver.lease);
+            scope.close();
+            assertEquals(1, f.interests(A), "the binding owns the transferred lease after scope retirement");
+            receiver.close();
+            assertEquals(0, f.interests(A));
+        }
+    }
+
+    @Test
+    void readyPublishedBetweenTicksCanEnterTheNextFrameWithoutWaitingForDemandTick() throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            f.local = true;
+            receiver.mode = ModelResourceDemand.Mode.OFFLINE;
+            var scope = f.coordinator.register(receiver);
+            scope.useFrameInstallation();
+            f.tick();
+            assertFalse(scope.hasReadyInstallation());
+            f.complete(A);
+            f.cache.tick();
+            var before = f.events.size();
+            assertTrue(scope.hasReadyInstallation());
+            assertEquals(List.of("0:acquire:1", "0:release:1"), f.events.subList(before, f.events.size()));
+            assertNull(receiver.lease, "Ready discovery cannot install before frame admission");
+            assertEquals(1, f.offlineCalls);
+            assertEquals(0, f.onlineCalls);
+            assertEquals(1, f.starts.size());
+            try (var claim = Objects.requireNonNull(scope.claimReadyInstallation())) {
+                assertNull(receiver.lease);
+                assertEquals(1, f.interests(A));
+            }
+            assertEquals(0, f.interests(A));
+        }
+    }
+
+    @Test
+    void firstRenderCanDiscoverReadyDuringThePageWaitAndKeepsItsAnchorAcrossTheFirstTick() throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            var request = f.resourceRequest(A.modelId(), "player", "main", ModelResourcePurpose.GUI, null);
+            try (var producer = f.start(request, WorkPriority.BACKGROUND)) {
+                f.complete(A);
+                f.cache.tick();
+                var previous = f.coordinator.openPage("previous");
+                f.clock.set(100);
+                var page = f.coordinator.replacePage(previous, "new");
+                receiver.mode = ModelResourceDemand.Mode.READY;
+                var scope = f.coordinator.register(receiver);
+                scope.useFrameInstallation();
+                page.entity(scope);
+                page.advance();
+                assertTrue(scope.hasReadyInstallation());
+                assertNull(receiver.lease, "a Ready hit still requires the frame's new-card admission");
+                assertEquals(2, f.interests(A));
+                var before = List.copyOf(f.events);
+                f.tick();
+                assertEquals(before, f.events, "the first tick must preserve the first-render anchor");
+                assertEquals(0, f.offlineCalls);
+                assertEquals(0, f.onlineCalls);
+                try (var claim = Objects.requireNonNull(scope.claimReadyInstallation())) {
+                    assertNull(receiver.lease);
+                }
+                assertEquals(1, f.interests(A));
+                page.close();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"CACHED", "OFFLINE"})
+    void readyOnlyMissDoesNotCancelRestartOrDowngradeAnExistingAcquisition(ModelResourceDemand.Mode mode)
+        throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            var probe = new CompletableFuture<Optional<ResourceLease>>();
+            if (mode == ModelResourceDemand.Mode.CACHED)
+                f.cachedProbe = probe;
+            else
+                f.offlineProbe = probe;
+            receiver.mode = mode;
+            var scope = f.coordinator.register(receiver);
+            scope.useFrameInstallation();
+            f.tick();
+            for (int frame = 0; frame < 3; frame++) {
+                assertFalse(scope.hasReadyInstallation());
+                assertNull(scope.claimReadyInstallation());
+                assertFalse(probe.isCancelled());
+            }
+            f.tick();
+            assertFalse(probe.isCancelled());
+            assertEquals(mode == ModelResourceDemand.Mode.CACHED ? 1 : 0, f.cachedCalls);
+            assertEquals(mode == ModelResourceDemand.Mode.OFFLINE ? 1 : 0, f.offlineCalls);
+            assertEquals(0, f.onlineCalls);
+            assertEquals(0, f.starts.size());
+            var request = receiver.assignment().request();
+            try (var producer = f.start(request, WorkPriority.BACKGROUND)) {
+                f.complete(A);
+                f.cache.tick();
+                assertTrue(scope.hasReadyInstallation());
+                assertTrue(probe.isCancelled(), "only an acquired Ready replacement can retire the old probe");
+                assertEquals(2, f.interests(A));
+                assertNull(receiver.lease);
+            }
+        }
+    }
+
+    @Test
+    void readyOnlyLookupRechecksNewUsePermissionBeforeTakingAResidentCapability() throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            var request = receiver.assignment().request();
+            try (var producer = f.start(request, WorkPriority.BACKGROUND)) {
+                f.complete(A);
+                f.cache.tick();
+                var scope = f.coordinator.register(receiver);
+                scope.useFrameInstallation();
+                f.denied.add(A.modelId());
+                var before = List.copyOf(f.events);
+                assertFalse(scope.hasReadyInstallation());
+                assertNull(scope.claimReadyInstallation());
+                assertEquals(before, f.events);
+                f.denied.remove(A.modelId());
+                assertTrue(scope.hasReadyInstallation());
+                f.denied.add(A.modelId());
+                assertNull(scope.claimReadyInstallation());
+                assertEquals(2, f.interests(A), "the earlier anchor retains its accepted ownership");
+                assertEquals(0, f.offlineCalls);
+                assertEquals(0, f.onlineCalls);
+            }
+        }
+    }
+
+    @Test
+    void unsubmittedAndBusyFrameClaimsCloseOnlyTheirOwnCapabilityAndCanRetry() throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            var request = f.resourceRequest(A.modelId(), "player", "main", ModelResourcePurpose.GUI, null);
+            try (var producer = f.start(request, WorkPriority.BACKGROUND)) {
+                f.ready(A);
+                var scope = f.coordinator.register(receiver);
+                scope.useFrameInstallation();
+                receiver.mode = ModelResourceDemand.Mode.READY;
+                f.tick();
+                var rejectedSubmission = Objects.requireNonNull(scope.claimReadyInstallation());
+                rejectedSubmission.close();
+                assertEquals(1, f.interests(A));
+                f.tick();
+                var busy = Objects.requireNonNull(scope.claimReadyInstallation());
+                receiver.busy = true;
+                var lease = busy.takeLease();
+                var outcome = receiver.install(busy.request(), lease, false, false);
+                assertEquals(ClientDemandCoordinator.InstallationResult.BUSY, outcome);
+                lease.close();
+                busy.complete(outcome);
+                f.tick();
+                assertTrue(scope.hasReadyInstallation());
+                var finalClaim = Objects.requireNonNull(scope.claimReadyInstallation());
+                var taskLease = finalClaim.takeLease();
+                scope.close();
+                finalClaim.complete(ClientDemandCoordinator.InstallationResult.STALE);
+                taskLease.close();
+                f.tick();
+                assertNull(scope.claimReadyInstallation());
+                assertEquals(1, f.interests(A));
+                assertEquals(1, f.starts.size(), "claim/retry never starts a new load");
+            }
+        }
+    }
+
+    @Test
+    void frameUseDefersPageRetirementAndStillClosesEverySiblingOnFailure() throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            var page = f.coordinator.openPage("old");
+            var scope = f.coordinator.register(receiver);
+            page.entity(scope);
+            var calls = new ArrayList<String>();
+            var primary = new IllegalStateException("first cleanup");
+            var secondary = new IllegalArgumentException("second cleanup");
+            page.action(new ClientDemandCoordinator.PageAction() {
+                public void advance(ModelResourceDemand.Mode allowed) {}
+                public void close() {
+                    calls.add("first");
+                    throw primary;
+                }
+            });
+            page.action(new ClientDemandCoordinator.PageAction() {
+                public void advance(ModelResourceDemand.Mode allowed) {}
+                public void close() {
+                    calls.add("second");
+                    throw secondary;
+                }
+            });
+            var frame = page.beginFrame();
+            assertThrows(IllegalStateException.class, page::beginFrame);
+            var replacement = f.coordinator.replacePage(page, "new");
+            assertTrue(page.isClosed());
+            assertFalse(scope.isClosed());
+            assertTrue(calls.isEmpty());
+            assertThrows(IllegalStateException.class, page::beginFrame);
+            assertSame(primary, assertThrows(IllegalStateException.class, frame::close));
+            assertEquals(List.of("first", "second"), calls);
+            assertArrayEquals(new Throwable[] {secondary}, primary.getSuppressed());
+            assertTrue(scope.isClosed());
+            frame.close();
+            assertFalse(replacement.isClosed());
+        }
+    }
+
+    @Test
+    void closingAnActivePageSealsHoverAndEntityAcquisitionBeforeDeferredCleanup() throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            var page = f.coordinator.openPage("list");
+            var scope = f.coordinator.register(receiver);
+            scope.useFrameInstallation();
+            receiver.mode = ModelResourceDemand.Mode.OFFLINE;
+            page.entity(scope);
+            page.pointer(A);
+            f.clock.set(300);
+            page.advance();
+            var frame = page.beginFrame();
+            page.close();
+            assertFalse(scope.isClosed());
+            f.tick();
+            assertEquals(0, f.offlineCalls);
+            assertEquals(0, f.onlineCalls);
+            assertNull(scope.claimReadyInstallation());
+            frame.close();
+            assertTrue(scope.isClosed());
+        }
+    }
+
+    @Test
+    void rejectedFrameInstallationReportsItsExplicitOutcomeAndDoesNotOwnTheTransferredLease() throws Exception {
+        try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
+            var request = f.resourceRequest(A.modelId(), "player", "main", ModelResourcePurpose.GUI, null);
+            try (var producer = f.start(request, WorkPriority.BACKGROUND)) {
+                f.ready(A);
+                var scope = f.coordinator.register(receiver);
+                scope.useFrameInstallation();
+                f.tick();
+                var claim = Objects.requireNonNull(scope.claimReadyInstallation());
+                assertThrows(IllegalStateException.class,
+                    () -> claim.complete(ClientDemandCoordinator.InstallationResult.INSTALLED));
+                var taskLease = claim.takeLease();
+                taskLease.close();
+                claim.complete(ClientDemandCoordinator.InstallationResult.REJECTED);
+                assertNotNull(scope.failure());
+                assertEquals("Model installation was rejected", scope.failure().getMessage());
+                claim.close();
+                assertEquals(1, f.interests(A));
+            }
+        }
     }
 
     @Test
@@ -219,7 +560,10 @@ class ClientDemandCoordinatorTest {
         field(type, "page").set(state, page);
         field(type, "target").set(state, receiver.target);
         field(type, "scope").set(state, receiver.scope);
-        field(type, "preview").set(state, image);
+        var imagesType = com.elfmcys.ysm.client.gui.button.CatalogCardImages.class;
+        var images = UnsafeUtil.getUnsafe().allocateInstance(imagesType);
+        field(imagesType, "preview").set(images, image);
+        field(type, "images").set(state, images);
         field(type, "active").setBoolean(state, active);
         return state;
     }
@@ -716,7 +1060,7 @@ class ClientDemandCoordinatorTest {
             assertEquals(1, f.offlineCalls);
             assertEquals(ModelResourceDemand.Mode.OFFLINE, modes.get(modes.size() - 1));
             f.at(700);
-            assertEquals(0, f.onlineCalls);
+            assertEquals(1, f.onlineCalls);
             f.at(701);
             assertEquals(1, f.onlineCalls);
             assertEquals(ModelResourceDemand.Mode.ONLINE, modes.get(modes.size() - 1));
@@ -724,7 +1068,7 @@ class ClientDemandCoordinatorTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"300,false", "301,true"})
+    @CsvSource({"300,false", "301,false", "700,false", "701,true"})
     void eagerCardsDoNotStartLocalWorkUntilTheirPageIsAdmitted(long previousDuration, boolean immediate)
         throws Exception {
         try (var f = new Fixture(); var card = new Receiver(f, A, ModelResourcePurpose.GUI)) {
@@ -736,8 +1080,9 @@ class ClientDemandCoordinatorTest {
             f.tick();
             assertEquals(immediate ? 1 : 0, f.offlineCalls);
             f.at(previousDuration + 299);
-            f.at(previousDuration + 300);
             assertEquals(immediate ? 1 : 0, f.offlineCalls);
+            f.at(previousDuration + 300);
+            assertEquals(1, f.offlineCalls);
             f.at(previousDuration + 301);
             f.at(previousDuration + 701);
             assertEquals(1, f.offlineCalls);
@@ -784,7 +1129,7 @@ class ClientDemandCoordinatorTest {
             assertEquals(0, f.onlineCalls);
             page.pointer(null);
             f.at(800);
-            assertEquals(0, f.onlineCalls);
+            assertEquals(1, f.onlineCalls);
             f.at(801);
             assertEquals(1, f.onlineCalls, "accepted hover continues after pointer exit");
             assertEquals(1, f.offlineCalls, "network admission reuses the completed offline probe");
@@ -801,14 +1146,14 @@ class ClientDemandCoordinatorTest {
             var page = f.coordinator.replacePage(previous, "second");
             page.card(card, A);
             page.pointer(A);
-            f.at(400);
-            assertEquals(ModelResourceDemand.Mode.READY, card.mode);
+            f.at(399);
+            assertNull(card.scope);
             assertEquals(0, f.offlineCalls);
             page.pointer(null);
             f.at(1000);
             assertTrue(f.starts.isEmpty());
             assertEquals(0, f.offlineCalls);
-            assertTrue(card.scope.isClosed());
+            assertNull(card.scope);
         }
     }
 
@@ -821,7 +1166,7 @@ class ClientDemandCoordinatorTest {
             var page = f.coordinator.replacePage(previous, "second");
             page.pointer(A);
             f.at(400);
-            assertEquals(0, f.offlineCalls);
+            assertEquals(1, f.offlineCalls);
             f.at(401);
             f.at(801);
             assertFalse(f.offlineProbe.isCancelled());
@@ -983,6 +1328,7 @@ class ClientDemandCoordinatorTest {
         boolean eager;
         final List<ResourceRequest> requests = new ArrayList<>();
         final Map<Hash256, WorkPriority> priorities = new HashMap<>();
+        int cachedCalls;
         int offlineCalls;
         boolean local;
         int onlineCalls;
@@ -1079,6 +1425,7 @@ class ClientDemandCoordinatorTest {
         }
 
         public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkPriority priority) {
+            cachedCalls++;
             return cachedProbe == null ? CompletableFuture.completedFuture(Optional.empty()) : cachedProbe;
         }
 

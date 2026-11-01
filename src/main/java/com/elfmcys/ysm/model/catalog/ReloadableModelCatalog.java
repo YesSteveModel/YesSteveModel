@@ -223,6 +223,11 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         }
     }
 
+    /** Accepted scans invalidate independent image observations even without a catalog transition. */
+    public synchronized long reloadGeneration() {
+        return scanSequence;
+    }
+
     public synchronized boolean busy() {
         return !closed && active != null;
     }

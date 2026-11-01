@@ -45,6 +45,7 @@ import java.util.function.Supplier;
 /** Catalog-bound image access for local and active remote sessions. */
 public final class ClientAssetRepository {
     private final ClientCatalogManager catalogs;
+    private final ResidentImages images = new ResidentImages();
     private final Supplier<RemotePresentationFetcher> presentations;
     private final Function<ModelContent, ModelContent> exactContent;
     private final PreviewStorage previewStore;
@@ -254,6 +255,8 @@ public final class ClientAssetRepository {
 
     public final class Batch implements AutoCloseable {
         private final ClientCatalogSnapshot snapshot;
+        private final java.util.Map<Hash256, Object> imageMembers = new java.util.HashMap<>();
+        private final java.util.Map<Hash256, Object> imageSessionMembers = new java.util.HashMap<>();
         private final RemotePresentationFetcher fetcher = presentations.get();
         private final ClientModelSession session = sessions.get();
         private final AtomicBoolean closed = new AtomicBoolean();
@@ -263,6 +266,75 @@ public final class ClientAssetRepository {
 
         private Batch(ClientCatalogSnapshot snapshot) {
             this.snapshot = snapshot;
+            snapshot.catalog().byModelId().forEach((id, record) -> {
+                imageMembers.put(id, catalogs.imageMember(id));
+                if (session != null && record.binding().content() instanceof RemoteModelContent content)
+                    imageSessionMembers.put(id, session.imageMember(content.representation().identity()));
+            });
+        }
+
+        public ResidentImages images() {
+            return images;
+        }
+
+        public ImageRequest imageRequest(Hash256 modelId, ModelAssetSelector selector) {
+            var content = snapshot.find(modelId).orElseThrow(() ->
+                new IllegalArgumentException("Unknown model id: " + modelId)).content();
+            var member = imageMembers.get(modelId);
+            var connection = session;
+            var remoteIdentity = content instanceof RemoteModelContent ? content.representation().identity() : null;
+            var sessionMember = imageSessionMembers.get(modelId);
+            BooleanSupplier allowed = () -> !closed.get() && sessions.get() == connection
+                && (connection == null || connection.state() != ClientModelSession.State.CLOSED)
+                && member != null && catalogs.imageMember(modelId) == member
+                && catalogs.snapshot().find(modelId).map(entry -> entry.content() == content).orElse(false)
+                && (connection == null || remoteIdentity == null
+                    || connection.imageMemberCurrent(remoteIdentity, sessionMember));
+            var preview = selector instanceof ModelAssetSelector.ModelPreview;
+            Supplier<CompletableFuture<PreviewResult>> acquire = () -> preview ? preview(modelId)
+                : presentation(modelId, ((ModelAssetSelector.ModelPresentation)selector).asset(),
+                    ((ModelAssetSelector.ModelPresentation)selector).index()).thenApply(PreviewResult.Data::new);
+            try {
+                var chunk = presentationChunk(content, selector);
+                if (chunk != null) {
+                    Object proof = chunk.hash() == null ? content.representation().identity()
+                        : java.util.HexFormat.of().formatHex(chunk.hash());
+                    var image = presentationImage(content, selector);
+                    var interpretation = image == null ? List.of() : List.of(image.format(), image.width(), image.height());
+                    var identity = new ImageIdentity(modelId, selector, proof, interpretation,
+                        chunk.encoding(), chunk.size(), chunk.decodeSize(), chunk.flags());
+                    return new ImageRequest(ignored -> identity, allowed, ignored -> true, acquire);
+                }
+                if (!preview) {
+                    var identity = new ImageIdentity(member, selector);
+                    return new ImageRequest(ignored -> identity, allowed, ignored -> true, acquire);
+                }
+                var store = previewStore == null ? null : previewStore.forContent(content);
+                var container = content.representation().containerId();
+                Object version = store == null ? member : store.observe(container);
+                var reload = catalogs.previewReload();
+                var observation = connection == null ? null
+                    : connection.observePreview(content.representation().identity()).orElse(null);
+                var previewVersion = observation == null ? member : observation.contentVersion();
+                Function<ImageSource, Object> imageVersion = source -> source instanceof PreviewStore.EncodedPreview data
+                    && data.version() != null ? data.version() : version;
+                Function<ImageSource, ImageIdentity> identity = source -> new ImageIdentity(modelId, selector,
+                    container, imageVersion.apply(source), reload, previewVersion);
+                return new ImageRequest(identity, allowed, source -> catalogs.previewReload() == reload
+                    && (store == null || store.current(container, (PreviewStore.Version)imageVersion.apply(source)))
+                    && (observation == null || connection.previewObservationCurrent(observation)), acquire);
+            } catch (IOException failure) {
+                throw new CompletionException(failure);
+            }
+        }
+
+        public ImageRequest coverRequest(ModelPackDescriptor pack) {
+            var identity = new ImageIdentity(pack.hierarchy(), pack.coverHash() == null ? pack : pack.coverHash(),
+                pack.coverFormat().toUpperCase(java.util.Locale.ROOT), pack.coverSize());
+            return new ImageRequest(ignored -> identity,
+                () -> !closed.get() && sessions.get() == session
+                    && catalogs.snapshot().packs().stream().anyMatch(value -> samePackCoverContent(value, pack)),
+                ignored -> true, () -> packCover(pack).thenApply(PreviewResult.Data::new));
         }
 
         public boolean previewAbsent(ModelFileIdentity identity) {
@@ -429,16 +501,13 @@ public final class ClientAssetRepository {
                 if (chunk == null)
                     return registerEager(() -> CompletableFuture
                         .failedFuture(new IOException("Model contains no requested presentation")), null, null);
-                try {
-                    content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
+                if (remote.hasCachedImage(chunk))
                     return registerEager(() -> contentPresentation(this::cancelled, content, selector), null, null);
-                } catch (IOException missing) {
-                    var slot = assets.size();
-                    RemotePresentationFetcher.Member member =
-                        new RemotePresentationFetcher.Icon(slot, remote.representation().identity(), chunk);
-                    return register(() -> contentPresentation(this::cancelled, content, selector), member,
-                        new RemoteBacking(remote, chunk));
-                }
+                var slot = assets.size();
+                RemotePresentationFetcher.Member member =
+                    new RemotePresentationFetcher.Icon(slot, remote.representation().identity(), chunk);
+                return register(() -> contentPresentation(this::cancelled, content, selector), member,
+                    new RemoteBacking(remote, chunk));
             } catch (IOException | RuntimeException failure) {
                 return registerEager(() -> CompletableFuture.failedFuture(failure), null, null);
             }
@@ -648,19 +717,25 @@ public final class ClientAssetRepository {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
+            Throwable failure = null;
             if (transfer != null)
-                transfer.cancel(false);
-            assets.stream().map(asset -> asset.previewPayload).filter(Objects::nonNull).forEach(PreviewPayload::close);
-            assets.forEach(asset -> {
+                failure = cleanup(failure, () -> transfer.cancel(false));
+            for (var asset : assets) {
+                if (asset.previewPayload != null)
+                    failure = cleanup(failure, asset.previewPayload::close);
                 if (asset.preparation != null)
-                    asset.preparation.cancel(false);
+                    failure = cleanup(failure, () -> asset.preparation.cancel(false));
                 if (!asset.result.isCompletedExceptionally())
-                    release(asset.result.getNow(null));
+                    failure = cleanup(failure, () -> release(asset.result.getNow(null)));
                 if (asset.prepared != null)
-                    release(asset.prepared.outcome);
-                asset.result.cancel(false);
-            });
+                    failure = cleanup(failure, () -> release(asset.prepared.outcome));
+                failure = cleanup(failure, () -> asset.result.cancel(false));
+            }
             assets.clear();
+            if (failure instanceof Error error)
+                throw error;
+            if (failure instanceof RuntimeException error)
+                throw error;
         }
 
         private final class PendingAsset {
@@ -722,6 +797,18 @@ public final class ClientAssetRepository {
         }
     }
 
+    private static Throwable cleanup(Throwable primary, Runnable action) {
+        try {
+            action.run();
+        } catch (Throwable failure) {
+            if (primary == null)
+                return failure;
+            if (primary != failure)
+                primary.addSuppressed(failure);
+        }
+        return primary;
+    }
+
     private static AssetContainerView.ChunkInfo presentationChunk(ModelContent content, ModelAssetSelector selector)
         throws IOException {
         var view = content.representation().view();
@@ -732,7 +819,16 @@ public final class ClientAssetRepository {
         if (presentation.asset() == ModelAssetSelector.PresentationAsset.MODEL_ICON) {
             return view.getFileView().getAssetView().getChunkInfo(ModelFileConstant.THUMB_ICON_CHUNK_NAME);
         }
-        var info = view.getManifest().info();
+        var image = presentationImage(content, selector);
+        return image == null ? null
+            : view.getFileView().getAssetView().getChunkInfo(AssetFileConstant.BLOB_CHUNK_PREFIX + image.blobId());
+    }
+
+    private static ImageProto presentationImage(ModelContent content, ModelAssetSelector selector) {
+        if (!(selector instanceof ModelAssetSelector.ModelPresentation presentation)
+            || presentation.asset() == ModelAssetSelector.PresentationAsset.MODEL_ICON)
+            return null;
+        var info = content.representation().view().getManifest().info();
         ImageProto image;
         if (presentation.asset() == ModelAssetSelector.PresentationAsset.AUTHOR_AVATAR) {
             var metadata = info.metadataUnsafe();
@@ -752,7 +848,7 @@ public final class ClientAssetRepository {
                 return null;
             image = settings.guiBackgroundUnsafe();
         }
-        return view.getFileView().getAssetView().getChunkInfo(AssetFileConstant.BLOB_CHUNK_PREFIX + image.blobId());
+        return image;
     }
 
     private static ImageSource remotePackCover(ModelPackDescriptor pack, UniBuffer bytes) throws IOException {

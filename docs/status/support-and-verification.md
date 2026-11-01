@@ -18,7 +18,7 @@
 | Java 动画与模型声音 | Controller、typed AOT、固定许可、实体显式交接与来源缓存已接入；JNI 及 Forge 正常／受控提前返回、捕获失败后返回和退出账本有局部证据 | 可选模组注入组合、游戏性能、双端同步、设备声音和长期回收未完成验证；[实体所有权验证](../verification/entity-animation-ownership.md)、[动画问题](known-issues/animation.md) |
 | Molang 重复编译与宿主预算 | 完整入口契约共享分析、source／entry 分离和显式宿主策略已接入；三档规模、冷暖来源／资格及代表模型 GUI/FULL 完整准备通过 | Windows Forge 已观察该模型冷暖预览、选用与第一／第三人称；完整动作、逐骨骼视觉、声音及净性能收益仍未验证；[复现与边界](../verification/animation-bake-benchmark.md#模型输入与共享规模) |
 | Native CPU renderer | Bake/extract/render、SIMD 与并行顶点生成已有生产入口；hermetic clang Release 聚焦回归通过 | Cube-info Java view 已复现越界；MSVC、完整游戏视觉及其他平台未通过验收；[渲染问题](known-issues/rendering.md)、[构建问题](known-issues/format-and-schema.md#codec导入与平台) |
-| GUI 模型准备与取景 | 完整闭包、主体特化和动画复用已接入；当前卡片与生成图已有有限像素验证；完整地址、Ctrl 分派和跨根 pack 导航有局部测试 | 真实 Ctrl 点击、剪贴板和文件管理器响应、完整模型/动画矩阵、输入往返与最终主循环成本未验；[取景边界](known-issues/rendering.md#gui-取景)、[冷准备性能](known-issues/animation.md#gui-与模型冷准备) |
+| GUI 模型准备与取景 | 完整闭包、主体特化、独立图驻留与每 render 帧卡片交接已接入；容量、所有权和 native 等价有局部回归；当前卡片与生成图已有有限像素验证；完整地址、Ctrl 分派和跨根 pack 导航有局部测试 | 真实 Ctrl 点击、剪贴板和文件管理器响应、完整模型/动画矩阵、输入往返与最终主循环成本未验；[取景边界](known-issues/rendering.md#gui-取景)、[冷准备性能](known-issues/animation.md#gui-与模型冷准备) |
 | 第一人称与重复消费 | 标准/SW 手部和初始背景已接入持久局部输出；受控 JNI 与部分实机路径通过 | 完整资源生命周期、动态 renderer oracle、native 成本与用户视觉未验；[第一人称证据](known-issues/rendering.md#重复消费与第一人称) |
 | 图像 codec | 解码支持 PNG、JPEG、WebP、AVIF、ZTX；编码支持 WebP、AVIF、ZTX；不支持 JPEG XL | 平台与 codec 组合未完整验证；[格式问题](known-issues/format-and-schema.md#codec导入与平台) |
 | 平台入口 | Windows x64、GNU/Linux x64、专用 Android arm64 环境有产品入口；x64 要求 SSE4.1 | Windows 7、x86-64-v1、macOS 和其他架构尚不可用；[平台需求](../product-decisions/requirements/req-platform-availability.md) |

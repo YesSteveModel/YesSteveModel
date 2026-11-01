@@ -4,7 +4,7 @@ import com.elfmcys.ysm.natives.NativeRuntime;
 
 import java.util.concurrent.*;
 
-public final class ThreadTools {
+public final class ResponsiveExecutor {
     private static final int THREAD_COUNT = Math.max(2, Math.min(8, NativeRuntime.availableProcessors() / 2));
     private static final ThreadPoolExecutor THREAD_POOL = new ThreadPoolExecutor(THREAD_COUNT, THREAD_COUNT, 30,
         TimeUnit.SECONDS, new LinkedBlockingQueue<>(), runnable -> {
@@ -13,6 +13,14 @@ public final class ThreadTools {
             thread.setDaemon(true);
             return thread;
         });
+
+    public static int maximumPoolSize() {
+        return THREAD_POOL.getMaximumPoolSize();
+    }
+
+    public static void execute(Runnable runnable) {
+        THREAD_POOL.execute(runnable);
+    }
 
     public static Future<?> submit(Runnable runnable) {
         return THREAD_POOL.submit(runnable);

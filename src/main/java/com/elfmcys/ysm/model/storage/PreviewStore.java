@@ -43,6 +43,7 @@ public final class PreviewStore implements PreviewStorage {
     private final Path cacheRoot;
     private final AtomicSharedCache cache;
     private Consumer<Hash256> storedObserver;
+    private final java.util.Map<Hash256, Version> versions = new java.util.HashMap<>();
 
     public PreviewStore(Path cacheRoot, AtomicSharedCache cache, Consumer<Hash256> storedObserver) {
         this.cacheRoot = Objects.requireNonNull(cacheRoot, "cacheRoot").toAbsolutePath().normalize();
@@ -70,6 +71,34 @@ public final class PreviewStore implements PreviewStorage {
 
     public void storedObserver(Consumer<Hash256> observer) {
         storedObserver = Objects.requireNonNull(observer);
+    }
+
+    /** Observes replacement authority without reading image bytes. */
+    public synchronized Version observe(Hash256 containerId) {
+        return versions.computeIfAbsent(containerId, ignored -> new Version());
+    }
+
+    public synchronized boolean current(Hash256 containerId, Version version) {
+        var current = versions.get(containerId);
+        return current != null && version != null && (current == version || current == version.basis);
+    }
+
+    private synchronized void replaced(Hash256 containerId, EncodedPreview preview) {
+        var version = new Version();
+        versions.put(containerId, version);
+        preview.version = version;
+    }
+
+    public static final class Version {
+        private final Version basis;
+
+        private Version() {
+            this(null);
+        }
+
+        private Version(Version basis) {
+            this.basis = basis;
+        }
     }
 
     private Path previewPath(Hash256 containerId) {
@@ -136,12 +165,15 @@ public final class PreviewStore implements PreviewStorage {
 
     /** Management must distinguish an inaccessible cache from a successfully observed miss. */
     public Optional<EncodedPreview> probe(Hash256 containerId) throws IOException {
+        var version = observe(containerId);
         var stored = readEncoded(containerId);
         if (stored.isEmpty())
             return Optional.empty();
         var bytes = SharedBuffer.adopt(stored.orElseThrow());
         try {
-            return Optional.of(read(() -> Image.probe(bytes), bytes.size()));
+            var result = read(() -> Image.probe(bytes), bytes.size());
+            result.version(version);
+            return Optional.of(result);
         } catch (AssetLoadException invalidMedia) {
             if (invalidMedia.reason() != AssetLoadException.Reason.CONTENT)
                 throw invalidMedia;
@@ -166,16 +198,33 @@ public final class PreviewStore implements PreviewStorage {
         Objects.requireNonNull(containerId, "containerId");
         var expected = preview.bytes();
         var target = previewPath(containerId);
+        var observed = new java.util.concurrent.atomic.AtomicReference<Version>();
+        var original = observe(containerId);
+        var committed = new java.util.concurrent.atomic.AtomicBoolean();
         try {
             cache.materializeReplacing("preview", containerId.toString(), target, path -> {
                 try {
-                    return Arrays.equals(readBounded(path), expected);
+                    var same = Arrays.equals(readBounded(path), expected);
+                    if (same)
+                        observed.set(observe(containerId));
+                    return same;
                 } catch (IOException invalid) {
                     return false;
                 }
-            }, file -> file.writeBytes(expected));
+            }, file -> file.writeBytes(expected), replacement -> {
+                synchronized (this) {
+                    replacement.run();
+                    replaced(containerId, preview);
+                    observed.set(preview.version());
+                    committed.set(true);
+                }
+            });
+            preview.version(observed.get());
             notifyStored(containerId);
         } catch (IOException | RuntimeException failure) {
+            // Usable memory content must not impersonate the unchanged persistent observation.
+            if (!committed.get())
+                preview.version(new Version(original));
             YesSteveModel.LOGGER.warn("Failed to persist usable preview cache entry {}", target, failure);
         }
     }
@@ -227,10 +276,41 @@ public final class PreviewStore implements PreviewStorage {
                     while (data.hasRemaining())
                         output.write(data);
                 }
-            }, gate);
+            }, replacement -> gate.commit(() -> {
+                synchronized (this) {
+                    replacement.run();
+                    replaced(containerId, preview);
+                }
+            }));
             notifyStored(containerId);
         } finally {
             java.lang.ref.Reference.reachabilityFence(encoded);
+        }
+    }
+
+    /** Standalone declared images keep their own media policy, without preview-cache bounds. */
+    public static EncodedPreview prepareTexture(ImageSource source) throws IOException {
+        try (var image = source.open()) {
+            if (image.format() == Image.Format.RGBA) {
+                try (var encoded = ImageEncoder.encodeLossless(image.data().shareNative(), image.width(), image.height())) {
+                    return prepareTexture(() -> new Image(encoded.format(), encoded.width(), encoded.height(), encoded.data()));
+                }
+            }
+            var owner = new PreviewPixels.Owner();
+            var decoded = image.decodeToBuffer();
+            PreviewPixels pixels;
+            try {
+                pixels = owner.adopt(decoded, image.width(), image.height());
+            } catch (Throwable failure) {
+                decoded.close();
+                throw failure;
+            }
+            try {
+                return new EncodedPreview(image.data(), image.format(), image.width(), image.height(), pixels, owner);
+            } catch (Throwable failure) {
+                pixels.close();
+                throw failure;
+            }
         }
     }
 
@@ -301,9 +381,15 @@ public final class PreviewStore implements PreviewStorage {
     public static final class PendingPreview implements AutoCloseable {
         private final Image image;
         private boolean closed;
+        private volatile Version version;
 
         private PendingPreview(Image image) {
             this.image = image;
+        }
+
+        public synchronized PendingPreview version(Version version) {
+            this.version = version;
+            return this;
         }
 
         public synchronized EncodedPreview verify(PreviewPixels.Owner owner, boolean display) throws IOException {
@@ -321,6 +407,7 @@ public final class PreviewStore implements PreviewStorage {
                     }
                     var result =
                         new EncodedPreview(image.data(), image.format(), image.width(), image.height(), pixels, owner);
+                    result.version = version;
                     pixels = null;
                     return result;
                 } finally {
@@ -377,6 +464,7 @@ public final class PreviewStore implements PreviewStorage {
         private PreviewPixels pixels;
         private final PreviewPixels.Owner pixelOwner;
         private boolean closed;
+        private volatile Version version;
 
         private EncodedPreview(SharedBuffer bytes, Image.Format format, int width, int height, PreviewPixels pixels,
             PreviewPixels.Owner pixelOwner) {
@@ -408,13 +496,41 @@ public final class PreviewStore implements PreviewStorage {
 
         public synchronized EncodedPreview acquire() {
             requireOpen();
-            return new EncodedPreview(bytes, format, width, height, pixels == null ? null : pixels.acquire(),
+            var result = new EncodedPreview(bytes, format, width, height, pixels == null ? null : pixels.acquire(),
                 pixelOwner);
+            result.version = version;
+            return result;
         }
 
         public synchronized EncodedPreview acquireContent() {
             requireOpen();
-            return new EncodedPreview(bytes, format, width, height, null, pixelOwner);
+            var result = new EncodedPreview(bytes, format, width, height, null, pixelOwner);
+            result.version = version;
+            return result;
+        }
+
+        public synchronized Version version() {
+            return version;
+        }
+
+        /** The operation passes its read-time observation through media verification. */
+        public synchronized void version(Version version) {
+            this.version = version;
+        }
+
+        public synchronized void preparePixels(PreviewPixels.Owner owner) throws IOException {
+            requireOpen();
+            if (pixels != null)
+                return;
+            try (var image = open()) {
+                var decoded = image.decodeToBuffer();
+                try {
+                    pixels = owner.adopt(decoded, width, height);
+                } catch (Throwable failure) {
+                    decoded.close();
+                    throw failure;
+                }
+            }
         }
 
         public synchronized PreviewPixels.Reload beginReload() {

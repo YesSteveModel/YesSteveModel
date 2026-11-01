@@ -1199,6 +1199,27 @@ class FirstPersonOwnerIntegrationTest {
     }
 
     @Test
+    void worldPlayerSubjectRemainsReadableBeforeTheRendererJoinsItsQueuedAnimation() throws Exception {
+        try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get());
+            var module = TestExpressionModules.create()) {
+            var resources = new OwnerResourceFixtures();
+            resources.attach(cap);
+            var target = resources.target(1, module, fixture.model);
+            cap.updateModelAndTexture(target.modelHash(), "variant0");
+            DemandFixtures.advance(cap);
+            try {
+                startAsync(cap, 0.25f);
+                assertTrue(cap.hasPendingUpdate());
+                // The player renderer checks compatibility before update joins the queued animation.
+                assertSame(player, cap.getEntity());
+                assertThrows(IllegalStateException.class, cap::getSeekTime);
+            } finally {
+                com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
+            }
+        }
+    }
+
+    @Test
     void earlyGetAndDrawKeepOtherOwnersPrivateUntilTheInvocationDrain() throws Exception {
         try (var fixture = new Fixture("parts-a"); var module = TestExpressionModules.create()) {
             var early = new Timeline(player);
@@ -1973,84 +1994,9 @@ class FirstPersonOwnerIntegrationTest {
     }
 
     @Test
-    void catalogCardRetirementReleasesInstalledStateAndAnimationReferences() throws Exception {
-        try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get());
-            var module = TestExpressionModules.create()) {
-            var constructor = com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity.class
-                .getDeclaredConstructor(net.minecraft.world.entity.player.Player.class);
-            constructor.setAccessible(true);
-            var owner = constructor.newInstance(player);
-            var resources = new OwnerResourceFixtures();
-            var clock = new java.util.concurrent.atomic.AtomicLong();
-            resources.attach(owner, clock::get);
-            var target = resources.target(1, module, fixture.model);
-            var coordinator = resources.coordinator(clock::get);
-            var page = coordinator.openPage("catalog");
-            var stateType = Class.forName("com.elfmcys.ysm.client.gui.button.CatalogModelCardState");
-            var state = allocate(stateType);
-            var intent =
-                new com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Target(target.modelHash(), "variant0");
-            field(stateType, "entity").set(state, owner);
-            field(stateType, "page").set(state, page);
-            field(stateType, "target").set(state, intent);
-            var animationType = Class.forName("com.elfmcys.ysm.client.gui.button.CatalogModelPreviewAnimationState");
-            var animationConstructor = animationType.getDeclaredConstructor();
-            animationConstructor.setAccessible(true);
-            var animations = animationConstructor.newInstance();
-            field(stateType, "previewAnimations").set(state, animations);
-            var display = (com.elfmcys.ysm.client.demand.ClientDemandCoordinator.CardDisplay)state;
-            page.card(display, intent);
-            var draw = allocate(ProbePlayerRenderer.class);
-            var output = new Probe();
-            try {
-                page.pointer(intent);
-                clock.set(299);
-                coordinator.tick();
-                assertFalse(owner.isAssigned());
-                assertFalse(owner.hasInstalledModel());
-                assertEquals(0, resources.acquisitions);
-                clock.set(300);
-                coordinator.tick();
-                assertTrue(owner.hasInstalledModel());
-                assertTrue(draw.renderReplacement(owner, null, 0, 0.25f, new PoseStack(), output, 123, () -> {
-                }));
-                assertFalse(output.vertices.isEmpty());
-                var request = owner.assignment().request();
-                var other = resources.findReady(request).orElseThrow();
-                var oldScope = owner.demandScope();
-                field(stateType, "configuredTarget").set(state, target);
-                field(animationType, "hoverFadeoutMillis").set(animations,
-                    (java.util.function.DoubleSupplier)() -> target.playerResources().animations().size());
-                page.pointer(null);
-                assertTrue(oldScope.isClosed());
-                assertFalse(owner.isAssigned());
-                assertFalse(owner.hasInstalledModel());
-                assertFalse(owner.hasUnfinishedWork());
-                assertNull(owner.displayedModel());
-                assertNull(field(stateType, "configuredTarget").get(state));
-                assertEquals(0d,
-                    ((java.util.function.DoubleSupplier)field(animationType, "hoverFadeoutMillis").get(animations))
-                        .getAsDouble());
-                assertFalse(draw.renderReplacement(owner, null, 0, 0.25f, new PoseStack(), new Probe(), 123, () -> {
-                }));
-                page.pointer(intent);
-                clock.set(599);
-                coordinator.tick();
-                assertFalse(owner.hasInstalledModel());
-                clock.set(600);
-                coordinator.tick();
-                assertTrue(owner.hasInstalledModel());
-                assertNotSame(oldScope, owner.demandScope());
-                page.close();
-                assertNull(owner.displayedModel());
-                assertInstanceOf(com.elfmcys.ysm.model.resource.client.AcquireResult.Ready.class, other.poll());
-                other.close();
-            } finally {
-                page.close();
-                owner.retire();
-                coordinator.close();
-            }
-        }
+    void catalogCardRetirementReleasesInstalledStateAndAnimationReferences(
+        @org.junit.jupiter.api.io.TempDir Path root) throws Exception {
+        CatalogPageFrameExecutionTest.verifyRetirement(player, root);
     }
 
     @Test

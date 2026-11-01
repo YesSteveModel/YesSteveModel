@@ -139,20 +139,43 @@ public final class ClientModelSession {
             && previews.get(observation.identity) == observation;
     }
 
+    public synchronized Object imageMember(ModelFileIdentity identity) {
+        var observation = state == State.ACTIVE ? previews.get(identity) : null;
+        return observation == null ? null : observation.member;
+    }
+
+    public synchronized boolean imageMemberCurrent(ModelFileIdentity identity, Object member) {
+        var observation = state == State.ACTIVE ? previews.get(identity) : null;
+        return member != null && observation != null && observation.member == member;
+    }
+
     public synchronized void invalidatePreview(ModelFileIdentity identity) {
-        if (state == State.ACTIVE && previews.containsKey(identity)) {
-            previews.put(identity, new PreviewObservation(this, identity));
+        var previous = previews.get(identity);
+        if (state == State.ACTIVE && previous != null) {
+            previews.put(identity, new PreviewObservation(this, identity, previous.member));
         }
     }
 
     public static final class PreviewObservation {
         private final ClientModelSession owner;
         private final ModelFileIdentity identity;
+        private final Object member;
+        private final Object contentVersion = new Object();
         private boolean absent;
 
         private PreviewObservation(ClientModelSession owner, ModelFileIdentity identity) {
+            this(owner, identity, new Object());
+        }
+
+        private PreviewObservation(ClientModelSession owner, ModelFileIdentity identity, Object member) {
             this.owner = owner;
             this.identity = identity;
+            this.member = member;
+        }
+
+        /** Content keys must not retain this observation's session owner. */
+        public Object contentVersion() {
+            return contentVersion;
         }
     }
 

@@ -4,12 +4,34 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.Arguments;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ContinuousDemandTest {
+    static Stream<Arguments> pageAdmissionCases() {
+        return Stream.of(-1L, 0L, 300L, 301L, 699L, 700L, 701L).flatMap(previous ->
+            Stream.of(0L, 299L, 300L, 699L, 700L).map(current -> Arguments.of(previous, current)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("pageAdmissionCases")
+    void pageAdmissionUsesOnePreviousPageThresholdAndInclusiveCurrentThresholds(long previous, long current) {
+        var demand = new ContinuousDemand<String>();
+        if (previous >= 0)
+            demand.observe("previous", 0);
+        var start = Math.max(0, previous);
+        demand.observe("current", start);
+        var immediate = previous < 0 || previous > 700;
+        assertEquals(immediate || current >= 300, demand.pageEffectEligible(true, start + current, 300));
+        assertEquals(immediate || current >= 700, demand.pageEffectEligible(true, start + current, 700));
+        assertTrue(demand.pageEffectEligible(false, start + current, 700));
+    }
+
     @Test
     void hoverIncludesThreeHundredMilliseconds() {
         var demand = new ContinuousDemand<String>();

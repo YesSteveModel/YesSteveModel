@@ -15,6 +15,18 @@ public final class ClientAssetBatch implements AutoCloseable {
         this.delegate = delegate;
     }
 
+    public ResidentImages images() {
+        return delegate.images();
+    }
+
+    public ImageRequest imageRequest(Hash256 model, ModelAssetSelector selector) {
+        return delegate.imageRequest(model, selector);
+    }
+
+    public ImageRequest coverRequest(ModelPackDescriptor pack) {
+        return delegate.coverRequest(pack);
+    }
+
     public CompletableFuture<PreviewResult> preview(Hash256 hash) {
         return delegate.preview(hash);
     }

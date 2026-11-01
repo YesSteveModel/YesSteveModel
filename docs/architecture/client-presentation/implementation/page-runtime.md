@@ -8,21 +8,27 @@
 
 页面移除关闭卡片、batch 与预览实体，还清除 widgets、focus 与 narration 引用；仅 `clearWidgets()` 不解除后两类保留。导航取消时恢复仍显示的来源页记录。`FakePlayer` 始终绑定创建时世界，不通过 setLevel 迁移。
 
-`CatalogModelCardState` 只保存展示状态、GUI entity、图片投影与资格，不拥有 future、retry 或完成回调。`PageImages` 拥有图片 batch、slot、standalone texture；`CustomTextureManager` 承担宿主注册和物理释放。模型 target 的 adopted texture 不归该页面 owner。
+`CatalogModelCardState` 只保存展示状态、GUI entity、图片投影与资格，不拥有 future、retry 或完成回调。`CatalogCardImages` 集中 preview 政策与装饰图片投影；`PageImages` 拥有图片 batch、slot 与独立 use。`ClientAssetRepository` 签发不透明 `ImageIdentity`，`ResidentImages` 关联驻留内容并集中消费者计数。`CustomTextureManager.Registration` 提供精确注册的存活、重新激活与释放；manager 承担原保留期限和物理释放。模型 target 的 adopted texture 不进入此 registry。
 
 `AnimatableCacheUtil` 是客户端共享的通用展示实体 cache，访问过期或世界卸载清理；它不拥有模型卡的私有预览实体。`EntityLoadEvent` 的客户端等待列表按实体 ID 保留 callback，在实体到达、离开、过期或世界卸载时清理。它们都不从属于某次模型 installation。
 
 ## 页面主流程
 
-`ClientModelService.tick()` 推进 `ClientDemandCoordinator`；GUI render 只读投影。`PageScope` 按成员、顺序、内容与页码形成语义身份。Replacement 先建立接收 scope，再关闭旧 scope；迟到 close 不能关闭 replacement。
+`ClientModelService.tick()` 推进 `ClientDemandCoordinator` 的资源取得；模型列表的 GUI scope 不在 tick 安装。页面身份包含分类、搜索、pack、页码及有序内容。Replacement 先建立接收 scope，再关闭旧 scope；迟到 close 不能关闭 replacement。Render 前推进页面政策并领取独立 Ready lease；未获名额时，原 operation 保留 Ready anchor。Ready 旁路可发现 tick 间出现的完整资源；miss 不降级或取消已接纳取得。关闭先封口，帧借用结束后才清理自有输入。
 
-`PageImages.advance(allowed)` 消费准入上限，先取得本地结果、获准联网后提交 batch，并非阻塞观察完成。GUI 读取图片不启动工作。图片 Ready 只指 owner 持有可用 `TextureHolder`，bytes 或磁盘文件不是 Ready。Adapter 负责迟到结果和全部 slot 终态。
+`CatalogPageFrame` 在同次 render 内完成准入、提交和交接。页面循环游标授予至多池最大容量加一张卡的新准备名额，拒绝仍推进游标；已有安装的动画不受名额限制。其余卡片先提交，主线程执行首卡并立即注册有效图片，再完整 join 所有已接纳任务、注册其他有效图片。任何失败都先完成交接，帧间不保留在途批次。共享图片在提交前确定唯一准备卡；冷前景、背景与该卡获准的完整绑定在同一任务执行。
 
-完整媒体验证同时产生封闭 encoded 内容与 RGBA 能力。远端传输终态后，各条目独立通过媒体／当前性门禁并交付；不等待同批其他图片解码。Batch 在结果终态后仍保留释放责任；`CustomTexture` 构造接纳时取得像素，并独立保留 reload 内容。首次 load 直接上传 prepared pixels，上传结束或失败均归还 CPU 能力。注册拒绝与页面退出关闭本次能力，旧页面无需再次推进。独立 reload 重新解码，不复用已消费像素。
+Eager 页面不创建 preview batch、不请求或消费 preview；非 eager 按需建立独立 preview 需求。配置切换只改变后续推进和消费，不以隐藏 slot 维持 eager 工作，也不强制取消此前接纳的补图。跳过 preview 不产生缺图或错误投影。
+
+`PageImages.advanceAcquisition(allowed)` 先查驻留 use，miss 才取得输入、获准联网后提交 batch。`Image.claimPreparation()` 为同一 identity 签发一次 CPU 能力；卡片执行方同步调用 `prepare()`，主线程用 `Image.publish()` 消费结果。发布失败由 slot 保留，后续帧不重复准备；其他 slot 继续交接。非帧调用方的 `advance()` 串行调用同一能力。GUI 的 texture/loading 投影不启动工作。图片 Ready 只指可消费的宿主注册；bytes、CPU 输入与磁盘文件均不是 Ready。
+
+冷前景、背景和头像只在准备能力中读取、验证与解码；远端取得阶段不解码，cache 文件存在仅作准备提示。已有 preview operation 继续交付封闭 encoded 内容与 RGBA 能力。准备能力独立取得输入，拒绝时由提交方关闭；接纳后由任务或 `Prepared` 关闭。`CustomTexture` 构造接纳像素，并独立保留 reload 内容。首次 load 直接上传 prepared pixels，上传结束或失败均归还 CPU 能力。Batch 仍关闭自己的输入；它不再持有已转移像素。页面关闭只结束自己的 use，迟到结果仍由原取得 owner 收敛。
+
+驻留关联不保留页面或 session，不强持有 RGBA，也不另设保留计时器。Manager 物理释放或 `CustomTexture` reload/close 撤销精确注册关联；过时回调只能删除原 entry。Reload 后的重新准备属于宿主重建，不属于驻留命中。
 
 `ClientPreviewGenerator` 在原 operation 数量和每 tick 接纳限制内直接派发解码、host 与 export 工作，不等待像素字节额度。`PreviewPixels.Owner` 只保留 backing 的退休责任和串行 reload 门禁；独立引用与同步借用保护实际使用期。Owner shutdown 封口并退休保留，执行中借用归还后释放 backing。
 
-`CatalogModelCardState.deactivate()` 先撤展示标志，再 retire 并清动画引用。重新获准时显式指派和建立 EntityScope。准备和消费均要求当前资格与 Matching，hook 返回后再次复核；假实体 world tick 不推进资源门禁。
+`CatalogModelCardState.deactivate()` 先撤展示标志并封口 scope。帧借用中，撤指派和清动画引用延到任务交接后；本帧重新取得资格也等下一次正常页面推进接纳。重新获准时显式指派和建立 EntityScope；模型列表将该 scope 交给帧安装。永久关闭才 retire 私有实体。准备和消费均要求当前资格与 Matching，hook 返回后再次复核；假实体 world tick 不推进资源门禁。
 
 ## 选择与显示的分离
 
@@ -39,6 +45,8 @@
 ## GUI 取景
 
 `CatalogModelButton` 与 `PreviewRenderHost` 共用固定构图映射；截图输出透明背景并固定 idle。清单关闭预览旋转且指定非空、非 idle 自定义 GUI 动画时，截图开启旋转；其他情况与实时卡按清单约定。
+
+`GuiFrameInput` 固定本轮 partial tick、inventory context、朝向、装备和 hover/focus。任务在完整绑定前应用输入，并在 finally 恢复私有主体；装备快照不借真实玩家的可变别名。主线程绘制应用同一输入，只消费 `GeoRenderData`，不再次 update 或推进 controller。中央 FULL 预览、纹理候选和世界实体保留各自的同步或预调度入口。
 
 `CatalogTextureButton` 的 `GuiModelFraming` 在预渲染后、body/layer 输出前使用当前骨骼几何。`GuiModelView` 按安装 identity 保留有效帧包络，换安装清空。非法帧不进入包络；无法形成有限绘制矩阵时跳过本帧。取景不修改 native 属性或法线，buffer delegate 只在同步 draw 内借用。
 

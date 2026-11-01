@@ -35,6 +35,13 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     private static final ListType EVENT_ARGUMENTS = ExpressionHost.EVENT_F32_ARGUMENTS;
 
     private final Thread mainThread = Thread.currentThread();
+    private Runnable publicAccess = () -> {};
+    private Runnable executionAccess = () -> {};
+    private Runnable installationAccess = () -> {
+        if (Thread.currentThread() != mainThread)
+            throw new IllegalStateException("Expression installation requires its main thread");
+    };
+    private boolean executionOwnerBound;
     private long nextGeneration;
     private final ArrayDeque<DeferredCapture> deferred = new ArrayDeque<>();
     private State current;
@@ -43,6 +50,16 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     private java.util.function.BooleanSupplier projectionAvailable = () -> true;
     private final ArrayDeque<Projection> projections = new ArrayDeque<>();
     private boolean evaluating;
+
+    public void bindExecutionOwner(Runnable publicAccess, Runnable executionAccess, Runnable installationAccess) {
+        assertLifecycleThread();
+        if (executionOwnerBound)
+            throw new IllegalStateException("Expression execution owner is already bound");
+        this.publicAccess = Objects.requireNonNull(publicAccess);
+        this.executionAccess = Objects.requireNonNull(executionAccess);
+        this.installationAccess = Objects.requireNonNull(installationAccess);
+        executionOwnerBound = true;
+    }
 
     public void replace(RenderTargetExpressionModule module,
         Map<String, ? extends List<? extends EventProgram>> handlers, ComponentScope components) {
@@ -64,13 +81,13 @@ public final class EntityExpressionRuntime implements AutoCloseable {
 
     public PreparedInstallation prepare(RenderTargetExpressionModule module,
         Map<String, ? extends List<? extends EventProgram>> handlers, ComponentScope components, RoamingRole role) {
-        assertLifecycleThread();
+        assertInstallationThread();
         return new PreparedInstallation(
             State.create(module, handlers, ++nextGeneration, module.newRoamingState(role), components));
     }
 
     public void install(PreparedInstallation prepared, Runnable publication) {
-        assertLifecycleThread();
+        assertInstallationThread();
         if (evaluating)
             throw new IllegalStateException("cannot replace an evaluating expression owner");
         var candidate = prepared.take();
@@ -248,6 +265,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     private Evaluation beginEvaluation(InvocationInputs inputs, MolangContext.LogicalPhase phase) {
+        executionAccess.run();
         Objects.requireNonNull(inputs, "inputs");
         try {
             if (evaluating)
@@ -358,7 +376,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     public void prepareExecution() {
-        assertLifecycleThread();
+        assertInstallationThread();
         executionArmPair = armPair;
     }
 
@@ -497,8 +515,15 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     private void assertLifecycleThread() {
+        publicAccess.run();
         if (Thread.currentThread() != mainThread || evaluating)
             throw new IllegalStateException("Expression lifecycle requires its idle main thread");
+    }
+
+    private void assertInstallationThread() {
+        installationAccess.run();
+        if (evaluating)
+            throw new IllegalStateException("Expression installation requires its idle execution owner");
     }
 
     public void invalidate() {
@@ -509,6 +534,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     public <T> Optional<T> sample(java.util.function.Function<Snapshot, T> projection) {
+        executionAccess.run();
         if (current == null)
             return Optional.empty();
         var state = current;
@@ -517,6 +543,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     public <T> Optional<T> sampleInstallation(java.util.function.Function<Installation, T> projection) {
+        executionAccess.run();
         return current == null ? Optional.empty() : Optional.of(projection.apply(new Installation(this, current)));
     }
 
@@ -614,14 +641,17 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     public Optional<RenderTargetExpressionModule> module() {
+        executionAccess.run();
         return current == null ? Optional.empty() : Optional.of(current.module);
     }
 
     public Optional<CompiledRoamingState> roamingState() {
+        executionAccess.run();
         return current == null ? Optional.empty() : Optional.of(current.roamingState);
     }
 
     public void initializeRoaming(RoamingPayload payload) {
+        executionAccess.run();
         Objects.requireNonNull(payload, "payload");
         var state = requireCurrent();
         initializeRoaming(state, payload);
@@ -665,10 +695,12 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     public long generation() {
+        executionAccess.run();
         return current == null ? 0 : current.entityGeneration;
     }
 
     public int pendingDeferredCount() {
+        executionAccess.run();
         return deferred.size();
     }
 
@@ -801,6 +833,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     private State requireCurrent() {
+        executionAccess.run();
         if (current == null) {
             throw new IllegalStateException("entity expression runtime has no current target");
         }

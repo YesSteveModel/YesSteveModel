@@ -287,6 +287,8 @@ tasks.register('verifyPreviewHandoff', Test) {
         includeTestsMatching '*AutomaticPreviewScopeTest'
         includeTestsMatching '*ClientPreviewGeneratorTest'
         includeTestsMatching '*CustomTextureTest'
+        includeTestsMatching '*PageImagesTest'
+        includeTestsMatching '*ResidentImagesTest'
     }
     doFirst {
         jvmArgs "-javaagent:${tasks.named('previewDecodeAgent').get().archiveFile.get().asFile.absolutePath}",

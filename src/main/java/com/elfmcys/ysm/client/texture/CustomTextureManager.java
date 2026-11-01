@@ -34,6 +34,18 @@ public final class CustomTextureManager {
         REGISTRY.release(texture);
     }
 
+    public static Registration observe(CustomTexture texture, Runnable invalidated) {
+        RenderSystem.assertOnRenderThread();
+        return REGISTRY.observe(texture, invalidated);
+    }
+
+    /** Exact host registration, independent of an activation holder's reachability. */
+    public interface Registration {
+        boolean live();
+        TextureHolder acquire();
+        void release();
+    }
+
     public static void tick() {
         RenderSystem.assertOnRenderThread();
         REGISTRY.tick();
@@ -58,12 +70,15 @@ public final class CustomTextureManager {
                 registration = new TextureRegistration(new TextureRegistrationState<>(nextId()));
                 registrations.put(texture, registration);
             } else {
+                if (!registration.live)
+                    throw new IllegalStateException("Texture registration was invalidated");
                 var current = registration.holder();
                 if (current != null && registration.state.isActive(current.token)) {
                     return current;
                 }
             }
 
+            registration.delay = removingDelayTicks;
             var activation = registration.state.activate(removingDelayTicks);
             if (!activation.registered()) {
                 try {
@@ -81,6 +96,34 @@ public final class CustomTextureManager {
             registration.holder(holder);
             CleanerUtil.ref(holder, new CleanupEvent(texture, activation.token()), cleanupEvents::add);
             return holder;
+        }
+
+        Registration observe(CustomTexture texture, Runnable invalidated) {
+            var registration = registrations.get(texture);
+            if (registration == null)
+                throw new IllegalStateException("Texture has no host registration");
+            registration.invalidated = invalidated;
+            texture.onInvalidated(registration::invalidate);
+            return new Registration() {
+                @Override
+                public boolean live() {
+                    return registration.live && registrations.get(texture) == registration
+                        && texture.failure().isEmpty();
+                }
+
+                @Override
+                public TextureHolder acquire() {
+                    if (!live())
+                        throw new IllegalStateException("Texture registration is no longer consumable");
+                    return register(texture, registration.delay);
+                }
+
+                @Override
+                public void release() {
+                    if (registrations.get(texture) == registration)
+                        Registry.this.release(texture);
+                }
+            };
         }
 
         void release(AbstractTexture texture) {
@@ -117,6 +160,7 @@ public final class CustomTextureManager {
                     host.release(registration.state.id());
                     if (registration.state.markReleased(removal.token())) {
                         registrations.remove(removal.texture());
+                        registration.invalidate();
                     }
                 }
                 if (stopWatch.getTime() >= MAX_MILLI) {
@@ -130,6 +174,7 @@ public final class CustomTextureManager {
             if (result == TextureRegistrationState.ReleaseResult.DISCARD
                 && registrations.get(texture) == registration) {
                 registrations.remove(texture);
+                registration.invalidate();
             }
         }
 
@@ -160,6 +205,18 @@ public final class CustomTextureManager {
     private static final class TextureRegistration {
         private final TextureRegistrationState<ResourceLocation> state;
         private WeakReference<TextureHolderImpl> holder;
+        private int delay;
+        private boolean live = true;
+        private Runnable invalidated = () -> {};
+
+        private void invalidate() {
+            if (!live)
+                return;
+            live = false;
+            var listener = invalidated;
+            invalidated = () -> {};
+            listener.run();
+        }
 
         private TextureRegistration(TextureRegistrationState<ResourceLocation> state) {
             this.state = state;

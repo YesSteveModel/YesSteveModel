@@ -11,6 +11,8 @@
 
 ## GUI 取景
 
+模型列表现在绘制已交接的帧结果，renderer、GL 与 buffer 仍在 render thread。实际卡片任务和注册替身已有顺序、失败及退出测试；独立 LOCAL 分页宿主观察到注册、上传与释放入口及正常返回均在 render thread；全部图源、GL 物理删除、输入等价与整帧改善按[模型列表宿主](../../tools/benchmark/README.md#模型列表真实宿主)独立验证，不由线程数或主线程 CPU 推断。
+
 目录卡使用固定锚点与缩放，生成图使用 idle；作者根变换或舞台可以超出视区，不承诺包住全部几何。纹理卡仍按几何取景，骨骼 AABB 与历史姿态并集可能使构图偏松，较大动作后不回缩。正常路径见[展示实现](../../architecture/client-presentation/implementation/page-runtime.md)。
 
 隔离 Windows Forge 已复核 `wine_fox` 第一页十卡与十张生成图的可见/透明像素、动画来源和缓存尺寸；旋转设置与纹理卡极端变换有受控数学/JNI 回归。Hover/focus 往返、其他模型及完整动画仍需实机核验。旧自动取景截图与 HOT 对照不证明当前构图或主循环成本，见[冷准备性能](animation.md#gui-与模型冷准备)。

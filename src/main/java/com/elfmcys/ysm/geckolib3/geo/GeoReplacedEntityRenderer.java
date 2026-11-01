@@ -61,6 +61,15 @@ public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T 
         if (!animatableEntity.isPresentationAllowed())
             return false;
         var data = animatableEntity.update(partialTick);
+        return renderPreparedReplacement(animatableEntity, data, textureOverride, entityYaw, partialTick, poseStack,
+            bufferSource, packedLight, handoff);
+    }
+
+    public boolean renderPreparedReplacement(T animatableEntity, GeoRenderData data,
+        @Nullable ResourceLocation textureOverride, float entityYaw, float partialTick, PoseStack poseStack,
+        MultiBufferSource bufferSource, int packedLight, Runnable handoff) {
+        if (!animatableEntity.isPresentationAllowed())
+            return false;
         return animatableEntity.consumePrepared(data, borrowed -> {
             if (MinecraftForge.EVENT_BUS.post(new RenderLivingEvent.Pre<>(animatableEntity.getEntity(), this,
                 partialTick, poseStack, bufferSource, packedLight))) {

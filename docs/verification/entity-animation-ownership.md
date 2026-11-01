@@ -18,7 +18,13 @@ Fixture 目录包含 `parts-a.pb`、`parts-b.pb`、`markers-a.png`、`surfaces-s
 
 生命周期套件覆盖完成未 get、普通字段可见性、等待中断、失败归约、绘制回调撤销、永久退休和旧安装拒绝。`EntityProjectionIntegrationTest` 联合运行实际本地会话投影、body、vehicle 和 arm，核对运行中／退出未 get／get 后的字段与后续求值。Standalone JVM 仅移除 Forge capability token 的 transformer 初始化，保留会话代码。
 
+`FirstPersonOwnerIntegrationTest` 保留世界 renderer 的等待前主体读取回归。原 scheduler 排队后，主线程可取得同一 subject，动画状态读取仍拒绝。`GuiEntityExecutionTest` 另检查 GUI subject 在预留及返回未 join 时拒绝读取，只有对应任务和 join 后的主线程可读取。
+
 编译套件分别记录 compile hold、program lease 和 access lease。Inbox 用例覆盖发布先、关闭先及并发竞争；执行中 watch 的退休用例检查 get 先于关闭。受控 JVM/JNI 结果不证明全部 Minecraft 输入或可选模组 API 的线程安全。
+
+模型列表另有真实宿主分页入口，见[模型列表宿主](../tools/benchmark/README.md#模型列表真实宿主)。`CatalogPageFrameExecutionTest` 运行实际卡片任务，核对图片与绑定属于同一次执行、容量准入、输入恢复、共享 native 结果及首卡发布重入退出。注册替身不证明 GL；分页宿主不替代变化的鼠标/键盘、装备、朝向和 optional provider 的串并行等价 oracle。
+
+独立分页宿主已在 Immersive Melodies `0.6.0+1.20.1-forge` 存在时观察 `update` 在 render thread 与 GUI worker 正常返回。该结果只证明 hook 可达；全局 melody progress、乐器装备输入、串并行状态等价及第三方等待仍未验证。其余七个 optional provider 的 present 路径未验证。
 
 ## Forge 观察
 

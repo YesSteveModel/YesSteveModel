@@ -31,6 +31,7 @@ public final class ClientCatalogManager implements AutoCloseable {
     private volatile ClientCatalogSnapshot catalog;
     private volatile LocalCatalogState local;
     private boolean sessionPublished;
+    private final Map<Hash256, Object> imageMembers = new java.util.HashMap<>();
     private volatile Consumer<CatalogChange> listener = ignored -> {
     };
 
@@ -39,6 +40,7 @@ public final class ClientCatalogManager implements AutoCloseable {
         var initial = owner.currentCandidate();
         catalog = new ClientCatalogSnapshot(initial.snapshot());
         local = new LocalCatalogState(initial.index(), initial.snapshot());
+        reconcileImageMembers(null);
         subscription = owner.subscribe(this::apply);
     }
 
@@ -145,7 +147,27 @@ public final class ClientCatalogManager implements AutoCloseable {
         }
     }
 
+    public synchronized Object imageMember(Hash256 modelId) {
+        return imageMembers.get(modelId);
+    }
+
+    public long previewReload() {
+        return owner.reloadGeneration();
+    }
+
+    private void reconcileImageMembers(ClientCatalogSnapshot previous) {
+        imageMembers.keySet().retainAll(catalog.catalog().byModelId().keySet());
+        catalog.catalog().byModelId().forEach((id, record) -> {
+            var old = previous == null ? null : previous.catalog().byModelId().get(id);
+            if (old == null || old.binding().content() != record.binding().content())
+                imageMembers.put(id, new Object());
+            else
+                imageMembers.computeIfAbsent(id, ignored -> new Object());
+        });
+    }
+
     private void notifyListener(CatalogChange change) {
+        reconcileImageMembers(change.previous());
         try {
             listener.accept(change);
         } catch (Throwable failure) {

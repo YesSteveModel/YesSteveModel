@@ -176,7 +176,9 @@ JNI 不暴露 QuickBuffers message、builder、parse cursor 或 allocator。需�
 
 Java 侧没有可供所有业务共享的通用异步 runtime。新建异步机制时，executor 必须属于具体领域 owner，并明确队列容量或背压、任务取消、迟到结果失效和 shutdown 顺序。Minecraft client/render/server thread 的工作使用对应宿主调度入口，不能因为已有线程池而绕过 thread-affinity。
 
-`ThreadTools` 是现有少量调用使用的进程级 daemon pool，队列无界且没有业务 shutdown 协议；它不是新增长期任务、资源 pipeline 或网络 worker 的默认入口。`SpinLock` 只适合已证明竞争极短且不阻塞的临界区，不得跨 I/O、JNI、日志、事件派发或用户回调持有。
+`ResponsiveExecutor` 是进程级固定容量 daemon pool，线程使用 `Thread.NORM_PRIORITY`。队列无界，pool 没有业务 shutdown 协议，不作为新增长期任务、资源 pipeline 或网络 worker 的默认入口。`maximumPoolSize()` 读取实际 pool 的最大容量；页面准备预算不复制 CPU 容量公式，也不读取活跃线程数。GUI 帧任务的独占执行与完整交接由页面和实体 owner 负责，pool 不接管资源生命周期。
+
+`SpinLock` 只适合已证明竞争极短且不阻塞的临界区，不得跨 I/O、JNI、日志、事件派发或用户回调持有。
 
 可恢复并发失败由领域 owner 形成 typed result、diagnostic 或 terminal state；不要新增全局 `Result`、重试器或后台队列来掩盖各领域不同的取消和发布语义。涉及跨模块协调机制时，先检查[复杂度地图](complexity-map/README.md)。
 

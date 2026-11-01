@@ -48,7 +48,7 @@ Selection 独立于资源取得。`builtin_default` 的 wire 状态在 client �
 
 ### 缺图观察与管理提交资格
 
-远端缺图是当前 session 对精确成员的观察。无关 publication/grants 更新保留观察；移除重加成员、换表示、图可读通知和 session 结束撤销旧 token。ABSENT、独立图媒体拒绝及迟到页面结果都复核发送时 token。页面关闭不清除观察，GUI 不持第二份缺图表。
+远端缺图是当前 session 对精确成员的观察。无关 publication/grants 更新保留观察；移除重加成员、换表示、图可读通知和 session 结束撤销旧 token。ABSENT、独立图媒体拒绝及迟到页面结果都复核发送时 token。页面关闭不清除观察，GUI 不持第二份缺图表。独立图片的内容版本还复用此观察；图可读通知只撤旧版本，不改变成员 incarnation，也不主动下载。Repository 的图片请求另绑定 Catalog 与 session 成员 incarnation、exact connection。展示图片不使用运行资产的权限门禁。移除重加后旧请求不能借新成员的资格发布。声明图可复用资源侧已经证明的相同内容，但新 use 必须重新检查当前资格。
 
 管理图片 commit 在原 session/member 的 effect gate 复核资格，具体持久事务由[独立图片与提交资格](../storage/overview.md#独立图片与提交资格)定义。取消、成员替换和 session seal 拒绝旧提交；已成功提交的结果不因通知失败回滚。
 

@@ -69,6 +69,21 @@ public final class TestComponentHolders {
             var field = AnimatableEntity.class.getDeclaredField("entity");
             field.setAccessible(true);
             field.set(owner, entity);
+            var runtime = new com.elfmcys.ysm.expression.aot.EntityExpressionRuntime();
+            var lifecycleClass = Class.forName("com.elfmcys.ysm.client.entity.EntityExecutionLifecycle");
+            var constructor = lifecycleClass.getDeclaredConstructor(
+                com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.class, Runnable.class,
+                java.util.function.Consumer.class, java.util.concurrent.Executor.class);
+            constructor.setAccessible(true);
+            java.util.function.Consumer<Throwable> failure = cause -> {
+                if (cause instanceof RuntimeException exception) throw exception;
+                if (cause instanceof Error error) throw error;
+                throw new AssertionError(cause);
+            };
+            var lifecycle = constructor.newInstance(runtime, (Runnable)() -> {}, failure,
+                (java.util.concurrent.Executor)Runnable::run);
+            setField(owner, AnimatableEntity.class, "expressionRuntime", runtime);
+            setField(owner, AnimatableEntity.class, "lifecycle", lifecycle);
             @SuppressWarnings("unchecked")
             var typed = (AnimatableEntity<E>)(Object)owner;
             return typed;
@@ -98,9 +113,6 @@ public final class TestComponentHolders {
             setField(holder, holderClass, "processor", processor);
             setField(binding, bindingClass, "resourceHolder", holder);
             setField(owner, AnimatableEntity.class, "modelBinding", binding);
-            var lifecycleClass = Class.forName("com.elfmcys.ysm.client.entity.EntityExecutionLifecycle");
-            setField(owner, AnimatableEntity.class, "lifecycle",
-                com.elfmcys.ysm.util.UnsafeUtil.getUnsafe().allocateInstance(lifecycleClass));
         } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
     }
 

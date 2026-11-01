@@ -25,7 +25,6 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.*;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
 import org.joml.Quaternionf;
 
@@ -313,82 +312,52 @@ public final class RenderUtil {
         }
     }
 
-    private static <T extends LivingEntity, TAnimatable extends CustomHumanoidEntity<T>> void renderModelInGuiStateful(
-        float pPosX, float pPosY, float pScale, float partialTicks, TAnimatable animatableEntity,
-        GeoReplacedEntityRenderer<T, TAnimatable> renderer, boolean disablePreviewRotation, boolean disableEquipments,
-        GuiModelFraming framing, float width, float height) {
-        var living = animatableEntity.getEntity();
+    public static <T extends LivingEntity, TAnimatable extends CustomHumanoidEntity<T>> void renderPreparedModelInGui(
+        float posX, float posY, float scale, TAnimatable entity, GeoReplacedEntityRenderer<T, TAnimatable> renderer,
+        com.elfmcys.ysm.client.gui.GuiFrameInput input, com.elfmcys.ysm.geckolib3.geo.GeoRenderData data) {
+        setRenderingInInventory(true);
+        try {
+            renderModelInGuiStateful(posX, posY, scale, entity, renderer, input, data, true, null, 0, 0);
+        } finally {
+            setRenderingInInventory(false);
+        }
+    }
 
-        PoseStack viewStack = RenderSystem.getModelViewStack();
-        float yBodyRot = living.yBodyRot;
-        float yBodyRotO = living.yBodyRotO;
-        float yRot = living.getYRot();
-        float yRotO = living.yRotO;
-        float xRot = living.getXRot();
-        float xRotO = living.xRotO;
-        float yHeadRotO = living.yHeadRotO;
-        float yHeadRot = living.yHeadRot;
-        ItemStack[] itemStacks = null;
+    private static <T extends LivingEntity, TAnimatable extends CustomHumanoidEntity<T>> void renderModelInGuiStateful(
+        float posX, float posY, float scale, float partialTick, TAnimatable entity,
+        GeoReplacedEntityRenderer<T, TAnimatable> renderer, boolean disableRotation, boolean disableEquipment,
+        GuiModelFraming framing, float width, float height) {
+        var input = com.elfmcys.ysm.client.gui.GuiFrameInput.capture(entity.getEntity(), partialTick,
+            disableRotation, disableEquipment, false, false, 0);
+        renderModelInGuiStateful(posX, posY, scale, entity, renderer, input, null, false, framing, width, height);
+    }
+
+    private static <T extends LivingEntity, TAnimatable extends CustomHumanoidEntity<T>> void renderModelInGuiStateful(
+        float posX, float posY, float scale, TAnimatable entity, GeoReplacedEntityRenderer<T, TAnimatable> renderer,
+        com.elfmcys.ysm.client.gui.GuiFrameInput input, com.elfmcys.ysm.geckolib3.geo.GeoRenderData data,
+        boolean prepared, GuiModelFraming framing, float width, float height) {
+        var viewStack = RenderSystem.getModelViewStack();
         EntityRenderDispatcher dispatcher = null;
         MultiBufferSource.BufferSource bufferSource = null;
         boolean viewPushed = false;
         boolean shadowDisabled = false;
+        var applied = input.apply();
+        Throwable primary = null;
         try {
             viewStack.pushPose();
             viewPushed = true;
-            viewStack.translate(pPosX, pPosY, 1050.0D);
+            viewStack.translate(posX, posY, 1050.0D);
             viewStack.scale(1.0F, 1.0F, -1.0F);
             RenderSystem.applyModelViewMatrix();
 
-            PoseStack poseStack = new PoseStack();
-            poseStack.translate(0.0D, disablePreviewRotation ? 5.5 : 0, 1000.0D);
-            poseStack.scale(pScale, pScale, pScale);
-            Quaternionf zp = Axis.ZP.rotationDegrees(180.0F);
-            Quaternionf xp = Axis.XP.rotationDegrees(disablePreviewRotation ? 0 : -10);
+            var poseStack = new PoseStack();
+            poseStack.translate(0.0D, input.disableRotation() ? 5.5 : 0, 1000.0D);
+            poseStack.scale(scale, scale, scale);
+            var zp = Axis.ZP.rotationDegrees(180.0F);
+            var xp = Axis.XP.rotationDegrees(input.disableRotation() ? 0 : -10);
             zp.mul(xp);
             poseStack.mulPose(zp);
-
-            if (disableEquipments && living instanceof Player player) {
-                itemStacks = new ItemStack[EquipmentSlot.values().length];
-                int i = 0;
-                for (EquipmentSlot slot : EquipmentSlot.values()) {
-                    if (slot == EquipmentSlot.MAINHAND) {
-                        itemStacks[i] = player.getItemBySlot(slot);
-                        player.getInventory().items.set(player.getInventory().selected, ItemStack.EMPTY);
-                    } else if (slot == EquipmentSlot.OFFHAND) {
-                        itemStacks[i] = player.getItemBySlot(slot);
-                        player.getInventory().offhand.set(0, ItemStack.EMPTY);
-                    } else {
-                        var armor = player.getInventory().armor;
-                        if (armor.size() <= slot.getIndex()) {
-                            continue;
-                        }
-                        itemStacks[i] = player.getItemBySlot(slot);
-                        armor.set(slot.getIndex(), ItemStack.EMPTY);
-                    }
-                    i++;
-                }
-            } else {
-                itemStacks = null;
-            }
-
-            float yRotGui = disablePreviewRotation ? 180 : 200;
-            living.yBodyRot = yRotGui;
-            living.yBodyRotO = yRotGui;
-            living.setYRot(yRotGui);
-            living.yRotO = yRotGui;
-            living.setXRot(0);
-            living.xRotO = 0;
-            living.yHeadRot = living.getYRot();
-            living.yHeadRotO = living.getYRot();
-
-            // 修正骑乘时 GUI 界面歪头的 bug
-            if (living.getVehicle() instanceof LivingEntity vehicle) {
-                float vehicleYRot = vehicle.getYRot();
-                poseStack.mulPose(Axis.YP.rotationDegrees(vehicleYRot - yRotGui));
-                living.yHeadRot = vehicleYRot;
-                living.yHeadRotO = vehicleYRot;
-            }
+            poseStack.mulPose(Axis.YP.rotationDegrees(input.vehicleRotation()));
 
             Lighting.setupForEntityInInventory();
             dispatcher = Minecraft.getInstance().getEntityRenderDispatcher();
@@ -401,58 +370,36 @@ public final class RenderUtil {
                 framing.begin(bufferSource, width, height);
             MultiBufferSource drawBuffer = framing == null ? bufferSource : framing;
             RenderSystem.runAsFancy(() -> {
-                renderer.renderAnimatableEntity(animatableEntity, 0, partialTicks, poseStack, drawBuffer, 0xf000f0);
+                if (prepared)
+                    renderer.renderPreparedReplacement(entity, data, null, 0, input.partialTick(), poseStack,
+                        drawBuffer, 0xf000f0, () -> {});
+                else
+                    renderer.renderAnimatableEntity(entity, 0, input.partialTick(), poseStack, drawBuffer, 0xf000f0);
             });
+        } catch (RuntimeException | Error failure) {
+            primary = failure;
+            throw failure;
         } finally {
+            Throwable failure = primary;
             try {
-                if (bufferSource != null) {
-                    bufferSource.endBatch();
+                if (bufferSource != null) bufferSource.endBatch();
+            } catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
+            try {
+                if (shadowDisabled) dispatcher.setRenderShadow(true);
+            } catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
+            try { applied.close(); }
+            catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
+            try {
+                if (viewPushed) {
+                    viewStack.popPose();
+                    RenderSystem.applyModelViewMatrix();
                 }
-            } finally {
-                try {
-                    if (shadowDisabled) {
-                        dispatcher.setRenderShadow(true);
-                    }
-                } finally {
-                    living.yBodyRot = yBodyRot;
-                    living.yBodyRotO = yBodyRotO;
-                    living.setYRot(yRot);
-                    living.yRotO = yRotO;
-                    living.setXRot(xRot);
-                    living.xRotO = xRotO;
-                    living.yHeadRotO = yHeadRotO;
-                    living.yHeadRot = yHeadRot;
-                    try {
-                        if (itemStacks != null) {
-                            Player player = (Player)living;
-                            int i = 0;
-                            for (EquipmentSlot slot : EquipmentSlot.values()) {
-                                ItemStack itemStack = itemStacks[i];
-                                if (slot == EquipmentSlot.MAINHAND) {
-                                    player.getInventory().items.set(player.getInventory().selected, itemStack);
-                                } else if (slot == EquipmentSlot.OFFHAND) {
-                                    player.getInventory().offhand.set(0, itemStack);
-                                } else {
-                                    var armor = player.getInventory().armor;
-                                    if (armor.size() <= slot.getIndex()) {
-                                        continue;
-                                    }
-                                    armor.set(slot.getIndex(), itemStack);
-                                }
-                                i++;
-                            }
-                        }
-                    } finally {
-                        try {
-                            if (viewPushed) {
-                                viewStack.popPose();
-                                RenderSystem.applyModelViewMatrix();
-                            }
-                        } finally {
-                            Lighting.setupFor3DItems();
-                        }
-                    }
-                }
+            } catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
+            try { Lighting.setupFor3DItems(); }
+            catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
+            if (failure != primary) {
+                if (failure instanceof Error error) throw error;
+                if (failure instanceof RuntimeException error) throw error;
             }
         }
     }

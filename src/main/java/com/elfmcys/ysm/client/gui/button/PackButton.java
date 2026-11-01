@@ -115,4 +115,6 @@ public class PackButton extends Button implements AutoCloseable {
 
     @Override
     public void close() {}
+
+    @Nullable PageImages.Image coverImage() { return cover; }
 }

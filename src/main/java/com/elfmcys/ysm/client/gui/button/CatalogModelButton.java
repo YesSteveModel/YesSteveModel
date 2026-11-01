@@ -4,7 +4,6 @@ import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.capability.StarModelsCapabilityProvider;
 import com.elfmcys.ysm.client.event.RegisterEntityRenderersEvent;
 import com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity;
-import com.elfmcys.ysm.model.resource.client.asset.PageImages;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.model.catalog.client.entry.CatalogModelMetadata;
@@ -46,7 +45,7 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
     private final java.util.function.BooleanSupplier navigation;
 
     public CatalogModelButton(int x, int y, ClientCatalogEntry entry,
-        java.util.function.BooleanSupplier authorizationRequired, PageImages assets,
+        java.util.function.BooleanSupplier authorizationRequired, CatalogPageFrame frame,
         ClientDemandCoordinator.PageScope page, CustomGuiPlayerEntity entity, SelectionHandler selection,
         RenderTargetHandler openRenderTarget, java.util.function.BooleanSupplier navigation) {
         super(x, y, 52, 90, name(CatalogModelMetadata.from(entry)), ignored -> {
@@ -59,7 +58,7 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
         this.openRenderTarget = openRenderTarget;
         this.navigation = navigation;
         this.pathName = Component.literal(ModelIdUtil.getFileNameFromPath(metadata.path()));
-        this.state = new CatalogModelCardState(assets, page, entry, metadata, entity);
+        this.state = new CatalogModelCardState(frame, page, entry, metadata, entity);
     }
 
     public Hash256 modelHash() {
@@ -118,7 +117,6 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
 
     @Override
     public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        state.updatePreviewAnimations(isHovered(), isFocused(), Util.getMillis());
         var color = authorizationRequired.getAsBoolean() ? 0x7F000000 : 0xFF434242;
         graphics.fillGradient(getX(), getY(), getX() + width, getY() + height, color, color);
         var renderTarget = state.renderTarget();
@@ -175,12 +173,17 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
         RenderSystem.enableScissor((int)(getX() * scale), (int)(window.getHeight() - ((getY() + height - 20) * scale)),
             (int)(width * scale), (int)((height - 20) * scale));
         try {
-            RenderUtil.renderModelInGui(getX() + width / 2.0F, getY() + height / 2.0F + 20.0F, 30.0F,
-                Minecraft.getInstance().getFrameTime(), entity, RegisterEntityRenderersEvent.getPlayerRenderer(),
-                metadata.info().getSettings().disablePreviewRotation(), true);
+            RenderUtil.renderPreparedModelInGui(getX() + width / 2.0F, getY() + height / 2.0F + 20.0F, 30.0F,
+                entity, RegisterEntityRenderersEvent.getPlayerRenderer(), state.frameInput(), state.prepared());
         } finally {
             RenderSystem.disableScissor();
         }
+    }
+
+    CatalogModelCardState prepareFrame(float partialTick, int mouseX, int mouseY, long now) {
+        state.captureInput(partialTick, isMouseOver(mouseX, mouseY), isFocused(), now,
+            metadata.info().getSettings().disablePreviewRotation());
+        return state;
     }
 
     private void renderImage(GuiGraphics graphics, @Nullable TextureHolder image) {

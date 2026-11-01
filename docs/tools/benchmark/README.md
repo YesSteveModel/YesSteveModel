@@ -214,6 +214,31 @@ $catalogAgent = (Resolve-Path build/benchmark/catalog-reload-timing-agent.jar).P
 
 ## 证据半径
 
+### 模型列表真实宿主
+
+`src/verification/page-host` 在隔离 Forge 世界内驱动 `PlayerModelScreen` 的分页按钮。两份源码使用同一 host 与 ASM agent；生产源码不增加诊断入口。启动前固定 baseline/candidate、Java 依赖、Forge mappings、native、模型文件和客户端配置。配置使用 LOCAL session、30 个 target 保留名额与关闭免责声明；脚本固定查询 `wine`，要求 22 个模型、3 页。
+
+```powershell
+python src/verification/page-host/run_host.py --root <source> --output <new-output-directory> --script <frozen-script.json> --config <client-config-file>
+python src/verification/page-host/batch_campaign.py <frozen-plan.json> --output <new-campaign-directory>
+python src/verification/page-host/batch_analyze.py <campaign-directory>/manifest.json --output <analysis-file> --jfr <jdk-jfr-executable>
+```
+
+JSON 脚本逐项指定 scene、page、eager 和 dwell_ms。参与统计的项另指定 window_ms；窗口从输入开始，跨过窗口终点的完整帧间隔仍保留。快翻窗口允许重叠，同一进程的脚本块按进程成组，帧与块不充当独立重复。需要重复 baseline、AB/BA 顺序、独立进程对数、预热、噪声估计和预算时，在采样前冻结计划；不能按 candidate 结果改窗口或扩大容忍带。进程内切换 eager 不会自动形成新的冷态。
+
+Host 在脚本前记录帧时钟，分析器检查窗口起点和终点是否都有帧覆盖。软截止在外部硬截止前请求主线程保存部分帧、visit 和 JFR；主线程阻塞时仍可能触发硬终止并丢失内存记录。部分运行不补齐独立进程对。
+
+`frames.csv` 保存完整帧间隔、render wall time 与主线程 CPU。`visits.json` 保存输入时钟锚点、边界计数、注册和卡片状态。Agent 记录真实 chunk read、解码、纹理构造、load、upload、register/release、GL delete、卡片 run/join、GUI 动画和 provider hook 的入口及正常返回。`operations.jfr` 保留逐窗口 I/O、park/monitor、GC、执行样本和任务区间。Join 区间是主线程等待的上界，render wall time 减 CPU 不能归因为等待；后台样本也不证明调度竞争的因果关系。
+
+JFR 分析器使用 JDK RecordingFile 流式汇总，不展开完整 JSON 常量池。Java 分析进程限制为 512 MiB heap；输出按窗口和线程分组，并保留事件类型计数与调用栈。
+
+`--detail` 另存事件、首次 Matching draw 标记及窗口末截图，不进入性能对照。Matching draw 标记只证明当前安装进入绘制，不能自动证明画面可识别。`--functional` 在性能脚本前独立检查 builtin 四图的真实 GPU 像素共享、关闭、保留期、物理删除和 resource reload；该检查读取已注册纹理，不用于时延比较。它不覆盖独立源解码 oracle、远端或同路径替换。
+
+`--provider immersive-melodies` 启用单一 provider；`--provider all` 启用八个 provider，`available` 仅排除 Tacz。实际版本与启用状态由运行时 mod 清单证明。依赖失败、默认空 hook 与实际 hook 执行分别报告；正常返回不证明串并行状态等价。完整判定仍需要来源、资格、退出和变化输入矩阵、独立 baseline 波动带及首个可识别 3D。工具不自动发布整体性能通过；缺失矩阵、超时和部分运行保留为 inconclusive。
+
+`campaign.py` 与 `analyze.py` 保留旧固定脚本的统计格式。复算历史结果时使用该次冻结的 harness，不能将当前探针视为历史探针。
+
+
 模型加载交接的正确性入口与性能采样分开。`verifyGeometryRead` 以 JUnit 验证普通／cache-only 的单次 payload 取得、完整性检查、native decode 和独立持久化；`verifyPreviewHandoff` 记录完整媒体解码、encoded 交接、最终像素及自动默认 body 的构造范围。两者使用生产 codec/native 与 headless 发布接缝，结果保存在 Gradle 测试报告中，不证明真实 GPU、实体安装或主循环成本。`ClientPreviewGeneratorTest` 用小图验证保留像素期间继续解码、上传借用和取消；`DerivedStorageWorkTest` 验证 16 项饱和、单 worker、取消和提交。声音共享、首块失败和独立播放回归随普通 `test` 执行。
 
 共享引用、owner shutdown 与活动借用结束后的物理 backing 释放由 `PreviewPixelsTest` 验证；串行 reload 与已保留图片互不等待。按本页配置 native 路径后，运行 `./gradlew.bat test --tests '*ClientPreviewGeneratorTest' --tests '*PreviewPixelsTest'`。这些验证不测量驱动或 RSS。

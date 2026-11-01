@@ -36,6 +36,76 @@ class PreviewStoreTest {
     Path temp;
 
     @Test
+    void contentVersionChangesInsideReplacementBeforeAnObserverCanFail() throws Exception {
+        var store = new PreviewStore(temp.resolve("versions"), ignored -> {
+            throw new IllegalStateException("observer failed");
+        });
+        var id = hash(29);
+        var before = store.observe(id);
+        try (var image = PreviewStore.decode(PNG)) {
+            store.accept(id, image);
+            assertFalse(store.current(id, before));
+            var accepted = store.observe(id);
+            assertSame(accepted, image.version());
+            // An unchanged validated file retains its content version.
+            store.accept(id, image);
+            assertSame(accepted, store.observe(id));
+            assertThrows(IOException.class, () -> store.commit(id, image, replacement -> {
+                throw new IOException("effect gate refused");
+            }));
+            assertTrue(store.current(id, accepted));
+            store.commit(id, image, AtomicSharedCache.AtomicReplacement::run);
+            assertFalse(store.current(id, accepted));
+            assertSame(store.observe(id), image.version());
+        }
+    }
+
+    @Test
+    void aStoredReadCarriesItsOwnVersionAcrossAReplacement() throws Exception {
+        var store = new PreviewStore(temp.resolve("observed-read"));
+        var id = hash(30);
+        try (var image = PreviewStore.decode(PNG)) {
+            store.accept(id, image);
+            try (var read = store.probe(id).orElseThrow(); var copy = read.acquireContent()) {
+                var version = read.version();
+                assertTrue(store.current(id, version));
+                store.commit(id, image, AtomicSharedCache.AtomicReplacement::run);
+                assertFalse(store.current(id, version));
+                assertSame(version, copy.version());
+            }
+        }
+    }
+
+    @Test
+    void usableMemoryAfterPersistenceFailureHasADistinctDeliveryProof() throws Exception {
+        var root = temp.resolve("failed-persistence-version");
+        var refuse = new AtomicBoolean(true);
+        var store = new PreviewStore(root, new AtomicSharedCache(root, replacement -> {
+            if (refuse.get())
+                throw new IOException("replacement refused");
+            replacement.run();
+        }), ignored -> {});
+        var id = hash(31);
+        var persistent = store.observe(id);
+        try (var image = PreviewStore.decode(PNG)) {
+            store.accept(id, image);
+            var delivery = image.version();
+            assertNotSame(persistent, delivery);
+            assertSame(persistent, store.observe(id));
+            assertTrue(store.current(id, delivery));
+            assertFalse(store.current(hash(32), delivery));
+            assertArrayEquals(PNG, image.bytes());
+            try (var copy = image.acquireContent()) {
+                assertSame(delivery, copy.version());
+                refuse.set(false);
+                store.accept(id, image);
+                assertFalse(store.current(id, delivery));
+                assertSame(store.observe(id), image.version());
+            }
+        }
+    }
+
+    @Test
     void qualificationCannotEscapeThroughMutableInputOrOutputAliases() throws Exception {
         var input = PNG.clone();
         try (var preview = PreviewStore.decode(input)) {

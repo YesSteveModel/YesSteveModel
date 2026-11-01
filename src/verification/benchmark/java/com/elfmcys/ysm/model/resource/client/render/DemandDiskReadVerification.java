@@ -88,7 +88,7 @@ public final class DemandDiskReadVerification {
                 }
                 try (var fixture = new Fixture(input, root, source.equals("remote"))) {
                     fixture.page = fixture.coordinator.openPage("seed");
-                    var rapid = fixture.record(source, "rapid-through-300ms", () -> {
+                    var rapid = fixture.record(source, "rapid-before-300ms", () -> {
                         for (int index = 0; index < 3; index++) {
                             long start = 100L + index * 300L;
                             fixture.clock.set(start);
@@ -97,18 +97,19 @@ public final class DemandDiskReadVerification {
                             fixture.tick();
                             fixture.clock.set(start + 299);
                             fixture.tick();
-                            fixture.clock.set(start + 300);
-                            fixture.tick();
                         }
-                        require(fixture.card.lease == null, "The exact 300 ms boundary must still wait");
+                        require(fixture.card.lease == null, "Pages before the 300 ms boundary must still wait");
                     });
                     require(
                         rapid.totalCalls() == 0 && rapid.acquisitionCalls == 0 && fixture.manager.loadingCount() == 0,
                         "Rapid pages started resource work: " + source);
                     samples.add(rapid);
 
-                    var stable = fixture.record(source, "stable-301ms", () -> {
-                        fixture.clock.set(1001);
+                    var stable = fixture.record(source, "stable-300ms", () -> {
+                        fixture.clock.set(1000);
+                        fixture.tick();
+                        require(fixture.card.mode == ModelResourceDemand.Mode.OFFLINE,
+                            "The exact 300 ms boundary must admit local preparation");
                         fixture.await(() -> fixture.card.lease != null);
                     });
                     var expected = source.equals("bake") ? "bakeGeometry" : source;
@@ -160,9 +161,11 @@ public final class DemandDiskReadVerification {
             result.put("chain", "ClientDemandCoordinator -> ClientModelRenderTargetManager -> actual loader/cache");
             result.put("limits",
                 List.of("Catalog snapshots are fixture-injected; no directory discovery/admission",
-                    "Required builtin initialization is real and precedes recording", "Texture publication is headless",
+                    "Required builtin initialization and its derived persistence drain precede recording",
+                    "Texture publication is headless",
                     "Derived persistence drains after Ready and before the settled recording",
-                    "Monotonic demand time is controlled; filesystem calls and worker completion are real"));
+                    "Monotonic demand time is controlled; filesystem calls and worker completion are real",
+                    "The receiving fixture uses tick installation; this does not execute CatalogPageFrame"));
             result.put("models", input.targets.stream().map(target -> target.modelId().toString()).toList());
             result.put("samples", samples);
         }
@@ -299,6 +302,8 @@ public final class DemandDiskReadVerification {
             var required = manager.startRequired(CompletableFuture.completedFuture(
                 new ClientCatalogManager.LocalCatalogState(CatalogIndexSnapshot.empty(), builtinSnapshot)));
             awaitRequired(required);
+            // Ready can precede builtin staging validation, which is not caused by the measured page demand.
+            storageWork.awaitIdle();
             require(
                 catalogs.snapshot().find(input.targets.get(2).modelId()).orElseThrow().hasLocalSource() != useRemote,
                 "The fixture selected the wrong manager source branch");

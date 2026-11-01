@@ -64,7 +64,7 @@ Remote descriptor 只选择固定 encoding，不能提供路径、URL 或 provid
 
 普通 accept 可交付有效内存图；管理 commit 只以持久替换成功完成。Worker 完整验证并准备 staging 后，在原 session/member effect gate 内复核资格并原子替换；gate 内不解码、不执行 staging I/O 或等待文件锁。
 
-成员移除重加、换表示、取消和 session close 撤销旧资格。成功提交先成为稳定结果，再通知；反馈失败不反转提交。持久成功撤销对应区域的[服务端图片保留](../server-resources/overview.md#图片失效与旧请求)，有效内存交付不声称持久替换。独立 preview 的空间回收不借 target LRU 或 converted prune；当前没有自动扫描或定时清理。
+成员移除重加、换表示、取消和 session close 撤销旧资格。成功提交在原替换门禁内同步更新区域内的图片版本观察，再通知；反馈失败不反转提交。`PreviewStore.observe` 不读图；旧读结果携带读取时版本。未改变的已验证文件可保留版本，拒绝提交不改变版本。Client 直接观察 Catalog owner 已接纳扫描的代次；无内容变化的 reload 也使旧独立图版本失效。accept 持久化失败仍可交付有效内存图；此结果使用独立证明，不冒充未变的磁盘版本。版本只投影原 owner 的有效性事实，不授予权限，也不新增持久成功条件。持久成功撤销对应区域的[服务端图片保留](../server-resources/overview.md#图片失效与旧请求)，有效内存交付不声称持久替换。独立 preview 的空间回收不借 target LRU 或 converted prune；当前没有自动扫描或定时清理。
 
 ## 生命周期与失败
 

@@ -243,7 +243,7 @@ public final class ClientDemandCoordinator implements AutoCloseable {
             }
         }
         if (hover != null)
-            hover.advance(resourceMode(hoverPage.timeline, now));
+            hover.advance(pageResourceMode(hoverPage.timeline, now));
         // Receivers acquire independent leases while the preparation anchors are still alive.
         for (var scope : List.copyOf(entities))
             scope.advance(now);
@@ -264,6 +264,14 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         if (timeline.effectEligible(true, now, ContinuousDemand.NETWORK_SWITCH_DWELL_MILLIS))
             return ModelResourceDemand.Mode.ONLINE;
         if (timeline.effectEligible(true, now, ContinuousDemand.LOCAL_SWITCH_DWELL_MILLIS))
+            return ModelResourceDemand.Mode.OFFLINE;
+        return ModelResourceDemand.Mode.READY;
+    }
+
+    private static ModelResourceDemand.Mode pageResourceMode(ContinuousDemand<?> timeline, long now) {
+        if (timeline.pageEffectEligible(true, now, ContinuousDemand.NETWORK_SWITCH_DWELL_MILLIS))
+            return ModelResourceDemand.Mode.ONLINE;
+        if (timeline.pageEffectEligible(true, now, ContinuousDemand.LOCAL_SWITCH_DWELL_MILLIS))
             return ModelResourceDemand.Mode.OFFLINE;
         return ModelResourceDemand.Mode.READY;
     }
@@ -338,29 +346,49 @@ public final class ClientDemandCoordinator implements AutoCloseable {
             preparation.close();
     }
 
+    private static Throwable cleanup(@Nullable Throwable failure, Runnable action) {
+        try {
+            action.run();
+        } catch (RuntimeException | Error cleanupFailure) {
+            if (failure == null)
+                return cleanupFailure;
+            if (failure != cleanupFailure)
+                failure.addSuppressed(cleanupFailure);
+        }
+        return failure;
+    }
+
+    private static void throwCleanup(@Nullable Throwable failure) {
+        if (failure instanceof RuntimeException runtime)
+            throw runtime;
+        if (failure instanceof Error error)
+            throw error;
+    }
+
     public void reset() {
         var previous = current;
         var previousHover = hover;
         current = null;
         hover = null;
         hoverPage = null;
-        closeUnused(previous == null ? null : previous.preparation);
-        closeUnused(previousHover);
+        var failure = cleanup(null, () -> closeUnused(previous == null ? null : previous.preparation));
+        failure = cleanup(failure, () -> closeUnused(previousHover));
         for (var page : List.copyOf(pages))
-            page.close();
+            failure = cleanup(failure, page::close);
         for (var scope : List.copyOf(entities))
-            scope.close();
+            failure = cleanup(failure, scope::close);
         selectionTimeline.reset();
         feedback = Feedback.IDLE;
         feedbackTarget = null;
         observedAuthority = null;
         authorityWaiting = false;
+        throwCleanup(failure);
     }
 
     @Override
     public void close() {
-        reset();
         closed = true;
+        reset();
     }
 
     public final class PageScope implements AutoCloseable {
@@ -373,14 +401,54 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         private boolean ended;
         private boolean admitted;
         private boolean eager;
+        private boolean frameActive;
+        private boolean cleaned;
+        private Preparation retiringHover;
 
         private PageScope(Object identity, ContinuousDemand<Object> timeline) {
             this.identity = identity;
             this.timeline = timeline;
+            eager = eagerLoading.getAsBoolean();
         }
 
         public boolean matches(Object nextIdentity) {
             return !ended && identity.equals(nextIdentity);
+        }
+
+        public boolean isClosed() {
+            return ended;
+        }
+
+        public boolean eagerLoading() {
+            return eager;
+        }
+
+        public void advance() {
+            advance(clock.getAsLong());
+        }
+
+        /** Keeps page-owned inputs alive until every accepted task has returned to the frame owner. */
+        public FrameUse beginFrame() {
+            if (ended || frameActive)
+                throw new IllegalStateException("Page cannot begin another frame");
+            frameActive = true;
+            return new FrameUse();
+        }
+
+        public final class FrameUse implements AutoCloseable {
+            private boolean released;
+
+            private FrameUse() {}
+
+            @Override
+            public void close() {
+                if (released)
+                    return;
+                released = true;
+                frameActive = false;
+                if (ended)
+                    finishClose();
+            }
         }
 
         public void pointer(@Nullable Target target) {
@@ -403,8 +471,11 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         }
 
         public void entity(EntityScope scope) {
-            if (!ended)
+            if (!ended) {
+                pageEntities.removeIf(EntityScope::isClosed);
                 pageEntities.add(scope);
+            } else
+                scope.close();
         }
 
         public Feedback feedback(Target target) {
@@ -434,7 +505,7 @@ public final class ClientDemandCoordinator implements AutoCloseable {
             if (ended)
                 return;
             eager = eagerLoading.getAsBoolean();
-            var mode = resourceMode(timeline, now);
+            var mode = pageResourceMode(timeline, now);
             if (!admitted && mode != ModelResourceDemand.Mode.READY
                 && pointer.elapsedAtLeast(now, ContinuousDemand.HOVER_DWELL_MILLIS)) {
                 admitted = true;
@@ -450,7 +521,7 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         }
 
         private void publishCards(long now) {
-            var mode = resourceMode(timeline, now) == ModelResourceDemand.Mode.READY
+            var mode = pageResourceMode(timeline, now) == ModelResourceDemand.Mode.READY
                 ? ModelResourceDemand.Mode.READY : ModelResourceDemand.Mode.OFFLINE;
             for (var card : cards.entrySet()) {
                 var target = card.getValue();
@@ -471,18 +542,37 @@ public final class ClientDemandCoordinator implements AutoCloseable {
             ended = true;
             pages.remove(this);
             if (hoverPage == this) {
-                var previous = hover;
+                retiringHover = hover;
                 hover = null;
                 hoverPage = null;
-                closeUnused(previous);
             }
-            cards.keySet().forEach(CardDisplay::deactivate);
+            pageEntities.forEach(scope -> scope.sealed = true);
+            if (!frameActive)
+                finishClose();
+        }
+
+        private void finishClose() {
+            if (cleaned)
+                return;
+            cleaned = true;
+            Throwable failure = null;
+            var previousHover = retiringHover;
+            retiringHover = null;
+            failure = cleanup(failure, () -> closeUnused(previousHover));
+            var previousCards = List.copyOf(cards.keySet());
             cards.clear();
-            pageEntities.forEach(EntityScope::close);
+            for (var card : previousCards)
+                failure = cleanup(failure, card::deactivate);
+            var previousEntities = List.copyOf(pageEntities);
             pageEntities.clear();
-            actions.forEach(PageAction::close);
+            for (var scope : previousEntities)
+                failure = cleanup(failure, scope::close);
+            var previousActions = List.copyOf(actions);
             actions.clear();
+            for (var action : previousActions)
+                failure = cleanup(failure, action::close);
             pointer.reset();
+            throwCleanup(failure);
         }
     }
 
@@ -502,6 +592,10 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         private Throwable reportedFailure;
         private boolean ended;
 
+        private boolean frameInstallation;
+        private boolean sealed;
+        private ReadyInstallation claimed;
+
         private final WorkPriority priority;
 
         private EntityScope(Installation endpoint, WorkPriority priority) {
@@ -518,7 +612,192 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         }
 
         public boolean hasUnfinishedWork() {
-            return !ended && (operation != null && operation.unfinished() || fallback != null && fallback.unfinished());
+            return !ended && (claimed != null || operation != null && operation.unfinished()
+                || fallback != null && fallback.unfinished());
+        }
+
+        /** Only explicitly adopted GUI scopes stop installing from the client tick. */
+        public void useFrameInstallation() {
+            if (ended || sealed)
+                throw new IllegalStateException("Demand scope is closed");
+            frameInstallation = true;
+        }
+
+        public boolean hasReadyInstallation() {
+            return readyCandidate() != null;
+        }
+
+        /** Acquires the receiver before releasing the source anchor; this path starts no resource work. */
+        public @Nullable ReadyInstallation claimReadyInstallation() {
+            var candidate = readyCandidate();
+            if (candidate == null)
+                return null;
+            var lease = findReady(candidate.request);
+            if (lease == null)
+                return null;
+            var intrinsic = candidate == fallback;
+            var next = new ReadyInstallation(candidate.request, lease, intrinsic);
+            claimed = next;
+            if (intrinsic)
+                fallback = null;
+            else
+                operation = null;
+            try {
+                candidate.close();
+            } catch (RuntimeException | Error failure) {
+                try {
+                    next.close();
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (failure != cleanupFailure)
+                        failure.addSuppressed(cleanupFailure);
+                }
+                throw failure;
+            }
+            return next;
+        }
+
+        private @Nullable ResourceLease findReady(ResourceRequest request) {
+            if (!resources.permitsAcquisition(request))
+                return null;
+            var lease = resources.findReady(request).orElse(null);
+            if (lease == null)
+                return null;
+            final boolean current;
+            try {
+                current = lease.isCurrent(request) && lease.poll() instanceof AcquireResult.Ready;
+            } catch (RuntimeException | Error failure) {
+                try {
+                    lease.close();
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (failure != cleanupFailure)
+                        failure.addSuppressed(cleanupFailure);
+                }
+                throw failure;
+            }
+            if (!current) {
+                lease.close();
+                return null;
+            }
+            return lease;
+        }
+
+        private @Nullable Operation readyCandidate() {
+            if (ended || sealed || !frameInstallation || claimed != null)
+                return null;
+            var host = endpoint.get();
+            if (host == null)
+                return null;
+            var input = host.assignment();
+            if (!input.permitted())
+                return null;
+            var ready = readyOperation(host, operation, input.request());
+            if (ready != null) {
+                if (ready != operation) {
+                    var previous = operation;
+                    try {
+                        timeline.observe(new Use(ready.request, resources.content(ready.request.modelId())),
+                            clock.getAsLong());
+                    } catch (RuntimeException | Error failure) {
+                        cleanup(failure, ready::close);
+                        throw failure;
+                    }
+                    operation = ready;
+                    resourceFailure = null;
+                    if (previous != null)
+                        previous.close();
+                }
+                return ready;
+            }
+            if (host.hasInstallation())
+                return null;
+            ready = readyOperation(host, fallback, input.fallback());
+            if (ready != null && ready != fallback) {
+                var previous = fallback;
+                fallback = ready;
+                if (previous != null)
+                    previous.close();
+            }
+            return ready;
+        }
+
+        private @Nullable Operation readyOperation(Installation host, @Nullable Operation candidate,
+            @Nullable ResourceRequest request) {
+            if (request == null || request.purpose() != ModelResourcePurpose.GUI || host.matches(request, false)
+                || host.failure(request) != null || !resources.permitsAcquisition(request))
+                return null;
+            if (candidate != null && candidate.request.equals(request) && candidate.ready()
+                && candidate.anchor.isCurrent(request))
+                return candidate;
+            // A miss cannot lower the admission of work already in flight.
+            var lease = findReady(request);
+            if (lease == null)
+                return null;
+            var ready = new Operation(request, priority);
+            ready.anchor = lease;
+            return ready;
+        }
+
+        public final class ReadyInstallation implements AutoCloseable {
+            private final ResourceRequest request;
+            private final boolean fallback;
+            private ResourceLease lease;
+            private boolean completed;
+
+            private ReadyInstallation(ResourceRequest request, ResourceLease lease, boolean fallback) {
+                this.request = request;
+                this.lease = lease;
+                this.fallback = fallback;
+            }
+
+            public ResourceRequest request() {
+                return request;
+            }
+
+            public boolean fallback() {
+                return fallback;
+            }
+
+            /** The task now owns closure until installation consumes this independent capability. */
+            public ResourceLease takeLease() {
+                if (completed || lease == null)
+                    throw new IllegalStateException("Ready installation lease has already transferred");
+                var transferred = lease;
+                lease = null;
+                return transferred;
+            }
+
+            /** Called by the frame owner after joining; BUSY leaves the task responsible for its lease. */
+            public void complete(InstallationResult outcome) {
+                Objects.requireNonNull(outcome);
+                if (completed)
+                    throw new IllegalStateException("Ready installation is already complete");
+                if (lease != null)
+                    throw new IllegalStateException("Ready installation lease has not transferred");
+                completed = true;
+                if (claimed == this)
+                    claimed = null;
+                if (ended || sealed)
+                    return;
+                var host = endpoint.get();
+                if (outcome == InstallationResult.REJECTED && host != null)
+                    resourceFailure = Objects.requireNonNullElseGet(host.failure(request),
+                        () -> new IllegalStateException("Model installation was rejected"));
+                else if (outcome == InstallationResult.INSTALLED)
+                    resources.reportActiveModelUse(request);
+            }
+
+            @Override
+            public void close() {
+                if (completed)
+                    return;
+                completed = true;
+                if (claimed == this)
+                    claimed = null;
+                var owned = lease;
+                lease = null;
+                if (owned != null)
+                    owned.close();
+            }
         }
 
         private void advance(long now) {
@@ -527,6 +806,8 @@ public final class ClientDemandCoordinator implements AutoCloseable {
                 close();
                 return;
             }
+            if (sealed || claimed != null)
+                return;
             var input = host.assignment();
             if (!input.permitted()) {
                 clearOperations();
@@ -562,7 +843,8 @@ public final class ClientDemandCoordinator implements AutoCloseable {
                             ? ModelResourceDemand.Mode.OFFLINE : input.mode();
                     operation.advance(mode);
                     resourceFailure = operation.failure();
-                    install(host, operation, false);
+                    if (!frameInstallation)
+                        install(host, operation, false);
                     if (host.matches(request, false)) {
                         operation.close();
                         operation = null;
@@ -586,7 +868,8 @@ public final class ClientDemandCoordinator implements AutoCloseable {
                     fallback = new Operation(input.fallback(), priority);
                 }
                 fallback.advance(ModelResourceDemand.Mode.ONLINE);
-                install(host, fallback, true);
+                if (!frameInstallation)
+                    install(host, fallback, true);
             }
             if (resourceFailure != null && resourceFailure != reportedFailure && request != null) {
                 reportedFailure = resourceFailure;
@@ -757,11 +1040,12 @@ public final class ClientDemandCoordinator implements AutoCloseable {
 
         @Override
         public void close() {
-            acquisition.close();
-            if (anchor != null) {
-                anchor.close();
-                anchor = null;
-            }
+            var owned = anchor;
+            anchor = null;
+            var failure = cleanup(null, acquisition::close);
+            if (owned != null)
+                failure = cleanup(failure, owned::close);
+            throwCleanup(failure);
         }
     }
 

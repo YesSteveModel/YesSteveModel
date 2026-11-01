@@ -85,7 +85,11 @@ final class OwnerResourceFixtures implements DemandFixtures.ModelAccess {
 
     ModelRenderTarget target(int marker, RenderTargetExpressionModule module, ResourceLocation texture,
         ModelRenderTarget.StateIdentity stateIdentity, GeoModel... models) throws Exception {
-        var id = hash(marker);
+        return target(hash(marker), module, texture, stateIdentity, models);
+    }
+
+    ModelRenderTarget target(Hash256 id, RenderTargetExpressionModule module, ResourceLocation texture,
+        ModelRenderTarget.StateIdentity stateIdentity, GeoModel... models) throws Exception {
         var variants = new HashMap<String, PlayerModelVariant>();
         for (int i = 0; i < models.length; i++)
             variants.put("variant" + i, new PlayerModelVariant(models[i], models[i]));

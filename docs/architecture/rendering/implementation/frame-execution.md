@@ -54,7 +54,7 @@ Java 属性与 native 层级共用 `BakedModel` 的骨骼顺序。Extract 组合
 | 未预调度 level entity | 仍可 immutable，同步执行 |
 | inventory、paperDoll、firstPersonMod | Mutable，同步求值，不覆盖 canonical 槽 |
 | 本地第一人称 irisShadow | 强制 mutable，避免第三人称状态复用 |
-| GUI preview | Immutable 仅指同帧复用，不进入预调度集合 |
+| GUI preview | Immutable 仅指同帧复用；模型列表经 exact GUI 许可准备，其他 GUI 保留同步入口，不进入世界预调度集合 |
 | 独立 hand owner | 正常 level immutable 时间线；背景不推进动画，三部分局部提取 |
 
 Canonical 资格仅在完整发布后记录，并检查实际有效性、精确模型、context 与采样请求。新帧、mutable 求值或不兼容请求撤销资格。恢复输出不重置动作门禁。
@@ -62,6 +62,10 @@ Canonical 资格仅在完整发布后记录，并检查实际有效性、精确�
 `GeoRenderData` 绑定 owner 与 installation，`consumePrepared` 在同一调用窗口借用。第三人称取消和消费使用同一数据；hook 返回后复核该结果，不能二次 update 修补交接。GUI 另核对 Matching。回调 reset/retire 立即撤资格，物理释放等借用退出。
 
 ## 任务发布与并发边界
+
+模型列表固定 `GuiFrameInput` 后，为每个私有实例授予一次 exact GUI 任务许可。完整绑定、动画和 Extract 在同一执行者内完成；同卡冷前景、背景沿同一任务准备。主线程可执行首卡并注册其图片，再 join 后台任务；首卡或注册失败仍完整交接全部已接纳任务。任务返回但未 join 时不开放实例访问；提交拒绝归还未接纳能力。页面结束先封口，交接后再关闭自有输入。
+
+GUI 的 prepared draw 沿 `consumePrepared` 借用本次输出，保留原 hook 与资格复核，不再 update。Renderer、dispatcher、buffer、GL 和额外实体绘制留主线程。此许可只适用于模型列表显式采用的 GUI entity，不改变世界预调度或 FULL 中央预览的执行 owner。
 
 每次 `renderLevel` 的 HEAD 开始实体异步调用范围，RETURN 完整交接本次登记的全部任务。登记发生在提交前。主线程可先取得单个实体的对应 `Future.get` 并消费，同时让其他实体继续运行；RETURN 仍完成全部剩余 get 与投影归约。完成但未 get 的任务不开放更新态。
 

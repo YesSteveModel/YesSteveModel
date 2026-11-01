@@ -470,6 +470,13 @@ public final class RemoteModelStore implements AutoCloseable {
         return ownedPath(metadataRoot(identity).resolve(METADATA_FILE));
     }
 
+    /** A preparation hint only; the card task still verifies the payload before decoding. */
+    synchronized boolean hasCachedChunk(Hash256 modelId, AssetContainerView.ChunkInfo chunk) throws IOException {
+        requireOpen();
+        return chunk.hash() != null && Files.isRegularFile(chunkPath(modelId, new Hash256(chunk.hash()),
+            chunk.encoding()), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+    }
+
     Path chunkPath(Hash256 modelId, Hash256 hash, String encoding) {
         return ownedPath(
             modelRoot(modelId).resolve(hash + (ZSTD_ENCODING.equals(encoding) ? ZSTD_CHUNK_SUFFIX : CHUNK_SUFFIX)));

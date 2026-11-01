@@ -25,6 +25,8 @@ public class CustomTexture extends AbstractTexture {
     private final PreviewStore.EncodedPreview ownedSource;
     private final java.util.function.BiConsumer<CustomTexture, PreviewPixels> preparedUploader;
     private boolean closed;
+    private Runnable invalidated = () -> {};
+    private boolean loaded;
 
     public CustomTexture(ImageSource source) {
         this(source, CustomTexture::decode, CustomTexture::upload);
@@ -56,6 +58,9 @@ public class CustomTexture extends AbstractTexture {
         if (closed || failure != null) {
             return;
         }
+        if (loaded)
+            invalidated.run();
+        loaded = true;
         var initial = prepared;
         prepared = null;
         try (var reload = initial == null && ownedSource != null ? ownedSource.beginReload() : null; initial) {
@@ -99,6 +104,7 @@ public class CustomTexture extends AbstractTexture {
         if (closed)
             return;
         closed = true;
+        invalidated.run();
         var closing = prepared;
         prepared = null;
         try {
@@ -112,6 +118,10 @@ public class CustomTexture extends AbstractTexture {
                 super.close();
             }
         }
+    }
+
+    void onInvalidated(Runnable listener) {
+        invalidated = Objects.requireNonNull(listener);
     }
 
     public Optional<Throwable> failure() {

@@ -32,6 +32,8 @@
 
 ## 模型加载与图片交接
 
+独立 preview、前景、背景与作者头像已使用资源侧内容证明和驻留 use。受控回归覆盖热命中零重复工作、多消费者、替换、reload、成员/连接失效及失败收敛。真实宿主中的全部来源、注册存活、替换/reload/世界退出交错和长期回收尚未联合验收；[宿主入口](../../tools/benchmark/README.md#模型列表真实宿主)的分页计数不能单独关闭这些缺口。
+
 - 客户端 expression、派生写入与 preview 的字节政策已删除。定向回归覆盖 16 项 LRU／写入饱和、513 MiB 写入输入、192 MiB 实际像素、取消和最后借用释放。Winefox 01 的完整 MAIN 超过旧计价阈值仍可内存复用并提交；新 JVM 以独立 expected 重开，439 个动画和 artifact 内容相同且未编译。音频活动／保留与服务端 chunk／preview 额度在相同输入的前后版本、同 JVM owner 对照中保持；该对照不代表真实 integrated 游戏。方法见[保留与交接验证](../../tools/benchmark/README.md#证据半径)。新政策下的真实 GL 大图、integrated 游戏联合场景和长期 RSS 尚未验证。
 
 - 派生工作域的真实 staging 写入、验证、flush、原子替换故障、容量拒绝、双进程竞争和异常退出重启已有回归。GUI／FULL 与非玩家 boat 在 expression-animation／geometry 的 staging 阻塞期间完成实际安装。实际 local custom→global custom 切换后，旧工作仍提交原区域；Ready/cache-only 复用无新 producer。页面／世界退出、host 阻塞时 strict export 关闭及放行后无迟到提交已有 Windows Forge 观察；不覆盖全部网络 remote 故障组合。

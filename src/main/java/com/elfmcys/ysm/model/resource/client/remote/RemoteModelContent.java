@@ -72,6 +72,10 @@ public final class RemoteModelContent implements ModelContent {
         return store.requestChunk(this, chunks.get(index), fetcher, workers);
     }
 
+    public boolean hasCachedImage(AssetContainerView.ChunkInfo chunk) throws IOException {
+        return store.hasCachedChunk(representation.modelId(), chunk);
+    }
+
     public void publish(AssetContainerView.ChunkInfo chunk, UniBuffer bytes) throws IOException {
         store.publishChunk(representation.modelId(), chunk, bytes);
     }

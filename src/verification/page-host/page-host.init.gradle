@@ -1,0 +1,51 @@
+gradle.projectsEvaluated {
+    def p = rootProject
+    if (p.extensions.findByName('legacyForge') == null) return
+    def harness = new File(System.getenv('YSM_PAGE_HARNESS'))
+    def output = new File(System.getenv('YSM_PAGE_OUTPUT'))
+    if (System.getenv('YSM_PAGE_PROVIDER') == 'immersive-melodies')
+        p.dependencies.add('modRuntimeOnly', 'maven.modrinth:immersive-melodies:0.6.0+1.20.1-forge')
+    if (System.getenv('YSM_PAGE_PROVIDER') in ['all', 'available']) {
+        ['maven.modrinth:better-combat:1.8.6+1.20.1-forge',
+         'maven.modrinth:cloth-config:11.1.136+forge',
+         'curse.maven:playeranimator-658587:4587214',
+         'curse.maven:carry-on-274259:4882500',
+         'top.theillusivec4.curios:curios-forge:5.14.1+1.20.1',
+         'maven.modrinth:parcool:1.20.1-3.4.1.2-forge',
+         'maven.modrinth:slashblade-resharped:1.1.6-1.20.1',
+         'maven.modrinth:sophisticated-core:1.20.1-1.3.6.1514-forge',
+         'maven.modrinth:sophisticated-backpacks:1.20.1-3.24.25.1566-forge',
+         'curse.maven:timeless-and-classics-zero-1028108:6654541',
+         'maven.modrinth:immersive-melodies:0.6.0+1.20.1-forge'].findAll {
+            System.getenv('YSM_PAGE_PROVIDER') != 'available' || !it.startsWith('curse.maven:timeless-and-classics-zero-')
+        }.each {
+            p.dependencies.add('modRuntimeOnly', it)
+        }
+    }
+    p.sourceSets.main.java.srcDir(new File(harness, 'host'))
+    if (System.getenv('YSM_PAGE_FUNCTIONAL') == 'true')
+        p.sourceSets.main.java.srcDir(new File(harness, 'functional'))
+    def compileAgent = p.tasks.register('compilePageFrameHostAgent', JavaCompile) {
+        source = p.fileTree(new File(harness, 'agent')) { include '**/*.java' }
+        classpath = p.sourceSets.main.compileClasspath
+        destinationDirectory = p.layout.buildDirectory.dir('page-host/classes')
+        options.annotationProcessorPath = p.files()
+        javaCompiler = p.javaToolchains.compilerFor(p.java.toolchain)
+    }
+    def agent = p.tasks.register('pageFrameHostAgent', Jar) {
+        // The observation jar contains no builtin assets or production classes.
+        setDependsOn([compileAgent])
+        archiveFileName = 'page-frame-host-agent.jar'
+        destinationDirectory = p.layout.buildDirectory.dir('page-host')
+        from(p.layout.buildDirectory.dir('page-host/classes'))
+        from { p.sourceSets.main.compileClasspath.findAll { it.name ==~ /asm-[0-9].*\.jar/ }.collect { p.zipTree(it) } }
+        manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.verification.paging.PageFrameAgent' }
+    }
+    p.tasks.named('runClient') { dependsOn agent }
+    p.legacyForge.runs.named('client') {
+        environment.set(environment.get().findAll { key, value -> key != 'YSM_DEBUG_RESOURCE' })
+        gameDirectory = new File(output, 'game')
+        jvmArguments.add('-javaagent:' + p.layout.buildDirectory.file('page-host/page-frame-host-agent.jar').get().asFile.absolutePath)
+        jvmArguments.add('-XX:StartFlightRecording=settings=profile,filename=' + new File(output, 'host.jfr').absolutePath + ',dumponexit=true')
+    }
+}

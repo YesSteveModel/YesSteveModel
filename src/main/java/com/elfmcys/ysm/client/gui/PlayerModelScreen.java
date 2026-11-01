@@ -67,6 +67,7 @@ public class PlayerModelScreen extends ModelScreen {
     private final Map<String, ModelPackDescriptor> packDescriptors = new LinkedHashMap<>();
     private ClientDemandCoordinator.PageScope pageScope;
     private PageImages pageAssets;
+    private com.elfmcys.ysm.client.gui.button.CatalogPageFrame pageFrame;
     private final List<net.minecraft.client.gui.components.AbstractWidget> pageWidgets = new ArrayList<>();
     private FlatColorButton textureButton;
     private EditBox textField;
@@ -201,8 +202,9 @@ public class PlayerModelScreen extends ModelScreen {
             var previous = pageScope;
             pageScope = service.demands().replacePage(previous, signature);
             closePageWidgets();
-            pageAssets = new PageImages(service.createAssetBatch());
-            pageScope.action(pageAssets);
+            pageFrame = new com.elfmcys.ysm.client.gui.button.CatalogPageFrame(pageScope, service::createAssetBatch);
+            pageAssets = pageFrame.images();
+            pageScope.action(pageFrame);
             addCatalogButtons(pageAssets);
         }
         if (searchFocused)
@@ -316,7 +318,7 @@ public class PlayerModelScreen extends ModelScreen {
             index -= browser.packs().size();
             if (index >= 0 && index < browser.models().size()) {
                 var entry = browser.models().get(index);
-                var button = new CatalogModelButton(xStart, yStart, entry, () -> requiresAuthorization(entry), assets,
+                var button = new CatalogModelButton(xStart, yStart, entry, () -> requiresAuthorization(entry), pageFrame,
                     pageScope, new CustomGuiPlayerEntity(), this::selectModel, this::openTexturePage,
                     this::canOpenTexturePage);
                 modelButtons.add(button);
@@ -376,6 +378,12 @@ public class PlayerModelScreen extends ModelScreen {
         if (!hasCurrentWorld())
             return;
         updatePointer(mouseX, mouseY);
+        var currentPage = pageScope;
+        if (pageFrame != null)
+            pageFrame.prepare(List.copyOf(modelButtons), List.copyOf(packButtons), minecraft.getFrameTime(),
+                mouseX, mouseY, Util.getMillis());
+        if (!hasCurrentWorld() || pageScope != currentPage || currentPage != null && currentPage.isClosed())
+            return;
         if (textureButton != null)
             textureButton.active = canOpenTexturePage();
         renderBackground(graphics);
@@ -565,24 +573,46 @@ public class PlayerModelScreen extends ModelScreen {
     }
 
     private void closeModelButtons() {
-        modelButtons.forEach(CatalogModelButton::close);
+        Throwable failure = null;
+        for (var button : List.copyOf(modelButtons)) {
+            try { button.close(); } catch (Throwable error) {
+                failure = GuiFrameTasks.append(failure, error);
+            }
+        }
         modelButtons.clear();
         failedButtons.clear();
+        throwPageCleanup(failure);
     }
 
     private void closePageWidgets() {
-        closeModelButtons();
-        packButtons.forEach(PackButton::close);
+        Throwable failure = null;
+        try { closeModelButtons(); } catch (Throwable error) { failure = error; }
+        for (var button : List.copyOf(packButtons)) {
+            try { button.close(); } catch (Throwable error) {
+                failure = GuiFrameTasks.append(failure, error);
+            }
+        }
         packButtons.clear();
         pageWidgets.clear();
+        throwPageCleanup(failure);
     }
 
     private void closePage() {
-        if (pageScope != null)
-            pageScope.close();
+        var previous = pageScope;
         pageScope = null;
         pageAssets = null;
-        closePageWidgets();
+        pageFrame = null;
+        Throwable failure = null;
+        if (previous != null) {
+            try { previous.close(); } catch (Throwable error) { failure = error; }
+        }
+        try { closePageWidgets(); } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+        throwPageCleanup(failure);
+    }
+
+    private static void throwPageCleanup(Throwable failure) {
+        if (failure instanceof Error error) throw error;
+        if (failure instanceof RuntimeException error) throw error;
     }
 
     private void backToParent() {
@@ -610,7 +640,7 @@ public class PlayerModelScreen extends ModelScreen {
         }
     }
 
-    private List<String> pageSignature() {
+    private PageSignature pageSignature() {
         var result = new ArrayList<String>(10);
         for (var slot = 0; slot < 10; slot++) {
             var index = slot + browser.page() * 10;
@@ -636,8 +666,12 @@ public class PlayerModelScreen extends ModelScreen {
                 result.add("empty");
             }
         }
-        return List.copyOf(result);
+        return new PageSignature(browser.page(), browser.category(), browser.currentPack(),
+            textField == null ? "" : textField.getValue(), List.copyOf(result));
     }
+
+    private record PageSignature(int page, CatalogBrowserState.Category category, String pack, String query,
+        List<String> members) {}
 
     private String locale() {
         return Minecraft.getInstance().getLanguageManager().getSelected();

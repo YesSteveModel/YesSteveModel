@@ -121,6 +121,11 @@ public final class AtomicSharedCache {
         materialize(namespace, key, target, validator, writer, false);
     }
 
+    public void materializeReplacing(String namespace, String key, Path target, CacheValidator validator,
+        CacheWriter writer, CommitGate gate) throws IOException {
+        materialize(namespace, key, target, validator, writer, false, Objects.requireNonNull(gate, "gate"), false);
+    }
+
     /** The caller linearizes the final replacement with retirement of its effect capability. */
     public void replaceValidated(String namespace, String key, Path target, CacheValidator validator,
         CacheWriter writer, CommitGate gate) throws IOException {

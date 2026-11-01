@@ -4,11 +4,12 @@ import com.elfmcys.ysm.client.animation.AnimationRegister;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity;
+import com.elfmcys.ysm.client.gui.GuiFrameInput;
+import com.elfmcys.ysm.geckolib3.geo.GeoRenderData;
 import com.elfmcys.ysm.client.texture.TextureHolder;
 import com.elfmcys.ysm.model.catalog.client.entry.CatalogModelMetadata;
 import com.elfmcys.ysm.model.catalog.client.entry.ClientCatalogEntry;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
-import com.elfmcys.ysm.model.resource.client.asset.ModelAssetSelector;
 import com.elfmcys.ysm.model.resource.client.asset.PageImages;
 import org.jetbrains.annotations.Nullable;
 
@@ -19,29 +20,31 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
     private final ClientDemandCoordinator.Target target;
     private @Nullable ClientDemandCoordinator.EntityScope scope;
     private boolean active;
-    private final PageImages.Image preview;
-    private final PageImages.Image background;
-    private final PageImages.Image foreground;
+    private final CatalogCardImages images;
     private final CatalogModelPreviewAnimationState previewAnimations = new CatalogModelPreviewAnimationState();
     private ModelRenderTarget configuredTarget;
+    private boolean borrowed;
+    private boolean deactivationPending;
+    private boolean closed;
+    private boolean cleaned;
+    private GuiFrameInput frameInput;
+    private GeoRenderData prepared;
 
-    CatalogModelCardState(PageImages images, ClientDemandCoordinator.PageScope page, ClientCatalogEntry entry,
+    CatalogModelCardState(CatalogPageFrame frame, ClientDemandCoordinator.PageScope page, ClientCatalogEntry entry,
         CatalogModelMetadata metadata, CustomGuiPlayerEntity entity) {
         this.entity = entity;
         this.page = page;
         this.target = new ClientDemandCoordinator.Target(entry.modelHash(), metadata.defaultTexture());
         page.card(this, target);
-        preview = images.preview(entry.modelHash());
+        frame.register(this);
         var settings = entry.displayRepresentation().view().getManifest().info().settings();
-        background = settings.hasGuiBackground()
-            ? images.presentation(entry.modelHash(), ModelAssetSelector.PresentationAsset.GUI_BACKGROUND, 0) : null;
-        foreground = settings.hasGuiForeground()
-            ? images.presentation(entry.modelHash(), ModelAssetSelector.PresentationAsset.GUI_FOREGROUND, 0) : null;
+        images = new CatalogCardImages(frame.images(), entry.modelHash(), settings.hasGuiBackground(),
+            settings.hasGuiForeground(), page.eagerLoading());
     }
 
     @Nullable
     ModelRenderTarget renderTarget() {
-        return active ? entity.displayedModel() : null;
+        return !closed && active ? entity.displayedModel() : null;
     }
 
     ClientDemandCoordinator.Target target() {
@@ -50,26 +53,26 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
 
     @Nullable
     TextureHolder preview() {
-        return preview.texture();
+        return images.preview();
     }
 
     boolean loading() {
-        return preview.loading() || active && scope != null && scope.failure() == null
+        return images.previewLoading() || active && scope != null && scope.failure() == null
             && (scope.hasUnfinishedWork() || page.preparing(target));
     }
 
     boolean missingPreview() {
-        return preview.absent() && renderTarget() == null && !loading() && loadError() == null;
+        return images.previewAbsent() && renderTarget() == null && !loading() && loadError() == null;
     }
 
     @Nullable
     TextureHolder background() {
-        return background == null ? null : background.texture();
+        return images.background();
     }
 
     @Nullable
     TextureHolder foreground() {
-        return foreground == null ? null : foreground.texture();
+        return images.foreground();
     }
 
     @Nullable
@@ -80,16 +83,12 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
         if (failure == null)
             failure = entity.modelLoadFailure();
         if (failure == null)
-            failure = preview.failure();
-        if (failure == null && background != null)
-            failure = background.failure();
-        if (failure == null && foreground != null)
-            failure = foreground.failure();
+            failure = images.failure();
         return failure;
     }
 
-    void updatePreviewAnimations(boolean hovered, boolean focused, long now) {
-        var installed = renderTarget();
+    void updatePreviewAnimations(GuiFrameInput input) {
+        var installed = entity.hasMatchingInstallation() ? entity.getModelRenderTarget() : null;
         if (installed == null)
             return;
         if (configuredTarget != installed) {
@@ -102,40 +101,110 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
                 }, animations.containsKey(AnimationRegister.FOCUS));
             configuredTarget = installed;
         }
-        previewAnimations.apply(entity.getPreviewInfo(), hovered, focused, now);
+        previewAnimations.apply(entity.getPreviewInfo(), input.hovered(), input.focused(), input.now());
+    }
+
+    void previewPolicy(boolean eager, @Nullable PageImages images) {
+        this.images.advancePolicy(eager, images);
+    }
+
+    java.util.List<PageImages.Image> images() {
+        return images.preparations();
+    }
+
+    void captureInput(float partialTick, boolean hovered, boolean focused, long now, boolean disableRotation) {
+        frameInput = GuiFrameInput.capture(entity.getEntity(), partialTick, disableRotation, true, hovered, focused, now);
+        prepared = null;
+    }
+
+    GuiFrameInput frameInput() { return frameInput; }
+    GeoRenderData prepared() { return prepared; }
+    void prepared(GeoRenderData data) { prepared = data; }
+    CustomGuiPlayerEntity entity() { return entity; }
+    ClientDemandCoordinator.EntityScope scope() { return active ? scope : null; }
+    boolean closed() { return closed || page.isClosed(); }
+    void borrow() { borrowed = true; }
+    void returned() {
+        borrowed = false;
+        if (closed) finishClose();
+        else finishDeactivation();
     }
 
     @Override
     public void activate(ModelResourceDemand.Mode mode) {
+        if (closed() || borrowed)
+            return;
         entity.setResourceDemandMode(mode);
         if (!active) {
             entity.updateModelAndTexture(target.modelId(), target.texture());
             scope = entity.demandScope();
+            if (scope != null)
+                scope.useFrameInstallation();
+            if (scope != null)
+                page.entity(scope);
             active = true;
         }
     }
 
     @Override
     public void deactivate() {
-        if (!active)
+        Throwable failure = null;
+        if (active) {
+            active = false;
+            deactivationPending = true;
+            var previous = scope;
+            scope = null;
+            try { if (previous != null) previous.close(); }
+            catch (Throwable error) { failure = error; }
+        }
+        if (!borrowed) {
+            try { finishDeactivation(); } catch (Throwable error) {
+                failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
+            }
+        }
+        throwFailure(failure);
+    }
+
+    private void finishDeactivation() {
+        if (!deactivationPending)
             return;
-        active = false;
-        scope = null;
+        deactivationPending = false;
         try {
             entity.revokeAssignment();
         } finally {
             configuredTarget = null;
             previewAnimations.reset();
+            prepared = null;
         }
     }
 
     @Override
     public void close() {
-        try {
-            page.removeCard(this);
-            deactivate();
-        } finally {
-            entity.retire();
+        if (closed)
+            return;
+        closed = true;
+        if (borrowed)
+            return;
+        finishClose();
+    }
+
+    private void finishClose() {
+        if (cleaned)
+            return;
+        cleaned = true;
+        Throwable failure = null;
+        try { page.removeCard(this); } catch (Throwable error) { failure = error; }
+        try { deactivate(); } catch (Throwable error) {
+            failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
         }
+        try { entity.retire(); } catch (Throwable error) {
+            failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
+        }
+        throwFailure(failure);
+    }
+
+    private static void throwFailure(Throwable failure) {
+        if (failure instanceof Error error) throw error;
+        if (failure instanceof RuntimeException error) throw error;
     }
 }

@@ -15,16 +15,272 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class EntityExecutionLifecycleTest {
     @Test
+    void guiReservationSealsReadsUntilTheExplicitJoinAndCannotAuthorizeAnotherOwner() throws Exception {
+        try (var runtime = new EntityExpressionRuntime(); var other = new EntityExpressionRuntime()) {
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
+            var another = new EntityExecutionLifecycle(other, () -> {}, failure -> fail(failure));
+            var input = new EntityExpressionRuntime.InvocationInputs(
+                new InvocationInputs<net.minecraft.world.entity.Entity>() {}, (commands, provenance) -> () -> {},
+                () -> false);
+            var task = lifecycle.reserveGuiTask(true, () -> {
+                lifecycle.assertStateAccess();
+                lifecycle.assertSubjectAccess();
+                assertEquals(0, runtime.generation());
+                assertThrows(IllegalStateException.class, lifecycle::endUse);
+                assertThrows(IllegalStateException.class, lifecycle::retire);
+                assertThrows(IllegalStateException.class, runtime::invalidate);
+                assertThrows(IllegalStateException.class, runtime::clear);
+                assertThrows(IllegalStateException.class, runtime::prepareExecution);
+                assertThrows(IllegalStateException.class, () -> another.inCall(() -> null));
+                assertThrows(IllegalStateException.class, another::assertSubjectAccess);
+                assertThrows(IllegalStateException.class, other::generation);
+                assertThrows(IllegalStateException.class, () -> other.observe(input, ignored -> null));
+                return 17;
+            });
+            assertThrows(IllegalStateException.class, lifecycle::assertStateAccess);
+            assertThrows(IllegalStateException.class, lifecycle::assertSubjectAccess);
+            assertThrows(IllegalStateException.class, runtime::generation);
+            assertThrows(IllegalStateException.class, lifecycle::endUse);
+            assertThrows(IllegalStateException.class, () -> lifecycle.inDraw(() -> null));
+            assertThrows(IllegalStateException.class, () -> runtime.observe(input, ignored -> null));
+            var worker = new Thread(task);
+            worker.start();
+            worker.join(5000);
+            assertFalse(worker.isAlive());
+            assertTrue(lifecycle.hasTask());
+            assertThrows(IllegalStateException.class, lifecycle::assertSubjectAccess);
+            assertThrows(IllegalStateException.class, runtime::generation);
+            assertThrows(IllegalStateException.class, task::run);
+            assertEquals(17, task.join());
+            assertFalse(lifecycle.hasTask());
+            lifecycle.assertSubjectAccess();
+            assertEquals(0, runtime.generation());
+            assertThrows(IllegalStateException.class, task::join);
+        }
+    }
+
+    @Test
+    void guiInternalEntryPreservesCandidateCallAndDrawReentryRulesEvenOnTheMainThread() {
+        try (var runtime = new EntityExpressionRuntime()) {
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
+            @SuppressWarnings("unchecked")
+            var tasks = new EntityExecutionLifecycle.GuiTask<?>[1];
+            var task = lifecycle.reserveGuiTask(true, () -> lifecycle.inGuiExecution(tasks[0], () -> {
+                runtime.prepareExecution();
+                lifecycle.inCandidate(() -> {
+                    assertThrows(IllegalStateException.class, () -> lifecycle.inCall(() -> null));
+                    assertThrows(IllegalStateException.class, lifecycle::endUse);
+                    assertTrue(lifecycle.tryInstallation(() -> "reentered").isEmpty());
+                    return null;
+                });
+                lifecycle.inCall(() -> {
+                    assertThrows(IllegalStateException.class, () -> lifecycle.inCandidate(() -> null));
+                    assertThrows(IllegalStateException.class, () -> lifecycle.inDraw(() -> null));
+                    assertThrows(IllegalStateException.class, runtime::clear);
+                    return null;
+                });
+                assertThrows(IllegalStateException.class, lifecycle::awaitTask);
+                assertThrows(IllegalStateException.class, () -> lifecycle.reserveGuiTask(true, () -> null));
+                return 23;
+            }));
+            tasks[0] = task;
+            task.run();
+            assertThrows(IllegalStateException.class, runtime::generation);
+            assertEquals(23, task.join());
+        }
+    }
+
+    @Test
+    void rejectedAndNonGuiReservationsDoNotGrantExecution() throws Exception {
+        try (var runtime = new EntityExpressionRuntime()) {
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
+            assertThrows(IllegalStateException.class, () -> lifecycle.reserveGuiTask(false, () -> null));
+            assertFalse(lifecycle.hasTask());
+            var task = lifecycle.reserveGuiTask(true, () -> fail("Rejected task executed"));
+            task.reject();
+            assertFalse(lifecycle.hasTask());
+            assertEquals(0, runtime.generation());
+            assertThrows(IllegalStateException.class, task::run);
+            assertThrows(IllegalStateException.class, task::join);
+            var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            var worker = new Thread(() -> {
+                try { runtime.prepareExecution(); }
+                catch (Throwable expected) { failure.set(expected); }
+            });
+            worker.start();
+            worker.join(5000);
+            assertInstanceOf(IllegalStateException.class, failure.get());
+        }
+    }
+
+    @Test
+    void guiFailedSharedActivationDefersCleanupAndPreservesTheTaskFailure() {
+        var events = new ArrayList<String>();
+        var primary = new IllegalArgumentException("task");
+        var cleanup = new IllegalStateException("cleanup");
+        try (var runtime = new EntityExpressionRuntime()) {
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+                events.add("close");
+                throw cleanup;
+            }, failure -> {}, Runnable::run);
+            var tasks = new EntityExecutionLifecycle.GuiTask<?>[1];
+            var task = lifecycle.reserveGuiTask(true, () -> lifecycle.inGuiExecution(tasks[0], () -> {
+                try {
+                    lifecycle.endInstallationUse();
+                    assertTrue(lifecycle.isEndingUse());
+                    assertTrue(events.isEmpty());
+                    throw primary;
+                } finally { events.add("execution-exit"); }
+            }));
+            tasks[0] = task;
+            task.run();
+            assertEquals(List.of("execution-exit"), events);
+            assertSame(primary, assertThrows(IllegalArgumentException.class, task::join));
+            assertEquals(List.of("execution-exit", "close"), events);
+            assertArrayEquals(new Throwable[]{cleanup}, primary.getSuppressed());
+            assertFalse(lifecycle.hasTask());
+            assertEquals(0, runtime.generation());
+        }
+    }
+
+    @Test
+    void guiJoinWaitsForTheEntireFinallyAndRestoresInterrupt() throws Exception {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var runtime = new EntityExpressionRuntime()) {
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
+            var task = lifecycle.reserveGuiTask(true, () -> {
+                try {
+                    entered.countDown();
+                    assertTrue(release.await(5, TimeUnit.SECONDS));
+                    return 31;
+                } catch (InterruptedException failure) { throw new AssertionError(failure); }
+                finally { events.add("execution-exit"); }
+            });
+            var worker = new Thread(task);
+            worker.start();
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            var main = Thread.currentThread();
+            var gate = new Thread(() -> {
+                while (main.getState() != Thread.State.WAITING) Thread.onSpinWait();
+                release.countDown();
+            });
+            gate.start();
+            main.interrupt();
+            assertEquals(31, task.join());
+            assertTrue(Thread.interrupted());
+            assertEquals(List.of("execution-exit"), events);
+            gate.join(5000);
+            worker.join(5000);
+        } finally { release.countDown(); Thread.interrupted(); }
+    }
+
+    @Test
+    void guiJoinPromotesFatalFailureHandlingAndCleanupWithoutLosingTheOriginalTask() {
+        for (boolean failCleanup : List.of(false, true)) {
+            for (var fatal : List.of(new InternalError("fatal"), new OutOfMemoryError("oom"), new ThreadDeath())) {
+                var primary = new IllegalArgumentException("task");
+                var closed = new java.util.concurrent.atomic.AtomicInteger();
+                try (var runtime = new EntityExpressionRuntime()) {
+                    var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+                        closed.incrementAndGet();
+                        if (failCleanup) throw fatal;
+                    }, failure -> {
+                        assertSame(primary, failure);
+                        if (!failCleanup) throw fatal;
+                    });
+                    var tasks = new EntityExecutionLifecycle.GuiTask<?>[1];
+                    var task = lifecycle.reserveGuiTask(true, () -> lifecycle.inGuiExecution(tasks[0], () -> {
+                        if (failCleanup) lifecycle.endInstallationUse();
+                        throw primary;
+                    }));
+                    tasks[0] = task;
+                    task.run();
+                    assertSame(fatal, assertThrows(Error.class, task::join));
+                    assertArrayEquals(new Throwable[]{primary}, fatal.getSuppressed());
+                    assertEquals(failCleanup ? 1 : 0, closed.get());
+                    assertFalse(lifecycle.hasTask());
+                    assertFalse(lifecycle.isEndingUse());
+                    assertEquals(0, runtime.generation());
+                }
+            }
+        }
+    }
+
+    @Test
+    void guiDeferredEndingUsePromotesFatalCleanupAfterProjectionFailureButKeepsTheExistingOomBoundary()
+        throws Exception {
+        for (var cleanup : List.of(new InternalError("fatal"), new ThreadDeath(), new OutOfMemoryError("oom"))) {
+            try (var module = TestExpressionModules.create(Set.of("value"));
+                var runtime = new EntityExpressionRuntime()) {
+                TestExpressionModules.replace(runtime, module, Map.of(), RoamingRole.PRODUCER);
+                runtime.initializeRoaming(new RoamingPayload(new java.util.TreeMap<>()));
+                var installation = runtime.snapshot().orElseThrow().installation();
+                var projection = new IllegalStateException("projection");
+                var closed = new java.util.concurrent.atomic.AtomicInteger();
+                var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+                    closed.incrementAndGet();
+                    throw cleanup;
+                }, failure -> fail(failure));
+                var inputs = new EntityExpressionRuntime.InvocationInputs(
+                    new InvocationInputs<net.minecraft.world.entity.Entity>() {},
+                    (commands, provenance) -> () -> {}, () -> false);
+                var tasks = new EntityExecutionLifecycle.GuiTask<?>[1];
+                var task = lifecycle.reserveGuiTask(true, () -> lifecycle.inGuiExecution(tasks[0], () -> {
+                    runtime.normalUpdate(inputs, evaluation -> {
+                        runtime.roamingState().orElseThrow().write("value", 7);
+                        return null;
+                    }, delta -> { throw projection; });
+                    lifecycle.endInstallationUse();
+                    return null;
+                }));
+                tasks[0] = task;
+                var worker = new Thread(task);
+                worker.start();
+                worker.join(5000);
+                assertFalse(worker.isAlive());
+                assertTrue(lifecycle.hasTask());
+                assertTrue(lifecycle.isEndingUse());
+                assertEquals(0, closed.get());
+                assertThrows(IllegalStateException.class, runtime::generation);
+                var failure = assertThrows(Throwable.class, task::join);
+                if (cleanup instanceof OutOfMemoryError) {
+                    assertSame(projection, failure);
+                    assertArrayEquals(new Throwable[]{cleanup}, projection.getSuppressed());
+                } else {
+                    assertSame(cleanup, failure);
+                    assertArrayEquals(new Throwable[]{projection}, cleanup.getSuppressed());
+                }
+                assertEquals(1, closed.get());
+                assertFalse(lifecycle.hasTask());
+                assertFalse(lifecycle.isEndingUse());
+                assertFalse(installation.commit(() -> fail("Failed cleanup left the installation open")));
+            }
+        }
+    }
+
+    @Test
     void completedButUnjoinedTaskRemainsBusy() throws Exception {
         try (var runtime = new EntityExpressionRuntime()) {
             var queue = new ArrayList<Runnable>();
             var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure), queue::add);
-            lifecycle.submit(() -> 42);
+            lifecycle.submit(() -> {
+                lifecycle.assertSubjectAccess();
+                lifecycle.assertStateAccess();
+                return 42;
+            });
+            lifecycle.assertSubjectAccess();
+            assertThrows(IllegalStateException.class, lifecycle::assertStateAccess);
             var worker = new Thread(queue.get(0));
             worker.start();
             worker.join(5000);
             assertFalse(worker.isAlive());
+            lifecycle.assertSubjectAccess();
+            assertThrows(IllegalStateException.class, lifecycle::assertStateAccess);
             assertTrue(lifecycle.tryInstallation(() -> { throw new AssertionError("Unjoined task was read"); }).isEmpty());
+            assertThrows(IllegalStateException.class, runtime::clear);
+            assertThrows(IllegalStateException.class, runtime::prepareExecution);
             lifecycle.awaitTask();
             assertEquals("installed", lifecycle.tryInstallation(() -> "installed").orElseThrow());
         }

@@ -8,6 +8,7 @@ public final class ContinuousDemand<T> {
     public static final long HOVER_DWELL_MILLIS = 300;
     public static final long LOCAL_SWITCH_DWELL_MILLIS = 300;
     public static final long NETWORK_SWITCH_DWELL_MILLIS = 700;
+    public static final long PAGE_PREVIOUS_DWELL_MILLIS = 700;
 
     private T current;
     private boolean active;
@@ -72,6 +73,13 @@ public final class ContinuousDemand<T> {
 
     public boolean effectEligible(boolean missing, long nowMillis, long thresholdMillis) {
         return !requiresDwell(missing, thresholdMillis) || elapsedStrictlyExceeds(nowMillis, thresholdMillis);
+    }
+
+    /** Page switches share one previous-page test while each effect keeps its own current-page threshold. */
+    public boolean pageEffectEligible(boolean missing, long nowMillis, long thresholdMillis) {
+        requireThreshold(thresholdMillis);
+        return active && (!requiresDwell(missing, PAGE_PREVIOUS_DWELL_MILLIS)
+            || elapsedAtLeast(nowMillis, thresholdMillis));
     }
 
     public void reset() {

@@ -242,14 +242,17 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public EntityStateTracker<TEntity> getStateTracker() {
+        lifecycle.assertStateAccess();
         return stateTracker;
     }
 
     public float getSeekTime() {
+        lifecycle.assertStateAccess();
         return seekTime;
     }
 
     public final AnimationData getAnimationData() {
+        lifecycle.assertStateAccess();
         return requireInstallation().animations;
     }
 
@@ -307,6 +310,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public PhysicsManager getPhysicsManager(AnimationEvent<?> event) {
+        lifecycle.assertStateAccess();
         var context = event.getRenderContext();
         if (context.immutable() || context.firstPersonMod() || context.paperDoll())
             return physicsManager;
@@ -329,6 +333,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     protected void dispatchPersistentEvents(EntityExpressionRuntime.Evaluation evaluation, boolean shouldUpdate) {}
 
     public final TEntity getEntity() {
+        lifecycle.assertSubjectAccess();
         return entity;
     }
 
@@ -687,6 +692,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final EntityExpressionRuntime getExpressionRuntime() {
+        lifecycle.assertStateAccess();
         return expressionRuntime;
     }
 
@@ -796,7 +802,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                     var bindGeometry = next.geoModel.prepareModelBinding(geometry);
                     var bindResources = next.processor.prepareResourceBinding(assets(ready.target()).eventHandlers(),
                         next.animations, name -> resolveControllerData(ready.target(), name));
-                    next.abortSharedStateActivation = lifecycle::endUse;
+                    next.abortSharedStateActivation = lifecycle::endInstallationUse;
                     next.activation = (publication, qualified) -> lifecycle.inCall(() -> {
                         if (!isRunRequired() || !isCurrent(previous) || !qualified.getAsBoolean())
                             throw new CancellationException("Candidate owner no longer runs");
@@ -881,11 +887,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     @Nullable
     public final AnimatedGeoModel getLoadedGeoModel() {
+        lifecycle.assertStateAccess();
         var current = modelBinding.resourceHolder();
         return current == null || lifecycle.isEndingUse() ? null : current.geoModel;
     }
 
     public final boolean hasInstalledModel() {
+        lifecycle.assertStateAccess();
         return !lifecycle.isEndingUse() && modelBinding.resourceHolder() != null;
     }
 
@@ -923,10 +931,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public void setCodedAnimationStates(String controllerName, AnimationState state) {
+        lifecycle.assertStateAccess();
         this.codedAnimationStates.put(controllerName, state);
     }
 
     public AnimationState getCodedAnimationStates(String controllerName) {
+        lifecycle.assertStateAccess();
         return this.codedAnimationStates.getOrDefault(controllerName, AnimationState.IDLE);
     }
 
@@ -960,6 +970,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final boolean canEvaluate() {
+        lifecycle.assertStateAccess();
         return isRunRequired() && !lifecycle.isEndingUse() && modelBinding.permitsCurrentUse()
             && (fallbackRenderTargetId() != null || requestedRenderTargetId() != null);
     }
@@ -997,6 +1008,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final ModelRenderTarget getModelRenderTarget() {
+        lifecycle.assertStateAccess();
         var installed = modelBinding.resourceHolder();
         return installed == null || lifecycle.isEndingUse() ? null : installed.model;
     }
@@ -1022,6 +1034,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final Throwable modelLoadFailure() {
+        lifecycle.assertStateAccess();
         var installedFailure = modelBinding.failure();
         return installedFailure != null ? installedFailure : demandScope == null ? null : demandScope.failure();
     }
@@ -1121,6 +1134,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     @Override
     public final com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Assignment assignment() {
+        lifecycle.assertPublicAccess();
         lifecycle.tryInstallation(() -> {
             refreshAssignment();
             return true;
@@ -1138,6 +1152,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     @Override
     public final boolean matches(ResourceRequest request, boolean full) {
+        lifecycle.assertStateAccess();
         return !lifecycle.isEndingUse() && modelBinding.matches(request, full);
     }
 
@@ -1147,11 +1162,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final boolean matchesSelection(com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Target target) {
+        lifecycle.assertStateAccess();
         return !lifecycle.isEndingUse() && modelBinding.matchesSelection(target);
     }
 
     @Override
     public final Throwable failure(ResourceRequest request) {
+        lifecycle.assertStateAccess();
         return modelBinding.failure(request);
     }
 
@@ -1180,6 +1197,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     private ResourceHolder requireInstallation() {
+        lifecycle.assertStateAccess();
         var installed = modelBinding.resourceHolder();
         if (installed == null || lifecycle.isEndingUse())
             throw new IllegalStateException("Entity has no usable installation");
@@ -1261,6 +1279,91 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final boolean hasPendingUpdate() { return lifecycle.hasTask(); }
+
+    protected final void assertExecutionStateAccess() { lifecycle.assertStateAccess(); }
+
+    protected final void assertPublicMutationAccess() { lifecycle.rejectCandidateMutation(); }
+
+    public final <R> GuiTask<R> reserveGuiTask(java.util.function.Function<GuiExecution, R> operation) {
+        lifecycle.rejectRecursiveCall();
+        Objects.requireNonNull(operation, "operation");
+        if (resourcePurpose() != com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.GUI)
+            throw new IllegalStateException("Only a GUI entity can reserve GUI execution");
+        var execution = new GuiExecution(assignment());
+        var task = lifecycle.reserveGuiTask(true, () -> operation.apply(execution));
+        execution.task = task;
+        return new GuiTask<>(task, () -> finishProjections(true));
+    }
+
+    public final class GuiExecution {
+        private final com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Assignment assignment;
+        private EntityExecutionLifecycle.GuiTask<?> task;
+
+        private GuiExecution(com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Assignment assignment) {
+            this.assignment = assignment;
+        }
+
+        /** The installation consumes the lease on every entered path, including failure. */
+        public com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult install(
+            ResourceRequest request, ResourceLease lease, boolean fallback, boolean full) {
+            return lifecycle.inGuiExecution(task, () -> {
+                if (!assignment.permitted()
+                    || !request.equals(fallback ? assignment.fallback() : assignment.request())) {
+                    lease.close();
+                    return com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult.STALE;
+                }
+                return modelBinding.accept(request, lease, fallback, full, AnimatableEntity.this::prepareInstallation);
+            });
+        }
+
+        public @Nullable GeoRenderData update(float partialTicks, RenderContext context) {
+            return lifecycle.inGuiExecution(task, () -> {
+                prepareEvaluation();
+                var resolved = resolveRenderContext(context);
+                try {
+                    return lifecycle.inCall(() -> computePose(partialTicks, resolved));
+                } catch (OutOfMemoryError failure) {
+                    currentFrameExtracted = false;
+                    return null;
+                }
+            });
+        }
+    }
+
+    public static final class GuiTask<R> implements Runnable {
+        private final EntityExecutionLifecycle.GuiTask<R> task;
+        private final Runnable finish;
+
+        private GuiTask(EntityExecutionLifecycle.GuiTask<R> task, Runnable finish) {
+            this.task = task;
+            this.finish = finish;
+        }
+
+        @Override
+        public void run() { task.run(); }
+
+        public void reject() { task.reject(); }
+
+        public R join() {
+            Throwable primary = null;
+            try {
+                return task.join();
+            } catch (RuntimeException | Error failure) {
+                primary = failure;
+                throw failure;
+            } finally {
+                try {
+                    finish.run();
+                } catch (RuntimeException | Error failure) {
+                    var combined = EntityExecutionLifecycle.appendGuiFailure(primary, failure);
+                    if (combined != primary) {
+                        if (combined instanceof RuntimeException runtime) throw runtime;
+                        if (combined instanceof Error error) throw error;
+                    }
+                }
+            }
+        }
+    }
 
     /** Stable installation routing; this identity does not grant access to its mutable state. */
     public final Object projectionIdentity() { return modelBinding.resourceHolder(); }
