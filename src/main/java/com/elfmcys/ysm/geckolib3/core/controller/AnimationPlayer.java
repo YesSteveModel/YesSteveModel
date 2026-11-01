@@ -30,6 +30,16 @@ import org.joml.Vector3f;
 
 import java.util.*;
 
+/**
+ * Owns one playback timeline, its keyframe cursors, and its mutable pose queues.
+ *
+ * <p>Execution: confined to the owning entity's serial execution window. A shared resolution cache
+ * does not grant permission to share this player's timeline or queues.
+ *
+ * <p>Ownership: animation definitions are borrowed from the resource window. Queue getters expose live mutable state for immediate pose consumption.
+ *
+ * <p>Seam: implements [playback state](docs/architecture/animation/controllers-and-playback.md#播放状态) and depends on [resolution and playback lifetimes](docs/architecture/animation/controllers-and-playback.md#解析缓存与播放寿命).
+ */
 public class AnimationPlayer {
     /**
      * 模型所有骨骼
@@ -117,13 +127,14 @@ public class AnimationPlayer {
     }
 
     /**
-     * 此方法设置当前动画，
-     * <p>
-     * 你可以每帧运行此方法，如果每次都传入相同的动画，它将不会重新启动，
-     * <p>
-     * 如果需要重新启动，在该调用之前额外调用 indicateReload 即可。
-     * <p>
-     * 此外，它还可以在动画状态之间平滑过渡。
+     * Selects a playback request without restarting an unchanged stable request.
+     *
+     * <p>Ensures: an unstable request is resolved again. The same resolved animation preserves its timeline;
+     * a different result resets the old playback before scheduling the new animation.
+     * A stable absence remains idle until source invalidation or an explicit reload.
+     *
+     * @param animationName the requested name, or null to reset playback
+     * @param loopTypeOverride the loop override, or null to use the animation's declared loop type
      */
     public void setAnimation(@Nullable String animationName, @Nullable LoopType loopTypeOverride) {
         if (animationName == null) {
@@ -154,9 +165,17 @@ public class AnimationPlayer {
     }
 
     /**
-     * 此方法每帧调用一次，以便填充动画点队列并处理动画状态逻辑。
+     * Advances the timeline and fills pose queues inside the caller's open evaluation.
      *
-     * @param renderTicks 当前 tick + 插值 tick
+     * <p>Requires: the borrowed evaluation belongs to this player's current owner and installation.
+     * The caller consumes the queues before another update, reset, or model replacement.
+     *
+     * <p>Execution: installs the animation context only for this call and clears that context on every exit.
+     * executeEvents controls keyframe dispatch and does not elevate the evaluation's fixed ACTION permission.
+     *
+     * @param renderTicks the owner's animation time in ticks, including the interpolation fraction
+     * @param evaluation the current owner evaluation, borrowed for this call
+     * @param executeEvents whether this update can dispatch event keyframes
      */
     public void process(final float renderTicks, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents) {
         retryAnimation();

@@ -28,7 +28,7 @@
 
 - [完整索引](docs/README.md)
 - [构建指南](docs/build.md)
-- [术语表](docs/glossary.md) / [文档政策](docs/governance/documentation-policy.md)
+- [术语表](docs/glossary.md)
 - [独立格式标准](docs/standards/README.md)
 - [产品决策](docs/product-decisions/README.md)
 - [系统架构](docs/architecture/README.md) / [按问题定位](docs/architecture/README.md#按问题定位)

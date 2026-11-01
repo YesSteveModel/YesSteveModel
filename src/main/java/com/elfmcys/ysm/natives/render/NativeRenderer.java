@@ -16,10 +16,37 @@ import org.jetbrains.annotations.Nullable;
 
 import java.lang.ref.Reference;
 
+/**
+ * Bridges native CPU vertex output to the host's current VertexConsumer.
+ *
+ * <p>Execution: callers use the host render thread and serialize all calls, including calls
+ * for different states. Consumer callbacks must not reenter this renderer or getMatBuffer().
+ * Matrix storage, fallback storage, and the native executor are shared.
+ * Native worker writes complete before JNI returns; this call can wait for those workers.
+ *
+ * <p>Ownership: callers retain the state and consumer for the call. Native code borrows output
+ * ranges only until JNI returns; the host retains buffer, upload, and GPU ownership.
+ *
+ * <p>Seam: implements success-before-submit in the
+ * [host output contract](docs/architecture/rendering/overview.md#顶点输出与宿主接管).
+ */
 public class NativeRenderer {
     private static final int SUCCESS = 1;
     private static final int OUTPUT_REJECTED = 2;
 
+    /**
+     * <p>Requires: modelState is open and excludes extraction, invalidation, and close for this call.
+     * For nonempty output, the consumer, pose, and context describe the current host draw.
+     *
+     * <p>Failure: false commits no vertices. Output capacity or host-matrix rejection preserves
+     * a complete pose; publication damage revokes the state. Exceptions propagate to the caller.
+     * A fallback consumer exception can follow partial host writes and has no rollback.
+     *
+     * @param vertexCount the total reserved vertex count from this state's current publication
+     * @param color host tint in ARGB byte order
+     * @return true after direct advance or complete fallback replay, or after native validation of
+     *     a valid empty publication; this does not mean GPU submission has completed
+     */
     public static boolean render(VertexConsumer vertexConsumer, PoseStack.Pose pose, NativeModelState modelState,
         int vertexCount, int light, int overlay, int color, RenderContextType contextType) {
         if (!modelState.isValid()) {
@@ -99,11 +126,15 @@ public class NativeRenderer {
                     }
                 }
             }
-            accessor.ysm$reserve(vertexCount); // 有必要吗？
+            accessor.ysm$reserve(vertexCount); // TODO: Check whether fallback needs this reservation.
         }
         return new VertexBuffer(null, VertexFormatType.FALLBACK, null);
     }
 
+    /**
+     * @return the shared, 64-byte-aligned matrix carrier: model at byte 0, view at 64,
+     *     projection at 128, and normal at 192; the next call overwrites it
+     */
     @Borrowed
     @Aligned(64)
     public static NativeBuffer getMatBuffer(PoseStack.Pose pose) {
@@ -133,6 +164,12 @@ public class NativeRenderer {
         return ((argb >>> 16) & 0xFF) | (argb & 0xFF00) | ((argb & 0xFF) << 16) | (argb & 0xFF000000);
     }
 
+    /**
+     * JNI returns 1 for completed CPU output, 2 for output-only rejection, and 0 for invalid state
+     * or entry failure. A failed call may have written destination bytes; they must not be committed.
+     * A positive buffer flag selects a direct carrier; otherwise the carrier is int[].
+     * Empty output validates publication without reading the buffer or matrices.
+     */
     private static native int nRender(Object vertexBuffer, int vertexBufferFlag, long matPtr, long modelStatePtr,
         int vertexCount, long lightAndOverlay, int color, long flags, long irisEntityId);
 

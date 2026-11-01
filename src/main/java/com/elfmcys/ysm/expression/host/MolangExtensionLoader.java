@@ -5,10 +5,29 @@ import com.elfmcys.ysm.api.annotation.YsmEntityComponent;
 import java.lang.annotation.ElementType;
 import java.util.*;
 
-/** Called by the client startup owner before it constructs any target factory. */
+/**
+ * Called by the client startup owner before it constructs any target factory.
+ *
+ * <p>Requires: Forge discovery and the non-null host-availability snapshot are complete. This loader
+ * freezes the process collector once; it is not a per-world reload or a repeatable service factory.
+ *
+ * <p>Ensures: normal return exposes one frozen declaration host after every admitted class reaches
+ * its outcome. Rejected classes contribute diagnostics, not placeholders. Admission does not certify
+ * provider thread safety or construct installation-local components.
+ *
+ * <p>Execution: synchronous metadata reads, checker execution, binding, and class initialization on
+ * the startup caller. Discovery itself does not initialize implementation classes.
+ *
+ * <p>Seam: implements [extension qualification and freeze](docs/architecture/integration/overview.md#扩展接纳与声明发布).
+ */
 public final class MolangExtensionLoader {
     private MolangExtensionLoader() {}
 
+    /**
+     * Freezes the process declaration collector and returns its non-null host.
+     *
+     * @throws IllegalStateException if collection has already been sealed; failure does not reopen collection
+     */
     public static ExpressionHost createHost(HostAvailability availability) {
         var mods = net.minecraftforge.fml.ModList.get();
         var admitted = com.elfmcys.ysm.api.internal.MolangDeclarationBootstrap.freeze(
@@ -45,6 +64,7 @@ public final class MolangExtensionLoader {
         return admitted.host();
     }
 
+    /** Returns immutable discovery facts; actual source ownership and declaration qualification occur at admission. */
     public static List<MolangExtensions.Source>
         discover(List<? extends net.minecraftforge.forgespi.language.IModFileInfo> files, ClassLoader loader) {
         var sources = new ArrayList<MolangExtensions.Source>();

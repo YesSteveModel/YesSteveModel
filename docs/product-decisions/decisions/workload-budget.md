@@ -5,15 +5,15 @@
 - Needs:
   - 比较设备表现: [DD.high-end-quality-with-basic-availability](device-quality.md#ddhigh-end-quality-with-basic-availability)
 - Landing:
-  - [governance](../../governance/verification-policy.md#性能验证)
+  - [verification](../../verification/policy.md#性能验证)
   - [implementation](../../architecture/rendering/implementation/frame-execution.md#任务发布与并发边界)
   - [implementation](../../architecture/model-management/catalog/overview.md#实现与验证入口)
   - [implementation](../../architecture/runtime/implementation/execution.md#工作线程与发布线程)
   - [implementation](../../architecture/network/implementation/asset-transfer.md#分发负载保护)
-  - [design](../../architecture/network/overview.md#分发所有权与负载保护)
+  - [design](../../architecture/network/overview.md#传输接管与发送终态)
   - [status](../../status/known-issues/rendering.md#并发与性能)
   - [design](../../architecture/rendering/overview.md)
-  - [design](../../architecture/model-management/catalog/overview.md#逐项发布与替换)
+  - [design](../../architecture/model-management/catalog/overview.md#seam-contract)
   - [design](../../architecture/runtime/overview.md)
   - [design](../../architecture/network/overview.md)
 
@@ -51,4 +51,4 @@
 | 100 名玩家以内 | 正常运作；重载模型列表并分发模型时，平均 MSPT 增量低于 5 ms，lag spike 不超过 10 ms |
 | 200 名玩家 | 面向未来 Bukkit 插件端适配的前瞻测试，不据此扩大当前平台支持承诺 |
 
-MSPT 指每个服务端 tick 的处理耗时。10 ms 是不应突破的优化目标，与其他数值一样属于软目标。
+MSPT 指每个服务端 tick 的处理耗时。

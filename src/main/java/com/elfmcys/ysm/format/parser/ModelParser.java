@@ -14,7 +14,14 @@ import java.io.UncheckedIOException;
 import java.nio.channels.Channels;
 import java.util.Objects;
 
-/** Coordinates raw source access and model assembly. The caller retains ownership of the VFS. */
+/**
+ * Coordinates raw source access and model assembly. The caller retains ownership of the VFS.
+ *
+ * <p>Execution: synchronous parsing and I/O. The caller excludes concurrent mutation or close of
+ * each borrowed VFS and output. Independent calls do not share a parser owner.
+ *
+ * <p>Seam: implements [capture before raw conversion](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换). A scan or written container is not a resource Ready result.
+ */
 public final class ModelParser {
     public static final String CANONICALIZER_PROFILE_VERSION = "2";
     public static final String PARSER_PROFILE_VERSION = "1";
@@ -22,6 +29,15 @@ public final class ModelParser {
 
     private ModelParser() {}
 
+    /**
+     * Freezes the directory observations and bytes consumed by the scan, then returns their owning capture.
+     *
+     * <p>Ensures: later compilation through this capture does not reopen the original source. This is
+     * a frozen parse closure, not an atomic snapshot of a concurrently changing filesystem.
+     *
+     * <p>Ownership: borrows source only during this call and does not close it. The caller closes the
+     * returned capture after its last compilation or borrowed-buffer use. Failed capture releases its copies.
+     */
     public static CapturedModel capture(VirtualFileSystem source) {
         var data = new CapturedSourceData(Objects.requireNonNull(source, "source"));
         try {
@@ -49,6 +65,7 @@ public final class ModelParser {
             defaultAnimations, true, new MolangFrontend(observer)).output(), "output");
     }
 
+    /** Writes a staged container synchronously; callers own the result path and subsequent validation or deletion. */
     public static RawCompileResult compile(VirtualFileSystem vfs, Path outputDirectory,
         DefaultAnimationFilter defaultAnimations) {
         return compile(vfs, outputDirectory, defaultAnimations, ModelOriginVersion.CURRENT_RELEASE);
@@ -67,7 +84,13 @@ public final class ModelParser {
             result.diagnostics());
     }
 
-    /** Uses the caller-owned channel so cache staging cannot reopen a mutable path. */
+    /**
+     * Writes through a caller-owned channel so cache staging cannot reopen a mutable path.
+     *
+     * <p>Requires: exclusive use of output and a stable VFS, normally a frozen capture. The label is
+     * result metadata, not a path this overload reopens. Failure may leave partial output; the storage
+     * owner retains responsibility for closing and discarding it. No Catalog publication occurs here.
+     */
     public static RawCompileResult compile(VirtualFileSystem vfs, java.nio.channels.WritableByteChannel output,
         Path label, DefaultAnimationFilter defaultAnimations, String originVer) {
         var source = new RawModelSource(Objects.requireNonNull(vfs));

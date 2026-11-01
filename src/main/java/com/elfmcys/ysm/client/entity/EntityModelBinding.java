@@ -14,10 +14,27 @@ import java.lang.ref.WeakReference;
 import java.util.*;
 import java.util.function.LongSupplier;
 
-/** Owns complete installations and exact installation failures, never resource acquisition. */
+/**
+ * Owns complete installations and exact installation failures; resource acquisition belongs to the demand coordinator.
+ *
+ * <p>Execution: the caller holds the owner's installation window for acceptance, replacement, and release.
+ * This binding does not join tasks or reserve that window for a later call.
+ *
+ * <p>Ownership: an accepted attempt owns the supplied lease until a holder takes ownership or the attempt closes it.
+ *
+ * <p>Seam: implements [complete installation and replacement](docs/architecture/animation/entity-lifecycle.md#模型使用与完整安装) and [installation publication](docs/architecture/animation/entity-lifecycle.md#安装发布结果).
+ */
 final class EntityModelBinding implements AutoCloseable {
     @FunctionalInterface
     interface ResourceFactory {
+        /**
+         * Builds a private complete candidate using the supplied lease, without publishing the holder.
+         *
+         * <p>Ownership: a non-null holder must own that exact lease. The acceptance operation closes the lease
+         * if creation throws or returns null. Candidate cleanup must not close the previous installation.
+         *
+         * @return the prepared candidate, or null when preparation rejects the attempt
+         */
         @Nullable
         AnimatableEntity.ResourceHolder create(ResourceLease lease, boolean fallback);
     }
@@ -148,6 +165,20 @@ final class EntityModelBinding implements AutoCloseable {
         return null;
     }
 
+    /**
+     * Consumes one installation attempt inside an already established installation window.
+     *
+     * <p>Ensures: INSTALLED follows holder publication, including a later observer failure.
+     * Private candidate failure preserves the old holder. Failed activation of shared mutable state ends the old use without rollback.
+     *
+     * <p>Failure: stale request or preparation identity returns STALE. Exact remembered failure or candidate
+     * rejection returns REJECTED. Runtime installation failure records the exact request/content pair.
+     * Required-default failure before publication propagates from this boundary.
+     *
+     * <p>Ownership: all entered outcomes consume the supplied lease. The caller must not close or reuse that lease afterward.
+     *
+     * @return the publication result; this method does not return BUSY
+     */
     ClientDemandCoordinator.InstallationResult accept(ResourceRequest request, ResourceLease lease, boolean fallback,
         boolean full, ResourceFactory factory) {
         if (!assigned || !lease.isCurrent(request)) {

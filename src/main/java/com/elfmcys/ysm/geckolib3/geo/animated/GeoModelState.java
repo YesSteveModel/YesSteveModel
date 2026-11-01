@@ -14,12 +14,33 @@ import org.joml.Matrix4f;
 
 import java.util.function.Consumer;
 
+/**
+ * Owns a native frame state and publishes its matching Java model and locator map.
+ *
+ * <p>Execution: the entity owner serializes extraction, locator consumption, rendering, and close.
+ * Locator callbacks run inline and must not replace, extract, or close the state during the visit.
+ *
+ * <p>Ownership: the owner retains the installed model's resource lifetime through consumption.
+ * This class keeps a model reference but does not acquire a resource lease for a borrowed result.
+ *
+ * <p>Seam: implements Java publication in the
+ * [frame state contract](docs/architecture/rendering/overview.md#帧状态发布与借用).
+ */
 public final class GeoModelState implements Closeable {
     private final NativeModelState nativeState = NativeModelState.create();
     private final ReferenceArrayList<ShortArrayList> activeLocatorMap = new ReferenceArrayList<>(0);
 
     private GeoModel model;
 
+    /**
+     * <p>Requires: animatedModel's binding and complete attribute array stay unchanged during the call.
+     * The owner has ended consumption of the previous result.
+     *
+     * <p>Failure: false or a Java publication exception leaves no consumable result.
+     * The previous result is revoked before extraction starts; it is not a fallback frame.
+     *
+     * @return true after native views and the matching locator map are fully published, including empty geometry
+     */
     public boolean extract(AnimatedGeoModel animatedModel) {
         invalidate();
         try {
@@ -78,10 +99,18 @@ public final class GeoModelState implements Closeable {
         return nativeState.getTranslucentVertexCount() != 0;
     }
 
+    /**
+     * @return the embedded state for the owner's current consumption window; no independent close
+     *     or publication authority transfers to the caller
+     */
     public NativeModelState getNativeState() {
         return nativeState;
     }
 
+    /**
+     * Uses the locator visit contract, or calls applyDefaultPose then visitor once for an empty group.
+     * The default branch restores the pushed frame in finally; both callbacks must balance their own stack changes.
+     */
     public void visitLocatorGroupOrDefault(GeoLocator locator, PoseStack poseStack, Consumer<PoseStack> visitor,
         Consumer<PoseStack> applyDefaultPose) {
         if (locatorGroupSize(locator) > 0) {
@@ -97,6 +126,14 @@ public final class GeoModelState implements Closeable {
         }
     }
 
+    /**
+     * <p>Requires: this state is valid and locator belongs to its model's locator type.
+     * The callback preserves stack depth and consumes each temporary locator pose before returning.
+     *
+     * <p>Failure: callback exceptions propagate unchanged. The original top pose and normal are restored in finally.
+     *
+     * <p>Execution: invokes visitor synchronously once per active locator, in the published bone order.
+     */
     public void visitLocatorGroup(GeoLocator locator, PoseStack poseStack, Consumer<PoseStack> visitor) {
         if (model.locatorType() != locator.type()) {
             throw new IllegalArgumentException("locator type mismatch");
@@ -130,6 +167,9 @@ public final class GeoModelState implements Closeable {
         }
     }
 
+    /**
+     * @return the active group size in this valid publication; locator must belong to the current model's type
+     */
     public int locatorGroupSize(GeoLocator locator) {
         if (model.locatorType() != locator.type()) {
             throw new IllegalArgumentException("locator type mismatch");
@@ -145,6 +185,7 @@ public final class GeoModelState implements Closeable {
         return model;
     }
 
+    /** Revokes Java consumption and closes the native owner after all outstanding consumers have returned. */
     @Override
     public void close() {
         invalidate();

@@ -20,7 +20,19 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
-/** Sequential, exact-media access to verified chunks for one playback attempt. */
+/**
+ * One admitted playback's sequential capability for an exact representation and media item.
+ *
+ * <p><b>Invariant:</b> Each cursor requests indices from zero in order, with one pending request and
+ * at most two delivered chunks. Captured content and fetcher identity cannot authorize another media item
+ * or replacement connection. Restart creates a fresh cursor only after complete input consumption and release.
+ *
+ * <p><b>Ownership:</b> A successful interest transfers one Chunk to its receiver. Cursor close cancels
+ * pending interest but does not close chunks already delivered. Chunk close returns its window slot;
+ * shared backing can remain alive through other references. Playback, target and transfer have separate ends.
+ *
+ * <p><b>Seam:</b> [exact sequential audio reads](docs/architecture/model-management/audio/overview.md#接纳与读取).
+ */
 public final class VerifiedChunkAccess implements AutoCloseable {
     private final ModelFileIdentity representation;
     private final SoundMedia media;
@@ -81,6 +93,14 @@ public final class VerifiedChunkAccess implements AutoCloseable {
         return media;
     }
 
+    /**
+     * Starts the next sequential read without waiting for its bytes.
+     *
+     * @param index the next index in the media's chunk table, starting at zero
+     * @return an owned interest; successful result delivery transfers a Chunk that the receiver must close
+     * @throws IllegalArgumentException if the index is not the next sequential index
+     * @throws IllegalStateException if closed, another request is pending, or two chunks remain held
+     */
     public synchronized Interest request(int index) {
         if (closed) {
             throw new IllegalStateException("Sound chunk access is closed");
@@ -102,7 +122,13 @@ public final class VerifiedChunkAccess implements AutoCloseable {
         return interest;
     }
 
-    /** Reopens this exact grant only after its current sequential cursor reached EOF. */
+    /**
+     * Transfers this exhausted cursor's exact source capability into a fresh cursor for the next loop.
+     * The old cursor becomes closed. Restart does not repeat playback admission or change the fetcher.
+     *
+     * @return the owned replacement cursor
+     * @throws IllegalStateException if closed, input remains, a request is pending, or a chunk is still held
+     */
     public synchronized VerifiedChunkAccess restart() {
         if (closed) {
             throw new IllegalStateException("Sound chunk access is closed");

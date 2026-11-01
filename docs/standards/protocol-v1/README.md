@@ -208,6 +208,4 @@ ID 9 `SelectModelRequest.intent_id` 为 field 4、`uint64`；ID 10 `SelectModelR
 
 Client 仅将当前 connection、当前未结束 intent 的 ID 10 归入对应反馈；迟到、旧连接、0 或未知 status 不制造成功。ACCEPTED 只表示 disposition，不是安装完成。该字段不进入 ID 17，不提供排序、可靠投递或第二条 selection authority；ID 17 仍按到达机会应用实际模型状态。
 
-本次字段变更在未发布的 `0.5.0-unstable` schema 中同步更新双端，不双读旧格式，也不为此次改动递增版本；这是本次未发布开发基线的同步例外，不放宽后续版本的兼容性或升级规则。
-
 每个 client session 的首个已接纳 `PlayerStateReport` 必须是 FULL；同一 exact model session 保存这个真实 baseline，没有 baseline 的 DELTA 必须拒绝。DELTA 只修改出现字段，后续周期 FULL 是独立机会，不因先前失败立即重发。`PlayerStateReport`、`PlayerStateUpdate` 和 `StarredModelsSnapshot` 不携带 sequence/revision；本地提交与 peer 接纳分开解释，合法消息可以遗漏、重复、延迟或按不同到达顺序应用。发送、接收处理或广播失败都不得创建 ACK、重放、待发、失败恢复或回滚状态。`ModelId` 必须恰好 32 bytes。

@@ -19,7 +19,7 @@
 
 ## 正确性与失败处理
 
-- `NativeModelState` 的 cube-info Java view 在 native 扩容后仍引用旧数组，首次非空获取已实机复现越界。需修复并验证首次使用/扩容；Extract 成功不证明 view 可读。
+- `NativeModelState` 的 cube-info Java view 当前已使用 native 返回的数组，消除了旧实现扩容后仍引用原数组的路径。首次非空获取与扩容的运行回归仍需确认；Extract 成功不证明 view 可读。
 - 整模/第一人称输出的失败撤销、同帧恢复和 locator 尾组已有真实 JNI 回归；native 失败不自动切换输出路径，consumer 异常不承诺回滚。完整交接规则见[顶点输出](../../architecture/rendering/implementation/vertex-output.md)。
 - Serialized baked cache payload 不能独立证明 SIMD capability 匹配；读取未复核几何浮点有限性及语义域。Bake 对极端有限输入派生的 plane/tangent 也缺完整结果域验证。
 - Native 只校验 position/normal matrix 数值有限，不验证二者匹配，该组合也缺端到端验证。

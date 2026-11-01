@@ -10,12 +10,12 @@
   - [implementation](../../architecture/model-management/catalog/overview.md#实现与验证入口)
   - [implementation](../../architecture/model-management/client-resources/implementation/resource-ownership.md)
   - [implementation](../../architecture/model-management/storage/implementation/persistence.md)
-  - [design](../../architecture/model-management/catalog/overview.md#逐项发布与替换)
+  - [design](../../architecture/model-management/catalog/overview.md#seam-contract)
   - [design](../../architecture/model-management/catalog/overview.md#扫描进度投影)
   - [design](../../architecture/client-presentation/overview.md#本地目录进度)
   - [implementation](../../architecture/client-presentation/implementation/page-runtime.md#本地目录进度)
   - [design](../../architecture/model-management/client-resources/overview.md#引用撤销与物理关闭)
-  - [design](../../architecture/model-management/storage/overview.md#精确身份与原子提交)
+  - [design](../../architecture/model-management/storage/overview.md#精确缓存与持久工作)
   - [design](../../architecture/model-management/storage/overview.md#共享存储与清理)
 
 ## DD.single-current-catalog

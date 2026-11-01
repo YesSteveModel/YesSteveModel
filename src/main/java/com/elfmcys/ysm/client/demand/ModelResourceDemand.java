@@ -12,7 +12,18 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
-/** One consumer's acquisition, independent of selection, rendering and shared cache ownership. */
+/**
+ * Advances one consumer's demand without waiting for its asynchronous acquisitions.
+ *
+ * <p><b>Execution:</b> The demand owner serializes advance, inspection and close. Access callbacks can
+ * complete inline. A shared preparation does not merge this consumer's lease or failure with another use.
+ *
+ * <p><b>Ownership:</b> This object owns every acquisition until advance returns its Ready lease.
+ * The receiving consumer then owns closure. Closing the demand cancels only untransferred interests;
+ * a late result is closed by the attempt that still owns it.
+ *
+ * <p><b>Seam:</b> [independent demand reception](docs/architecture/model-management/demand/overview.md#用途准备与独立接收).
+ */
 public final class ModelResourceDemand implements AutoCloseable {
     public enum Mode {
         READY, CACHED, OFFLINE, ONLINE
@@ -66,7 +77,15 @@ public final class ModelResourceDemand implements AutoCloseable {
         return attempt != null || lease != null;
     }
 
-    /** Transfers a current Ready lease to the caller; the caller must retain or release it. */
+    /**
+     * Tries the allowed acquisition level and transfers at most one Ready lease.
+     * A lower level retires an incompatible pending attempt. A prior local failure does not prevent
+     * reuse of a Ready target produced by another consumer.
+     *
+     * @param allowed the non-null maximum acquisition level permitted by current demand admission
+     * @return an independently owned Ready lease, or null when closed, pending, denied, absent or failed;
+     *     inspect {@link #failure()} and {@link #denied()} to distinguish recorded rejection or failure
+     */
     public @Nullable ResourceLease advance(Mode allowed) {
         if (closed)
             return null;

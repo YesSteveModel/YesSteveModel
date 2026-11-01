@@ -14,7 +14,21 @@ import java.util.function.BooleanSupplier;
 import net.minecraft.world.entity.Entity;
 import org.jetbrains.annotations.Nullable;
 
-/** One round owns its inputs and effects; each expression exclusively borrows the execution state. */
+/**
+ * Carries one invocation round and exclusively lends its execution frame to one top-level expression at a time.
+ *
+ * <p>Invariant: a top-level call fixes ACTION permission to the host window intersected with the compiled
+ * entry permission. Nested calls cannot elevate that permission. Cancellation and generation eligibility remain dynamic.
+ * A typed program fallback does not clear the round's first failure or authorize a batch commit.
+ *
+ * <p>Execution: the owner serializes round setup, expression binding, execution, release, and close.
+ * Active calls use the recorded execution thread. Live subject and host views are borrowed inputs, not snapshots.
+ *
+ * <p>Ownership: providers must not retain the context, event, views, or frame beyond the current call.
+ * Deferred requests must contain copied captures rather than borrowed execution state.
+ *
+ * <p>Seam: implements [call permissions and budgets](docs/architecture/animation/molang-runtime.md#调用许可与预算) and [invocations and effects](docs/architecture/animation/molang-runtime.md#invocation-与效果).
+ */
 public final class MolangContext<E extends Entity> implements RoamingWriteContext, MolangContextView<E>, ExecutionFrame {
     public enum LogicalPhase {
         OBSERVATION, UPDATE, ACTION
@@ -174,6 +188,15 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
         return (InvocationInputs<E>)inputs;
     }
 
+    /**
+     * Stages an authorized prepared effect or copied deferred request without dispatching external effects.
+     *
+     * <p>Failure: missing ACTION permission, stale eligibility, unsupported requests, capacity, or host
+     * prevalidation failure rejects submission. Submission is not a promise that the whole round will commit.
+     *
+     * <p>Ownership: an accepted effect remains referenced by the round until commit or discard.
+     * The batch does not acquire closing ownership of resources captured by an effect.
+     */
     public void submit(EffectRequest request) {
         requireAction();
         Objects.requireNonNull(request, "request");
@@ -256,6 +279,12 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
         bindExpression(location, id, phase != LogicalPhase.OBSERVATION);
     }
 
+    /**
+     * Selects one expression while the round is idle and eligible.
+     *
+     * <p>Execution: the caller must release this binding after the expression's top-level cleanup.
+     * hostWindow can restrict the round's permission; it cannot grant ACTION in an observation round.
+     */
     public void bindExpression(String location, int id, boolean hostWindow) {
         requireIdle();
         verifyEligible();
@@ -287,6 +316,12 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
         animationSelected = true;
     }
 
+    /**
+     * Borrows the bound frame for one top-level call and resets that call's execution budgets.
+     *
+     * <p>Requires: the owner has bound an expression and no call is active. The caller must pair success
+     * with endTopLevel() on this thread, including after program failure.
+     */
     @Override
     public void beginTopLevel(boolean entryAllowsAction) {
         if (active || !bound)
@@ -301,6 +336,12 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
         active = true;
     }
 
+    /**
+     * Releases this thread's frame borrow and clears call-local permission and budget state.
+     *
+     * <p>Failure: unbalanced user-function scopes report FRAME_STATE after releasing the active borrow.
+     * Round failure and staged effects remain under the enclosing transaction's control.
+     */
     @Override
     public void endTopLevel() {
         requireActive();
@@ -351,6 +392,12 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
         batch.append(command, ownerProvenance);
     }
 
+    /**
+     * Ends an idle round and drops its borrowed input references before external dispatch.
+     *
+     * <p>Requires: all expression bindings and active calls have ended. Close neither commits effects
+     * nor closes the host objects that the round borrowed. A closed context cannot start another round.
+     */
     public void closeRound() {
         requireIdle();
         closed = true;

@@ -33,7 +33,7 @@ Portable profile 定义以下格式：
 
 外部格式 payload 解码后必须产生与 descriptor 宽高一致的 RGBA8 图像。Consumer 不得用文件扩展名替代 token，也不得猜测未知格式。颜色空间、ICC、方向 metadata、alpha 转换和尾随媒体字节策略尚未形成跨 codec 的稳定 YSM profile；producer 应输出已应用方向、无需外部颜色状态即可消费的静态图像，跨实现一致性测试必须固定最终 RGBA8 结果。
 
-`ZTX` 是当前实现可见的私有扩展 token，但端序、颜色、严格长度、版本升级和 fixtures 尚未冻结，因此不能用于 M2。实现可以显式接受它并报告 vendor extension 状态，但不得把结果标为 M2。
+`ZTX` 是当前实现可见的私有扩展 token，端序、颜色、严格长度、版本升级和 fixtures 尚未冻结。实现可显式接受并报告 vendor extension 状态，不得标为 M2。
 
 PBR texture set 的 `uv` 必须存在，`normal` 和 `specular` 可缺省。三者分别是 base texture、法线扩展和高光扩展的资源角色；通道编码与 shader 解释尚未冻结，不能仅凭字段名承诺跨 renderer 的逐像素等价。
 

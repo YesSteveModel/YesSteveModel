@@ -17,10 +17,11 @@
 | 模型冷加载与图片交接 | 内存 Ready 与可选持久化分离、原始冷编译证明、共享声音首块及一次图片解码交接已接入；客户端非音频字节政策已删除，数量与借用保护保留 | 超旧额度输入、完整 MAIN 新 JVM 重开及额度隔离已有定向证据；真实 integrated 联合场景、GL 大图和长期 RSS 仍未验证，固定内容收益仍未通过；[交接验证边界](known-issues/model-management.md#模型加载与图片交接) |
 | Java 动画与模型声音 | Controller、typed AOT、固定许可、实体显式交接与来源缓存已接入；JNI 及 Forge 正常／受控提前返回、捕获失败后返回和退出账本有局部证据 | 可选模组注入组合、游戏性能、双端同步、设备声音和长期回收未完成验证；[实体所有权验证](../verification/entity-animation-ownership.md)、[动画问题](known-issues/animation.md) |
 | Molang 重复编译与宿主预算 | 完整入口契约共享分析、source／entry 分离和显式宿主策略已接入；三档规模、冷暖来源／资格及代表模型 GUI/FULL 完整准备通过 | Windows Forge 已观察该模型冷暖预览、选用与第一／第三人称；完整动作、逐骨骼视觉、声音及净性能收益仍未验证；[复现与边界](../verification/animation-bake-benchmark.md#模型输入与共享规模) |
-| Native CPU renderer | Bake/extract/render、SIMD 与并行顶点生成已有生产入口；hermetic clang Release 聚焦回归通过 | Cube-info Java view 已复现越界；MSVC、完整游戏视觉及其他平台未通过验收；[渲染问题](known-issues/rendering.md)、[构建问题](known-issues/format-and-schema.md#codec导入与平台) |
+| Native CPU renderer | Bake/extract/render、SIMD 与并行顶点生成已有生产入口；hermetic clang Release 聚焦回归通过 | Cube-info Java view 已改用返回数组，首次使用与扩容回归仍需确认；MSVC、完整游戏视觉及其他平台未通过验收；[渲染问题](known-issues/rendering.md)、[构建问题](known-issues/format-and-schema.md#codec导入与平台) |
 | GUI 模型准备与取景 | 完整闭包、主体特化、独立图驻留与每 render 帧卡片交接已接入；容量、所有权和 native 等价有局部回归；当前卡片与生成图已有有限像素验证；完整地址、Ctrl 分派和跨根 pack 导航有局部测试 | 真实 Ctrl 点击、剪贴板和文件管理器响应、完整模型/动画矩阵、输入往返与最终主循环成本未验；[取景边界](known-issues/rendering.md#gui-取景)、[冷准备性能](known-issues/animation.md#gui-与模型冷准备) |
 | 第一人称与重复消费 | 标准/SW 手部和初始背景已接入持久局部输出；受控 JNI 与部分实机路径通过 | 完整资源生命周期、动态 renderer oracle、native 成本与用户视觉未验；[第一人称证据](known-issues/rendering.md#重复消费与第一人称) |
 | 图像 codec | 解码支持 PNG、JPEG、WebP、AVIF、ZTX；编码支持 WebP、AVIF、ZTX；不支持 JPEG XL | 平台与 codec 组合未完整验证；[格式问题](known-issues/format-and-schema.md#codec导入与平台) |
 | 平台入口 | Windows x64、GNU/Linux x64、专用 Android arm64 环境有产品入口；x64 要求 SSE4.1 | Windows 7、x86-64-v1、macOS 和其他架构尚不可用；[平台需求](../product-decisions/requirements/req-platform-availability.md) |
 | Legacy v1/v2/v3 | 已接入 current container 单向导入；Windows x64 真实语料已重开验证 | Remote、游戏播放、headless、其他平台与听测未验；[格式问题](known-issues/format-and-schema.md#codec导入与平台) |
+| 可选扩展接入 | 类级资格与 handler 准备已接入 | Event bus 注册失败的半注册回滚未闭环；[接入问题](known-issues/integration.md) |
 | 独立 Backend / 外部模型源 / GPU renderer | 未实现 | [Backend](../future/independent-backend.md)、[外部模型源](../future/external-model-sources.md)、[GPU renderer](../future/gpu-compute-renderer.md) |

@@ -19,7 +19,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import us.hebi.quickbuf.ProtoMessage;
 
-/** Common bounded-range transmission over one owned source capability. */
+/**
+ * Produces bounded fragments from one owned byte, lease or file-range capability.
+ *
+ * <p><b>Ownership:</b> Successful construction owns its source until idempotent close. The caller owns
+ * the packet until dispatch admission succeeds. Cancel seals production eligibility but does not close
+ * a source still borrowed by dispatch. Close also invokes the request's release hook, even if source close fails.
+ *
+ * <p><b>Failure:</b> Source admission does not guarantee later range I/O. Production failure belongs
+ * to the accepted request and must not become legal absence or a successful send.
+ *
+ * <p><b>Seam:</b> [range production failure](docs/architecture/network/overview.md#失败归属).
+ */
 final class RangePacket implements CancellablePacket {
     static final int FRAGMENT_BYTES = 24 * 1024;
 

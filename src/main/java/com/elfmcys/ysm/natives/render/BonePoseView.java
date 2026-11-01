@@ -9,6 +9,19 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Objects;
 
+/**
+ * Reads the native state's borrowed, 128-byte-per-bone pose layout.
+ *
+ * <p>Requires: the consumer retains the publishing NativeModelState and finishes access before
+ * its next extract, invalidate, or close. Local extraction permits access only to published indices.
+ * This view has no owner reference and cannot detect an expired native address.
+ *
+ * <p>Ownership: scalar reads copy values. Matrix reads copy into the supplied destination;
+ * that matrix does not borrow native storage.
+ *
+ * <p>Seam: consumes the
+ * [frame view publication](docs/architecture/rendering/implementation/frame-execution.md#输入输出与状态).
+ */
 public final class BonePoseView {
     static final int STRIDE = 128;
 

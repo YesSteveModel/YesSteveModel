@@ -9,7 +9,19 @@ import us.hebi.quickbuf.ProtoMessage;
 
 import java.util.function.Supplier;
 
-/** Validates and publishes one complete inbound message before invoking its handler. */
+/**
+ * Admits a complete frame as a fixed typed message and transfers its payload to the registered handler.
+ *
+ * <p><b>Ensures:</b> Handler entry follows message-ID matching, encoded-size and attachment-policy
+ * checks, and complete protobuf parsing. The handler can trust those structural guarantees; business
+ * validation, exact connection identity and protected effects remain its separate responsibilities.
+ *
+ * <p><b>Execution:</b> Dispatch invokes the handler on the caller's networking entry and does not grant
+ * main-thread domain access. A handler that defers work must retain the required backing and capture
+ * its source connection. A thrown handler failure closes the payload; normal return transfers closure duty.
+ *
+ * <p><b>Seam:</b> [frame admission versus domain authority](docs/architecture/network/overview.md#接收准入与执行权限).
+ */
 final class ProtocolInbound {
     private ProtocolInbound() {}
 

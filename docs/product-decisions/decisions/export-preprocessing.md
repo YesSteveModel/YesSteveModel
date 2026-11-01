@@ -13,7 +13,7 @@
   - [standard](../../standards/model-schema/assets-and-validation.md#分层验证与发布)
   - [design](../../architecture/asset-pipeline/model-compatibility.md#容器语义冻结)
   - [implementation](../../architecture/asset-pipeline/implementation/conversion-and-export.md#preview-取得与显式-export)
-  - [implementation](../../architecture/asset-pipeline/overview.md#预览与导出)
+  - [implementation](../../architecture/asset-pipeline/overview.md#导出批次与提交)
   - [design](../../architecture/model-management/catalog/overview.md#逻辑位置与接纳)
   - [design](../../architecture/asset-pipeline/overview.md)
   - [design](../../architecture/runtime/overview.md)

@@ -4,10 +4,28 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Modifier;
 import java.util.List;
 
+/**
+ * Qualification boundary before an optional event handler is initialized or registered.
+ *
+ * <p>Seam: implements the class-loading part of
+ * [extension failure isolation](docs/architecture/integration/overview.md#失败隔离与声明寿命); event-bus registration remains the loader's responsibility.
+ */
 final class ExtensionEventHandlerRegistration {
 
     private ExtensionEventHandlerRegistration() {}
 
+    /**
+     * Runs the generated checker before initializing a public concrete handler with a public no-arg constructor.
+     *
+     * <p>Ensures: incompatible qualification returns an outcome with no handler. A non-null handler is
+     * constructed but not registered; warnings alone do not prohibit registration. Checker success does
+     * not guarantee later event callbacks, concurrency, or third-party business behavior.
+     *
+     * <p>Execution: synchronous class loading and initialization on the caller. Failure records the
+     * failing stage and original cause; it does not undo arbitrary constructor side effects.
+     *
+     * @throws Failure if checker loading, checking, or handler construction fails in the isolated channels
+     */
     static Outcome prepare(String handlerBinaryName, ClassLoader loader) throws Failure {
         String checkerBinaryName = checkerBinaryName(handlerBinaryName);
         Class<?> checker;
@@ -66,6 +84,7 @@ final class ExtensionEventHandlerRegistration {
         return throwable;
     }
 
+    /** Handler is null exactly when this outcome does not permit registration; warning status is independent. */
     record Outcome(Object handler, String checkerBinaryName, String status, boolean coverageComplete,
         List<String> issues) {
         boolean shouldRegister() {

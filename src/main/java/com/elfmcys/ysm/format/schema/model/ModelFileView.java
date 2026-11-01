@@ -34,6 +34,21 @@ import java.util.Map;
 import java.util.function.BooleanSupplier;
 import org.jetbrains.annotations.Nullable;
 
+/**
+ * Validated model metadata and derived lookup views; backing storage remains owned by the content source.
+ *
+ * <p>Ensures: construction establishes container/model identity agreement and the supported Manifest
+ * reference profile. Consumers reuse those guarantees for this immutable representation. Unread payloads,
+ * actual-source admission, media decoding, and host readiness remain separate checks.
+ *
+ * <p>Ownership: metadata access does not retain a source handle. Payload reads borrow the supplied
+ * ChunkDataSource under its execution and lifetime contract; missing optional media is distinct from failure.
+ *
+ * <p>Failure: container parsing retains its checked and unchecked rejection channels. Invalid model
+ * identity and Manifest reference rules are reported as IOException; no partial view is published.
+ *
+ * <p>Seam: implements [model metadata validation](docs/architecture/asset-pipeline/overview.md#分层验证与发布).
+ */
 public class ModelFileView {
     private final boolean supported;
 
@@ -47,6 +62,7 @@ public class ModelFileView {
     private final PreviewSource thumbnailPreviewSource;
     private final PreviewSource iconPreviewSource;
 
+    /** Borrows an exclusively available channel for synchronous, position-changing metadata I/O; does not close it. */
     public ModelFileView(SeekableByteChannel file) throws IOException {
         this(ModelFileIdentityReader.readContainer(file), ModelFileIdentityReader.classifyAccess(file));
     }
@@ -198,6 +214,17 @@ public class ModelFileView {
         return readMetadata(metadataPrefix, null);
     }
 
+    /**
+     * Validates exactly the preamble and Manifest prefix without fetching remaining chunks.
+     *
+     * <p>Requires: a non-null, readable prefix whose bytes remain unchanged for this call. The input
+     * buffer remains caller-owned and may be released after return.
+     *
+     * <p>Ensures: reusable is only a sharing hint. It never skips input verification; equal metadata
+     * may return that same view. Failure publishes no partial view and does not invalidate reusable.
+     *
+     * @throws IOException if layout, identity, or the supported Manifest profile is invalid
+     */
     public static ModelFileView readMetadata(UniBuffer metadataPrefix, @Nullable ModelFileView reusable)
         throws IOException {
         if (!(metadataPrefix instanceof ArrayBuffer)) {
@@ -334,10 +361,16 @@ public class ModelFileView {
         return renderTargets;
     }
 
+    /** Returns the immutable target descriptor, or null for an absent id; performs no acquisition. */
     public @Nullable RenderTargetView getRenderTarget(String targetId) {
         return renderTargetsById.get(targetId);
     }
 
+    /**
+     * Returns a target whose presence the caller requires.
+     *
+     * @throws IllegalArgumentException if targetId is absent; use getRenderTarget for an expected miss
+     */
     public RenderTargetView requireRenderTarget(String targetId) {
         var target = getRenderTarget(targetId);
         if (target == null) {

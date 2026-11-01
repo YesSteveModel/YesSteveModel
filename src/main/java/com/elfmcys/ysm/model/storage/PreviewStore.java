@@ -29,7 +29,19 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 
-/** Independently replaceable preview images, weakly associated by container id only. */
+/**
+ * Stores independently replaceable images weakly associated by container ID.
+ * A preview proves neither model content identity nor access permission.
+ *
+ * <p><b>Invariant:</b> Replacement versions belong to this store and container. An observation is
+ * a commit/reuse qualification, not a filesystem lock. A usable in-memory preview can outlive failed
+ * optional persistence; strict management commit instead requires persistent replacement through its gate.
+ *
+ * <p><b>Execution:</b> Reads and writes use synchronous I/O. Configure the observer before concurrent
+ * use. Store methods do not establish the caller's session or management-effect authority.
+ *
+ * <p><b>Seam:</b> [preview persistence and effects](docs/architecture/model-management/storage/overview.md#独立图片与提交资格).
+ */
 public final class PreviewStore implements PreviewStorage {
     public static final int MAX_STORED_BYTES = 16 * 1024 * 1024;
     public static final int MAX_DIMENSION = 4_096;
@@ -163,7 +175,13 @@ public final class PreviewStore implements PreviewStorage {
         }
     }
 
-    /** Management must distinguish an inaccessible cache from a successfully observed miss. */
+    /**
+     * Observes and validates one local image without converting an inaccessible cache into a miss.
+     *
+     * @param containerId the non-null weak association key
+     * @return empty for absent or invalid image content; otherwise an owned preview with its observed version
+     * @throws IOException if the guarded cache cannot be read
+     */
     public Optional<EncodedPreview> probe(Hash256 containerId) throws IOException {
         var version = observe(containerId);
         var stored = readEncoded(containerId);
@@ -186,7 +204,14 @@ public final class PreviewStore implements PreviewStorage {
         return accept(containerId, ArrayBuffer.borrow(bytes));
     }
 
-    /** Returns the valid in-memory image even when optional cache persistence fails. */
+    /**
+     * Validates an image and attempts optional persistence while preserving a usable memory result.
+     *
+     * @param containerId the non-null weak association key
+     * @param bytes the encoded bytes borrowed for this call; the caller retains their ownership
+     * @return an owned valid preview even when optional persistence or its observer fails
+     * @throws IOException if image admission fails before a usable preview exists
+     */
     public EncodedPreview accept(Hash256 containerId, UniBuffer bytes) throws IOException {
         Objects.requireNonNull(containerId, "containerId");
         var preview = decode(bytes);
@@ -246,6 +271,14 @@ public final class PreviewStore implements PreviewStorage {
         }
     }
 
+    /**
+     * Commits a validated image as a persistent replacement through the caller's effect gate.
+     *
+     * @param containerId the non-null weak association key
+     * @param preview the admitted image borrowed for the complete synchronous write
+     * @param gate the non-null current-effect owner that serializes final replacement with retirement
+     * @throws IOException if persistence fails or the effect gate rejects the replacement
+     */
     public void commit(Hash256 containerId, EncodedPreview preview, AtomicSharedCache.CommitGate gate)
         throws IOException {
         Objects.requireNonNull(containerId, "containerId");

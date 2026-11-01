@@ -49,7 +49,19 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
-/** Deterministic, index-free cache for verified remote representations. */
+/**
+ * Stores validated exact metadata and chunks in one guarded remote cache region.
+ *
+ * <p><b>Invariant:</b> Metadata admission establishes the prefix's structure, identity and references;
+ * unread payloads still require their own verified read. Validated cache bytes carry no grants or session
+ * eligibility. Network fetchers remain request inputs and do not become persistent content authority.
+ *
+ * <p><b>Execution:</b> Metadata probes and commits use synchronous local I/O. Directory guards check
+ * the observed operation, not arbitrary later path mutation. The storage owner must preserve its directory
+ * identity for the operation; a source admitted earlier can still fail during a later read.
+ *
+ * <p><b>Seam:</b> [exact remote storage](docs/architecture/model-management/storage/overview.md#精确缓存与持久工作).
+ */
 public final class RemoteModelStore implements AutoCloseable {
     private static final String METADATA_FILE = "metadata.bin";
     private static final String METADATA_DIRECTORY = "metadata";
@@ -127,7 +139,13 @@ public final class RemoteModelStore implements AutoCloseable {
         }
     }
 
-    /** Single-file metadata lookup. This method never calls the network fetcher. */
+    /**
+     * Reads one exact metadata cache entry without calling a network fetcher.
+     *
+     * @param identity the non-null exact model/container/manifest tuple
+     * @return empty for missing or invalid cached metadata; otherwise content bound to this storage region
+     * @throws IOException if cache access fails; callers must not report an access failure as legal absence
+     */
     public synchronized Optional<RemoteModelContent> probeMetadata(ModelFileIdentity identity) throws IOException {
         requireOpen();
         Objects.requireNonNull(identity, "identity");
@@ -146,7 +164,15 @@ public final class RemoteModelStore implements AutoCloseable {
         }
     }
 
-    /** Validation completes before the atomic replacement that publishes the new prefix. */
+    /**
+     * Validates the exact metadata prefix before atomically publishing its cache file.
+     * Success does not establish complete model-body availability or content activation.
+     *
+     * @param identity the non-null expected model/container/manifest tuple
+     * @param metadataPrefix the non-null complete prefix borrowed through validation and persistence
+     * @return the validated content bound to this cache region
+     * @throws IOException if content admission or persistent replacement fails
+     */
     public RemoteModelContent commitMetadataPrefix(ModelFileIdentity identity, UniBuffer metadataPrefix)
         throws IOException {
         requireOpen();

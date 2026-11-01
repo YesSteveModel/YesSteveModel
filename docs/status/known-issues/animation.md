@@ -5,6 +5,7 @@
 ## 求值与语义
 
 - `isMoving` 有逻辑错误，影响依赖它的 `CodedAnimationController`。
+- LOOP 播放一次跨越多个完整周期时，当前事件推进只处理旧周期尾部和最终采样周期，中间周期可能漏发离散指令。尚未用回归确定多周期事件的期望与边界规则；需沿[主时间线因果](../../architecture/animation/controllers-and-playback.md#指令区间推进)核对，不能视为已证实的全部事件语义。
 - 骨骼基准 snapshot 错用 `children_hidden` 初始化 `cubes_hidden`，可能混淆两个可见性通道。
 - Controller 旋转混合仍保留不完整的历史行为。当前 Schema 已无 `blend_via_shortest_path`，reader 固定按 `false` 处理，模型不能表达该选择。
 - 旧 `ysm.bone_absolute_pivot` 不会解析为当前 `ysm.bone_pivot_abs`，依赖旧名的行为缺口仍在。
@@ -12,6 +13,8 @@
 - 花嫁酒狐 main/arm 完整静态集合已在原 limits 内通过 headless 冷编译；原控制器经生产 frontend/coded-controller 在独立 cold/disk-warm JVM 中核对分支、命令和返回值。旧资格 family 的预算失败已不适用，但正常选模后的声音、连招、reload 与 Better Combat 环境仍未验。制品与 oracle 见[集成验证](../../verification/molang-declarations.md)。
 
 ## Context、线程与生命周期
+
+- 共享状态激活已经开始后，安装路径仍将 `OutOfMemoryError` 写入 exact request/content 的拒收记忆；外层 OOM 隔离没有撤销该记录。同内容可能持续拒收至 reload 或身份变化，与[OOM 不永久标坏内容](../../product-decisions/decisions/failure-isolation.md#bcordinary-failure-keeps-game-running)冲突。控制流已确认，未作共享激活 hook 的故障注入；不能由已有私有候选 OOM 回归推导此分支通过。
 
 <a id="default-startup"></a>
 

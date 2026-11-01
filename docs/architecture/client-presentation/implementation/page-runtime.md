@@ -1,6 +1,6 @@
 # 页面 runtime 的落实关系
 
-本页落实[页面作用域](../overview.md#运行作用域与所有权)、[页面结果交接](../overview.md#页面需求与结果)和[选择导航](../overview.md#选择与资源需求)。共同取得和用途准备机制见[需求协调](../../model-management/demand/overview.md)。
+本页落实[页面作用域](../overview.md#运行作用域与所有权)、[页面结果交接](../overview.md#页面需求与展示消费)和[选择导航](../overview.md#选择与资源需求)。共同取得和用途准备机制见[需求协调](../../model-management/demand/overview.md)。
 
 ## 页面与资源 owner
 

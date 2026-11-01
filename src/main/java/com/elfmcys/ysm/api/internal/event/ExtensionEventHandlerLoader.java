@@ -9,12 +9,27 @@ import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.event.lifecycle.FMLLoadCompleteEvent;
 import net.minecraftforge.forgespi.language.ModFileScanData;
 
-/** Internal Forge discovery and registration bridge for {@link YsmEventHandler}. */
+/**
+ * Internal Forge discovery and registration bridge for {@link YsmEventHandler}.
+ *
+ * <p>Execution: discovery and registration run in the load-complete listener's invocation window.
+ * Registration does not grant render-thread access to constructors or later callbacks.
+ *
+ * <p>Failure: qualification failures are isolated per handler. Registration exceptions are logged,
+ * but this bridge currently does not undo any listeners installed before register throws.
+ *
+ * <p>Seam: implements [optional handler admission](docs/architecture/integration/overview.md#失败隔离与声明寿命); see the
+ * [partial-registration rollback gap](docs/status/known-issues/integration.md#可选-handler-注册回滚).
+ */
 public final class ExtensionEventHandlerLoader {
     private static final String ANNOTATION_NAME = YsmEventHandler.class.getName();
 
     private ExtensionEventHandlerLoader() {}
 
+    /**
+     * Attaches one load-complete registration callback to the supplied bus. The bootstrap caller invokes
+     * this once per intended bus; this method does not deduplicate repeated attachment or own bus shutdown.
+     */
     public static void attach(IEventBus eventBus) {
         eventBus.addListener((FMLLoadCompleteEvent event) -> registerAll(eventBus));
     }

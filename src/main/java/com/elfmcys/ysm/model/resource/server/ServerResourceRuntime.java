@@ -38,7 +38,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
-/** Shared server retention for verified chunk bytes and replaceable encoded preview bytes. */
+/**
+ * Retains verified chunk bytes and replaceable encoded preview bytes for server transmissions.
+ *
+ * <p><b>Execution:</b> Acquisition enqueues a bounded request. The server owner drives tick to admit
+ * work and deliver results; callers must not block that owner waiting for a returned future.
+ * Workers read sources and return completions. Close seals requests and waits for worker termination.
+ *
+ * <p><b>Ownership:</b> Each delivered BytesLease is independent. Eviction and preview invalidation
+ * remove reuse eligibility without revoking delivered leases. Detached preview reads can still serve
+ * their original requests, but cannot replace newer retained bytes. Future cancellation relinquishes
+ * only that result; source work can continue for other requests.
+ *
+ * <p><b>Seam:</b> [server byte retention and old requests](docs/architecture/model-management/server-resources/overview.md#图片失效与旧请求).
+ */
 public final class ServerResourceRuntime implements AutoCloseable {
     static final long IDLE_NANOS = Duration.ofSeconds(30).toNanos();
     static final long MAX_CACHED_BYTES = 64L * 1024 * 1024;
@@ -102,6 +115,14 @@ public final class ServerResourceRuntime implements AutoCloseable {
         return workers;
     }
 
+    /**
+     * Requests verified stored bytes without granting business access to the model.
+     *
+     * @param content the non-null admitted exact content; the request owner must already check authorization
+     * @param chunk the non-null chunk descriptor from that content's established chunk table
+     * @return a non-null future that transfers one open lease on success; capacity rejection is BusyException,
+     *     and source I/O or verification failure completes exceptionally
+     */
     public CompletableFuture<BytesLease> acquireChunk(ModelContent content, AssetContainerView.ChunkInfo chunk) {
         Objects.requireNonNull(content, "content");
         Objects.requireNonNull(chunk, "chunk");
@@ -123,6 +144,13 @@ public final class ServerResourceRuntime implements AutoCloseable {
         return result;
     }
 
+    /**
+     * Requests encoded preview bytes in the content's storage region without decoding image media.
+     *
+     * @param content the non-null content that supplies storage provenance and container identity
+     * @return a non-null future; empty means an observed cache miss, present transfers one open lease,
+     *     and access failure or capacity rejection completes exceptionally
+     */
     public CompletableFuture<Optional<BytesLease>> acquirePreview(ModelContent content) {
         var result = new CompletableFuture<Optional<BytesLease>>();
         enqueue(new PreviewRequest(
@@ -413,6 +441,12 @@ public final class ServerResourceRuntime implements AutoCloseable {
         }
     }
 
+    /**
+     * Retains one immutable encoded byte entry independently of cache membership.
+     * The receiver owns idempotent close and must exclude close from an in-progress read.
+     * Size, share and copy require an open lease. A shared slice retains its own backing beyond lease close;
+     * logical close does not promise immediate pooled-buffer reclamation.
+     */
     public static final class BytesLease implements AutoCloseable {
         private Entry entry;
 

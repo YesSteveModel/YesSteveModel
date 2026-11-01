@@ -31,7 +31,7 @@
 | A-LEGACY-READ | 2 | 2 | 有界 buffer ingress 与完整模型解码衍生 source 边界及图片峰值表示 |
 | A-ONE-ARTIFACT | 2 | 2 | 统一出口下的 staging 与 legacy result 交付 |
 | D-CAPABILITY | 2 | 2 | Typed admission 与物理 filesystem sink |
-| D-EFFECT | 2 | 2 | 动作求值窗口门禁同时约束普通 effect 与模型声音提交；允许 effect 后的部分失败仍没有全局回滚 |
+| D-EFFECT | 2 | 2 | 动作门禁同时约束普通 effect 与模型声音；batch 提交前失败丢弃，外部提交后不承诺跨系统回滚 |
 | D-REUSE | 2 | 2 | 本地替代与跨会话 exact reuse |
 | D-SESSION | 2 | 2 | Session identity 与有限工作 retirement |
 | A-ARCHIVE | 2 | 1 | 借用 extraction 衍生 owning capture |
@@ -40,6 +40,6 @@
 | A-FAILURE-MEMORY | 1 | 1 | 模型请求与 lazy 资源失败资格共用同一 exact registry |
 | D-RECOVER | 1 | 1 | 模型请求与 lazy 资源的失败记忆 |
 
-扩展候选：D-LOOP 的主数 R=0、D=0，经 Inference 到具体策略后的候选 R=10；D-GUI 为 0/0，候选 R=5；D-IMAGE 为 0/0，候选 R=2。D-GUI 的扩展范围经当前意图到 MN-20，只表示短命 entity 需求与失败资格相遇，不表示 GUI 拥有模型失败记录。AN-08/13、NR-03 的存在有证据，但根理由仍是 H，不能加入 Fact 祖先的 R。A-FORCED 的 1/1 只证明一个现存特权衍生一个维护机制，产品必要性仍未定。
+扩展候选：D-LOOP 的主数 R=0、D=0，经 Inference 到具体策略后的候选 R=10；D-GUI 为 0/0，候选 R=5；D-IMAGE 为 0/0，候选 R=2。D-GUI 的扩展范围经当前意图到 MN-20，只表示短命 entity 需求与失败资格相遇，不表示 GUI 拥有模型失败记录。AN-08、NR-03 的存在有证据，但根理由仍是 H，不能加入 Fact 祖先的 R。A-FORCED 的 1/1 只证明一个现存特权衍生一个维护机制，产品必要性仍未定。
 
 可复算方法：从 Fact 表展开 `From → each(To)`；按根表的同一 DD 链接合并产品短键，每个候选先计这些键的邻接并集为 D，再做有 visited 去重的遍历，遇到机制页列出的生产 ID 则计 R，同时继续沿其因果边走。对表外关系、节点引用数、普通调用、含机制名称的文字不计数。投影图中的折叠集合也不参与计算。合并摘要只用于此视图，不改写根表中的适用范围或机制的独立删除条件。

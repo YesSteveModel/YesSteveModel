@@ -1,12 +1,12 @@
 # JNI 与内存
 
-本页定位[JNI 所有权契约](../overview.md#jni-与所有权)中的同步借用、输出采用和关闭责任。Java wrapper、派生 view 和 native backing 的寿命分别判断。
+本页定位[JNI 所有权契约](../overview.md#jni-能力与结果交付)中的同步借用、输出采用和关闭责任。Java wrapper、派生 view 和 native backing 的寿命分别判断。
 
 ## Buffer 传递
 
 `BufferArgument` 与 `BufferInput` 在 JNI 两侧传递并验证有界范围；描述符只用于本次调用，不是持久 handle。Critical array 的地址不能逃出同步窗口；direct input 不复制 backing，原 owner 应覆盖调用期。
 
-`BufferOutput` 将 owning allocation 交给 `NativeHeapBuffer` Storage，释放协议与分配配对。接收方显式关闭 Storage，或将整个 Storage 交给 GC wrapper。所有 `slice()` 均只借用；`SharedBuffer.ownedSlice()` 保留共同 GC owner；`copy()` 建立独立 Storage。三者不能互换，具体入口见[Buffer 与所有权](../../../infrastructure.md#buffer-与所有权)。`Image.probe` 保留 GC 管理的输入，像素输出与压缩 backing 独立。
+`BufferOutput` 将 owning allocation 交给 `NativeHeapBuffer` Storage，释放协议与分配配对。接收方显式关闭 Storage，或将整个 Storage 交给 GC wrapper。所有 `slice()` 均只借用；`SharedBuffer.ownedSlice()` 保留共同 GC owner；`copy()` 建立独立 Storage。三者不能互换，具体入口见[Buffer 与所有权](../../../development/infrastructure.md#buffer-与所有权)。`Image.probe` 保留 GC 管理的输入，像素输出与压缩 backing 独立。
 
 `NativeArchive.getFile()` 借用 archive 缓存，下次 extract 可覆盖。需要跨读取或异步保留时，调用方先复制；这正是[raw capture](../../asset-pipeline/implementation/conversion-and-export.md#raw-capture-与编译)的输入边界。
 
@@ -28,7 +28,7 @@ flowchart LR
     Wrapper -. 派生借用 .-> View["payload / NIO view"]
 ```
 
-几何返回应先完成映射写回且无 pending exception。音频与 legacy 结果先在 native RAII 下构造载体及全部 view，再交付 handle。Java 在调用前准备 adoption factory；wrapper/Cleaner 注册失败与后续 cleanup 共用一次释放状态，不分享半成品关闭权。通用构造回滚见[基建](../../../infrastructure.md#生命周期与构造回滚)。
+几何返回应先完成映射写回且无 pending exception。音频与 legacy 结果先在 native RAII 下构造载体及全部 view，再交付 handle。Java 在调用前准备 adoption factory；wrapper/Cleaner 注册失败与后续 cleanup 共用一次释放状态，不分享半成品关闭权。通用构造回滚见[基建](../../../development/infrastructure.md#生命周期与构造回滚)。
 
 `AudioNormalizer.Result` 一次保活首页与全部 chunks，关闭使派生 view 失效。Legacy result 在协议校验前已经 owning，失败即关闭；其 `acquire()` 可创建共享 backing 的独立 handle。`serialize` 的 owning bytes 与被借用模型是两个独立 owner。
 

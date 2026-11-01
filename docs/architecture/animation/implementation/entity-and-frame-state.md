@@ -1,6 +1,6 @@
 # 实体状态的落实关系
 
-本页落实[完整安装与替换](../entity-lifecycle.md#完整安装与替换)、[结束边界](../entity-lifecycle.md#暂停reset-与-retire)及[时间推进](../overview.md#时间推进与观察)。
+本页落实[完整安装与替换](../entity-lifecycle.md#模型使用与完整安装)、[结束边界](../entity-lifecycle.md#暂停reset-与-retire)及[时间推进](../overview.md#时间推进与观察)。
 
 ## 实体级所有权
 

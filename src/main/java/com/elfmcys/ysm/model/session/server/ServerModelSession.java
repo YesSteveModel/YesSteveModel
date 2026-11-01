@@ -22,7 +22,19 @@ import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-/** Authoritative catalog, grants, selection, and forced-selection mode for one player. */
+/**
+ * Owns negotiation, committed catalog authority, grants and selection for one adapter-owned connection.
+ *
+ * <p><b>Invariant:</b> Negotiation ACTIVE does not imply a committed catalog. A committed authority
+ * is a complete value; notification failure cannot undo that value. Resource permission applies
+ * at request admission, while an accepted effect follows its exact member incarnation.
+ *
+ * <p><b>Execution:</b> Methods synchronize this object's state. The server adapter still owns
+ * exact-connection checks and main-thread capability writes. A returned authority is a snapshot,
+ * not a reservation against later policy or catalog changes.
+ *
+ * <p><b>Seam:</b> [session authority commit](docs/architecture/model-management/sessions/overview.md#权威提交与通知).
+ */
 public final class ServerModelSession {
     private final Supplier<CatalogSnapshot> offeredCatalog;
     private final boolean syncRoaming;
@@ -88,6 +100,15 @@ public final class ServerModelSession {
         return active() && playerStateReportPolicy.acceptsProjection(report) && (full || playerStateFullAccepted);
     }
 
+    /**
+     * Records the baseline frontier after the domain owner applies the report's requested facts.
+     * Validation or receipt alone must not call this method. Later best-effort notification does not roll it back.
+     *
+     * <p><b>Seam:</b> [real report baseline](docs/architecture/network/player-state.md#表现报告与真实基线).
+     *
+     * @param full whether the successfully applied report establishes a FULL baseline
+     * @throws IllegalStateException if the session is inactive or a DELTA has no accepted FULL baseline
+     */
     public synchronized void commitPlayerStateReport(boolean full) {
         if (!active() || !full && !playerStateFullAccepted) {
             throw new IllegalStateException("Player-state report has no FULL baseline");
@@ -197,6 +218,17 @@ public final class ServerModelSession {
         return SelectionResult.ACCEPTED;
     }
 
+    /**
+     * Tests current admission policy for a new request against the committed authority.
+     * Callers must apply this gate before acquiring protected sources; a cache hit grants no permission.
+     * Forced selection can admit private runtime chunks without a grant under restricted authorization.
+     * The architecture leaves that exception's policy precedence unresolved.
+     *
+     * @param modelId the requested model identity
+     * @param kind the requested resource category
+     * @param restrictedAuth whether the current server policy restricts private runtime content
+     * @return false when the session, publication, member or access policy rejects new use
+     */
     public synchronized boolean canRequest(Hash256 modelId, AssetRef.Kind kind, boolean restrictedAuth) {
         if (!active() || !publicationCommitted) {
             return false;
@@ -292,13 +324,29 @@ public final class ServerModelSession {
         memberIncarnations = Map.of();
     }
 
+    /**
+     * Captures one commit gate for an admitted request's exact published member.
+     * This method does not replace the request's access check.
+     *
+     * @param identity the exact metadata identity admitted by the request owner
+     * @return empty if no active committed member exists; otherwise an independent, one-commit gate
+     */
     public synchronized Optional<Effect> effect(ModelFileIdentity identity) {
         var incarnation = memberIncarnations.get(identity);
         return active() && publicationCommitted && incarnation != null ? Optional.of(new Effect(identity, incarnation))
             : Optional.empty();
     }
 
-    /** A request's effect retires with the exact connection/member, independently of grants. */
+    /**
+     * One request's commit right for an exact session member, independent of later grant changes.
+     *
+     * <p><b>Execution:</b> Commit and retirement share the session monitor. The replacement must execute
+     * only the prepared atomic replacement; it must not wait for work that needs this session monitor.
+     * Cancellation or member replacement rejects a later commit with {@link StaleEffectException}.
+     * An I/O failure from the replacement remains an I/O failure and does not set the committed flag.
+     *
+     * <p><b>Seam:</b> [request effect lifetime](docs/architecture/model-management/sessions/overview.md#成员观察与管理提交).
+     */
     public final class Effect implements AtomicSharedCache.CommitGate {
         private final ModelFileIdentity identity;
         private final Object incarnation;

@@ -15,7 +15,7 @@
 
 此基准测预热 JVM 的冷 artifact 编译，host 不启用可选模组 provider。它不代表首次启动的 JIT 状态，也不覆盖 `fp_arm`、其他 target、动画烘焙或游戏帧时间。`prepareBenchmark` 可导出 JDK、classpath 和 native 路径，供外部 runner 直接启动 JMH。
 
-通用运行参数、native 基准和对照的证据要求见[持续性能基建](../tools/benchmark/README.md)。完整动画准备、宿主消费和帧期仍需对应工作量的独立测量，不能从此编译基准推导。
+通用运行参数、native 基准和对照的证据要求见[持续性能基建](../tools/benchmark/README.md)。
 
 `PlayerMolangCompileBenchmark --probe` 另从实际落盘 artifact 核对 class 总字节数。读取和校验位于独立 probe，不进入 JMH 主计时。
 

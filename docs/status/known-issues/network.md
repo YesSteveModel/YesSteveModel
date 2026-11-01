@@ -9,3 +9,7 @@
 - 玩家指派与动画投影的首次 FULL/DELTA 交错、完整多人矩阵未联合验证。隔离 Forge 已覆盖限制叠加、屏蔽期间新选择、恢复与旧连接拒绝；未加载 YSM 的主体已分别验证无指派时保持宿主、强制指派后显示目标。协议规则见[玩家状态](../../architecture/network/player-state.md)。
 - Dedicated 选模的 CLIENT-only 类故障已修复，隔离 classloader 和真实 dedicated 选模、退出重进已有证据；不能外推所有控制消息或网络交错。
 - 授权变更仍缺全部通知失败、多人配置切换和音频后端交错。受控回归覆盖 public/grant/限制/强制选择、已接纳工作保留与资格恢复；隔离 Forge 已观察 AUTH 撤权后结束旧安装，再用同一 cache 时降为 default。规则见[授权决策](../../product-decisions/decisions/model-authorization.md)与[资格投影](../../architecture/network/implementation/catalog-sync.md#selection-与-request-admission)。
+
+## 连接建立失败的宿主传播
+
+`ClientSessionRuntime` 建立远端 activation 时，存储打开的 I/O 或运行异常会在清理当前 session 后重新抛出。`ClientLoggedEvent` 的登录监听器未隔离该异常，因此异常可越过监听器进入宿主事件路径。实际是否阻断正常 Minecraft 连接仍缺故障注入验证；不能据 session 已清理推定宿主可用性已受保护。该路径尚不能支撑[普通失败不终止游戏或连接](../../product-decisions/decisions/failure-isolation.md#bcordinary-failure-keeps-game-running)的保证。

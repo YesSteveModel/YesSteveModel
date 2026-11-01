@@ -21,7 +21,21 @@ import org.apache.commons.io.input.BoundedInputStream;
 import org.apache.commons.lang3.NotImplementedException;
 import org.apache.commons.lang3.SerializationException;
 
-/** Parses and validates container metadata. Chunk payload I/O belongs to ChunkDataSource implementations. */
+/**
+ * Parses and validates container metadata. Chunk payload I/O belongs to ChunkDataSource implementations.
+ *
+ * <p>Ensures: normal return establishes supported container version, table structure, and preamble
+ * verification. It does not establish schema semantics, payload availability, or ordinary chunk hashes.
+ *
+ * <p>Execution: synchronous, position-changing I/O on a borrowed channel. Callers exclude concurrent
+ * channel use and close; the returned descriptor does not retain that channel.
+ *
+ * <p>Failure: malformed or unsupported input can produce IOException or unchecked format exceptions;
+ * callers must not interpret access failure as evidence that stored content is corrupt.
+ *
+ * <p>Seam: implements the container layer of
+ * [validation](docs/architecture/asset-pipeline/overview.md#分层验证与发布).
+ */
 public final class AssetContainerReader {
     private AssetContainerReader() {}
 
@@ -190,6 +204,13 @@ public final class AssetContainerReader {
         return readPreamble(containerPreamble, 0, containerPreamble.length);
     }
 
+    /**
+     * Reads the supplied array range without retaining it. The range must contain the complete verified
+     * preamble but need not contain ordinary chunk payloads; descriptor offsets remain container-relative.
+     *
+     * @param offset first byte in the array, non-negative
+     * @param size byte count within the array; the caller must not mutate this range during parsing
+     */
     public static AssetContainerView readPreamble(byte[] containerPreamble, int offset, int size) throws IOException {
         try (var channel = new ByteArraySeekableChannel(containerPreamble, offset, size)) {
             return read(channel);

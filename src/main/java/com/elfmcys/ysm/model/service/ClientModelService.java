@@ -54,6 +54,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+/**
+ * Client composition boundary for catalog projection, resource acquisition, and demand progression.
+ *
+ * <p>Invariant: a published service has completed required preparation and transferred its close
+ * responsibility to the process system. Ordinary catalog activation is a separate operation.
+ *
+ * <p>Execution: live client operations run in the render owner's window. Publication accessors are
+ * thread-visible snapshots, not lifetime pins. Process teardown must exclude new client operations.
+ *
+ * <p>Ownership: child accessors borrow service-owned components. Acquired leases, batches, and
+ * playback uses retain their own release obligations; disconnect does not close the process system.
+ *
+ * <p>Seam: implements [client startup](docs/architecture/runtime/overview.md#启动与进入世界) and [client shutdown](docs/architecture/runtime/overview.md#结束与替换). Resource results follow the
+ * [client-resource contract](docs/architecture/model-management/client-resources/overview.md#seam-contract) and do not imply entity installation.
+ */
 public final class ClientModelService implements AutoCloseable {
     private static volatile ClientModelService INSTANCE;
 
@@ -184,6 +199,18 @@ public final class ClientModelService implements AutoCloseable {
         }
     }
 
+    /**
+     * Completes required preparation before publishing the service; returns the existing service if running.
+     *
+     * <p>Requires: non-null process system and fixed host availability, in the client setup render-owner
+     * window. Repeated calls do not reconfigure the existing service from the supplied arguments.
+     *
+     * <p>Execution: may block while pumping host work for required preparation. Ordinary catalog activation
+     * does not wait for a scan result.
+     *
+     * <p>Failure: required preparation or ownership rejection closes the private candidate and propagates
+     * the original cause. Ordinary catalog failure does not revoke an already published service.
+     */
     public static synchronized ClientModelService start(ModelSystem system, HostAvailability availability) {
         java.util.Objects.requireNonNull(system, "system");
         java.util.Objects.requireNonNull(availability, "availability");
@@ -238,6 +265,11 @@ public final class ClientModelService implements AutoCloseable {
         return candidate;
     }
 
+    /**
+     * Returns the borrowed published service; the reference does not prevent shutdown.
+     *
+     * @throws IllegalStateException if no client service is published
+     */
     public static ClientModelService instance() {
         var service = INSTANCE;
         if (service == null) {
@@ -246,6 +278,7 @@ public final class ClientModelService implements AutoCloseable {
         return service;
     }
 
+    /** Returns the current publication snapshot; absence does not start or await a service. */
     public static Optional<ClientModelService> current() {
         return Optional.ofNullable(INSTANCE);
     }
@@ -262,11 +295,25 @@ public final class ClientModelService implements AutoCloseable {
         return catalogManager.snapshot();
     }
 
+    /**
+     * Attempts a catalog reload without awaiting it, then returns the new resource-session identity.
+     * The connection owner must retain and use this exact identity for later session operations.
+     */
     public Object beginConnection() {
         system.catalog().reload();
         return renderTargetManager.beginSession();
     }
 
+    /**
+     * Starts remote projection for the current resource session and returns its activation owner.
+     *
+     * <p>Requires: the connection owner has selected the current session and live fetch capabilities.
+     * This method is not an atomic rollback boundary: fetcher binding and projection selection precede
+     * opening the remote store.
+     *
+     * @throws IOException if the remote store cannot be opened; the connection owner must terminate
+     *         the failed activation through its session failure path
+     */
     public RemoteCatalogActivation beginRemoteActivation(
         com.elfmcys.ysm.model.resource.client.remote.RemoteMetadataFetcher fetcher,
         com.elfmcys.ysm.model.resource.client.remote.RemoteChunkFetcher chunkFetcher, Object sessionOwner)
@@ -377,6 +424,7 @@ public final class ClientModelService implements AutoCloseable {
         renderTargetManager.reportActiveUse(request);
     }
 
+    /** Returns an independent asset batch whose submission and close responsibility belong to the caller. */
     public ClientAssetBatch createAssetBatch() {
         return new ClientAssetBatch(assetRepository.openBatch());
     }
@@ -389,6 +437,12 @@ public final class ClientModelService implements AutoCloseable {
         return audioRuntime.createPlayback(source);
     }
 
+    /**
+     * Ends current remote use and restores local projection, retaining the process catalog and service.
+     *
+     * <p>Requires: the connection owner has already matched the exact departing session. This facade
+     * resets demand, audio, and catalog projection without independently rejecting a stale identity.
+     */
     public void disconnect(Object sessionOwner) {
         demands.reset();
         audioRuntime.stopAll();
@@ -396,6 +450,7 @@ public final class ClientModelService implements AutoCloseable {
         catalogManager.endRemote();
     }
 
+    /** Advances owned terminal queues and demand on the render owner; callers must exclude teardown. */
     public void tick() {
         system.tickCatalog();
         system.tickServerRuntime();
@@ -416,6 +471,15 @@ public final class ClientModelService implements AutoCloseable {
         return catalogManager.scanProgress();
     }
 
+    /**
+     * Removes service publication, seals domain owners, then drains notification and resource workers.
+     *
+     * <p>Execution: serialized with startup and other close calls. May block without a timeout; must not
+     * run on an owned worker or depend on further host ticks. Interrupt status is restored after draining.
+     *
+     * <p>Failure: cleanup continues across owners and propagates the first cause with later causes
+     * suppressed. A later close waits for this call to leave the monitor but does not retry its cleanup.
+     */
     @Override
     public void close() {
         synchronized (ClientModelService.class) {

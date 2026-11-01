@@ -16,8 +16,8 @@
   - [standard](../../standards/asset-container.md#container-verification)
   - [standard](../../standards/asset-container.md#chunk-table)
   - [design](../../architecture/network/overview.md)
-  - [design](../../architecture/model-management/storage/overview.md#精确身份与原子提交)
-  - [design](../../architecture/model-management/sessions/overview.md#远端权威与激活)
+  - [design](../../architecture/model-management/storage/overview.md#精确缓存与持久工作)
+  - [design](../../architecture/model-management/sessions/overview.md#目录权威与内容激活)
   - [design](../../architecture/model-management/audio/overview.md#接纳与读取)
 
 ## DD.catalog-before-model-body

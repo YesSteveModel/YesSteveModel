@@ -12,7 +12,18 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
 
-/** Slots own uses; acquisition and physical release keep their original owners. */
+/**
+ * Slots own uses; acquisition and physical release keep their original owners.
+ *
+ * <p>Execution: page/slot access and host publication are render-owner confined. Only a claimed
+ * Preparation may cross to its designated worker; its result must return to the render owner.
+ *
+ * <p>Ownership: construction takes the batch's close responsibility. Slots borrow acquired inputs
+ * from that batch and hold independent resident uses. Claimed preparation has its own completion
+ * obligation and must be published or closed even after this page ends.
+ *
+ * <p>Seam: implements [page result handoff](docs/architecture/client-presentation/overview.md#页面需求与展示消费) and [page retirement](docs/architecture/client-presentation/overview.md#生命周期与失败).
+ */
 public final class PageImages implements ClientDemandCoordinator.PageAction {
     private final ClientAssetBatch batch;
     private final ResidentImages owner;
@@ -49,7 +60,10 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
         return image;
     }
 
-    /** Frame execution advances acquisition, then explicitly claims its CPU work. */
+    /**
+     * Advances acquisition without decoding or host publication. READY only checks resident use;
+     * ONLINE also submits this batch once. A closed page is a no-op. CPU work requires a separate claim.
+     */
     public void advanceAcquisition(ModelResourceDemand.Mode allowed) {
         if (closed)
             return;
@@ -60,6 +74,7 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
         }
     }
 
+    /** Synchronously prepares and publishes claimed CPU work on the caller, for non-frame consumers. */
     @Override
     public void advance(ModelResourceDemand.Mode allowed) {
         advanceAcquisition(allowed);
@@ -98,6 +113,7 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
         if (failure instanceof RuntimeException error) throw error;
     }
 
+    /** A page-owned projection; loading, absence, and failure are distinct from host-texture readiness. */
     public final class Image {
         private Supplier<ImageRequest> requestFactory;
         private ImageRequest request;
@@ -160,6 +176,7 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
                 ignored -> request.current(input), () -> source);
         }
 
+        /** Returns a borrowed live host texture or null; does not start work or extend the slot's lifetime. */
         public @Nullable TextureHolder texture() {
             return closed || use == null ? null : use.texture();
         }
@@ -184,6 +201,10 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
             return !closed && use == null && failure == null && input != null && request.current(input);
         }
 
+        /**
+         * Claims at most one preparation for this content identity. A null result means no claim was
+         * obtained; it is not proof of absence. The caller owns a returned claim and must execute or close it.
+         */
         public @Nullable ResidentImages.Preparation claimPreparation() {
             try {
                 return cpuReady() ? owner.claim(request, input) : null;
@@ -193,6 +214,10 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
             }
         }
 
+        /**
+         * Consumes this slot's prepared result on the render owner, including closed-page rejection.
+         * Publication failure is recorded and propagated; the caller must not retry a consumed result.
+         */
         public void publish(ResidentImages.Prepared image) {
             if (closed) {
                 image.close();

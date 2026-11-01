@@ -36,6 +36,20 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.network.NetworkEvent;
 import org.jetbrains.annotations.Nullable;
 
+/**
+ * Bridges typed player-state messages to exact-session domain facts and client projections.
+ *
+ * <p><b>Execution:</b> Receive entry validates structure and the source header, then enqueues
+ * domain work. Server execution checks the original connection and session again before capability writes.
+ * Client execution uses the original connection gate before projection. Mutable protobuf input must not
+ * change after enqueue.
+ *
+ * <p><b>Invariant:</b> FULL baseline acceptance follows successful application of all requested facts.
+ * Best-effort observation, update construction and broadcast occur after that frontier and cannot roll it back.
+ * Invalid reports and missing owners do not establish a baseline.
+ *
+ * <p><b>Seam:</b> [player-state application frontier](docs/architecture/network/player-state.md#seam-contract).
+ */
 public final class PlayerStateHandler {
     private static final int MAX_ANIMATION_ID_BYTES = 256;
 

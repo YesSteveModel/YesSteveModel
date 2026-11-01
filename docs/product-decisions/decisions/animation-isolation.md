@@ -10,7 +10,6 @@
   - [implementation](../../architecture/animation/implementation/entity-and-frame-state.md#实体级所有权)
   - [implementation](../../architecture/animation/controllers-and-playback.md#副作用阶段)
   - [design](../../architecture/animation/overview.md)
-  - [design](../../architecture/animation/overview.md)
 
 ## DD.animation-state-is-entity-local
 

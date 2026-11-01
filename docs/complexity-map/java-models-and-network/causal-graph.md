@@ -45,7 +45,7 @@ flowchart LR
 | 子图 | 可整体退出的条件 | 仍有独立来源的义务 |
 |---|---|---|
 | `A-RESOURCE → MN-17`：共享 Pending 工作 → 最后 interest/迟到完成协调；`A-RESOURCE → MN-06`：共享 Ready → 引用保活 | 不再共享待完成工作，才可能去掉 interest 聚合；改变完成资源的 owner 方案才可能替换可达性管理 | 多消费者已取得的资源仍有效；cancel 不能等同 physical close，session 身份仍由 MN-11 保证 |
-| `D-HOLD → MN-05`；文件型 content 的未来读取用精确实例排序，已完成资源由 MN-06 可达性保活 | 取消 direct 副本已移除完整复制、专属锁和清理；若取消延迟读取才可能进一步删除 source-instance 状态 | Direct 原件未来读取允许局部失败；已开始读的完整验证、用户来源处置权和 cache bytes 验证仍独立 |
+| `D-HOLD → MN-05`；文件型 content 的未来读取用精确实例排序，已完成资源由 MN-06 可达性保活 | 取消延迟读取才可能删除 source-instance 状态 | Direct 原件未来读取允许局部失败；已开始读的完整验证、用户来源处置权和 cache bytes 验证仍独立 |
 | `A-TEXTURE-PUBLISH → MN-18 → P-UPLOAD-BURST → MN-19`：host 发布 → 集中 owner 工作 → 延后 admission | Host 发布策略或有证据的调度预算改变后，可收缩排队及等待期 guard | GPU/host thread affinity、失败 candidate 不污染 Ready、旧 lease 保活仍在；仅改队列名称无收益 |
 | `MN-10 → P-REACQUIRE → MN-20`：保留恢复机会 → 同条件再请求 → exact 失败记忆 | 将失败资格在同一 domain 中统一表示，证明不同 request/content 仍能恢复 | Flight 终态退出；模型请求、target 内 lazy 资源与 preview miss 的失败边界不同，不能拼成全局永久失败表 |
 | `A-REMOTE-FILES → MN-22` 与 `A-SHARED-CACHE → MN-23` | 移除对应文件型 sink 或共享 writer 选择，分别评估删除 | 不同 cache 的来源保护、完整发布和 exact identity 仍成立；跨进程锁不能替代受检路径边界及操作期目录稳定前提 |

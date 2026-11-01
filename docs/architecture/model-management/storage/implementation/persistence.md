@@ -1,6 +1,6 @@
 # 持久提交的落实
 
-本页落实[存储区域与所有权](../overview.md#运行作用域与所有权)、[精确提交](../overview.md#精确身份与原子提交)和[共享清理](../overview.md#共享存储与清理)，定位能力、锁及 owner gate 的关系。
+本页落实[固定区域](../overview.md#固定区域与目录观察)、[精确缓存与持久工作](../overview.md#精确缓存与持久工作)和[共享清理](../overview.md#共享存储与清理)，定位能力、锁及 owner gate 的关系。
 
 ## 固定区域与文件边界
 
@@ -11,6 +11,8 @@
 `FileIdentity` 仅比较可选 `fileKey` 与类型；`DirectoryAccess` 另核验真实路径。创建时间可能退化为修改时间，不能用于该比较。Provider 不提供 `fileKey` 时不因此停用存储，但同路径同类型替换可能不可见。观察不保证发现每次目录变化，不替代内容校验，也不证明不可伪造的物理身份。
 
 `ChannelReadPhase` 只拥有一次已接纳 channel。Callback 借用只读游标，完整 I/O 串行；封口不等待活动 I/O。最后借用归还时关闭，无活动借用则当场关闭。打开后未能构造阶段也关闭 channel。写入、staging 验证、索引锁和消费者登记锁不进入读取阶段；同路径 atomic commit 前先结束本操作的读阶段。
+
+I/O 锁覆盖完整 seek/read/validate，生命周期锁只保护接纳和借用计数。
 
 目录观察保存完整祖先链。重新取得路径视图时，门面逐项复核类型和可选身份，并解析末端真实路径以检查整条路径。快照只复用观察记录，不缓存复核成功；后续文件操作仍会复核。多层目录创建在写入缺失尾部前先检查既有前缀，避免进入链接目标创建目录。
 
@@ -30,7 +32,7 @@ Commit、取消和 shutdown 共用 effect gate。替换成功即固定成功终�
 
 `ChunkDataSource.openReadPhase` 为实际准备提供局部视图。File source 用同一 channel 取得 definition、common strings 和声音首块；读取结束后关闭，再编译表达式。Runtime 的精确来源 wrapper 转发该阶段与原 batch，不把批次退化为逐 chunk 打开；读取失败仍回报原精确实例。
 
-`readPayloads` 去重相同 descriptor，返回完整 `SharedBuffer` 集合；失败不发布部分结果。读取阶段只关闭 channel，不撤销已交付的 bytes。File source 在读取前后核对接纳长度，各 payload 仍验证内容。Remote preparation 固定 received 输入引用，先结束 transfer，再消费本地 bytes；独立 chunk 文件各自读取并关闭。媒体前缀资格归[声音准备](../../audio/overview.md#运行作用域与所有权)，不由源 chunk 完整性替代。
+`readPayloads` 去重相同 descriptor，返回完整 `SharedBuffer` 集合；失败不发布部分结果。读取阶段只关闭 channel，不撤销已交付的 bytes。File source 在读取前后核对接纳长度，各 payload 仍验证内容。Remote preparation 固定 received 输入引用，先结束 transfer，再消费本地 bytes；独立 chunk 文件各自读取并关闭。媒体前缀资格归[声音准备](../../audio/overview.md#播放接纳与顺序读取)，不由源 chunk 完整性替代。
 
 `ConvertedSourceIndexStore.replaceScopes` 在 scope 事务锁内重读并合并类别。`ConvertedCacheCoordinator` 在 gate 内登记实际 consumer 锁，再由 Catalog 复核 active/closed；扫描准入不能先于登记。`ModelStorageInfra.prune` 只把本次保留对象分派到各 scope，路径分派不授予删除许可。进程 owner 在 Catalog 与 runtime 停止后关闭登记。
 

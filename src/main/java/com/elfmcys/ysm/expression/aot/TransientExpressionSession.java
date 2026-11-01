@@ -33,9 +33,22 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
-/** Exact-generation owner for one privileged, source-origin transient program. */
+/**
+ * Owns one transient program lease and, after attachment, its exact installation's execution access.
+ *
+ * <p>Execution: compilation can use a background thread after the owner freezes CompilationInputs.
+ * Attachment, execution, and explicit close are serialized by the owner. Atomic close tracking does
+ * not permit close to race with execution or attachment.
+ *
+ * <p>Ownership: the receiver closes an accepted session. A rejected or late result must be closed
+ * by the handoff owner. Cancellation requests do not transfer this responsibility.
+ *
+ * <p>Seam: implements [transient execution](docs/architecture/animation/molang-runtime.md#短期执行).
+ */
 public final class TransientExpressionSession implements AutoCloseable {
+    /** Maximum UTF-8 source length accepted by one compilation. */
     public static final int MAX_SOURCE_BYTES = 4096;
+    /** Global count bound for in-progress compilations and live program sessions together. */
     public static final int MAX_LIVE_LEASES = 64;
 
     private static final AtomicInteger LIVE_LEASES = new AtomicInteger();
@@ -75,6 +88,12 @@ public final class TransientExpressionSession implements AutoCloseable {
     record CompilationInputs(ResourceGenerationToken generation, TransientLayout<MolangContext> layout,
         TransientDynamicAccess dynamic) {}
 
+    /**
+     * Freezes the module's transient layout and privilege on the owner before background compilation.
+     *
+     * <p>Ownership: the caller must retain the source module's resource lease through compilation.
+     * The returned inputs grant no access to the owner's mutable expression instance.
+     */
     static CompilationInputs prepare(RenderTargetExpressionModule module, Privilege privilege) {
         var instanceNames = new TreeSet<LocalName>(Comparator.comparing(LocalName::name));
         var writes = new TreeSet<LocalName>(Comparator.comparing(LocalName::name));
@@ -99,6 +118,14 @@ public final class TransientExpressionSession implements AutoCloseable {
         return compile(prepare(module, privilege), entityGeneration, source, privilege, purpose, sourceLocation, cancelled);
     }
 
+    /**
+     * Compiles independent transient code from frozen inputs without attaching owner execution access.
+     *
+     * <p>Failure: source, compilation, cancellation, or live-lease admission failure releases this attempt's
+     * program lease and count reservation. Success does not prove that the source installation is still current.
+     *
+     * @return an owned, unattached session that the recipient must attach or close
+     */
     static TransientExpressionSession compile(CompilationInputs prepared, long entityGeneration, String source,
         Privilege privilege, Purpose purpose, String sourceLocation, BooleanSupplier cancelled) throws Exception {
         Objects.requireNonNull(prepared, "prepared");
@@ -153,6 +180,11 @@ public final class TransientExpressionSession implements AutoCloseable {
         }
     }
 
+    /**
+     * Takes independently owned execution access after the owner qualifies the exact installation and generation.
+     *
+     * <p>Ownership: every entered call consumes value, including closed-session and duplicate-attachment failure.
+     */
     void attach(TransientExecutionAccess<MolangContext> value) {
         Objects.requireNonNull(value, "access");
         try {
@@ -170,6 +202,13 @@ public final class TransientExpressionSession implements AutoCloseable {
         }
     }
 
+    /**
+     * Executes within the current qualified owner round using this session's attached access.
+     *
+     * <p>Requires: the owner has qualified the session's installation and generation. Context, subject binding,
+     * and frame remain exclusively borrowed until execution and its cleanup return.
+     * The caller must not close this session concurrently.
+     */
     Object execute(MolangContext context, dev.semaweave.SubjectBinding subjectBinding,
         dev.semaweave.ExecutionFrame frame) throws Throwable {
         try {
@@ -217,6 +256,11 @@ public final class TransientExpressionSession implements AutoCloseable {
         return sourceLocation;
     }
 
+    /**
+     * Observes live sessions plus reservations held by in-progress compilations.
+     *
+     * @return the current count; the observation does not reserve admission for another compilation
+     */
     public static int liveLeaseCount() {
         return LIVE_LEASES.get();
     }
@@ -227,6 +271,12 @@ public final class TransientExpressionSession implements AutoCloseable {
         }
     }
 
+    /**
+     * Releases attached execution access and the independent program lease without waiting for execution.
+     *
+     * <p>Requires: no attachment or execution is in progress. Repeated serial close calls release no second lease.
+     * A cleanup failure still attempts program-lease cleanup and propagates the primary cleanup failure.
+     */
     @Override
     public void close() {
         try {

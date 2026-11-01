@@ -11,7 +11,17 @@ import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
 import net.minecraft.world.entity.Entity;
 
-/** The exact-class directory is consumed at Root construction, never by generated calls. */
+/**
+ * Constructs one instance for each applicable declaration and binds its exact provider directory.
+ *
+ * <p>Invariant: provider lookup happens at Root construction, never during generated calls.
+ * Successful begin hooks form the cleanup prefix, so a hook that throws before returning must release its own unfinished borrow.
+ *
+ * <p>Failure: hook failure does not undo prior component mutations. Invalidation during evaluation
+ * revokes directory access immediately and retains the entered lifecycle prefix only for cleanup.
+ *
+ * <p>Seam: implements [component lifecycle](docs/architecture/animation/molang-declarations.md#组件生命周期) through the ComponentScope contract.
+ */
 public final class DeclarationComponentScope implements ComponentScope {
     private final AnimatableEntity<?> owner;
     private final Entity subject;

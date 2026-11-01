@@ -3,6 +3,15 @@ package com.elfmcys.ysm.natives.render;
 import com.elfmcys.ysm.natives.NativeProfiler;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 
+/**
+ * Replays completed native output to an unknown host consumer layout.
+ *
+ * <p>Execution: shares one process-wide carrier. NativeRenderer's caller excludes overlapping
+ * allocation, native fill, and replay, with no nested rendering from a consumer callback.
+ *
+ * <p>Seam: implements the fallback branch of the
+ * [host output handoff](docs/architecture/rendering/implementation/vertex-output.md#rendertypecontext-与-vertexkind).
+ */
 class FallbackVertexWriter {
     private static final int STRIDE = 8;
 
@@ -17,6 +26,7 @@ class FallbackVertexWriter {
 
     private static int[] VERTEX_DATA;
 
+    /** Borrows at least vertexCount * 8 ints; elements beyond the native-filled prefix are not output. */
     static int[] getVertexData(int vertexCount) {
         var size = Math.multiplyExact(vertexCount, STRIDE);
         if (VERTEX_DATA == null || VERTEX_DATA.length < size) {
@@ -25,6 +35,12 @@ class FallbackVertexWriter {
         return VERTEX_DATA;
     }
 
+    /**
+     * <p>Requires: native rendering succeeded for exactly this prefix of the current carrier.
+     *
+     * <p>Failure: consumer exceptions propagate unchanged after any already accepted prefix.
+     * The caller must not replay that prefix as a recovery attempt.
+     */
     static void write(VertexConsumer vertexBuffer, int vertexCount, int overlayUv) {
         try (var ignored = NativeProfiler.beginFallbackVertexWrite()) {
             var vertexData = VERTEX_DATA;

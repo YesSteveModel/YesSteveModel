@@ -11,6 +11,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 
+/**
+ * Converts one frozen raw source into a staged current container.
+ *
+ * <p>Execution: capture and conversion perform synchronous I/O. A capture must remain open and be
+ * exclusively available to its compilation; the caller owns the output directory and staging lifetime.
+ *
+ * <p>Seam: implements [frozen conversion](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换); storage revalidation and publication remain with the receiving owner.
+ */
 public final class RawModelImporter {
     private final DefaultAnimationFilter defaultAnimations;
 
@@ -18,6 +26,7 @@ public final class RawModelImporter {
         this.defaultAnimations = Objects.requireNonNull(defaultAnimations, "defaultAnimations");
     }
 
+    /** Returns an independently owned capture after closing this call's directory or archive handle. */
     public CapturedModel capture(Path source) {
         if (Files.isDirectory(source)) {
             try (var vfs = new Directory(source)) {
@@ -38,6 +47,15 @@ public final class RawModelImporter {
         }
     }
 
+    /**
+     * Borrows captured and directory to write a fresh staging entry, checking scan/compile identity and diagnostics.
+     *
+     * <p>Ensures: normal return transfers the completed staging path to the caller, not a published or
+     * revalidated storage object. The capture and directory remain caller-owned.
+     *
+     * <p>Failure: attempts to remove only this call's identified staging entry. I/O is reported as
+     * unchecked I/O failure; cleanup failure is retained. Existing source and committed objects are not replaced.
+     */
     public RawCompileResult convert(CapturedModel captured, com.elfmcys.ysm.util.DirectoryAccess directory) {
         Objects.requireNonNull(captured, "captured");
         var name = captured.modelId() + "-" + java.util.UUID.randomUUID() + ".mxc";

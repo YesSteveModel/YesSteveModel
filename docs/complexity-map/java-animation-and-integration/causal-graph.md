@@ -38,10 +38,10 @@ flowchart LR
 |---|---|---|
 | `A-AN-01 → AN-02` 与 `A-AN-02 → AN-04/AN-05` | 原地异步求值带来串行/汇合；多 pass 共用历史带来姿态恢复。worker 发布依赖对应 get；主线程生命周期替代通用 runtime barrier，局部绘制借用和独立编译交付仍保留 | 单实体隔离、动作次数、Ready lease、native view 有效期；取消异步不证明可删多 pass 或动作门禁 |
 | `D-CONTROLLER → AN-06` | controller 解析复用减少共享查询，但产生精确来源失效与无上限名称保留。删除缓存可消除这两项派生责任；桥接与缓存不共享必要性结论 | 同名成功播放不重启、失败可恢复、来源隔离和共享资源关闭责任仍成立 |
-| `AN-05 → P-PARTIAL-EFFECT` | 解释器在求值窗口内直接提交宿主 effect，原先的 batch/eligibility 收口已不存在；能力门禁本身不能保证半次动作安全 | Observation 仍不得提交，generation 切换与旧表现不污染仍需保持；半次动作当前没有回滚或丢弃保证，不能声称该风险已收口 |
+| `AN-05 → P-PARTIAL-EFFECT` | 完整求值、hook、效果验证与 owner 资格成功后才提交 batch；外部提交开始后仍可能失败 | 提交前失败丢弃 batch；外部提交失败只清除剩余引用，不承诺跨系统回滚。阶段边界见[效果契约](../../architecture/animation/molang-runtime.md#invocation-与效果) |
 | `A-DEFER → P-CALL-LOCAL-ESCAPE → AN-19` | 延后执行带来参数留存和排空顺序；改调度可收缩留存窗口，但需保持既有动作语义 | Entity 隔离、capture 值含义、模型切换/结束时的排空终态；如改变可观察顺序，需要回到产品/兼容边界裁决 |
 
-这些子图是下方本地关系表的投影。AN-08/13 的根仍为假设，不能因局部扇出低而从主体删除；同样不能把“开放 ABI 一定不安全”当作已验证理由。
+这些子图是下方本地关系表的投影。AN-08 的根仍为假设，作品依据缺口见 [Q-06](open-questions.md#q-06)。
 
 
 
@@ -57,7 +57,7 @@ flowchart LR
 | P-REPEAT-EFFECT | addresses | AN-05 | AN-05 |
 | D-EFFECT | requires | AN-05 | AN-05 |
 | D-EFFECT | requires | AN-20 | AN-20：声音触发只能由有 effect 资格的主时间线提交 |
-| AN-05 | creates | P-PARTIAL-EFFECT | AN-05：logical action 获得 effect 能力，执行中仍可能失败；当前无已闭合的收口机制 |
+| AN-05 | creates | P-PARTIAL-EFFECT | AN-05：batch 提交前失败可丢弃；外部提交开始后失败不承诺跨系统回滚 |
 | A-DEFER | creates | P-CALL-LOCAL-ESCAPE | AN-19：延后执行跨越 call-local 参数寿命 |
 | P-CALL-LOCAL-ESCAPE | addresses | AN-19 | AN-19：求值快照与逆序排空；Forge 时序核验仍有缺口 |
 | A-AN-03 | creates | P-SKIP-TIME | AN-03 |

@@ -1,6 +1,6 @@
 # 连接与消息准入
 
-本页定位[业务资格](../overview.md#exact-connection-与业务资格)和[连接撤销交接](../overview.md#连接撤销交接)的当前落实关系。
+本页定位[业务资格](../overview.md#连接业务资格与撤销)和[连接撤销交接](../overview.md#连接撤销交接)的当前落实关系。
 
 `NetworkHandler` 唯一注册消息方向、类型、decoded 上限、attachment policy 和 handler。`FrameCodec` 在 dispatch 前验证物理帧；transport 不持有业务 assembly。`ClientSessionRuntime` 与 `SessionProtocolHandler` 以 exact `Connection` 路由和退休，延后执行再次验证原连接。
 

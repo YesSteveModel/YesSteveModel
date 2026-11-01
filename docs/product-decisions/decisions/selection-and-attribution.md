@@ -22,9 +22,9 @@
   - [design](../../architecture/client-presentation/overview.md)
   - [design](../../architecture/model-management/demand/overview.md#用途准备与独立接收)
   - [design](../../architecture/model-management/demand/overview.md#选择反馈)
-  - [design](../../architecture/model-management/sessions/overview.md#缺图观察与管理提交资格)
+  - [design](../../architecture/model-management/sessions/overview.md#成员观察与管理提交)
   - [status](../../status/known-issues/rendering.md#gui-取景)
-  - [implementation](../../architecture/network/player-state.md#权威模型)
+  - [design](../../architecture/network/player-state.md#选择请求与处置)
   - [status](../../status/known-issues/model-management.md)
 
 ## DD.visual-model-selection

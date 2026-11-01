@@ -1,6 +1,6 @@
 # 共享准备与发布的落实
 
-本页落实[Pending 与 Ready](../overview.md#pending-与-ready)、[宿主交接](../overview.md#ready-与宿主交接)及[物理关闭](../overview.md#引用撤销与物理关闭)，定位当前独占完成权与采用点。
+本页落实[Pending 与 Ready](../overview.md#seam-contract)、[宿主交接](../overview.md#ready-与宿主交接)及[物理关闭](../overview.md#引用撤销与物理关闭)，定位当前独占完成权与采用点。
 
 ## Flight 与准备依赖
 
@@ -14,7 +14,7 @@
 
 ## 完成与采用
 
-Worker terminal 交付 pre-Ready candidate。Candidate guard 在等待 host 时保留退休处置权；owner 退出即拒绝候选，不能依赖后续 tick 才清理。`HostTexturePublisher` 提供无状态注册、上传和 adoption seam；结果回到 runtime 由 exact-current 门禁提交。Required default 采用路径见[唯一发布](../default-model.md#私有构造与唯一发布)。
+Worker terminal 交付 pre-Ready candidate。Candidate guard 在等待 host 时保留退休处置权；owner 退出即拒绝候选，不能依赖后续 tick 才清理。`HostTexturePublisher` 提供无状态注册、上传和 adoption seam；结果回到 runtime 由 exact-current 门禁提交。Required default 采用路径见[唯一发布](../default-model.md#seam-contract)。
 
 普通 target 最后 consumer 退出后进入 unused 保留；再次 acquire 离开 unused。`ModelRetentionCount` 约束无消费者完整 target 的数量，零表示不保留；active target 与 lease 数不计入该数量。超限只撤最旧 cache 引用。配置默认依据见[设备默认](../../../../product-decisions/decisions/device-quality.md#bcdevice-derived-configuration-defaults)。
 
@@ -34,7 +34,7 @@ Worker terminal 交付 pre-Ready candidate。Candidate guard 在等待 host 时�
 
 解析结果包含 Animation、本次有效 fallback 来源与可缓存性。完整名称范围中的稳定成功可以缓存；只有有效 local 与 fallback 范围均证实不存在，才可缓存缺失。I/O、空载荷、确定性坏内容及失败 fallback 沿原资源失败边界裁决，不成为缺失证明或稳定替代结果。取消和 OOM 不转换为缺失。已验证内容可继续使用，不要求源文件保持可读。Fallback 标记属于解析上下文，不写入共享 Animation。
 
-Controller 缓存只有派生查询状态，不拥有加载失败记忆或 store 的关闭权。兼容绑定更换与使用结束撤销缓存条目和来源引用，不关闭其他 owner 的 store／backing；既有合法播放按[播放历史](../../../animation/controllers-and-playback.md#播放状态)独立保留。缓存不设容量上限；成功引用和负缓存 key 随不同名称数量增长，失效与结束边界负责撤引用。
+Controller 缓存只有派生查询状态，不拥有加载失败记忆或 store 的关闭权。兼容绑定更换与使用结束撤销缓存条目和来源引用，不关闭其他 owner 的 store／backing；既有合法播放按[播放历史](../../../animation/controllers-and-playback.md#解析缓存与播放寿命)独立保留。缓存不设容量上限；成功引用和负缓存 key 随不同名称数量增长，失效与结束边界负责撤引用。
 
 ## 图片内容与 CPU 像素
 

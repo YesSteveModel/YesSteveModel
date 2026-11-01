@@ -50,7 +50,19 @@ import java.util.function.Supplier;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.world.entity.LivingEntity;
 
-/** Owns render-target loading, lease retention, builtin initialization and catalog invalidation. */
+/**
+ * Resolves current model uses and owns client render-target preparation across process and session work.
+ *
+ * <p><b>Invariant:</b> New acquisition and audio playback use current catalog policy. Exact content
+ * identity, expression binding, purpose and storage provenance determine reuse; a matching model ID
+ * alone does not establish a reusable target. Content activation does not imply host Ready publication.
+ *
+ * <p><b>Ownership:</b> Each successful lease reception transfers an independent interest to its caller.
+ * Session retirement cancels that session's pending work; existing Ready leases and independent playback
+ * follow their own owners. The required default initialization must finish before ordinary acquisition.
+ *
+ * <p><b>Seam:</b> [client target acquisition](docs/architecture/model-management/client-resources/overview.md#seam-contract).
+ */
 public final class ClientModelRenderTargetManager implements AutoCloseable {
     private final ClientCatalogManager catalogs;
     private final ModelRenderTargetLoader loader;
@@ -204,6 +216,15 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         return getOrStartReady(request, WorkPriority.BACKGROUND);
     }
 
+    /**
+     * Starts an acquisition that transfers a lease only after Ready publication and current-use qualification.
+     * GUI requests can first probe the derived cache. A returned acquisition is not an installed target.
+     *
+     * @param request the non-null receiving use
+     * @param priority the non-null scheduling priority, independent of access permission
+     * @return the cancellation and ownership owner; its successful result transfers one open Ready lease
+     * @throws IllegalStateException if required default resources or the captured work owner are unavailable
+     */
     public ReadyAcquisition getOrStartReady(ResourceRequest request, WorkPriority priority) {
         var context = currentWorkContext();
         if (request.purpose().isGui())
@@ -354,6 +375,17 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         }
     }
 
+    /**
+     * Admits a new playback and captures an independent exact-media reading capability.
+     * The admitted capability does not depend on the originating target lease staying open.
+     *
+     * <p><b>Seam:</b> [playback admission](docs/architecture/model-management/audio/overview.md#接纳与读取).
+     *
+     * @param source the non-null verified media source with its retained first chunk
+     * @return an owned sequential capability bound to this representation and the captured fetcher
+     * @throws AssetLoadException if current policy, membership or representation rejects new playback
+     * @throws IllegalStateException if required default resources are unavailable
+     */
     public VerifiedChunkAccess resolveSound(SoundSource source) throws AssetLoadException {
         Objects.requireNonNull(source, "source");
         requireAvailable();
@@ -709,7 +741,14 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     private record WorkContext(Object owner, RemoteChunkFetcher fetcher) {
     }
 
-    /** Linearizes cancellation, terminal disposition and lease ownership transfer. */
+    /**
+     * Linearizes cancellation, terminal disposition and transfer of one Ready lease.
+     *
+     * <p><b>Ownership:</b> Before successful result delivery, this object owns the lease and closes rejected
+     * or failed results. Success transfers closure to the result receiver. Cancel after that transfer has
+     * no effect on the receiver's lease; cancel before transfer seals reception and releases its interest.
+     * The result stage can complete inline and does not promise a particular callback thread.
+     */
     public static final class ReadyAcquisition {
         private final ResourceRequest request;
         private ResourceLease lease;

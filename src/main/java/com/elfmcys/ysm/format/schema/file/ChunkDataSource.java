@@ -15,7 +15,26 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
 
+/**
+ * Acquires and validates bytes for descriptors of one content representation.
+ *
+ * <p>Requires: descriptors come from the matching validated container, and the content owner keeps
+ * this source usable for the read. Descriptor validation does not prove that its bytes are available.
+ *
+ * <p>Ownership: returned shared buffers retain their backing independently and must not be modified.
+ * Source handles and read phases have separate close obligations; a metadata view does not own them.
+ *
+ * <p>Failure: access, content, and cancellation failures remain distinct. A failed read is not an
+ * empty payload and does not authorize deleting stored content. Concrete sources define their admission
+ * and concurrent-use rules; implementations must not expose unverified bytes through a verified read.
+ *
+ * <p>Seam: implements [per-chunk validation](docs/architecture/asset-pipeline/overview.md#分层验证与发布) after metadata admission.
+ */
 public interface ChunkDataSource {
+    /**
+     * Opens a caller-owned lexical read phase. Close it after the last read; phase closure does not
+     * revoke already returned shared buffers. A failed phase must not be reused for another read.
+     */
     default ReadPhase openReadPhase() throws IOException {
         return new ReadPhase() {
             private volatile boolean closed;
@@ -87,12 +106,20 @@ public interface ChunkDataSource {
         void close() throws IOException;
     }
 
-    /** Returns shared decoded or direct media bytes. Consumers must not modify them. */
+    /**
+     * Returns non-null shared decoded or direct media bytes after size/hash checks for this descriptor.
+     * Media payload validity still belongs to its decoder; consumers do not mutate the returned bytes.
+     */
     SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException;
 
-    /** Returns the validated stored representation. Consumers must not modify shared bytes. */
+    /** Returns the validated stored representation, retaining its encoding; consumers do not mutate shared bytes. */
     SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException;
 
+    /**
+     * Checks cancellation before and after the synchronous read; it does not promise to interrupt I/O.
+     *
+     * @throws CancellationException if cancellation is observed, including after bytes have been read
+     */
     default SharedBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
         BufferType bufferType) throws IOException {
         if (cancelled.getAsBoolean()) {
@@ -105,7 +132,11 @@ public interface ChunkDataSource {
         return result;
     }
 
-    /** Returns one shared payload per chunk type; failure discards the unpublished batch. */
+    /**
+     * Returns one shared payload per chunk type; equivalent duplicates coalesce and conflicting
+     * descriptors fail. No partial map is returned on failure. The map belongs to the caller and its
+     * buffer values remain shared and read-only by contract.
+     */
     default Map<String, SharedBuffer> readPayloads(BooleanSupplier cancelled,
         Collection<AssetContainerView.ChunkInfo> chunks, BufferType bufferType) throws IOException {
         return collectPayloads(cancelled, chunks, chunk -> readPayload(cancelled, chunk, bufferType));

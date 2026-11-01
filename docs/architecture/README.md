@@ -32,19 +32,21 @@ flowchart TB
 
 ## 系统边界
 
-| 职责 | 输入与结果 | 设计入口 |
+| 职责 | 输入与结果 | 契约入口 |
 |---|---|---|
-| 运行组合 | 宿主窗口 → 进程、服务及连接作用域 | [Runtime](runtime/overview.md) |
-| 资产管线 | 来源 → 已验证容器与模型视图 | [转换与兼容](asset-pipeline/overview.md) |
-| 模型管理 | 来源、权限与需求 → 目录、内容与资源 lease | [核心模型及下级职责](model-management/overview.md) |
-| 网络 | 精确连接与权威事实 → publication、按需传输与状态投影 | [连接与传输](network/overview.md) |
-| 动画 | 资产与实体输入 → 私有求值、姿态与受控效果 | [实体与 Molang](animation/overview.md) |
-| 渲染 | 静态几何与姿态 → 宿主可消费的顶点 | [渲染管线](rendering/overview.md) |
-| Native 能力 | 显式输入与 buffer → 有界计算结果 | [能力与 JNI](native-runtime/overview.md) |
-| 客户端展示 | 目录与交互 → 页面展示、需求和选择意图 | [页面设计](client-presentation/overview.md) |
-| 游戏与扩展接入 | 宿主事件与上下文 → 领域 owner 的调用窗口 | [接入设计](integration/overview.md) |
+| 运行组合 | 宿主窗口 → 进程、服务及连接作用域 | [Runtime](runtime/overview.md#seam-contract) |
+| 资产管线 | 来源 → 已验证容器与模型视图 | [转换与兼容](asset-pipeline/overview.md#seam-contract) |
+| 模型管理 | 来源、权限与需求 → 目录、内容与资源 lease | [核心模型及下级职责](model-management/overview.md#seam-contract) |
+| 网络 | 精确连接与权威事实 → publication、按需传输与状态投影 | [连接与传输](network/overview.md#seam-contract) |
+| 动画 | 资产与实体输入 → 私有求值、姿态与受控效果 | [实体与 Molang](animation/overview.md#seam-contract) |
+| 渲染 | 静态几何与姿态 → 宿主可消费的顶点 | [渲染管线](rendering/overview.md#seam-contract) |
+| Native 能力 | 显式输入与 buffer → 有界计算结果 | [能力与 JNI](native-runtime/overview.md#seam-contract) |
+| 客户端展示 | 目录与交互 → 页面展示、需求和选择意图 | [页面设计](client-presentation/overview.md#seam-contract) |
+| 游戏与扩展接入 | 宿主事件与上下文 → 领域 owner 的调用窗口 | [接入设计](integration/overview.md#seam-contract) |
 
 相邻模块不共同修改同一份权威状态。跨域组合先提交所属事实，再通知消费者；通知失败不回滚已提交事实。Provider 拥有接口契约，组合层只拥有必要组合规则。子系统目录可递归展开，目录父子关系不等于运行时 ownership。
+
+各入口的职责章节继续导航到下级子系统，包括无独立目录的单页子系统。Seam 的适用范围、划分及格式见[设计指南](../development/design.md#契约与责任)，消费者按[实现指南](../development/implementation.md#使用保证与保护责任)核对和使用保证。
 
 ## 作用域与终结
 
@@ -66,8 +68,8 @@ flowchart TB
 | Reload 后为何仍能保留旧安装？ | [Catalog](model-management/catalog/overview.md)、[客户端资源](model-management/client-resources/overview.md)、[实体生命周期](animation/entity-lifecycle.md) |
 | 动画触发结束后，播放与 PCM 为何还在？ | [音频设计](model-management/audio/overview.md) |
 | 实体 retire 与物理释放有何区别？ | [实体生命周期](animation/entity-lifecycle.md)、[资源保留](model-management/client-resources/overview.md)、[内存边界](native-runtime/overview.md) |
-| 线程容量、发布顺序和关闭由谁约束？ | [有限工作](runtime/overview.md#有限工作与发布)、[结束与替换](runtime/overview.md#结束与替换) |
+| 线程容量、发布顺序和关闭由谁约束？ | [有限工作](runtime/overview.md#有限工作调度与领域交接)、[结束与替换](runtime/overview.md#结束与替换) |
 | 当前责任映射在哪里？ | 各设计入口的“实现与验证入口”；[运行接入映射](runtime/implementation/lifecycle-and-publication.md) |
-| 如何修改层次、裁剪实现细节并修复依赖？ | [架构文档维护](../governance/architecture-docs.md) |
+| 如何修改层次、裁剪实现细节并修复依赖？ | [架构文档维护](documentation-rules.md) |
 
-机制成本与归约机会见[复杂度地图](../complexity-map/README.md)。本页导航不拥有下级资源清单或状态定义。
+机制成本与归约机会见[复杂度地图](../complexity-map/README.md)。

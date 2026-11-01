@@ -69,6 +69,21 @@ import com.elfmcys.ysm.geckolib3.model.EntityStateTracker;
 import java.util.function.Supplier;
 import java.util.concurrent.CancellationException;
 
+/**
+ * Owns one subject's mutable animation state and its current resource installation.
+ *
+ * <p>Invariant: each owner has one execution authority. An outstanding task keeps that authority
+ * until the corresponding wait or GUI join completes, including task cleanup.
+ *
+ * <p>Execution: public lifecycle operations run on the render thread. Worker execution uses the
+ * owner's reserved window. A GUI permit grants only its exact task's internal installation and
+ * evaluation operations. Callbacks must not reenter public lifecycle operations.
+ * Owner confinement does not make the live entity, level, or optional host APIs immutable or safe for concurrent access.
+ *
+ * <p>Ownership: resource getters and render data borrow the current installation; they do not transfer its lease.
+ *
+ * <p>Seam: establishes [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接) and depends on [complete installation and replacement](docs/architecture/animation/entity-lifecycle.md#模型使用与完整安装).
+ */
 public abstract class AnimatableEntity<TEntity extends Entity>
     implements com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Installation {
     private static final float SWING_MOTION_THRESHOLD = 0.15f;
@@ -203,7 +218,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         codedAnimationStates.clear();
     }
 
-    /** Retirement is permanent; reload/reset only end the current use. */
+    /**
+     * Permanently revokes this owner's assignment and ends its current use.
+     *
+     * <p>Execution: joins an outstanding ordinary task before cleanup. An active draw borrow delays
+     * resource cleanup until the borrow ends, but does not delay revocation.
+     */
     public final void retire() {
         lifecycle.rejectCandidateMutation();
         try {
@@ -332,6 +352,14 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     /** Closed persistent events are dispatched explicitly inside the logical owner. */
     protected void dispatchPersistentEvents(EntityExpressionRuntime.Evaluation evaluation, boolean shouldUpdate) {}
 
+    /**
+     * Returns the borrowed live subject, without granting access to owner-private animation state.
+     *
+     * <p>Execution: a stable world subject remains readable on the main thread during ordinary work.
+     * A reserved GUI task excludes public subject access until join.
+     *
+     * @return the subject; the caller does not own its lifetime or obtain a host-input snapshot
+     */
     public final TEntity getEntity() {
         lifecycle.assertSubjectAccess();
         return entity;
@@ -374,6 +402,15 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         return ClientTickEvent.getRefreshRate();
     }
 
+    /**
+     * Prepares the ordinary level pose after joining prior owner work.
+     *
+     * <p>Ownership: the result borrows the current installation and mutable pose output. A later
+     * owner update or ended use can invalidate that output. The caller must use consumePrepared()
+     * to qualify consumption; a non-null return does not reserve later draw access.
+     *
+     * @return the prepared pose, or null when no consumable pose is available for this update
+     */
     public @Nullable GeoRenderData update(float partialTicks) {
         if (!isAssigned()) {
             return null;
@@ -1172,6 +1209,25 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         return modelBinding.failure(request);
     }
 
+    /**
+     * Attempts installation in the current idle window without waiting for a task.
+     *
+     * <p>Ensures: INSTALLED means that publication committed. A later observer failure does not undo publication.
+     *
+     * <p>Failure: BUSY leaves the lease with the caller, including when a task finished but remains unjoined.
+     * An entered attempt can return STALE or REJECTED. Required-default installation failures retain their exceptional boundary.
+     *
+     * <p>Ownership: every entered attempt consumes the lease, including rejection and failure.
+     * The installed holder owns the lease after publication; otherwise the attempt closes the lease.
+     *
+     * <p>Seam: implements [installation publication](docs/architecture/animation/entity-lifecycle.md#安装发布结果).
+     *
+     * @param request the exact selected request to accept
+     * @param lease the caller-owned lease for this attempt
+     * @param fallback whether the request is the selected fallback
+     * @param full whether the selection requires FULL preparation
+     * @return the publication or refusal result
+     */
     @Override
     public final com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult
         install(ResourceRequest request, ResourceLease lease, boolean fallback, boolean full) {
@@ -1278,12 +1334,29 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         return lifecycle.inDraw(operation);
     }
 
+    /**
+     * Reports outstanding execution authority, including completed work that has not been joined.
+     *
+     * @return a current observation, not a reservation for a later operation
+     */
     public final boolean hasPendingUpdate() { return lifecycle.hasTask(); }
 
     protected final void assertExecutionStateAccess() { lifecycle.assertStateAccess(); }
 
     protected final void assertPublicMutationAccess() { lifecycle.rejectCandidateMutation(); }
 
+    /**
+     * Seals a GUI owner for one task before an executor accepts that task.
+     *
+     * <p>Requires: the caller is on the main thread and the GUI owner is active, idle, and has no task.
+     * The operation must use only the supplied permit's internal operations on this owner.
+     *
+     * <p>Execution: the operation runs inline in GuiTask.run(), at most once, on the selected execution thread.
+     * The owner remains sealed after completion until explicit join. Rejection is only for a task that never started.
+     *
+     * @param operation the synchronous operation that borrows the exact task permit
+     * @return the task whose run, rejection, and join obligations belong to the caller
+     */
     public final <R> GuiTask<R> reserveGuiTask(java.util.function.Function<GuiExecution, R> operation) {
         lifecycle.rejectRecursiveCall();
         Objects.requireNonNull(operation, "operation");
@@ -1295,6 +1368,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         return new GuiTask<>(task, () -> finishProjections(true));
     }
 
+    /**
+     * Grants internal access only while this permit's exact task executes.
+     *
+     * <p>Ownership: the callback must not retain this permit for later use or use it for another owner.
+     * The permit grants neither public lifecycle access nor draw access, even when the task runs on the main thread.
+     */
     public final class GuiExecution {
         private final com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Assignment assignment;
         private EntityExecutionLifecycle.GuiTask<?> task;
@@ -1303,7 +1382,14 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             this.assignment = assignment;
         }
 
-        /** The installation consumes the lease on every entered path, including failure. */
+        /**
+         * Applies the captured GUI assignment inside this exact task's installation window.
+         *
+         * <p>Ownership: the operation consumes the lease on every entered path. A permit or thread violation
+         * occurs before entry and leaves the supplied lease with the caller.
+         *
+         * @return INSTALLED after publication, or STALE or REJECTED after consuming the lease
+         */
         public com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult install(
             ResourceRequest request, ResourceLease lease, boolean fallback, boolean full) {
             return lifecycle.inGuiExecution(task, () -> {
@@ -1316,6 +1402,17 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             });
         }
 
+        /**
+         * Prepares CPU pose output while this exact GUI task owns the entity.
+         *
+         * <p>Failure: allocation failure invalidates this extraction and returns null. Other failures
+         * follow the task's exceptional completion. This operation does not submit a host draw.
+         *
+         * <p>Ownership: the returned pose borrows this installation's output. The consumer must join
+         * the task before draw consumption and must not retain the pose across a later owner update or ended use.
+         *
+         * @return the prepared pose, or null when this task produced no consumable pose
+         */
         public @Nullable GeoRenderData update(float partialTicks, RenderContext context) {
             return lifecycle.inGuiExecution(task, () -> {
                 prepareEvaluation();
@@ -1330,6 +1427,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         }
     }
 
+    /**
+     * Carries one sealed GUI execution and its explicit authority-return operation.
+     *
+     * <p>Execution: run() executes once at most. The caller must reject an unaccepted, unstarted task,
+     * or join an accepted task on the main thread. Completion alone does not return owner access.
+     * A callback must not join its own task.
+     */
     public static final class GuiTask<R> implements Runnable {
         private final EntityExecutionLifecycle.GuiTask<R> task;
         private final Runnable finish;
@@ -1344,6 +1448,14 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
         public void reject() { task.reject(); }
 
+        /**
+         * Waits for the complete task and returns execution authority before adopting final projections.
+         *
+         * <p>Failure: task and cleanup failures leave the task joined; combined GUI failures preserve fatal-error priority.
+         * Interruptions do not abandon the wait; the method restores the interrupt flag after the terminal handoff.
+         *
+         * @return the callback result after the task and its cleanup complete
+         */
         public R join() {
             Throwable primary = null;
             try {
@@ -1381,6 +1493,15 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             expressionRuntime.adoptProjections(finalWindow);
     }
 
+    /**
+     * Starts this invocation's owner update, or updates synchronously outside an invocation.
+     *
+     * <p>Execution: the main-thread caller first joins prior work and prepares the owner before submission.
+     * Successful submission transfers private-state access until waitForAsyncUpdate() completes.
+     * Submission failure propagates without leaving a pending task.
+     *
+     * @param partialTicks the frame interpolation fraction supplied by the host
+     */
     public final void beginAsyncUpdate(float partialTicks) {
         lifecycle.rejectRecursiveCall();
         if (!AnimationParallelTicker.isInvocationActive()) {
@@ -1395,6 +1516,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         lifecycle.submit(() -> computePose(partialTicks, RenderContext.levelImmutable()));
     }
 
+    /**
+     * Joins ordinary work before returning private-state access and adopting eligible projections.
+     *
+     * <p>Execution: the main-thread call can block. Task completion includes the task's finally blocks.
+     * Interruptions do not release the owner early; the method restores the interrupt flag after the wait.
+     * A reserved GUI task requires GuiTask.join() instead.
+     */
     public final void waitForAsyncUpdate() {
         try {
             lifecycle.awaitTask();

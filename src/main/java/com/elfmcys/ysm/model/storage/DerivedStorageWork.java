@@ -5,7 +5,17 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Objects;
 
-/** Owns optional derived writes through their last borrow, independently of resource readiness. */
+/**
+ * Owns bounded optional persistence work through the end of its last input borrow.
+ *
+ * <p><b>Invariant:</b> Job cancellation is a logical terminal state. A running job retains its inputs
+ * and capacity until its Work returns. Persistence failure does not undo an already usable resource.
+ *
+ * <p><b>Execution:</b> One worker runs accepted Work. Close seals admission, interrupts active work
+ * and waits for that worker; Work must not call close on its own owner or wait for owner-thread progress.
+ *
+ * <p><b>Seam:</b> [optional persistence ownership](docs/architecture/model-management/storage/overview.md#精确缓存与持久工作).
+ */
 public final class DerivedStorageWork implements AutoCloseable {
     public static final int DEFAULT_MAXIMUM_JOBS = 16;
 
@@ -30,7 +40,12 @@ public final class DerivedStorageWork implements AutoCloseable {
         this.maximumJobs = maximumJobs;
     }
 
-    /** Null rejects without transferring input ownership or executing the work. */
+    /**
+     * Offers optional persistence without waiting for its I/O.
+     *
+     * @param work the non-null operation, which retains its inputs until its run method returns
+     * @return the accepted Job, or null when closed or full; null leaves all input responsibility with the caller
+     */
     public synchronized Job submit(Work work) {
         Objects.requireNonNull(work, "work");
         if (closed || jobs == maximumJobs)
@@ -167,6 +182,12 @@ public final class DerivedStorageWork implements AutoCloseable {
         boolean closed) {
     }
 
+    /**
+     * Prepares and validates the output before invoking the supplied commit gate.
+     * Only the final prepared atomic replacement belongs inside the gate. I/O failures remain storage failures;
+     * the worker records IOException and RuntimeException as FAILED. Interruption requests cancellation but
+     * does not permit another thread to close data still borrowed by this operation.
+     */
     @FunctionalInterface
     public interface Work {
         void run(AtomicSharedCache.CommitGate gate) throws IOException;

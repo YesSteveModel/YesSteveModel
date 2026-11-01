@@ -11,7 +11,7 @@
 - Landing:
   - [design](../../architecture/animation/entity-lifecycle.md#失败记忆与恢复)
   - [implementation](../../architecture/animation/implementation/entity-and-frame-state.md#绑定与切换)
-  - [implementation](../../architecture/model-management/client-resources/default-model.md#实现入口)
+  - [implementation](../../architecture/model-management/client-resources/default-model.md#实现与验证入口)
   - [design](../../architecture/model-management/client-resources/overview.md#取得失败与纹理回退)
   - [design](../../architecture/model-management/sessions/overview.md#失败与恢复资格)
   - [design](../../architecture/animation/overview.md)

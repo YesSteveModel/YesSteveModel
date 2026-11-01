@@ -12,7 +12,18 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-/** Owns client report observations and commits each eligible send opportunity. */
+/**
+ * Owns client observations and consumes each eligible best-effort report opportunity before sending.
+ *
+ * <p><b>Execution:</b> The client report owner serializes session, authority, animation and observe calls.
+ * The caller admits server authority only after applying its self FULL roaming baseline.
+ *
+ * <p><b>Invariant:</b> A produced report advances local observations even if a later send fails.
+ * Transport cannot restore or replay that consumed opportunity. The server separately accepts a real FULL
+ * baseline only after successful fact application; this planner does not acknowledge that server transition.
+ *
+ * <p><b>Seam:</b> [best-effort report observations](docs/architecture/network/player-state.md#表现报告与真实基线).
+ */
 public final class PlayerStateReportPlanner {
     private static final int MAX_ANIMATION_ID_BYTES = 256;
 
@@ -117,6 +128,14 @@ public final class PlayerStateReportPlanner {
         return authoritativeRoamingKey;
     }
 
+    /**
+     * Samples one report opportunity and commits its observations before returning a report.
+     *
+     * @param nowNanos monotonic time in nanoseconds for report intervals
+     * @param entityId the local player's entity ID for the current report lifetime
+     * @param roaming the non-null sample; unavailable defers a required roaming opportunity, absent intentionally omits it
+     * @return empty when ineligible, rate-limited or unchanged; otherwise a caller-owned report for one best-effort send
+     */
     public Optional<PlayerStateReportProto> observe(long nowNanos, int entityId, RoamingSample roaming) {
         if (policy == null || !authorityKnown
             || policy.requestedSections().contains(PlayerStateSection.ROAMING) && !roaming.available()) {

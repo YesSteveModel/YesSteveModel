@@ -1,6 +1,6 @@
 # 资产传输
 
-本页定位[typed 组装](../overview.md#typed-capability-与业务组装)与[dispatch 所有权](../overview.md#分发所有权与负载保护)。字段、数值上限与 coverage 规则由[协议](../../../standards/protocol-v1/README.md#typed-model-distribution)定义。
+本页定位[typed 组装](../overview.md#typed-capability-与业务组装)与[dispatch 所有权](../overview.md#传输接管与发送终态)。字段、数值上限与 coverage 规则由[协议](../../../standards/protocol-v1/README.md#typed-model-distribution)定义。
 
 ## Typed request 与 action owner
 

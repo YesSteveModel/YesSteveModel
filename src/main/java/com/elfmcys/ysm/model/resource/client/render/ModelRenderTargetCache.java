@@ -41,6 +41,22 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 
+/**
+ * Shares exact preparation Flights and retains host-published Ready targets.
+ *
+ * <p><b>Invariant:</b> A Ready result follows complete candidate adoption by the texture publisher.
+ * A completed loader future alone is not Ready. Each acquisition has a separate lease, including
+ * consumers that share one Flight. Cache eviction drops cache references, not live consumer interests.
+ *
+ * <p><b>Execution:</b> Internal maps use the cache monitor. The host owner drives tick and publication;
+ * loaders return asynchronous outcomes without waiting for that owner. CurrentLookup can run under
+ * the cache monitor. Lease users must serialize each handle's queries with its close.
+ *
+ * <p><b>Ownership:</b> The cache disposes each accepted candidate once: publish it or reject it through
+ * the supplied closer. Stale and cancelled work cannot publish into a replacement Flight.
+ *
+ * <p><b>Seam:</b> [Ready publication and resource ownership](docs/architecture/model-management/client-resources/overview.md#seam-contract).
+ */
 public final class ModelRenderTargetCache implements AutoCloseable {
     static final int MAX_IN_FLIGHT = 256;
     static final int MAX_BACKGROUND_IN_FLIGHT = MAX_IN_FLIGHT - 2;
@@ -359,6 +375,15 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         }
     }
 
+    /**
+     * Observes terminal preparation for a lease created by this cache.
+     * Completion does not transfer or create a lease; the caller must keep its original lease open.
+     * The caller must only observe this future, without completing or obtruding its shared result.
+     *
+     * @param lease an open lease from this cache
+     * @return a non-null future whose result the caller borrows under the original lease
+     * @throws IllegalArgumentException if the lease belongs to another implementation or cache
+     */
     public CompletableFuture<AcquireResult> terminal(ResourceLease lease) {
         var owned = ownedLease(lease);
         var flight = owned.state.flight;
@@ -678,12 +703,22 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         YesSteveModel.LOGGER.error("Model render target loader contract violation", error);
     }
 
+    /**
+     * Produces one asynchronous candidate or classified failure for an admitted Flight.
+     * The returned future and its terminal outcome must be non-null. Cancellation is cooperative;
+     * a late candidate still transfers to the cache for rejection. The loader must not publish the candidate.
+     */
     @FunctionalInterface
     public interface Loader {
         CompletableFuture<ModelRenderTargetLoader.LoadResult> load(BooleanSupplier cancelled,
             ClientResourceScheduler.Dispatch dispatch);
     }
 
+    /**
+     * Answers the current qualification of a new acquisition or publication.
+     * The callback can run under the cache monitor and must not wait for work that needs that monitor.
+     * It observes changing membership and policy; established immutable content guarantees remain trusted.
+     */
     @FunctionalInterface
     public interface CurrentLookup {
         boolean isCurrent(ModelFileIdentity identity, RenderTargetKey key, ResourceRequest request);

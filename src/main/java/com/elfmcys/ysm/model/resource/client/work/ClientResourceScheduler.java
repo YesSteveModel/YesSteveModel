@@ -13,7 +13,20 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BiFunction;
 
-/** Owns execution capacity; resource owners retain cancellation and cleanup responsibility. */
+/**
+ * Owns execution capacity; resource owners retain cancellation and cleanup responsibility.
+ *
+ * <p>Execution: queue operations, promotion, withdrawal, and shutdown are serialized internally.
+ * One worker serves local-player work; the remaining workers serve background work. Tasks in one
+ * dispatch may run concurrently. Worker count is bounded; the queues do not impose an admission quota.
+ *
+ * <p>Requires: submitted actions own frozen inputs and complete finite work without waiting for
+ * network, host callbacks, other workers, or a Flight. Each action publishes its domain terminal
+ * result and releases its inputs even if execution fails; logging an escaped failure is not completion.
+ *
+ * <p>Seam: implements [scheduling versus domain completion](docs/architecture/runtime/overview.md#调度与领域终态交接) and
+ * [priority isolation](docs/architecture/runtime/overview.md#客户端资源调度).
+ */
 public final class ClientResourceScheduler {
     private static final PromotionLink NO_PROMOTION = () -> {
     };
@@ -25,6 +38,12 @@ public final class ClientResourceScheduler {
     private final Executor backgroundExecutor = action -> dispatch(WorkPriority.BACKGROUND).execute(action);
     private boolean shutdown;
 
+    /**
+     * Starts dedicated daemon workers immediately.
+     *
+     * @param workerCount total worker count, at least two
+     * @throws IllegalArgumentException if fewer than two workers are requested
+     */
     public ClientResourceScheduler(int workerCount) {
         this(workerCount, (policy, body) -> ThreadScheduling.entry(policy == ThreadPolicy.NORMAL
             ? ThreadRole.CLIENT_LOCAL_PLAYER_RESOURCE : ThreadRole.CLIENT_BACKGROUND_RESOURCE, policy, body));
@@ -57,14 +76,20 @@ public final class ClientResourceScheduler {
         }
     }
 
+    /** Returns an independent priority group, not a serial executor or a domain-operation owner. */
     public Dispatch dispatch(WorkPriority initial) {
         return new Dispatch(Objects.requireNonNull(initial, "initial"));
     }
 
+    /** Returns a borrowed executor using background priority; each action keeps the class-level obligations. */
     public Executor backgroundExecutor() {
         return backgroundExecutor;
     }
 
+    /**
+     * Rejects later submissions and wakes workers to drain accepted actions; does not cancel or await them.
+     * Repeated calls are harmless. Domain owners must separately terminate work they withdraw.
+     */
     public void shutdown() {
         synchronized (lock) {
             shutdown = true;
@@ -72,6 +97,14 @@ public final class ClientResourceScheduler {
         }
     }
 
+    /**
+     * Waits for every worker to exit without a timeout.
+     *
+     * <p>Requires: shutdown has been requested and the caller is not one of these workers. Returning
+     * proves executor termination, not that a domain owner delivered every result.
+     *
+     * @throws InterruptedException if the waiting caller is interrupted
+     */
     public void awaitTermination() throws InterruptedException {
         for (var worker : workers) {
             worker.join();
@@ -149,6 +182,7 @@ public final class ClientResourceScheduler {
         }
     }
 
+    /** A shared priority group; promotion affects queued work and dependencies, never restarts a running action. */
     public final class Dispatch implements Executor {
         private WorkPriority priority;
         private final LinkedHashSet<QueuedTask> queued = new LinkedHashSet<>();
@@ -164,6 +198,14 @@ public final class ClientResourceScheduler {
             }
         }
 
+        /**
+         * Accepts one non-null action and returns its withdrawal handle. The action may start before return.
+         *
+         * <p>Ownership: acceptance transfers execution responsibility only. Rejection leaves the input and
+         * terminal-result obligations with the submitter; action failure is logged on its worker.
+         *
+         * @throws RejectedExecutionException if shutdown has sealed submission
+         */
         public QueuedTask enqueue(Runnable action) {
             Objects.requireNonNull(action, "action");
             QueuedTask task;
@@ -192,6 +234,7 @@ public final class ClientResourceScheduler {
             enqueue(action);
         }
 
+        /** Promotes remaining work once; does nothing after shutdown and does not preempt claimed work. */
         public void promoteLocalPlayer() {
             synchronized (lock) {
                 // A drained local worker must never receive work after shutdown.
@@ -201,6 +244,13 @@ public final class ClientResourceScheduler {
             }
         }
 
+        /**
+         * Forwards current and future promotion to a distinct dispatch from this scheduler.
+         * The caller owns the returned link and closes it when the dependency ends. Closing a link
+         * removes forwarding only; it does not undo promotion or cancel dependent work.
+         *
+         * @throws IllegalArgumentException if dependency is this dispatch or belongs to another scheduler
+         */
         public PromotionLink forwardPromotionTo(Dispatch dependency) {
             Objects.requireNonNull(dependency, "dependency");
             if (dependency == this || dependency.scheduler() != ClientResourceScheduler.this) {
@@ -238,7 +288,12 @@ public final class ClientResourceScheduler {
             enqueuedAt = ResourceDiagnostics.isEnabled() ? System.nanoTime() : 0;
         }
 
-        /** A successful withdrawal returns cleanup responsibility to the original owner. */
+        /**
+         * Atomically withdraws an unclaimed action without running it or closing its inputs.
+         *
+         * @return true if this call withdrew the action and the original owner must settle its result
+         *         and inputs; false if already claimed or withdrawn, which does not prove completion
+         */
         public boolean withdraw() {
             synchronized (lock) {
                 if (!queued) {

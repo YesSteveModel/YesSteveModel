@@ -4,7 +4,7 @@
 - Select: 客户端输入校验、可信服务端的能力底线
 - Landing:
   - [standard](../../standards/protocol-v1/README.md#安全与能力边界)
-  - [design](../../architecture/animation/molang-runtime.md#失败与信任边界)
+  - [design](../../architecture/animation/molang-runtime.md#内容信任与预算)
   - [design](../../architecture/animation/molang-runtime.md)
 
 ## DD.validate-client-before-effect

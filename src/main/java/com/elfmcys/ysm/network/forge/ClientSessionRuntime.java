@@ -44,12 +44,32 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 
-/** Connection-scoped owner of the one current client model session. */
+/**
+ * Owns the client adapter's one exact Connection and its independent model business and catalog lifetimes.
+ *
+ * <p><b>Execution:</b> Synchronized entry points serialize current-owner checks and replacement.
+ * Callers must route domain work to the client owner thread. An exact check here does not authorize
+ * an arbitrary worker to mutate Minecraft state.
+ *
+ * <p><b>Ownership:</b> Replacement removes current before closing transfer, publication and activation
+ * owners. Late callbacks can dispose their own results but cannot borrow a replacement connection.
+ * Catalog failure can retain handshake business eligibility; protocol failure retires both.
+ *
+ * <p><b>Seam:</b> [client connection retirement](docs/architecture/network/overview.md#连接撤销交接).
+ */
 public final class ClientSessionRuntime {
     private static ConnectionState current;
 
     private ClientSessionRuntime() {}
 
+    /**
+     * Replaces the current connection and opens its model-session owners.
+     * IOException or RuntimeException from remote-store setup retires the partial owner before propagation.
+     *
+     * @param connection the non-null exact host connection
+     * @return the new session; negotiation or content activation can still be pending
+     * @throws IllegalStateException if remote-store setup fails after creation of the connection owner
+     */
     public static synchronized ClientModelSession beginConnection(Connection connection) {
         Objects.requireNonNull(connection, "connection");
         closeCurrent();
@@ -433,6 +453,11 @@ public final class ClientSessionRuntime {
         }
     }
 
+    /**
+     * Retires only the current exact connection. A delayed disconnect for an old connection has no effect.
+     *
+     * @param connection the host connection identity whose owner should end
+     */
     public static synchronized void disconnect(Connection connection) {
         if (current != null && current.connection == connection) {
             closeCurrent();

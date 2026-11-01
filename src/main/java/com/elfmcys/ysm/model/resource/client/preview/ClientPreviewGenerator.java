@@ -48,7 +48,22 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Client-tick owner for bounded preview and export operations. */
+/**
+ * Client-tick owner for bounded preview and export operations.
+ *
+ * <p>Failure: admission after close completes the result with CancellationException; a full submission queue
+ * completes it with RejectedExecutionException. Stage failures complete the same result exceptionally.
+ *
+ * <p>Execution: submitters enqueue work; the client owner drives tick and close. Worker completion publishes
+ * stage facts. Tick advances available facts without waiting for unfinished workers. Future callbacks can run
+ * inline on the thread that completes or cancels the result, including while the owner monitor is held.
+ *
+ * <p>Ownership: the operation owns retained inputs and intermediate results. A successfully delivered
+ * EncodedPreview transfers to the consumer, which must close it. Cancellation requests cleanup but does not join
+ * workers; the service that owns the executors must drain them during shutdown.
+ *
+ * <p>Seam: implements [preview operation ownership](docs/architecture/asset-pipeline/overview.md#预览取得与生成).
+ */
 public final class ClientPreviewGenerator implements Closeable {
     private static final int DEFAULT_MAX_ACTIVE = 16;
     private static final int DEFAULT_PENDING_CAPACITY = 32;
@@ -156,12 +171,16 @@ public final class ClientPreviewGenerator implements Closeable {
         return resolveLocal(content, true);
     }
 
+    /**
+     * @return a preview source, or null when no preview exists and generation is disabled
+     */
     public CompletableFuture<ImageSource> resolveLocal(ModelContent content, boolean allowGeneration) {
         Objects.requireNonNull(content, "content");
         var output = new CompletableFuture<ImageSource>();
         return submit(new LocalPreviewSubmission(nextId(), content, allowGeneration, output), output);
     }
 
+    /** Returns an empty result for an absent remote preview; does not generate a replacement. */
     public CompletableFuture<Optional<ImageSource>> probeRemote(ModelContent content) {
         Objects.requireNonNull(content, "content");
         var output = new CompletableFuture<Optional<ImageSource>>();
@@ -726,6 +745,10 @@ public final class ClientPreviewGenerator implements Closeable {
         return prepared == null ? failure : prepared.closeOwned(failure);
     }
 
+    /**
+     * Seals admission and cancels pending operations. Late facts are disposed by their operation slots.
+     * Already delivered results remain the consumer's responsibility. Repeated calls do nothing.
+     */
     @Override
     public synchronized void close() {
         if (!closed.compareAndSet(false, true)) {

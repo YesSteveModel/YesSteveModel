@@ -10,7 +10,7 @@
 - Landing:
   - [standard](../../standards/model-schema/assets-and-validation.md)
   - [implementation](../../architecture/model-management/catalog/overview.md#实现与验证入口)
-  - [design](../../architecture/model-management/catalog/overview.md#逐项发布与替换)
+  - [design](../../architecture/model-management/catalog/overview.md#seam-contract)
   - [design](../../architecture/model-management/catalog/overview.md#逻辑位置与接纳)
 
 ## DD.bedrock-creator-ecosystem
@@ -45,6 +45,6 @@
 
 全局目录只允许在启动探测期间创建正常缺席的根和自有探针，见[来源保护例外](artifact-storage.md#bclocal-catalog-input-is-never-mutated)。已有链接和 junction 保留；断链不视为缺席，不创建断链目标。实例 custom 自动创建、实例 auth 仅在 dedicated server 自动创建的边界不变。
 
-文件格式按逻辑入口名识别。链接不放宽内容验证、来源权限或缓存写入边界，也不扩展压缩包内部链接语义。多个逻辑入口均可参与候选；同相对位置的不同内容可并存，同内容冲突由 [Catalog 设计](../../architecture/model-management/catalog/overview.md#逐项发布与替换)裁决，不承诺固定赢家或多别名展示。
+文件格式按逻辑入口名识别。链接不放宽内容验证、来源权限或缓存写入边界，也不扩展压缩包内部链接语义。多个逻辑入口均可参与候选；同相对位置的不同内容可并存，同内容冲突由 [Catalog 设计](../../architecture/model-management/catalog/overview.md#seam-contract)裁决，不承诺固定赢家或多别名展示。
 
 断链、访问失败、祖先环或 raw 内部链接只拒绝受影响分支或模型；同根健康项继续参与验证与发布。不完整观察不能证明旧项删除，见[目录发布](catalog-publication.md#bccatalog-defines-current-content)。修复输入本身不触发重载。

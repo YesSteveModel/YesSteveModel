@@ -10,7 +10,17 @@ import java.util.concurrent.FutureTask;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-/** Main-thread lifecycle; a pending task remains private until its corresponding get. */
+/**
+ * Serializes public lifecycle operations, owner execution, candidate activation, and draw borrows.
+ *
+ * <p>Invariant: a task retains the owner's private state until its corresponding get or GUI join.
+ * A completed future remains a task until that handoff. A GUI reservation seals the owner immediately.
+ *
+ * <p>Execution: lifecycle operations require the main thread. Only the recorded worker or the exact
+ * executing GUI permit can enter its internal window. These rules do not synchronize live host inputs.
+ *
+ * <p>Seam: establishes [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接).
+ */
 final class EntityExecutionLifecycle {
     private enum Phase { IDLE, CANDIDATE, CALL, DRAW }
 
@@ -165,6 +175,12 @@ final class EntityExecutionLifecycle {
         }
     }
 
+    /**
+     * Enters installation only when no task or other operation owns the execution window.
+     *
+     * <p>Execution: does not join or wait. An empty result means that the operation never ran,
+     * so the caller retains every resource that the operation would have consumed.
+     */
     <R> Optional<R> tryInstallation(Supplier<R> operation) {
         assertMainThread();
         if (retired || phase != Phase.IDLE || hasTask() || endingUse)
@@ -220,6 +236,12 @@ final class EntityExecutionLifecycle {
         }
     }
 
+    /**
+     * Drains the ordinary task's corresponding get before clearing the task slot.
+     *
+     * <p>Failure: interruption delays the handoff instead of abandoning it. The interrupt flag is restored.
+     * Task failure enters taskFailure only after all task cleanup completes and the slot is cleared.
+     */
     void awaitTask() {
         assertPublicAccess();
         if (phase == Phase.CALL || phase == Phase.CANDIDATE)
@@ -250,6 +272,12 @@ final class EntityExecutionLifecycle {
         }
     }
 
+    /**
+     * Reserves exclusive GUI execution before submission and binds the operation to one permit.
+     *
+     * <p>Requires: the caller must later reject an unstarted, unaccepted task or join the accepted task.
+     * Running the task inline does not remove the explicit join obligation.
+     */
     <R> GuiTask<R> reserveGuiTask(boolean permitted, Supplier<R> operation) {
         rejectRecursiveCall();
         if (!permitted || retired || endingUse || hasTask())

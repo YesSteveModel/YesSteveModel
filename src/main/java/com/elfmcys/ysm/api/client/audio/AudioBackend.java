@@ -17,6 +17,19 @@ import java.util.concurrent.CompletionStage;
  * </p>
  */
 public interface AudioBackend {
+    /**
+     * Accepts or rejects one playback synchronously, without completing its terminal before returning.
+     * Acceptance selects this backend for the whole playback; backend failure does not fall back to another backend.
+     *
+     * <p><b>Ownership:</b> Accepted transfers the restricted chunk capability and complete playback duty to
+     * the backend. The backend closes delivered chunks after their last borrow and seals new output before
+     * cancel returns. Rejected leaves capability closure with the caller and must retain no playback work.
+     *
+     * <p><b>Seam:</b> [audio backend acceptance](docs/architecture/model-management/audio/overview.md#后端接管与播放终态).
+     *
+     * @param request the non-null exact media, private chunk capability and initial control snapshot
+     * @return a non-null Accepted with one playback owner, or Rejected with a reason
+     */
     PlayResult play(PlaybackRequest request);
 
     sealed interface PlayResult permits Accepted, Rejected {}
@@ -39,7 +52,11 @@ public interface AudioBackend {
         /** Applies one full control snapshot in caller order. */
         void control(Control control);
 
-        /** Seals new output effects before returning. Repeated cancellation is harmless. */
+        /**
+         * Seals new output effects before returning. Repeated cancellation is harmless.
+         * The current SPI does not define when outstanding chunk borrows end relative to this return;
+         * see the [cancellation handoff gap](docs/status/known-issues/model-management.md#外部音频后端的取消交接).
+         */
         void cancel(CancelReason reason);
 
         /** Returns the exact playback's single terminal result. */

@@ -55,7 +55,20 @@ import java.util.function.Supplier;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
-/** Process catalog authority accepting complete snapshots built by one scan coordinator. */
+/**
+ * Process catalog authority that publishes complete candidates from one scan coordinator.
+ *
+ * <p><b>Invariant:</b> Each candidate contains a matching catalog and index. Separate calls to
+ * {@link #current()} and {@link #index()} can observe different publications; use
+ * {@link #currentCandidate()} when both views must come from one publication.
+ * Metadata admission does not prove that unread payloads or mutable source paths remain readable.
+ *
+ * <p><b>Execution:</b> The lifecycle owner serializes {@link #tick()} with owner-side publication.
+ * Scanning runs off that owner thread. Reload synchronizes admission and does not wait for a scan.
+ * Closing seals admission and waits for the scan coordinator; the owner must not close from that coordinator.
+ *
+ * <p><b>Seam:</b> [catalog publication](docs/architecture/model-management/catalog/overview.md#seam-contract).
+ */
 public final class ReloadableModelCatalog implements AutoCloseable {
     private static final int MAX_INPUTS = 100_000;
     private static final long BATCH_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1);
@@ -158,6 +171,12 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         completeStartFailure(admission);
     }
 
+    /**
+     * Requests one scan without replacing the last published candidate at admission.
+     *
+     * @return a non-null future completed by owner ticks after the scan terminates; BUSY admits no scan,
+     *     and a closed or inactive owner returns FAILED
+     */
     public CompletableFuture<ReloadResult> reload() {
         final Admission admission;
         synchronized (this) {
@@ -197,6 +216,15 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         }
     }
 
+    /**
+     * Registers an observer and immediately offers the current candidate.
+     *
+     * <p><b>Execution:</b> The initial callback runs on the caller. Later callbacks run on the publishing
+     * tick, outside the catalog monitor. The catalog reports observer failure without rolling back publication.
+     *
+     * @param listener a non-null observer that must not block publication
+     * @return an independent subscription whose close removes only this observer
+     */
     public Subscription subscribe(Consumer<CatalogTransition> listener) {
         Objects.requireNonNull(listener, "listener");
         final CatalogCandidate value;

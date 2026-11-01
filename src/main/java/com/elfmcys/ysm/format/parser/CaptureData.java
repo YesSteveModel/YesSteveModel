@@ -17,9 +17,19 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * Owns the frozen raw parse closure used by later compilation.
+ *
+ * <p>Ownership: the VFS and its buffers are borrowed until this capture closes. Closing the VFS view
+ * is not a separate ownership transfer. The caller excludes close while a compilation or borrow is active.
+ *
+ * <p>Seam: supports [frozen input reuse](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换); an uncaptured file is not fetched from the original source after freezing.
+ */
 public interface CaptureData extends AutoCloseable {
+    /** Returns the borrowed frozen view; no source I/O or new ownership is implied. */
     VirtualFileSystem asVirtualFileSystem();
 
+    /** Ends the capture and invalidates all its borrowed views and buffers. */
     @Override
     void close();
 }

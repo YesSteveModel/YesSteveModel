@@ -15,7 +15,19 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-/** Single-owner client authority state. Publication and activation commit on the client thread. */
+/**
+ * Owns remote publication and content activation for one connection chosen by the adapter.
+ *
+ * <p><b>Invariant:</b> ACTIVE means that remote authority exists; individual content can remain
+ * Pending or Failed. Catalog queries expose Ready content plus the intrinsic default.
+ * Publication, activation and render-target installation are separate transitions.
+ *
+ * <p><b>Execution:</b> Methods serialize this object's state. The adapter must reject a retired
+ * connection before calling them; this object has no Minecraft connection identity.
+ * Previously returned immutable snapshots remain values after replacement or close.
+ *
+ * <p><b>Seam:</b> [remote publication and activation](docs/architecture/model-management/sessions/overview.md#目录权威与内容激活).
+ */
 public final class ClientModelSession {
     private final CatalogSnapshot localCatalog;
     private final CatalogSnapshot intrinsicDefault;
@@ -68,7 +80,13 @@ public final class ClientModelSession {
         return Optional.of(new Response(true));
     }
 
-    /** Commits all four remote collections as one unit; content remains Pending. */
+    /**
+     * Commits all remote collections together and starts their content as Pending.
+     * An ACTIVE session instead applies the publication replacement rules.
+     *
+     * @param snapshot the non-null, fully assembled publication admitted by the receiver
+     * @throws IllegalStateException if the initial publication has no accepted hello or the state is invalid
+     */
     public synchronized void publishFull(RemotePublicationSnapshot snapshot) {
         if (state == State.ACTIVE) {
             publishPublication(snapshot);
@@ -84,7 +102,13 @@ public final class ClientModelSession {
         reconcilePreviews(snapshot);
     }
 
-    /** Commits new authority first and retains state only for unchanged exact tuples. */
+    /**
+     * Replaces authority and preserves activation only for unchanged exact content tuples.
+     * Grant changes affect new use; this transition does not close leases already held by consumers.
+     *
+     * @param snapshot the non-null, fully assembled replacement publication
+     * @throws IllegalStateException if the session is not ACTIVE
+     */
     public synchronized void publishPublication(RemotePublicationSnapshot snapshot) {
         requireState(State.ACTIVE);
         Objects.requireNonNull(snapshot, "snapshot");
@@ -179,6 +203,14 @@ public final class ClientModelSession {
         }
     }
 
+    /**
+     * Publishes a terminal activation result for the current publication.
+     * A Ready entry establishes content readiness, not a baked target or an installed entity model.
+     *
+     * @param snapshot the non-null terminal result whose entries belong to the current publication
+     * @throws IllegalStateException if the session is not ACTIVE
+     * @throws IllegalArgumentException if the result is incomplete or belongs to another publication
+     */
     public synchronized void publishActivation(ActivationSnapshot snapshot) {
         requireState(State.ACTIVE);
         Objects.requireNonNull(snapshot, "snapshot");
@@ -219,6 +251,10 @@ public final class ClientModelSession {
         return Set.copyOf(retries);
     }
 
+    /**
+     * Retires remote authority and enters intrinsic-default-only mode unless LOCAL or CLOSED.
+     * The adapter separately owns handshake business eligibility, transfer cancellation and playback shutdown.
+     */
     public synchronized void failCompleteTransfer() {
         if (state != State.CLOSED && state != State.LOCAL) {
             remote = null;

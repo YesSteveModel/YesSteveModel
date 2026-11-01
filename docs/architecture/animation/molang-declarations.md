@@ -1,6 +1,6 @@
 # 共同 Molang 声明契约
 
-本页拥有 builtin/API 作者签名与公共值规则；调用解析由[静态语言](molang-static-language.md#调用解析与局部恢复)拥有，类级资格与冻结由[扩展设计](../integration/overview.md#扩展资格与冻结)定义，实例安装由[实体 owner](implementation/entity-and-frame-state.md#绑定与切换)拥有。公共 Java 表面位于 `api.annotation`、`api.molang`。
+本页拥有 builtin/API 作者签名与公共值规则；调用解析由[静态语言](molang-static-language.md#调用解析与局部恢复)拥有，类级资格与冻结由[扩展设计](../integration/overview.md#扩展接纳与声明发布)定义，实例安装由[实体 owner](implementation/entity-and-frame-state.md#绑定与切换)拥有。公共 Java 表面位于 `api.annotation`、`api.molang`。
 
 ## 作者签名
 

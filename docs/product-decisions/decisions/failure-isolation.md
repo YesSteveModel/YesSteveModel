@@ -10,7 +10,7 @@
   - 涉及默认兜底本身失败: [CON.default-failure-exception](../shared.md#condefault-failure-exception)
 - Landing:
   - [implementation](../../architecture/rendering/implementation/vertex-output.md)
-  - [design](../../architecture/model-management/catalog/overview.md#生命周期与失败)
+  - [design](../../architecture/model-management/catalog/overview.md#失败与拒收)
   - [status](../../status/known-issues/rendering.md#正确性与失败处理)
   - [design](../../architecture/rendering/overview.md)
   - [design](../../architecture/model-management/sessions/overview.md#失败与恢复资格)

@@ -12,7 +12,7 @@ Mock 表示测试宿主和输入适配，不表示另写一套模型管理实现
 | Classpath | `MockSupervisor` 以不同物理 classpath 启动普通 Java client/server 子进程，载入各自生产依赖并通过 byte carrier 交互；smoke 验证基础闭环，full 与 exact-100 分别运行系统场景与规模场景 | 不启动 Forge launcher，不证明真实游戏 hook、GPU 或 GUI 行为；smoke 明确不具备完整验收资格 |
 | Forge host | `modelManagementMockForge` 由 `HostSupervisor` 启动独立 server、client A/B，`mockHost` 中的薄 probe 经宿主入口驱动并观察行为 | 只证明所运行环境与场景，不覆盖所有 shader、GPU、长期运行或物理回收时限 |
 
-Classpath 的 full 与 exact-100 各执行两次受控回放并核对输入身份及结果。域内 workload 与物理 exact-100 是不同验证半径，不能互相冒充，也不能据场景名称推导持续并发性能承诺；性能目标适用范围由[验证政策](../governance/verification-policy.md)定义。
+Classpath 的 full 与 exact-100 各执行两次受控回放并核对输入身份及结果。域内 workload 与物理 exact-100 是不同验证半径，不能互相冒充，也不能据场景名称推导持续并发性能承诺；性能目标适用范围由[验证政策](policy.md)定义。
 
 ## 构建与进程 ownership
 
@@ -65,7 +65,7 @@ java -jar catalog-links-verification.jar <fixtures> <evidence> windows
 <linux-java17> -jar catalog-links-verification.jar <fixtures> <evidence> linux-drvfs <windows-junction-root>
 ```
 
-`YSM_NATIVE_PATH` 应指向对应平台的 JNI 库。每次运行应使用全新 fixture 目录；入口在该目录解包运行依赖，并将测试临时目录放在同一文件系统。证据目录保存 JAR/native SHA-256、Java/provider 属性及逐项结果。生产包不包含测试控制入口。
+`YSM_NATIVE_PATH` 应指向对应平台的 JNI 库。每次运行应使用全新 fixture 目录；入口在该目录解包运行依赖，并将测试临时目录放在同一文件系统。证据目录保存 JAR/native SHA-256、Java/provider 属性及逐项结果。
 
 缓存写入验证应在单次操作期间保持目录结构稳定。用受控门禁在下一次复核前改变目录或引入内部链接，观察拒绝及来源 bytes/目录清单不变；不以检查与路径操作之间的外部替换竞态作为通过判据。Provider 缺少 `fileKey` 时，健康提交、失败保旧和完整内容校验仍应成立；同路径同类型替换可能不可见，不列为必然拒绝的判据。双 JVM 用例通过生产 JDK 文件锁竞争，覆盖同 key writer、索引范围合并、活跃消费者及异常退出残留；旧 `flock` 参与者不能作为互斥 oracle。
 

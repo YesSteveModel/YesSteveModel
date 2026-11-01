@@ -15,7 +15,17 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.Objects;
 
-/** Process composition root for immutable contracts, storage, and shared catalogs. */
+/**
+ * Process composition root for immutable contracts, storage, and shared catalogs.
+ *
+ * <p>Ownership: accessors borrow child owners. Their return does not retain the system or transfer a
+ * close right. Each child keeps its own execution and resource-retention contract.
+ *
+ * <p>Execution: callers arrange lifecycle exclusion for child use. The open check is not a lease;
+ * attachment and shutdown sealing are serialized, while cleanup runs outside this monitor.
+ *
+ * <p>Seam: implements [process ownership](docs/architecture/runtime/overview.md#运行作用域与所有权) and [ordered shutdown](docs/architecture/runtime/overview.md#结束与替换).
+ */
 public final class ModelSystem implements AutoCloseable {
     private final ModelStorageInfra storage;
     private final BuiltinModelCatalog builtins;
@@ -36,6 +46,14 @@ public final class ModelSystem implements AutoCloseable {
             .storedObserver(containerId -> serverResources.invalidatePreview(region.previews(), containerId)));
     }
 
+    /**
+     * Creates an unactivated system owned by the caller until process publication.
+     *
+     * <p>Requires: non-null process paths and an active mod container. Construction performs storage
+     * and builtin I/O synchronously; it does not start an ordinary catalog scan or prepare client Ready.
+     *
+     * @throws UncheckedIOException if the builtin contract cannot be read
+     */
     public static ModelSystem openDefault(AssetPaths paths) {
         final BuiltinModelIndex contract;
         try {
@@ -118,6 +136,12 @@ public final class ModelSystem implements AutoCloseable {
         serverResources.tick();
     }
 
+    /**
+     * Transfers one non-null client runtime's close responsibility to this system on normal return.
+     * Rejection leaves that responsibility with the caller and does not close the supplied owner.
+     *
+     * @throws IllegalStateException if this system is sealed or already has a client runtime
+     */
     public synchronized void attachClientRuntime(AutoCloseable owner) {
         requireOpen();
         Objects.requireNonNull(owner, "owner");
@@ -127,6 +151,16 @@ public final class ModelSystem implements AutoCloseable {
         clientRuntime = owner;
     }
 
+    /**
+     * Seals new access, then closes catalog, client, server resources, storage, and builtins in order.
+     *
+     * <p>Execution: the first call may block on owned work. A concurrent or repeated call only observes
+     * the seal and can return before cleanup completes. Children must not require future host ticks
+     * to terminate.
+     *
+     * <p>Failure: later owners are still closed after an earlier failure. The first cause propagates
+     * with later causes suppressed; another close does not retry failed cleanup.
+     */
     @Override
     public void close() {
         final AutoCloseable client;

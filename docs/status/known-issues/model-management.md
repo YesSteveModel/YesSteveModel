@@ -18,7 +18,7 @@
 
 ## 目录、存储与安装
 
-- Java 标准库受检路径与 JDK 文件锁的迁移回归已覆盖 Windows 和 WSL 原生 ext4，包括正向提交、观察拒绝、双 JVM writer、索引合并及活跃消费者保护。Windows 还验证缺少 `fileKey` 时的健康提交与验证失败保旧；平台或属性前提不适用的用例单列。存储仍依赖[操作期目录结构稳定](../../product-decisions/decisions/artifact-storage.md#bccache-maintenance-does-not-own-sources)，不保证发现无 `fileKey` 时的同路径同类型替换。Unix 非法单段与健康层级的 Catalog/pack 发布已有独立回归。方法见[缓存与名称段验证](../../verification/model-management.md#catalog-链接与显式-reload)。
+- Java 标准库受检路径与 JDK 文件锁的迁移回归已覆盖 Windows 和 WSL 原生 ext4，包括正向提交、观察拒绝、双 JVM writer、索引合并及活跃消费者保护。当前 Windows JDK provider 不提供目录 `fileKey`，已验证健康提交与验证失败保旧，同路径替换拒绝用例按前提跳过；其他平台或属性前提不适用的用例单列。存储仍依赖[操作期目录结构稳定](../../product-decisions/decisions/artifact-storage.md#bccache-maintenance-does-not-own-sources)，不保证发现无 `fileKey` 时的同路径同类型替换。Unix 非法单段与健康层级的 Catalog/pack 发布已有独立回归。方法见[缓存与名称段验证](../../verification/model-management.md#catalog-链接与显式-reload)。
 - Linux 私有 bind mount 验证了父目录别名下的同线程锁重入、取消别名等待者后跨 JVM 互斥仍有效，以及关闭一个消费者后另一消费者仍阻止清理。覆盖范围是稳定的父目录别名，不包含人为单独硬链接锁文件；网络共享文件系统、其他 provider、Android/macOS 及完整游戏仍未验证。
 - macOS 用户目录查询已由 Foundation Objective-C++ 经 `NativeRuntime` JNI 返回，Java 保留候选与探测。新增查询文件通过参考 macOS 工具链的独立 CMake 目标编译；Windows native 构建及 JNI 绑定验证通过。整体 native 的 CMake 配置受既有 Conan 包缺少 mimalloc 库阻挡。`NativeLibUtil` 尚未接通 macOS 加载，完整链接、真实目录查询及 native/游戏运行未验证；整体移植不属于本次目录迁移范围。
 
@@ -32,6 +32,9 @@
 
 ## 模型加载与图片交接
 
+- `ClientAssetRepository` 的 eager 完成回调没有与 batch close 共用交付锁。回调先观察未关闭、close 再读取空结果、回调交付成功、close 取消失败的交错可遗漏新结果的释放。源码级交错已确认，尚未运行竞态复现；不能据普通完成/取消回归声明全部迟到结果已闭环。责任见[页面结果所有权](../../architecture/client-presentation/overview.md#运行作用域与所有权)。
+- `DerivedStorageWork` 在 worker 启动前已入队并设置 worker；若 `Thread.start` 失败，没有恢复这些状态，close 可能等待永不运行的 worker 清除自身。属于线程启动失败的条件路径，未注入验证，不等同于普通 I/O 失败；责任见[存储工作寿命](../../architecture/model-management/storage/overview.md#精确缓存与持久工作)。
+
 独立 preview、前景、背景与作者头像已使用资源侧内容证明和驻留 use。受控回归覆盖热命中零重复工作、多消费者、替换、reload、成员/连接失效及失败收敛。真实宿主中的全部来源、注册存活、替换/reload/世界退出交错和长期回收尚未联合验收；[宿主入口](../../tools/benchmark/README.md#模型列表真实宿主)的分页计数不能单独关闭这些缺口。
 
 - 客户端 expression、派生写入与 preview 的字节政策已删除。定向回归覆盖 16 项 LRU／写入饱和、513 MiB 写入输入、192 MiB 实际像素、取消和最后借用释放。Winefox 01 的完整 MAIN 超过旧计价阈值仍可内存复用并提交；新 JVM 以独立 expected 重开，439 个动画和 artifact 内容相同且未编译。音频活动／保留与服务端 chunk／preview 额度在相同输入的前后版本、同 JVM owner 对照中保持；该对照不代表真实 integrated 游戏。方法见[保留与交接验证](../../tools/benchmark/README.md#证据半径)。新政策下的真实 GL 大图、integrated 游戏联合场景和长期 RSS 尚未验证。
@@ -41,9 +44,12 @@
 - 预览媒体资格、staging 副本一致性、最终编码像素与上传借用已有回归。真实 GL 延迟上传、页面／世界退出、注册拒绝、borrow 内失败和独立 reload 已观察像素回读一致及最终释放；客户端像素字节额度已删除，保留原 operation 数量和串行 reload 门禁；旧额度样本不证明当前保留峰值或 RSS 回落。
 - eager 无图卡片在实时准备期间保持加载反馈，真实逐帧未出现有效展示下的中间问号。实际 intrinsic default MAIN／arm 的主体均为 LivingEntity；真实页面手动动画浏览、非默认纹理与第三／第一人称画面已有固定样本。Detached 默认 body 与必要 PBR 的实际构造／GL 上传已验证，不裁决 shader pack 的最终材质效果或全部动画／联动视觉。
 - 固定内容对照已覆盖 GUI 单卡／第一页、FULL 和换纹理的 eager true/false，并报告暖 geometry／图片、进程工作集及主循环分布。第一页 eager=false 的首帧收益未复现，Private Bytes 增量与 frame P99 两对均增加；完整图片 blit 成本仍缺。整体收益和主循环尾延迟未通过当前验收，局部去重改善不抵消这些风险。
-- 当前 Windows JDK provider 不提供目录 `fileKey`。同路径替换的拒绝用例按前提跳过；生产存储仍依赖操作期目录结构稳定，不能据此声明该替换已验证通过。
 
 ## 导出与管理补图
 
 - `/ysm export` 与 `/ysm export-all` 的环境/权限门禁、单项与批量完整导出已有实机证据，生成制品已独立重开。作者图、混合批次、各阶段文件/host 故障、活动世界停止、长期 cache 及最坏合法图片/target 成本仍未验。职责见[转换与导出](../../architecture/asset-pipeline/implementation/conversion-and-export.md#preview-取得与显式-export)。
 - 管理补图时，builtin `wine_fox/18_wedding` 报告 `Expression compiler is unavailable`，其他项目继续完成；该模型的 expression admission/编译可用性尚未闭环。单 raw fixture 的图片命中、Ready/cold 路径和 gameplay 送达不能证明大目录、双管理员、帧时间或 operation retention 峰值达标。
+
+## 外部音频后端的取消交接
+
+外部后端 cancel 当前只明确承诺返回前 seal 新输出；runtime 随即关闭 chunk capability，包括已交付 chunk。若后端解码 worker 尚未结束对 chunk bytes 的借用，现有 SPI 没有明确的借用结束交接。默认后端的 worker 清理机制不能替外部后端证明此条件。应先闭合[后端能力与播放终态](../../architecture/model-management/audio/overview.md#后端接管与播放终态)的责任；尚未验证 backing 物理存活或复现内存错误，不能直接定性为 UAF。

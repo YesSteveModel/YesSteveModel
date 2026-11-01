@@ -1,6 +1,6 @@
 # Molang 运行时的落实关系
 
-本页落实[Molang 编译与执行分离](../molang-runtime.md#编译与执行分离)、[完整准备](../molang-runtime.md#完整准备与准入)和[效果事务](../molang-runtime.md#invocation-与效果)。语言规则由[静态语言](../molang-static-language.md)拥有，扩展作者接口由[共同声明](../molang-declarations.md)拥有。
+本页落实[Molang 编译与执行分离](../molang-runtime.md#共享产物准备与准入)、[完整准备](../molang-runtime.md#完整准备与准入)和[效果事务](../molang-runtime.md#invocation-与效果)。语言规则由[静态语言](../molang-static-language.md)拥有，扩展作者接口由[共同声明](../molang-declarations.md)拥有。
 
 ## 源码、解析与缓存
 

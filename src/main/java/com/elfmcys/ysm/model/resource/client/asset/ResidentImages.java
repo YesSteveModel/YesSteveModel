@@ -11,7 +11,15 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/** Content associations and consumer uses; host retention and physical release stay in the manager. */
+/**
+ * Content associations and consumer uses; host retention and physical release stay in the manager.
+ *
+ * <p>Execution: lookup, claim, publication, and Use access run on the render owner. Synchronization
+ * also permits preparation completion from workers; it does not permit host texture work on any thread.
+ * A Preparation is single-consumer work and a Prepared result needs an ordered handoff before publication.
+ *
+ * <p>Seam: implements [independent image use and host retention](docs/architecture/client-presentation/implementation/page-runtime.md#页面与资源-owner) without owning model-target textures.
+ */
 public final class ResidentImages {
     private final Map<ImageIdentity, Entry> residents = new HashMap<>();
     private final Map<ImageIdentity, Preparation> preparing = new HashMap<>();
@@ -44,6 +52,10 @@ public final class ResidentImages {
         this.decoder = decoder;
     }
 
+    /**
+     * Returns an independently closeable use only for current authority and a live host registration;
+     * returns null on a miss. Does not read, decode, or acquire model content.
+     */
     public synchronized Use lookup(ImageRequest request) {
         if (!request.current(null))
             return null;
@@ -60,6 +72,12 @@ public final class ResidentImages {
         return new Use(entry, request);
     }
 
+    /**
+     * Reserves one current identity for CPU preparation, or returns null if stale, resident, or already claimed.
+     *
+     * <p>Ownership: retains an independent use of encoded input on success. The caller remains responsible
+     * for its original input and must close an unused claim; successful prepare transfers cleanup to Prepared.
+     */
     public synchronized Preparation claim(ImageRequest request, ImageSource source) {
         if (!request.current(source))
             return null;
@@ -76,7 +94,11 @@ public final class ResidentImages {
         return preparation;
     }
 
-    /** Consumes every outcome, including rejection and invalidation. */
+    /**
+     * Consumes a non-null, unconsumed Prepared result on every path, including rejection and failure.
+     * Normal return may discard a stale or duplicate result; it does not create a consumer use.
+     * Host registration/upload failures propagate after this result's cleanup.
+     */
     public synchronized void publish(Prepared image) {
         Objects.requireNonNull(image);
         if (image.content == null)
@@ -124,6 +146,7 @@ public final class ResidentImages {
         preparing.remove(preparation.identity, preparation);
     }
 
+    /** One consumer's host retention; closing it never closes another consumer's use. */
     public final class Use implements AutoCloseable {
         private final Entry entry;
         private final ImageRequest request;
@@ -134,6 +157,7 @@ public final class ResidentImages {
             this.request = request;
         }
 
+        /** Returns a borrowed texture or null after use close, authority loss, or registration invalidation. */
         public TextureHolder texture() {
             return !closed && request.allowed() && entry.registration.live() ? entry.holder : null;
         }
@@ -164,7 +188,14 @@ public final class ResidentImages {
             this.source = source;
         }
 
-        /** Synchronous CPU work, invoked once by the designated card task. */
+        /**
+         * Performs synchronous CPU work once on the designated task; does not register a host texture.
+         * Normal return transfers the prepared input to the caller, who must publish or close it.
+         * Failure releases this claim; closing Preparation after consumption does not close its result.
+         *
+         * @throws IllegalStateException if this preparation was already executed or closed
+         * @throws IOException if image preparation fails
+         */
         public Prepared prepare() throws IOException {
             final ImageSource input;
             synchronized (this) {
@@ -213,6 +244,10 @@ public final class ResidentImages {
         }
     }
 
+    /**
+     * One owning CPU result, used exclusively until publish or close consumes it. Closing an unpublished
+     * result releases its input and identity reservation; it does not invalidate another resident entry.
+     */
     public final class Prepared implements AutoCloseable {
         private final Preparation preparation;
         private final ImageRequest request;

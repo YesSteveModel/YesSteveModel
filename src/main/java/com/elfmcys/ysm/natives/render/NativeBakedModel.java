@@ -21,6 +21,24 @@ import org.joml.Vector2f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
 
+/**
+ * Owns immutable native geometry; Java retains resource identity and publication authority.
+ *
+ * <p>Requires: bake and tryBake callers retain the model bytes and texture owner through the call.
+ * Inputs must not change or be released during that borrow. Textures contain tightly packed RGBA
+ * pixels; buffer overloads require at least width * height * 4 readable bytes at their base address.
+ *
+ * <p>Execution: operations complete synchronously on the calling thread. The owner excludes close
+ * from all native handle borrows. Native extraction and rendering retain or borrow the immutable
+ * backing under their own state contracts; this wrapper does not schedule host work.
+ *
+ * <p>Ownership: bake/read return an unshared handle with one close obligation.
+ * After share(), consumers retain references and cannot explicitly close this wrapper.
+ * Serialized output has an independent Storage owner.
+ *
+ * <p>Seam: implements immutable geometry ownership in the
+ * [shared geometry handoff](docs/architecture/native-runtime/implementation/jni-and-memory.md#共享-geometry).
+ */
 public final class NativeBakedModel extends NativeObject {
     private boolean shared;
     private static final Function<State, NativeBakedModel> ADOPT = NativeBakedModel::new;
@@ -53,6 +71,7 @@ public final class NativeBakedModel extends NativeObject {
     public record CubeData(Vector3f[] positions, QuadData[] quads, int quadCount, int quadCountAfterCulling) {
     }
 
+    /** Complete owning geometry and its bone-order mapping; short indices are unsigned. */
     public record ModelResult(NativeBakedModel bakedModel, short[] sortedBoneIndices) {
     }
 
@@ -60,13 +79,23 @@ public final class NativeBakedModel extends NativeObject {
         super(state);
     }
 
-    /** Revokes explicit destruction once independent consumers can retain this handle. */
+    /**
+     * <p>Ensures: permanently revokes explicit destruction of this wrapper; repeated share calls return the same owner.
+     *
+     * <p>Ownership: consumers retain this wrapper until their native borrows finish, then drop references.
+     * Only Cleaner may release the shared wrapper's handle.
+     *
+     * @return this wrapper, without creating another native handle
+     */
     public synchronized NativeBakedModel share() {
         get();
         shared = true;
         return this;
     }
 
+    /**
+     * @throws IllegalStateException after share(); shared consumers have no physical release authority
+     */
     @Override
     public synchronized void close() {
         if (shared)
@@ -247,6 +276,7 @@ public final class NativeBakedModel extends NativeObject {
         return new CubeData(positions, quads, quadCount, quadCountAfterCulling);
     }
 
+    /** Serializes the message for the synchronous bake handoff; texture must use NativeImage.Format.RGBA. */
     @Owned
     public static ModelResult bake(GeoModelProto model, NativeImage texture, int originVersion, boolean forceCulling,
         boolean forceTranslucent, boolean hasPbr) throws IOException {
@@ -257,6 +287,7 @@ public final class NativeBakedModel extends NativeObject {
         }
     }
 
+    /** Uses the bake contract with an RGBA NativeImage whose owner remains live throughout the call. */
     @Owned
     public static ModelResult bake(UniBuffer modelData, int boneCount, NativeImage texture, int originVersion,
         boolean forceCulling, boolean forceTranslucent, boolean hasPbr) {
@@ -269,6 +300,7 @@ public final class NativeBakedModel extends NativeObject {
             originVersion, forceCulling, forceTranslucent, hasPbr);
     }
 
+    /** Uses the buffer bake contract with both force options disabled. */
     @Owned
     public static ModelResult bake(UniBuffer modelData, int boneCount, NativeBuffer texturePixels, int textureWidth,
         int textureHeight, int originVersion, boolean hasPbr) {
@@ -276,6 +308,16 @@ public final class NativeBakedModel extends NativeObject {
             hasPbr);
     }
 
+    /**
+     * <p>Requires: modelData is GeoModelProto bytes and boneCount matches that message.
+     *
+     * <p>Failure: native rejection throws RuntimeException. Failed Java adoption releases the
+     * unreturned handle. Success creates geometry only; it does not install resources or textures.
+     *
+     * @param boneCount expected bone count in [0, 65536]
+     * @param originVersion unsigned 16-bit source version
+     * @return complete owning geometry and a bone-order mapping of boneCount elements
+     */
     @Owned
     public static ModelResult bake(UniBuffer modelData, int boneCount, NativeBuffer texturePixels, int textureWidth,
         int textureHeight, int originVersion, boolean forceCulling, boolean forceTranslucent, boolean hasPbr) {
@@ -318,6 +360,16 @@ public final class NativeBakedModel extends NativeObject {
         return result;
     }
 
+    /**
+     * <p>Requires: the caller supplies a current native-cache payload after its cache/profile admission.
+     * The buffer owner and bytes remain unchanged until the synchronous read returns.
+     *
+     * <p>Failure: native decode rejection throws RuntimeException; failed adoption releases the result handle.
+     * Cache identity and miss/rebuild decisions remain with the Java storage owner.
+     *
+     * @param boneCount payload bone count in [0, 65536]
+     * @return complete owning geometry and its bone-order mapping
+     */
     @Owned
     public static ModelResult read(UniBuffer buffer, int boneCount) {
         validateBoneCount(boneCount);
@@ -345,7 +397,7 @@ public final class NativeBakedModel extends NativeObject {
         }
     }
 
-    /** Immutable backing can be shared with storage; consumers must only drop their reference. */
+    /** @return positive byte estimates for retained native backing and serialized output, respectively */
     public StorageBytes storageBytes() {
         try {
             var backing = nStorageBytes(get());
@@ -361,7 +413,13 @@ public final class NativeBakedModel extends NativeObject {
     public record StorageBytes(long backing, long serialization) {
     }
 
-    /** Borrows immutable backing; shared consumers have no physical close authority. */
+    /**
+     * <p>Ownership: borrows this model during serialization, then transfers an independent allocation
+     * to the receiver. The receiver closes that Storage or transfers it to a GC owner.
+     *
+     * @return owning serialized bytes; closing them does not release this model
+     * @throws RuntimeException if native serialization fails
+     */
     @Owned
     public NativeStorage serialize() {
         try {
@@ -375,6 +433,7 @@ public final class NativeBakedModel extends NativeObject {
         }
     }
 
+    /** Uses the validation contract with an RGBA NativeImage retained for the entire call. */
     public static boolean tryBake(UniBuffer modelData, NativeImage texture, int originVersion, boolean forceCulling,
         boolean forceTranslucent, boolean hasPbr) {
         if (texture.format() != NativeImage.Format.RGBA) {
@@ -386,6 +445,7 @@ public final class NativeBakedModel extends NativeObject {
             originVersion, forceCulling, forceTranslucent, hasPbr);
     }
 
+    /** Uses the validation contract after serializing the message into call-local bytes. */
     public static boolean tryBake(GeoModelProto model, NativeBuffer texturePixels, int textureWidth, int textureHeight,
         int originVersion, boolean forceCulling, boolean forceTranslucent, boolean hasPbr) throws IOException {
         try (var modelData = ArrayBuffer.allocateWithScope(model.getSerializedSize())) {
@@ -395,6 +455,13 @@ public final class NativeBakedModel extends NativeObject {
         }
     }
 
+    /**
+     * <p>Failure: false reports native validation failure without returning a geometry owner.
+     * Java carrier, dimension, and option errors remain exceptions.
+     *
+     * @return whether native bake validation completed for the supplied bytes and options;
+     *     this does not publish a model or a reusable validation handle
+     */
     public static boolean tryBake(UniBuffer modelData, NativeBuffer texturePixels, int textureWidth, int textureHeight,
         int originVersion, boolean forceCulling, boolean forceTranslucent, boolean hasPbr) {
         validateTextureSize(texturePixels.size(), textureWidth, textureHeight);

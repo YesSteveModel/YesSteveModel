@@ -7,7 +7,14 @@ import com.elfmcys.ysm.YesSteveModel;
 import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.loading.FMLPaths;
 
-/** Lifecycle bridge between Forge common setup and the process model-system owner. */
+/**
+ * Lifecycle bridge between Forge common setup and the process model-system owner.
+ *
+ * <p>Execution: startup and process shutdown must not overlap. Synchronization protects publication,
+ * not the lifetime of a system returned to a caller.
+ *
+ * <p>Seam: implements the [process lifecycle](docs/architecture/runtime/overview.md#结束与替换); game-service and connection shutdown do not close this owner.
+ */
 public final class ModelRuntime {
     private static ModelSystem system;
     private static boolean shutdownHookRegistered;
@@ -15,6 +22,14 @@ public final class ModelRuntime {
 
     private ModelRuntime() {}
 
+    /**
+     * Publishes a complete system once; repeated calls keep the published instance.
+     *
+     * <p>Requires: Forge paths and the active mod container are available. Ordinary catalog activation
+     * and required client preparation have separate owners.
+     *
+     * <p>Failure: construction failure propagates without publishing a partial system.
+     */
     public static synchronized void initialize() {
         if (system != null) {
             return;
@@ -36,6 +51,11 @@ public final class ModelRuntime {
         }
     }
 
+    /**
+     * Returns the borrowed process system; callers do not acquire a close right or a lifetime pin.
+     *
+     * @throws IllegalStateException if initialization has not published a system, or shutdown detached it
+     */
     public static synchronized ModelSystem system() {
         if (system == null) {
             throw new IllegalStateException("Model runtime has not been initialized");
@@ -43,6 +63,7 @@ public final class ModelRuntime {
         return system;
     }
 
+    /** Returns the process directory configuration, retained across system close and reconstruction. */
     public static AssetPaths paths() {
         return directories.get();
     }
@@ -70,6 +91,14 @@ public final class ModelRuntime {
         return paths;
     }
 
+    /**
+     * Detaches the current system before closing it outside the publication monitor.
+     *
+     * <p>Execution: may wait for owned work without a timeout. A concurrent second close can return
+     * before the first close finishes; callers must not treat that return as a join.
+     *
+     * <p>Failure: system cleanup failures propagate after detachment. Repeated calls do not retry cleanup.
+     */
     public static void close() {
         final ModelSystem current;
         synchronized (ModelRuntime.class) {

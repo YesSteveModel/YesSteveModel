@@ -14,7 +14,19 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 
-/** The sole owner of accepted resource packets, cursors, retries, and global rate limiting. */
+/**
+ * Sole owner of accepted resource packets, fragment cursors, retries and global rate limiting.
+ *
+ * <p><b>Invariant:</b> Queue acceptance is neither transmission completion nor client publication.
+ * Retrying rebuilds only the current fragment. Session keys are exact ServerModelSession objects;
+ * the caller must already establish their connection and business eligibility.
+ *
+ * <p><b>Execution:</b> The producer serializes fragment production and transport attempts per session.
+ * Detached packet close and production-failure callbacks run outside the dispatch session monitor.
+ * Close seals queues and joins the producer; the producer must not close its own worker.
+ *
+ * <p><b>Seam:</b> [dispatch ownership frontier](docs/architecture/network/overview.md#传输接管与发送终态).
+ */
 public final class ResourceDispatchWorker implements AutoCloseable {
     public static final long RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(100);
 
@@ -45,7 +57,15 @@ public final class ResourceDispatchWorker implements AutoCloseable {
         }
     }
 
-    /** Atomically transfers all packets to the exact session owner or transfers none. */
+    /**
+     * Atomically transfers the complete packet set to one exact session, or transfers none.
+     *
+     * @param owner the non-null admitted session; this method does not check its business permission
+     * @param transport the non-null port that must match this session's already registered port by identity
+     * @param packets the non-null stable packet list with non-null, caller-owned entries
+     * @return true only when dispatch takes every packet's close duty; false leaves every packet with the caller
+     * @throws RuntimeException if settings or packet inputs violate their contract; the caller retains the packets
+     */
     public synchronized boolean enqueue(ServerModelSession owner, TransportPort transport,
         List<? extends LogicalPacket> packets) {
         Objects.requireNonNull(owner, "owner");

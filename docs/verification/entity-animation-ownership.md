@@ -1,6 +1,6 @@
 # 实体动画所有权验证
 
-本页记录验证入口。执行、交接和退出责任见[实体生命周期](../architecture/animation/entity-lifecycle.md)，缓存规则见[播放状态](../architecture/animation/controllers-and-playback.md#播放状态)。
+本页记录验证入口。执行、交接和退出责任见[实体生命周期](../architecture/animation/entity-lifecycle.md)，缓存规则见[播放状态](../architecture/animation/controllers-and-playback.md#解析缓存与播放寿命)。
 
 ## 受控回归
 

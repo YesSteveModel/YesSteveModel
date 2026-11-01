@@ -1,6 +1,6 @@
 # 转换与导出
 
-本页定位[冻结输入](../overview.md#冻结输入与单向转换)、[媒体转换](../overview.md#图像与声音转换)及[导出](../overview.md#预览与导出)的当前交接。公共语义由[模型兼容决策](../../../product-decisions/decisions/model-compatibility.md)和标准定义。
+本页定位[冻结输入](../overview.md#冻结输入与单向转换)、[媒体转换](../overview.md#图像与声音转换)及[导出](../overview.md#导出批次与提交)的当前交接。公共语义由[模型兼容决策](../../../product-decisions/decisions/model-compatibility.md)和标准定义。
 
 ## Raw capture 与编译
 

@@ -18,7 +18,7 @@
 |---|---|---|
 | 实体状态与调度 | AN-01–04 | 只读资源可共享，可变求值状态实体私有；异步、限频与多 pass 分别协调 |
 | 动作与 controller | AN-05/06/19/20 | 动作能力、模型覆盖/内建动作桥、deferred capture 与声音完整后端 ownership |
-| 扩展隔离与 builtin 生成 | AN-08–10/13/21 | 历史混合、checker、加载前隔离、生成式声明/call plan |
+| 扩展隔离与 builtin 生成 | AN-08–10/21 | 历史混合、checker、加载前隔离、生成式声明/call plan |
 | 宿主输出交接 | AN-11/12 | Direct/fallback 两条 consumer 路径和成功后提交 |
 
 本主题拥有 AN 内部关系；跨域边由[跨子系统关系](../governance/cross-subsystem-relations.md)唯一维护，加载规则见[关系登记入口](../governance/relationship-register.md)。

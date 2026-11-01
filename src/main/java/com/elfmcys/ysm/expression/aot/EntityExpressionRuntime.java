@@ -28,7 +28,20 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
 
-/** Entity owner for one exact target-generation instance and its closed event dispatcher. */
+/**
+ * Owns one installation's mutable expression instance and closed event dispatcher.
+ *
+ * <p>Invariant: an invocation uses one exact installation and one effect batch. The first program or
+ * component failure remains a batch failure even when later code receives a typed fallback.
+ *
+ * <p>Execution: lifecycle calls require the idle main-thread owner. Preparation and installation can
+ * also run under the exact GUI installation permit. Evaluation uses the owner's exclusive execution window
+ * and rejects reentry. A batch closes its source round before external dispatch can enter a later round.
+ *
+ * <p>Ownership: immutable compiled modules and host inputs remain borrowed; this runtime owns its mutable instance and pending projections.
+ *
+ * <p>Seam: implements [complete preparation and admission](docs/architecture/animation/molang-runtime.md#完整准备与准入), [invocations and effects](docs/architecture/animation/molang-runtime.md#invocation-与效果), and [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接).
+ */
 public final class EntityExpressionRuntime implements AutoCloseable {
     public static final int MAX_DEFERRED_CAPTURES = 64;
 
@@ -79,6 +92,14 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
     }
 
+    /**
+     * Constructs a complete private instance without replacing the installed instance.
+     *
+     * <p>Requires: the module, handlers, components, and roaming role describe one candidate installation.
+     * The caller holds the installation window and keeps the candidate resource alive.
+     *
+     * @return an owned candidate that the caller must install or close
+     */
     public PreparedInstallation prepare(RenderTargetExpressionModule module,
         Map<String, ? extends List<? extends EventProgram>> handlers, ComponentScope components, RoamingRole role) {
         assertInstallationThread();
@@ -86,6 +107,17 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             State.create(module, handlers, ++nextGeneration, module.newRoamingState(role), components));
     }
 
+    /**
+     * Consumes a private candidate and invokes publication inline before retiring the previous instance.
+     *
+     * <p>Requires: the caller owns the candidate and the idle installation window. Publication must not
+     * leave externally published state behind if the callback throws.
+     *
+     * <p>Failure: publication failure restores the previous expression instance and closes the candidate.
+     * Failure after publication does not roll back the installation.
+     *
+     * <p>Ownership: a taken candidate is consumed on success and failure. The caller must not reuse its mutable state.
+     */
     public void install(PreparedInstallation prepared, Runnable publication) {
         assertInstallationThread();
         if (evaluating)
@@ -112,6 +144,12 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
     }
 
+    /**
+     * Owns an unpublished mutable instance until install() takes it or close() releases it.
+     *
+     * <p>Execution: preparation, initialization, installation, and close use the same exclusive installation window.
+     * The returned installation identity does not grant evaluation or publication rights before activation.
+     */
     public final class PreparedInstallation implements AutoCloseable {
         private State state;
 
@@ -225,6 +263,18 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             (delta, finalWindow) -> { localProjection.accept(delta); return true; });
     }
 
+    /**
+     * Runs one animation body and retains successful roaming output for later owner-qualified adoption.
+     *
+     * <p>Requires: the caller encloses component hooks in this evaluation's transaction before the body returns.
+     * The production inputs match the installed subject. The projection sink is required for a persistent action window.
+     *
+     * <p>Failure: body, program, hook, or pre-commit validation failure discards staged effects and the new projection.
+     * External dispatch failure can leave earlier external effects committed; this boundary supplies no rollback.
+     *
+     * <p>Ownership: evaluation and component inputs must not escape the synchronous body. A pending sink
+     * remains associated with this exact source installation until adoption, invalidation, or the final window.
+     */
     public <T> T animationPassProjected(InvocationInputs inputs, boolean persistentActionWindow, Body<T> body,
         ProjectionSink localProjection) {
         if (persistentActionWindow)
@@ -462,6 +512,14 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         if (failure instanceof Error error) throw error;
     }
 
+    /**
+     * Receives a committed delta at an idle owner adoption point.
+     *
+     * <p>Execution: called synchronously on the lifecycle thread after task handoff. Returning false
+     * retains the pending projection only before the final window. A thrown failure ends that sink's attempt.
+     *
+     * <p>Ownership: the delta contains copied values. The callback does not obtain access to the source's mutable instance.
+     */
     @FunctionalInterface
     public interface ProjectionSink {
         boolean adopt(RoamingPayload delta, boolean finalWindow);
@@ -526,6 +584,11 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             throw new IllegalStateException("Expression installation requires its idle execution owner");
     }
 
+    /**
+     * Revokes the current installation's acceptance and drops pending projections before resource cleanup.
+     *
+     * <p>Execution: requires the lifecycle thread. Revocation does not close the mutable instance or revive an ended installation.
+     */
     public void invalidate() {
         assertLifecycleThread();
         if (current != null)
@@ -547,6 +610,12 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         return current == null ? Optional.empty() : Optional.of(projection.apply(new Installation(this, current)));
     }
 
+    /**
+     * Identifies one installation without owning or extending that installation's lifetime.
+     *
+     * <p>Ownership: callers can retain this routing identity, but must use commit() for an operation
+     * that depends on the installation still being current and accepting.
+     */
     public static final class Installation {
         private final EntityExpressionRuntime owner;
         private final State state;
@@ -556,6 +625,14 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             this.state = state;
         }
 
+        /**
+         * Runs the action inline only if this exact installation is current, accepting, and idle.
+         *
+         * <p>Execution: the caller uses the lifecycle thread. A false result runs no action.
+         * An action failure propagates without rolling back mutations that the action already made.
+         *
+         * @return whether the qualified action ran and returned normally
+         */
         public boolean commit(Runnable action) {
             owner.assertLifecycleThread();
             if (owner.current != state || !state.accepting || owner.evaluating)
@@ -738,12 +815,32 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         });
     }
 
+    /**
+     * Executes a caller-owned transient session as one privileged action or observation round.
+     *
+     * <p>Requires: the session is attached to this runtime's current installation. The owner holds its
+     * exclusive execution window. This call borrows the session through execution and cleanup without closing it.
+     *
+     * <p>Failure: stale generation or incompatible phase rejects execution. Program failure follows the
+     * round's failure boundary; successful compilation alone does not authorize this invocation.
+     */
     public Object executeTransient(InvocationInputs inputs, TransientExpressionSession session) {
         Objects.requireNonNull(session, "session");
         return session.privilege().effects() ? action(inputs, evaluation -> evaluation.executeTransient(session))
             : observe(inputs, evaluation -> evaluation.executeTransient(session));
     }
 
+    /**
+     * Freezes transient compilation inputs and retains the current module on the idle lifecycle thread.
+     *
+     * <p>Failure: a missing, ended, or different entity generation rejects preparation before handoff.
+     * A returned request can become stale while independent compilation continues.
+     *
+     * <p>Ownership: the caller owns the returned request until a compiler accepts it. The caller must close
+     * an unaccepted request; an accepted compile releases the retained module when compilation ends.
+     *
+     * @return the independent compilation request, not an executable owner capability
+     */
     public TransientCompilation prepareTransient(long expectedGeneration, String source,
         TransientExpressionSession.Privilege privilege, TransientExpressionSession.Purpose purpose,
         String sourceLocation) {
@@ -761,6 +858,17 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
     }
 
+    /**
+     * Attaches a completed program only to the request's exact current installation and target generation.
+     *
+     * <p>Requires: session is the result of request, and the lifecycle-thread caller owns the session.
+     * The caller must serialize attachment with session execution and close.
+     *
+     * <p>Ensures: success equips the session for qualified owner execution; the caller still owns its close obligation.
+     *
+     * <p>Failure: stale installation rejects attachment without closing the session. The handoff owner
+     * must close a rejected or late session. Failure to attach execution access does not transfer session ownership.
+     */
     public void attachTransient(TransientCompilation request, TransientExpressionSession session) {
         assertLifecycleThread();
         var state = requireCurrent();
@@ -771,6 +879,17 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         session.attach(state.instance.openTransientAccess(session.layout(), session.dynamicAccess()));
     }
 
+    /**
+     * Owns the frozen inputs and retained module for one independent compilation handoff.
+     *
+     * <p>Execution: prepare runs on the idle lifecycle thread; compile can run on a background thread.
+     * The caller must not close an accepted request while compile uses its retained module.
+     *
+     * <p>Ownership: close releases an unaccepted request. Once compile starts, compile owns that cleanup
+     * until return, including cancellation and failure. A successful session has its own independent lease.
+     *
+     * <p>Seam: refines [transient execution](docs/architecture/animation/molang-runtime.md#短期执行).
+     */
     public static final class TransientCompilation implements AutoCloseable {
         private final TransientExpressionSession.CompilationInputs inputs;
         private final Object installationKey;
@@ -794,6 +913,14 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             this.lease = lease;
         }
 
+        /**
+         * Compiles this unconsumed request and releases its retained module on every exit.
+         *
+         * <p>Requires: the caller owns the accepted request and has not compiled or closed it before.
+         * A cancellation signal requests termination; the worker retains cleanup responsibility until return.
+         *
+         * @return an owned session whose result receiver must attach or close, including after a late completion
+         */
         public TransientExpressionSession compile(BooleanSupplier cancelled) throws Exception {
             try (lease) {
                 return TransientExpressionSession.compile(inputs, generation, source, privilege, purpose, location,
@@ -804,7 +931,14 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         @Override public void close() { lease.close(); }
     }
 
-    /** Synchronous tooling entry; asynchronous callers must separate prepare, compile and attach. */
+    /**
+     * Prepares, compiles, and attaches a transient session synchronously for tooling.
+     *
+     * <p>Execution: the idle lifecycle-thread caller waits for compilation. Background callers must use
+     * separate prepare, compile, and attach handoffs instead.
+     *
+     * <p>Ownership: failure closes the new session. Success transfers its close obligation to the caller.
+     */
     public TransientExpressionSession compileTransient(long expectedGeneration, String source,
         TransientExpressionSession.Privilege privilege, TransientExpressionSession.Purpose purpose,
         String sourceLocation, BooleanSupplier cancelled) throws Exception {
@@ -845,6 +979,12 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         clear();
     }
 
+    /**
+     * Borrows the current evaluation synchronously inside one owner invocation.
+     *
+     * <p>Requires: the body must not retain the evaluation or its call-local contexts after return.
+     * A body failure participates in the enclosing round's effect and cleanup outcome.
+     */
     @FunctionalInterface
     public interface Body<T> {
         T run(Evaluation evaluation) throws Throwable;

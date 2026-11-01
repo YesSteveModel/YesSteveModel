@@ -1,6 +1,6 @@
 # 扩展装载
 
-本页定位[扩展资格与冻结](../overview.md#扩展资格与冻结)的生成、发现和发布门禁。作者声明见[共同声明契约](../../animation/molang-declarations.md)。
+本页定位[扩展资格与冻结](../overview.md#扩展接纳与声明发布)的生成、发现和发布门禁。作者声明见[共同声明契约](../../animation/molang-declarations.md)。
 
 ## 扩展兼容检查与注册
 

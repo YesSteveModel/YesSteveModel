@@ -14,6 +14,23 @@ import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
 import java.util.function.Function;
 
+/**
+ * Owns one mutable native frame publication and its reusable storage.
+ *
+ * <p>Invariant: valid means that native extraction and Java view/count publication both completed.
+ * Invalid state has no consumable publication; zero counts alone do not identify a valid empty result.
+ *
+ * <p>Execution: the owner serializes extract, view consumption, rendering, invalidate, and close
+ * for this instance. Different instances may extract concurrently. Reachability fences do not
+ * provide this exclusion.
+ *
+ * <p>Ownership: pose, index, and locator views borrow this state until its next extract,
+ * invalidate, or close. Consumers retain the state and must not modify the borrowed data.
+ * Extraction borrows attributes only for the call and retains the baked backing in native state.
+ *
+ * <p>Seam: implements the
+ * [frame publication and borrow contract](docs/architecture/rendering/overview.md#帧状态发布与借用).
+ */
 public final class NativeModelState extends NativeObject {
     private static final int BONE_INFO_INT_COUNT = 8;
     private static final int CUBE_INFO_HEADER_INT_COUNT = 2;
@@ -40,6 +57,10 @@ public final class NativeModelState extends NativeObject {
         super(state);
     }
 
+    /**
+     * @return a new invalid state, owned and eventually closed by the caller
+     * @throws RuntimeException if native state creation fails
+     */
     public static NativeModelState create() {
         Function<State, NativeModelState> factory = NativeModelState::new;
         var ptr = nCreate();
@@ -49,13 +70,29 @@ public final class NativeModelState extends NativeObject {
         return adopt(ptr, factory);
     }
 
+    /**
+     * <p>Requires: bakedModel is open. boneAttributes contains one complete
+     * AnimatedGeoModel.BONE_ATTRIBUTE_COUNT record per baked bone, in the baked bone order.
+     * The caller excludes input mutation and release during this synchronous call.
+     *
+     * <p>Failure: false means native extraction failed. Exceptions during Java result construction
+     * propagate. Both outcomes revoke the previous publication and leave this state invalid.
+     *
+     * @return true after publishing all views and counts, including a valid empty result
+     */
     @Borrowed
-    // Result and BonePoseView are reused by this state. Consume them before
-    // the next extract call or close.
     public boolean extract(NativeBakedModel bakedModel, float[] boneAttributes) {
         return extract(bakedModel, boneAttributes, false, 0);
     }
 
+    /**
+     * Uses the extract contract with a local root and the same complete attribute array.
+     * External ancestors do not contribute transforms or visibility.
+     * Only poses referenced by the resulting render or locator indices may be consumed.
+     *
+     * @param rootIndex a bone index in the baked order, in [0, baked bone count)
+     * @return true after complete local publication; native rejection revokes the result and returns false
+     */
     @Borrowed
     public boolean extractSubtree(NativeBakedModel bakedModel, float[] boneAttributes, int rootIndex) {
         return extract(bakedModel, boneAttributes, true, rootIndex);
@@ -105,6 +142,7 @@ public final class NativeModelState extends NativeObject {
         }
     }
 
+    /** Revokes both publications and all outstanding views; native storage capacity may remain allocated. */
     public void invalidate() {
         clearResult();
         try {
@@ -123,15 +161,19 @@ public final class NativeModelState extends NativeObject {
         valid = false;
     }
 
+    /** @return the borrowed pose view, or null when no publication is valid */
     public BonePoseView getBonePoses() {
         return bonePoses;
     }
 
-    /// Direct
+    /**
+     * @return borrowed direct indices, or null when invalid; shorts encode unsigned baked bone indices
+     */
     public ShortBuffer getRenderBoneIndices() {
         return renderBoneIndices;
     }
 
+    /** @return borrowed unsigned bone indices; callers must not mutate this list */
     public ShortList getLocatorBoneIndices() {
         return locatorBoneIndices.subList(0, locatorCount);
     }
@@ -148,8 +190,15 @@ public final class NativeModelState extends NativeObject {
         return valid;
     }
 
-    // 获取需要渲染的所有 bone 在最终 vertex buffer 内的位置
-    // 返回的 View 借用 thread-local carrier；同一线程再次调用本方法后不可继续使用旧 View。
+    /**
+     * <p>Requires: this state has a valid publication.
+     *
+     * <p>Ownership: borrows a thread-local carrier. The next call to this method on the same
+     * thread, even for another state, ends the view's lifetime. State invalidation also ends its use.
+     *
+     * @return ranges in vertex units relative to this publication's final vertex buffer
+     * @throws RuntimeException if native range extraction fails
+     */
     public BoneInfoView calculateRenderBoneInfo() {
         var requiredSize = checkedArraySize(renderBoneIndices.capacity(), BONE_INFO_INT_COUNT, 0);
         var data = getIntBuffer(BONE_INFO_BUFFER, requiredSize);
@@ -165,8 +214,15 @@ public final class NativeModelState extends NativeObject {
         return new BoneInfoView(data, renderBoneIndices.capacity());
     }
 
-    // 获取需要渲染的所有 cube 在最终 vertex buffer 内的位置
-    // 返回的 View 仅为借用；同一线程再次调用本方法后不可继续使用旧 View。
+    /**
+     * <p>Requires: this state has a valid publication.
+     *
+     * <p>Ownership: borrows a separate thread-local carrier until this method is called again
+     * on the same thread, even for another state. State invalidation also ends its use.
+     *
+     * @return cube ranges in vertex units relative to this publication's final vertex buffer
+     * @throws RuntimeException if native range extraction or result decoding fails
+     */
     public CubeInfoView calculateRenderCubeInfo() {
         var headerIntCount = checkedArraySize(renderBoneIndices.capacity(), CUBE_INFO_HEADER_INT_COUNT, 0) + 1;
         var data = CUBE_INFO_BUFFER.get();
@@ -228,6 +284,7 @@ public final class NativeModelState extends NativeObject {
         return MemoryUtil.memShortBuffer(ptr, size);
     }
 
+    /** Revokes all views before releasing this state's handle; consumers must already have finished. */
     @Override
     public void close() {
         clearResult();
@@ -248,7 +305,7 @@ public final class NativeModelState extends NativeObject {
 
     private static native int[] nCalculateRenderCubeInfo(long state, int[] dst);
 
-    // 相对于最终 vertex buffer 的 offset；以及根据是否剔除和是否为负尺寸块计算的最大顶点数量。
+    /** Vertex offset and reserved vertex capacity; these are not byte counts or committed consumer counts. */
     public record VertexRange(long vertexOffset, long expectedVertexCount) {
         public static VertexRange unpack(int[] data, int offset) {
             return new VertexRange(Integer.toUnsignedLong(data[offset]), Integer.toUnsignedLong(data[offset + 1]));

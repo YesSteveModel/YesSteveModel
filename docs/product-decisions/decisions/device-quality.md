@@ -6,7 +6,7 @@
   - 判定最低适配范围: [BC.minimum-platform-baselines](platform-baselines.md#bcminimum-platform-baselines)
   - 评估工作量与性能目标: [DD.main-loop-has-priority](workload-budget.md#ddmain-loop-has-priority)
 - Landing:
-  - [governance](../../governance/verification-policy.md#性能验证)
+  - [verification](../../verification/policy.md#性能验证)
   - [status](../../status/support-and-verification.md)
   - [status](../../status/known-issues/rendering.md#并发与性能)
   - [design](../../architecture/native-runtime/overview.md#设备配置默认)

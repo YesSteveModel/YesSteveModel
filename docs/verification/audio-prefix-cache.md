@@ -1,6 +1,6 @@
 # 音频 PCM 缓存验证
 
-本页维护默认后端的验证入口和证据边界。缓存职责见[PCM 保留与发布](../architecture/model-management/audio/overview.md#pcm-保留与发布)，播放终态见[播放终态](../architecture/model-management/audio/overview.md#播放终态)。
+本页维护默认后端的验证入口和证据边界。缓存职责见[PCM 保留与发布](../architecture/model-management/audio/overview.md#pcm-保留与工作集)，播放终态见[播放终态](../architecture/model-management/audio/overview.md#播放终态)。
 
 ## 正确性
 
@@ -21,7 +21,7 @@ $env:YSM_NATIVE_PATH='C:/absolute/path/to/ysm.dll'
 .\gradlew.bat test --tests 'com.elfmcys.ysm.model.resource.client.audio.*' --tests 'com.elfmcys.ysm.natives.NativeObjectAdoptionIntegrationTest'
 ```
 
-测试使用真实 libopus/JNI，受控 worker 和 headless host。原始 handle 的故障采用走现有 `NativeObject` 回收边界；恢复失败和暂停入口穿过真实 JNI。测试没有用替代 decoder 证明续接。
+测试使用真实 libopus/JNI，受控 worker 和 headless host。原始 handle 的故障采用走现有 `NativeObject` 回收边界；恢复失败和暂停入口穿过真实 JNI。
 
 音频样本及生成参数由测试资源中的 `audio-playback/manifest.json` 维护。首 chunk 在首个有效 audio page 结束，未合并多张 page 来凑准备阈值。单 chunk 样本覆盖 4、4.9 和 6.000354 秒；多 chunk 样本覆盖首块不足 4 秒、4.4935 秒和 5.9935 秒。
 

@@ -20,7 +20,16 @@ import java.util.Comparator;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Produces one fully verified, atomically committed portable model artifact. */
+/**
+ * Produces a verified portable model artifact before replacing its destination.
+ *
+ * <p>Execution: synchronous file I/O on a worker; the caller keeps source and preview alive until return.
+ * Concurrent exports need distinct destinations or caller-owned commit ordering.
+ *
+ * <p>Ownership: borrows source and preview. Owns the temporary file and removes it on exit.
+ *
+ * <p>Seam: implements [verified export and atomic replacement](docs/architecture/asset-pipeline/overview.md#导出批次与提交).
+ */
 public final class ModelExporter {
     private ModelExporter() {}
 
@@ -29,6 +38,15 @@ public final class ModelExporter {
         return export(source, preview, output, extra, AtomicSharedCache.AtomicReplacement::run);
     }
 
+    /**
+     * <p>Requires: gate runs the replacement synchronously once or throws before replacement.
+     * It must not return normally without committing or retain the replacement for later use.
+     *
+     * <p>Ensures: normal return identifies the committed artifact; it does not publish a catalog entry.
+     *
+     * <p>Failure: read, verification, replacement and temporary-file cleanup failures propagate as IOException.
+     * A failure before replacement preserves the destination. A commit is not rolled back on later failure.
+     */
     public static Path export(ManagedContainer source, PreviewStore.EncodedPreview preview, Path output, String extra,
         AtomicSharedCache.CommitGate gate) throws IOException {
         Objects.requireNonNull(source, "source");

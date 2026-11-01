@@ -13,6 +13,17 @@ import net.minecraft.world.level.Level;
 
 import java.lang.ref.WeakReference;
 
+/**
+ * Coordinates one world's ordinary animation invocation and its final projection window.
+ *
+ * <p>Execution: the host invokes this coordinator on the main thread. The host must pair scheduleAll()
+ * with waitAll() before leaving the invocation, including when scheduling fails.
+ * Scheduled tasks own separate entity state; the coordinator does not freeze live host inputs.
+ *
+ * <p>Ownership: registrations are weak. The invocation retains scheduled owners until every task and final projection is drained.
+ *
+ * <p>Seam: implements the ordinary invocation portion of [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接).
+ */
 public class AnimationParallelTicker {
     private static final ReferenceArrayList<WeakReference<AnimatableEntity<?>>> ANIMATABLE_LIST =
         new ReferenceArrayList<>(64);
@@ -56,6 +67,12 @@ public class AnimationParallelTicker {
         if (failure instanceof Error error) throw error;
     }
 
+    /**
+     * Opens one invocation and schedules active registered owners.
+     *
+     * <p>Failure: owner scheduling failures accumulate for waitAll(). An empty world still requires waitAll()
+     * to close the invocation. Recursive invocation is a caller violation.
+     */
     public static void scheduleAll(final float partialTick) {
         if (invocationActive)
             throw new IllegalStateException("Recursive world animation invocation");
@@ -92,6 +109,12 @@ public class AnimationParallelTicker {
         }
     }
 
+    /**
+     * Adds one owner to the open invocation before starting its update.
+     *
+     * <p>Requires: scheduleAll() has opened the invocation. The caller must preserve the matching waitAll() obligation after failure.
+     * The task list retains an owner whenever a submitted task still needs its terminal handoff.
+     */
     public static void schedule(AnimatableEntity<?> owner, float partialTick) {
         if (!invocationActive)
             throw new IllegalStateException("Asynchronous animation requires a world invocation");
@@ -105,6 +128,14 @@ public class AnimationParallelTicker {
         }
     }
 
+    /**
+     * Drains every retained task, then attempts every final projection, before closing the invocation.
+     *
+     * <p>Failure: an owner failure does not skip other owners. The method clears invocation state before
+     * reporting the first failure with later failures suppressed.
+     *
+     * <p>Execution: can block on each corresponding task get; completion of an individual future is not an owner-access handoff.
+     */
     public static void waitAll() {
         Throwable failure = invocationFailure;
         for (var animatable : TASK_LIST) {

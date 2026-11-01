@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Check the standalone Markdown tree using only the Python standard library."""
+"""Check the Markdown tree and Java documentation references; Git enumerates source files."""
 
 from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 import unicodedata
 from collections import defaultdict, deque
@@ -15,7 +16,6 @@ from check_complexity_relationships import run as check_complexity_relationships
 
 
 REQUIRED_DIRECTORIES = {
-    "governance",
     "standards/model-schema",
     "standards/protocol-v1",
     "architecture",
@@ -27,12 +27,12 @@ REQUIRED_DIRECTORIES = {
 REQUIRED_FILES = {
     "README.md",
     "architecture/README.md",
-    "governance/architecture-docs.md",
+    "architecture/documentation-rules.md",
     "verification/model-management.md",
     "verification/molang-declarations.md",
     "migration-overview.md",
     "glossary.md",
-    "governance/documentation-policy.md",
+    "verification/policy.md",
     "status/support-and-verification.md",
     "status/known-issues/format-and-schema.md",
     "status/known-issues/network.md",
@@ -92,9 +92,68 @@ def headings(path: Path) -> set[str]:
     return {slug(match.group(1)) for match in HEADING_RE.finditer(mask_code(path.read_text("utf-8")))}
 
 
+JAVA_COMMENT_OR_LITERAL_RE = re.compile(
+    r'//[^\r\n]*|/\*[\s\S]*?\*/|"""[\s\S]*?"""|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''
+)
+HTML_LINK_RE = re.compile(r'<a\s+href=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def check_source_doc_links(project: Path, files: list[Path] | None = None) -> list[str]:
+    project = project.resolve()
+    if files is None:
+        if not (project / "src").is_dir():
+            return []
+        try:
+            inventory = subprocess.check_output(
+                ["git", "-C", str(project), "ls-files", "-z", "--cached", "--others",
+                 "--exclude-standard", "--", "src"], encoding="utf-8", stderr=subprocess.PIPE,
+            )
+        except (OSError, subprocess.CalledProcessError) as failure:
+            return [f"source documentation: cannot enumerate source files with Git: {failure}"]
+        files = [project / name for name in dict.fromkeys(inventory.split("\0")) if name.endswith(".java")]
+    errors = []
+    for path in files:
+        if not path.is_file():
+            continue
+        source = path.read_text("utf-8")
+        for token in JAVA_COMMENT_OR_LITERAL_RE.finditer(source):
+            if not token.group().startswith(("//", "/*")):
+                continue
+            comment = mask_code(re.sub(r"(?m)^\s*\* ?", "", token.group()))
+            references = [(match.group("target").strip("<>"), False)
+                          for match in LINK_RE.finditer(comment)]
+            references += [(match.group(1), True) for match in HTML_LINK_RE.finditer(comment)]
+            for raw, html in references:
+                parsed = urlsplit(raw)
+                if parsed.scheme in {"http", "https", "mailto"}:
+                    continue
+                relative = unquote(parsed.path)
+                if not relative.endswith(".md") and "docs/" not in relative:
+                    continue
+                location = f"{path.relative_to(project)}:{source.count(chr(10), 0, token.start()) + 1}"
+                if html or not relative.startswith("docs/") or "\\" in relative or any(
+                        part in {".", "..", ""} for part in relative.split("/")) or parsed.query:
+                    errors.append(f"{location}: use a project-root Markdown documentation link: {raw}")
+                    continue
+                target = (project / relative).resolve()
+                if not target.is_relative_to(project / "docs") or not target.is_file():
+                    errors.append(f"{location}: broken source documentation link: {raw}")
+                    continue
+                if parsed.fragment:
+                    anchors = [slug(match.group(1)) for match in HEADING_RE.finditer(
+                        mask_code(target.read_text("utf-8")))]
+                    count = anchors.count(slug(unquote(parsed.fragment)))
+                    if count != 1:
+                        errors.append(f"{location}: missing or ambiguous source documentation anchor: {raw}")
+    return errors
+
+
 OVERVIEW_SECTIONS = (
-    "职责与边界", "运行作用域与所有权", "数据流与交接",
-    "生命周期与失败", "关键契约与设计取舍", "实现与验证入口",
+    "职责与边界", "Seam Contract", "设计取舍", "实现与验证入口",
+)
+CONTRACT_FIELDS = (
+    "边界与权威", "前置条件与输入", "结果与保证",
+    "所有权与时序", "失败与拒收", "证据与依赖",
 )
 PROJECTION_DIRECTORIES = {"flows", "views"}
 
@@ -107,6 +166,140 @@ def local_links(path: Path, text: str) -> list[tuple[Path, str]]:
             target = (path.parent / unquote(parsed.path)).resolve() if parsed.path else path.resolve()
             links.append((target, unquote(parsed.fragment)))
     return links
+
+
+def sections_at(text: str, level: int) -> list[tuple[str, str]]:
+    """Return same-level sections without interpreting headings inside fences."""
+    visible = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.DOTALL)
+    matches = list(re.finditer(r"^" + "#" * level + r" (.+)$", visible, re.MULTILINE))
+    return [(match.group(1), visible[match.end():matches[index + 1].start()
+                                   if index + 1 < len(matches) else len(visible)])
+            for index, match in enumerate(matches)]
+
+
+def is_contract_page(path: Path) -> bool:
+    return path.name == "seam-contract.md" or path.name.endswith("-seam-contract.md")
+
+
+def contract_sections(text: str, level: int) -> list[tuple[str, str]]:
+    """Read fields from headings or standalone bold labels, ignoring fenced examples."""
+    visible = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.DOTALL)
+    labels = list(re.finditer(r"^\*\*([^*\n]+)\*\*\s*$", visible, re.MULTILINE))
+    if labels:
+        return [(match.group(1), visible[match.end():labels[index + 1].start()
+                                        if index + 1 < len(labels) else len(visible)])
+                for index, match in enumerate(labels)]
+    return sections_at(visible, level)
+
+
+def check_contract_fields(path: Path, text: str, level: int, root: Path) -> list[str]:
+    sections = contract_sections(text, level)
+    errors = []
+    if [title for title, _ in sections] != list(CONTRACT_FIELDS):
+        errors.append(f"{path.relative_to(root)}: contract needs six ordered fields")
+    for title, body in sections:
+        if title in CONTRACT_FIELDS and not HEADING_RE.sub("", body).strip():
+            errors.append(f"{path.relative_to(root)}: contract field {title} is empty")
+    return errors
+
+
+def contract_reference(path: Path, body: str) -> tuple[Path, str] | None:
+    """A delegation block names one authority; links inside contract fields are dependencies."""
+    if sections_at(body, 3) or re.search(r"^\*\*", body, re.MULTILINE):
+        return None
+    links = local_links(path, body)
+    return links[0] if len(links) == 1 else None
+
+
+def declared_contract_targets(path: Path, text: str) -> list[tuple[Path, str]]:
+    targets = []
+    for title, body in sections_at(text, 2):
+        if title != "Seam Contract":
+            continue
+        items = sections_at(body, 3)
+        if not items:
+            reference = contract_reference(path, body)
+            if reference:
+                targets.append(reference)
+        elif not any(name in CONTRACT_FIELDS for name, _ in items):
+            for name, item in items:
+                if name != "共同规则":
+                    reference = contract_reference(path, item)
+                    if reference:
+                        targets.append(reference)
+    return targets
+
+
+def referenced_contract(target: Path, fragment: str) -> tuple[str, int] | None:
+    if not target.is_file() or target.suffix != ".md":
+        return None
+    text = re.sub(r"```.*?```|~~~.*?~~~", "", target.read_text("utf-8"), flags=re.DOTALL)
+    if not fragment:
+        return text, 2
+    matches = list(re.finditer(r"^(#{1,6})\s+(.+?)\s*$", text, re.MULTILINE))
+    found = [index for index, match in enumerate(matches) if slug(match.group(2)) == slug(fragment)]
+    if len(found) != 1:
+        return None
+    index = found[0]
+    heading = matches[index]
+    level = len(heading.group(1))
+    end = next((match.start() for match in matches[index + 1:]
+                if len(match.group(1)) <= level), len(text))
+    return text[heading.end():end], level + 1
+
+
+def check_contract_reference(path: Path, reference: tuple[Path, str] | None, root: Path) -> list[str]:
+    if reference is None:
+        return [f"{path.relative_to(root)}: contract entry needs fields or one authority link"]
+    target, fragment = reference
+    architecture = root / "architecture"
+    if (target == path or not target.is_relative_to(architecture)
+            or "implementation" in target.relative_to(architecture).parts
+            or target.relative_to(architecture).parts[0] in PROJECTION_DIRECTORIES):
+        return [f"{path.relative_to(root)}: contract authority must be a distinct architecture design section"]
+    section = referenced_contract(target, fragment)
+    if section is None:
+        return [f"{path.relative_to(root)}: contract authority section is missing or ambiguous"]
+    text, level = section
+    return check_contract_fields(target, text, level, root)
+
+
+def check_subsystem_contract(path: Path, text: str, root: Path) -> list[str]:
+    sections = sections_at(text, 2)
+    errors = []
+    if [title for title, _ in sections] != list(OVERVIEW_SECTIONS):
+        errors.append(f"{path.relative_to(root)}: subsystem needs four ordered core sections")
+    contracts = [body for title, body in sections if title == "Seam Contract"]
+    if len(contracts) != 1:
+        errors.append(f"{path.relative_to(root)}: subsystem needs one Seam Contract entry")
+        return errors
+    body = contracts[0]
+    items = sections_at(body, 3)
+    if not items:
+        return errors + check_contract_reference(path, contract_reference(path, body), root)
+    introduction = body.split("\n### ", 1)[0]
+    if any(title in CONTRACT_FIELDS for title, _ in items):
+        errors.extend(check_contract_fields(path, body, 3, root))
+        if any(is_contract_page(target) and target.parent == path.parent
+               for target, _ in local_links(path, introduction)):
+            errors.append(f"{path.relative_to(root)}: inline and separate contract authorities cannot coexist")
+        return errors
+    names = [title for title, _ in items]
+    if len(names) != len(set(names)) or names == ["共同规则"]:
+        errors.append(f"{path.relative_to(root)}: named contracts must be unique and include a seam")
+    navigation = {(target, slug(fragment)) for target, fragment in local_links(path, introduction)}
+    for title, item in items:
+        if title == "共同规则":
+            if not re.match(r"\s*适用范围：\S", item):
+                errors.append(f"{path.relative_to(root)}: common rules need an explicit scope")
+            continue
+        if (path, slug(title)) not in navigation:
+            errors.append(f"{path.relative_to(root)}: named contract {title} needs an entry navigation link")
+        if re.search(r"^\*\*", item, re.MULTILINE):
+            errors.extend(check_contract_fields(path, item, 4, root))
+        else:
+            errors.extend(check_contract_reference(path, contract_reference(path, item), root))
+    return errors
 
 
 def check_architecture(root: Path) -> list[str]:
@@ -125,8 +318,6 @@ def check_architecture(root: Path) -> list[str]:
             errors.append(f"{directory.relative_to(root)}: design topics must be siblings of overview.md")
         if "implementation" in relative.parts or relative.parts[0] in PROJECTION_DIRECTORIES:
             continue
-        if not (directory / "overview.md").is_file():
-            errors.append(f"{directory.relative_to(root)}: subsystem overview.md is missing")
     for path in markdown_files(architecture):
         relative = path.relative_to(architecture)
         text = path.read_text("utf-8")
@@ -155,15 +346,50 @@ def check_architecture(root: Path) -> list[str]:
                        for target, fragment in links):
                 kind = "view" if relative.parts[0] == "views" else "flow"
                 errors.append(f"{path.relative_to(root)}: {kind} needs a design-section link")
-        elif path.name == "overview.md":
-            sections = re.findall(r"^## (.+)$", text, re.MULTILINE)
-            if sections != list(OVERVIEW_SECTIONS):
-                errors.append(f"{path.relative_to(root)}: overview needs the six ordered core sections")
-            parent = path.parent.parent
-            parent_entry = parent / ("README.md" if parent == architecture else "overview.md")
-            if not any(target == parent_entry and fragment and target.is_file()
-                       and slug(fragment) in headings(target) for target, fragment in links):
-                errors.append(f"{path.relative_to(root)}: overview needs a parent-contract section link")
+        elif is_contract_page(path):
+            errors.extend(check_contract_fields(path, text, 2, root))
+        elif path != architecture / "README.md" and (
+                path.name == "overview.md" or any(title == "Seam Contract"
+                                                 for title, _ in sections_at(text, 2))
+                or re.search(r"^上级契约：", mask_code(text), re.MULTILINE)):
+            errors.extend(check_subsystem_contract(path, text, root))
+            parent_lines = re.findall(r"^上级契约：(.+)$", mask_code(text), re.MULTILINE)
+            parent_links = local_links(path, parent_lines[0]) if len(parent_lines) == 1 else []
+            if len(parent_links) != 1:
+                errors.append(f"{path.relative_to(root)}: subsystem needs one explicit parent-contract section link")
+            else:
+                target, fragment = parent_links[0]
+                valid_parent = (target != path and target.is_relative_to(architecture)
+                                and target.is_file() and target.suffix == ".md"
+                                and "implementation" not in target.relative_to(architecture).parts
+                                and target.relative_to(architecture).parts[0] not in PROJECTION_DIRECTORIES)
+                if valid_parent:
+                    valid_parent = (target == architecture / "README.md"
+                                    or any(title == "Seam Contract" for title, _ in sections_at(target.read_text("utf-8"), 2)))
+                if not valid_parent or not fragment or slug(fragment) not in headings(target):
+                    errors.append(f"{path.relative_to(root)}: invalid parent-contract section link")
+    authorities: dict[tuple[Path, str], list[Path]] = defaultdict(list)
+    for owner in markdown_files(architecture):
+        text = owner.read_text("utf-8")
+        for target, fragment in declared_contract_targets(owner, text):
+            authorities[(target, slug(fragment))].append(owner)
+        for title, body in sections_at(text, 2):
+            if title != "Seam Contract":
+                continue
+            items = sections_at(body, 3)
+            if any(name in CONTRACT_FIELDS for name, _ in items):
+                authorities[(owner, "seam-contract")].append(owner)
+            else:
+                for name, item in items:
+                    if name != "共同规则" and re.search(r"^\*\*", item, re.MULTILINE):
+                        authorities[(owner, slug(name))].append(owner)
+    for (target, fragment), owners in authorities.items():
+        if len(owners) != 1:
+            errors.append(f"{target.relative_to(root) if target.is_relative_to(root) else target}: "
+                          f"contract {fragment or 'page'} needs exactly one subsystem owner")
+    for target in markdown_files(architecture):
+        if is_contract_page(target) and (target, "") not in authorities:
+            errors.append(f"{target.relative_to(root)}: separate contract needs exactly one subsystem owner")
     return errors
 
 
@@ -256,6 +482,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     root = parser.parse_args().root
     errors = run(root)
+    errors.extend(check_source_doc_links(root.resolve().parent))
     errors.extend(f"complexity-map: {error}" for error in check_complexity_relationships(root))
     errors = sorted(set(errors))
     for error in errors:

@@ -15,7 +15,7 @@ Manifest 包含 render targets、公共资源描述和模型信息。它必须�
 - 每个实际存在的 texture entry 的 key 非空，并继续满足 image descriptor、blob identity 与引用闭包要求；空 map 不产生 image reference 或 placeholder。
 - `blob_id` 为正数并引用合法 `ModelData`。
 
-Player target 使用固定 id `player`。空纹理 projectile/vehicle 仍保留 target identity、kind、`match`、`ModelData`、settings 与 Manifest 顺序，但不能成为可用的 YSM replacement；普通运行时恢复宿主呈现。该语义只由 target kind 决定，不依赖 raw、legacy 或 direct-container provenance。`match` 保存重复字符串序列；schema 不赋予列表顺序以优先级、覆盖或匹配算法，这些属于模型管理策略。
+空纹理 projectile/vehicle 仍保留 target identity、kind、`match`、`ModelData`、settings 与 Manifest 顺序，但不能成为可用的 YSM replacement；普通运行时恢复宿主呈现。该语义只由 target kind 决定，不依赖 raw、legacy 或 direct-container provenance。`match` 保存重复字符串序列；schema 不赋予列表顺序以优先级、覆盖或匹配算法，这些属于模型管理策略。
 
 `ModelSettings` 是渲染提示，`ModelStats` 是展示统计。统计值不得替代解析后的 geometry 校验。
 
