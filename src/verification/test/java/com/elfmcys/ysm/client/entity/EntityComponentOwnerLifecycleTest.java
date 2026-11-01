@@ -451,10 +451,11 @@ class EntityComponentOwnerLifecycleTest {
             Object component = owner.exactComponent(probe).orElseThrow();
             var lease = owner.resources.leases.get(0);
             probe.getField("beginCallback").set(component, (Runnable)() -> {
-                owner.reset();
+                assertThrows(IllegalStateException.class, owner::reset);
                 assertEquals(0, lease.closes);
             });
-            assertNull(owner.produce(0.25f, RenderContext.levelImmutable()));
+            assertNotNull(owner.produce(0.25f, RenderContext.levelImmutable()));
+            owner.reset();
             assertEquals(1, lease.closes);
             assertEquals(1, count(probe, owner, "END_EVAL"));
             assertNull(probe.getField("borrowed").get(component));
@@ -476,7 +477,7 @@ class EntityComponentOwnerLifecycleTest {
                 }
             });
             harness.player.tickCount++;
-            owner.beginAsyncUpdate(0.5f);
+            FirstPersonOwnerIntegrationTest.startAsync(owner, 0.5f);
             assertTrue(entered.await(30, TimeUnit.SECONDS));
             var lifecycleField = AnimatableEntity.class.getDeclaredField("lifecycle");
             lifecycleField.setAccessible(true);
@@ -537,7 +538,7 @@ class EntityComponentOwnerLifecycleTest {
                 throw new IllegalStateException("probe-async-update");
             });
             harness.player.tickCount++;
-            owner.beginAsyncUpdate(0.5f);
+            FirstPersonOwnerIntegrationTest.startAsync(owner, 0.5f);
             assertTrue(entered.await(30, TimeUnit.SECONDS));
             var lifecycleField = AnimatableEntity.class.getDeclaredField("lifecycle");
             lifecycleField.setAccessible(true);
@@ -768,7 +769,7 @@ class EntityComponentOwnerLifecycleTest {
         }
 
         void failWhileEndingUse(RuntimeException failure) {
-            inCall(() -> {
+            inDrawBorrow(() -> {
                 reset();
                 throw failure;
             });

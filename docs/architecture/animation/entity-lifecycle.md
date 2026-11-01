@@ -36,22 +36,22 @@ flowchart TD
 
 ## 完整安装与替换
 
-候选应验证当前 request/profile、真实 subject，并完整构造组件、表达式 root、controller、processor、资源 holder 与实际变体。全部成功后，在同一 owner barrier 发布新安装；先撤销旧安装报告资格，再结束旧状态和自身 lease。
+候选应验证当前 request/profile、真实 subject，并完整构造组件、表达式 root、controller、processor、资源 holder 与实际变体。主线程取得旧任务的对应 `get` 后，才可发布新安装。全部候选步骤成功后，主线程先撤销旧安装报告资格，再结束旧状态和自身 lease。
 
 ```mermaid
 flowchart LR
     Ready["Ready 与接收者独立 lease"] --> Candidate["私有完整候选"]
     Candidate -->|"失败或激活前过期"| Reject["只关闭候选"]
-    Candidate -->|"验证并在 barrier 发布"| Current["当前完整安装"]
-    Current --> Borrow["同步 prepare / consume 借用"]
+    Candidate -->|"主线程验证并发布"| Current["当前完整安装"]
+    Current --> Borrow["同步绘制回调借用"]
     Current --> Seal["撤销效果与输出资格"]
-    Seal --> End["任务终态且最外层借用退出"]
+    Seal --> End["对应 get 完成且绘制借用退出"]
     End --> Release["释放私有状态与自身 lease"]
 ```
 
 私有准备失败保留健康旧安装与历史。候选期查询只见完整旧安装或 Unbound；同 owner 切模、reset、retire 和递归求值明确拒绝。发布后的外部绘制回调可改变请求或封口，不能递归安装；通知异常不回滚已发布安装。
 
-安装入口不等待动画 worker。任务、借用或候选窗口占用时返回 Busy，不记录内容失败。协调方保留自己的 Ready anchor，下次 tick 再尝试；纹理导航则直接拒绝本次进入，不保留导航意图。
+安装入口不等待动画 worker。只要任务尚未经过对应 `get`，即使已完成也返回 Busy；绘制借用或候选窗口占用同样返回 Busy，不记录内容失败。协调方保留自己的 Ready anchor，下次 tick 再尝试；纹理导航则直接拒绝本次进入，不保留导航意图。
 
 仅纹理变化时，兼容性应同时满足精确内容、逻辑 target、bake profile、binding、purpose、同一准备结果与 main/arm module 对象身份。旧安装还应健康、属于同一 owner 且无活动借用。兼容候选先私有验证几何与资源关联；激活先撤旧输出，再通知实际 target、刷新资源视图并转移状态关闭权。
 
@@ -65,20 +65,22 @@ flowchart LR
 | 纯消费者暂停 | 结束 demand、任务、安装与私有输出 | 保留指派和网络投影，解除全部限制后按最新请求重建；旧播放不排队 |
 | reset | 结束当前使用 | 保留指派、请求及安装失败记忆 |
 | 显式 reload | 结束当前使用 | 保留指派和请求，清除本 owner 的安装失败记忆 |
-| retire | 撤销指派，结束当前使用 | 重复调用不重复释放；新显式指派可复用对象 |
-| 异步宿主失活 | 移除预调度登记并 retire | 重新指派不自动恢复已移除登记 |
+| retire | 撤销指派，结束当前使用 | 永久终结 owner；重复调用不重复释放，重新指派不能复活 |
+| 异步宿主失活 | 移除预调度登记并 retire | 后续使用应创建新 owner |
 
-仍活跃的异步 owner 在显式 retire 后保留原登记；重新指派后可继续调度。同步 owner 不依赖预调度器回收资源。
+主线程拥有指派、安装、reset、reload 和 retire。Worker 与同步求值回调不能重入这些入口；拒绝发生在状态变化之前。同步 owner 的上级在页面或操作结束时显式退休。
 
-封口先撤销效果与输出资格。任务真实结束且最外层同步借用退出后，实体根才清理私有状态与自身 lease。等待中断、清空 Future 或 GC 都不证明 worker 已退出。回调内封口不等待自身退出；后续重建仍经过同一串行边界。
+普通结束先取得任务的对应 `get`，再撤销资格并清理。`get` 覆盖 worker 的完整 finally；等待中断后继续等待，再恢复中断标志。同步绘制回调是局部例外：回调内 reset/retire 立即撤销消费资格，私有状态和 lease 延后到绘制借用退出才释放。普通求值不使用这条延后释放路径。
 
 显式路径在安全边界执行 `onModelEnded()`；组件没有 reset/retire hook，真实换模创建新 holder。单项清理失败不跳过后续清理，既有主失败保留，清理失败作为 suppressed。
 
 ## 失败记忆与恢复
 
+普通 Extract 异常只撤销本次几何输出。主线程在同步调用或对应 `get` 后记录 exact installation、采样上下文和原异常；已成功提交的逻辑轮与投影保留。结束整个使用会撤掉尚待目标汇合的合法投影，因此 Extract 失败不沿用组件失败的结束使用路径。Required default 的原异常仍传播；宿主顶点消费和其他 `Error` 保持原边界。
+
 实体的同步求值或异步任务发生 OOM 时，本次执行不交付准备结果；owner 消费任务失败，后续独立执行仍可进入。私有候选安装的 OOM 只拒绝本次安装，不写入 exact content 的永久失败记忆。已发布安装和独立 lease 保留；required default 失败仍传播。共享 holder 激活已改变状态时，仍按原规则结束旧使用。
 
-严重 non-null 返回违约或组件生命周期失败结束 exact installation。Holder 先完成已成功 begin 的全部配对 end，再由根保存拒绝事实并封口；资格丢失按取消归约，不伪造组件故障。普通安装在后续协调机会采用 default 或宿主，不在 hook 或清理栈内递归安装。
+严重 non-null 返回违约或组件生命周期失败结束 exact installation。Worker 先完成已成功 begin 的全部配对 end，主线程取得对应 `get` 后才保存拒绝事实并结束使用；资格丢失按取消归约，不伪造组件故障。普通安装在后续协调机会采用 default 或宿主，不在 hook 或清理栈内递归安装。
 
 新 holder 构造或首次 target hook 失败只拒绝候选。兼容替换开始修改共享 holder 后失败，结束旧使用；拒绝事实仍属于候选 exact request/content。失败只约束该 owner，不改变全局声明接纳或将内容标为全局损坏。
 
@@ -90,7 +92,7 @@ flowchart LR
 
 事实查询只描述当前指派、请求、安装、关系、许可与工作。能力查询分别判断播放、求值、准备或精确结果消费的当前资格；不取得资源、不推进动画、不汇合任务、不执行 hook，也不预留未来资格。
 
-查询在 client/render owner 串行窗口执行，worker 只查自己持有的窗口。调用方在显式业务入口完成同步，执行入口仍复核资格。GUI 的准备和消费另要求 Matching；hook 改变选择或许可后旧结果立即失效。宿主取消与实际消费共享本次准备结果，规则见[渲染交接](../rendering/overview.md#三阶段契约)。
+未经过对应 `get` 时，外部只能查询主线程维护的调度事实，不能读取实体更新态。Worker 独占自己的执行态；主线程在业务入口显式交接，再调用普通查询。普通 getter 不隐式等待，也不逐次检查跨线程资格。GUI 的准备和消费另要求 Matching；hook 改变选择或许可后旧结果立即失效。宿主取消与实际消费共享本次准备结果，规则见[渲染交接](../rendering/overview.md#三阶段契约)。
 
 未终结工作包括本 owner 的任务和尚未移交的 attempt/lease，不包括已结束的失败或 miss。取消自己的需求不等待共享 Flight 物理终结；自己的工作结束也不证明 target、GPU 或 allocator 已回收。
 
@@ -100,4 +102,4 @@ flowchart LR
 
 显式卸载、替换和退休尽早结束当前占用。共享 target 的关闭与宿主纹理回收仍由[客户端资源](../model-management/client-resources/overview.md)定义；独立接纳的播放按[音频终态](../model-management/audio/overview.md)结束。
 
-当前 barrier 和任务映射见[实体实现](implementation/entity-and-frame-state.md)。真实退出重进、联动宿主和失败组合的证据见[动画问题](../../status/known-issues/animation.md)与[模型问题](../../status/known-issues/model-management.md)，本页不提供 GC 时限。
+主线程任务交接与绘制借用见[实体实现](implementation/entity-and-frame-state.md)。真实退出重进、联动宿主和失败组合的证据见[动画问题](../../status/known-issues/animation.md)与[模型问题](../../status/known-issues/model-management.md)，本页不提供 GC 时限。

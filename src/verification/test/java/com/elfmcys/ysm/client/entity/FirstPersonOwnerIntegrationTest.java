@@ -68,6 +68,7 @@ import java.util.List;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 @EnabledIfEnvironmentVariable(named = "YSM_NATIVE_PATH", matches = ".+")
 @EnabledIfEnvironmentVariable(named = "YSM_FIRST_PERSON_FIXTURES", matches = ".+")
@@ -111,7 +112,9 @@ class FirstPersonOwnerIntegrationTest {
         field(Minecraft.class, "timer").set(minecraft, new Timer(20, 0));
         field(Minecraft.class, "instance").set(null, minecraft);
         MinecraftForge.EVENT_BUS.start();
-        locator = new TestLocator();
+        var registered = com.elfmcys.ysm.geckolib3.geo.render.built.GeoLocatorTypeRegistry
+            .get(new ResourceLocation("ysm", "t2_fixture"));
+        locator = registered == null ? new TestLocator() : (TestLocator)registered;
         var playerLocatorType = com.elfmcys.ysm.client.model.locator.PlayerLocator.class;
         originalPlayerLocator = field(playerLocatorType, "INSTANCE").get(null);
         if (originalPlayerLocator == null) {
@@ -216,9 +219,17 @@ class FirstPersonOwnerIntegrationTest {
 
     @AfterEach
     void releaseHost() {
+        com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
         renderer.release();
         cap.retire();
         RenderFirstPlayerBackground.reset();
+    }
+
+    static void startAsync(AnimatableEntity<?> owner, float partial) {
+        if (!com.elfmcys.ysm.client.animation.AnimationParallelTicker.isInvocationActive())
+            com.elfmcys.ysm.client.animation.AnimationParallelTicker.scheduleAll(partial);
+        if (!owner.hasPendingUpdate())
+            com.elfmcys.ysm.client.animation.AnimationParallelTicker.schedule(owner, partial);
     }
 
     @Test
@@ -342,7 +353,8 @@ class FirstPersonOwnerIntegrationTest {
                         (proxy, method, args) -> switch (method.getName()) {
                             case "ysm$ok" -> true;
                             case "ysm$vertexFormat" -> com.mojang.blaze3d.vertex.DefaultVertexFormat.NEW_ENTITY;
-                            case "ysm$reserve" -> region;
+                            case "ysm$reserve" -> com.elfmcys.ysm.buffer.BorrowedNativeBuffer.of(region,
+                                region.nio(), 0, (int)args[0] * 36);
                             case "ysm$advance" -> {
                                 advanced[0] += (int)args[0];
                                 yield null;
@@ -975,10 +987,9 @@ class FirstPersonOwnerIntegrationTest {
             assertOwnerReleased(owner);
             assertEquals(1, owner.resources.leases.get(0).closes);
             assertNull(owner.produce(0.25f, RenderContext.levelImmutable()));
-            owner.select(1);
-            DemandFixtures.advance(owner);
-            assertEquals(2, owner.resources.acquisitions);
-            assertTrue(owner.isAssigned());
+            assertThrows(IllegalStateException.class, () -> owner.select(1));
+            assertEquals(1, owner.resources.acquisitions);
+            assertFalse(owner.isAssigned());
             owner.retire();
         }
     }
@@ -1112,7 +1123,7 @@ class FirstPersonOwnerIntegrationTest {
                     }
                     exited.set(true);
                 };
-                owner.beginAsyncUpdate(0.25f);
+                startAsync(owner, 0.25f);
                 assertTrue(entered.await(30, java.util.concurrent.TimeUnit.SECONDS));
                 var waiter = Thread.currentThread();
                 var gate = new Thread(() -> {
@@ -1150,12 +1161,11 @@ class FirstPersonOwnerIntegrationTest {
                 owner.resources.target(2, module, fixture.model);
                 var oldLease = owner.resources.leases.get(0);
                 owner.beforeAnimation = () -> {
-                    owner.select(2);
                     entered.countDown();
                     await(release);
                 };
                 player.tickCount++;
-                owner.beginAsyncUpdate(0.5f);
+                startAsync(owner, 0.5f);
                 assertTrue(entered.await(30, java.util.concurrent.TimeUnit.SECONDS));
                 var lifecycle = field(AnimatableEntity.class, "lifecycle").get(owner);
                 var task =
@@ -1166,10 +1176,10 @@ class FirstPersonOwnerIntegrationTest {
                     awaitWaiting(waiter);
                     assertFalse(task.isDone());
                     assertEquals(0, oldLease.closes);
-                    assertTrue(previous.modelState.isValid());
                     waiter.interrupt();
                     release.countDown();
                 });
+                owner.select(2);
                 DemandFixtures.advance(owner);
                 assertTrue(Thread.interrupted());
                 gate.get(30, java.util.concurrent.TimeUnit.SECONDS);
@@ -1189,98 +1199,104 @@ class FirstPersonOwnerIntegrationTest {
     }
 
     @Test
-    void workerCallbackRetirementSealsEffectsUntilItsTrueExitAndCannotAffectANewOwner() throws Exception {
-        try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get());
-            var module = TestExpressionModules.create()) {
-            var sealed = new java.util.concurrent.CountDownLatch(1);
+    void earlyGetAndDrawKeepOtherOwnersPrivateUntilTheInvocationDrain() throws Exception {
+        try (var fixture = new Fixture("parts-a"); var module = TestExpressionModules.create()) {
+            var early = new Timeline(player);
+            var slow = new Timeline(player);
+            var entered = new java.util.concurrent.CountDownLatch(1);
             var release = new java.util.concurrent.CountDownLatch(1);
-            var starts = new java.util.concurrent.atomic.AtomicInteger();
-            class GatedPlayer extends CustomPlayerEntity {
-                boolean endDuringUpdate;
-
-                GatedPlayer() {
-                    super(player, true, false);
-                }
-
-                @Override
-                protected void dispatchPersistentEvents(
-                    com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.Evaluation evaluation, boolean update) {
-                    super.dispatchPersistentEvents(evaluation, update);
-                    if (endDuringUpdate) {
-                        retire();
-                        sealed.countDown();
-                        await(release);
-                    }
-                }
-
-                @Override
-                public java.util.Optional<com.elfmcys.ysm.client.sound.instance.AudioPlaybackFactory>
-                    getSoundPlayback(String name) {
-                    return java.util.Optional.of(control -> {
-                        starts.incrementAndGet();
-                        return new AcceptedPlayback();
-                    });
-                }
-            }
-            var old = new GatedPlayer();
-            var resources = new OwnerResourceFixtures();
-            resources.attach(old);
-            var target = resources.target(1, module, fixture.model);
-            target.playerResources().animations()
-                .put("voice", new Animation("voice", 20, com.elfmcys.ysm.geckolib3.core.builder.LoopType.PLAY_ONCE,
-                    null, List.of(),
-                    List.of(new com.elfmcys.ysm.geckolib3.core.keyframe.event.EventKeyFrame<>(0, "voice")), List.of()));
             try {
-                old.updateModelAndTexture(target.modelHash(), "variant0");
-                var borrowed = DemandFixtures.produce(old, 0.25f, RenderContext.levelImmutable());
-                old.playExtraAnimation("voice");
-                old.endDuringUpdate = true;
+                early.install(fixture.model, module);
+                slow.install(fixture.model, module);
+                slow.beforeAnimation = () -> {
+                    entered.countDown();
+                    await(release);
+                };
+                startAsync(early, 0.25f);
+                startAsync(slow, 0.25f);
+                assertTrue(entered.await(30, java.util.concurrent.TimeUnit.SECONDS));
+                early.waitForAsyncUpdate();
+                assertNativeConsumption(early, early.produce(0.25f, RenderContext.levelImmutable()));
+                assertTrue(slow.hasPendingUpdate());
+                assertEquals(1, early.actions);
+                release.countDown();
+                com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
+                assertFalse(slow.hasPendingUpdate());
+                assertEquals(1, slow.actions);
                 player.tickCount++;
-                old.beginAsyncUpdate(0.5f);
-                assertTrue(sealed.await(30, java.util.concurrent.TimeUnit.SECONDS));
-                assertFalse(old.isAssigned());
-                assertTrue(old.hasUnfinishedWork());
-                assertFalse(old.canEvaluate());
-                assertFalse(old.canConsume(borrowed, borrowed.ctx));
-                assertEquals(0, resources.leases.get(0).closes);
-                assertTrue(borrowed.modelState.isValid());
-                var waiter = Thread.currentThread();
-                var gate = java.util.concurrent.CompletableFuture.runAsync(() -> {
-                    awaitWaiting(waiter);
-                    waiter.interrupt();
-                    release.countDown();
-                });
-                old.waitForAsyncUpdate();
-                assertTrue(Thread.interrupted());
-                gate.get(30, java.util.concurrent.TimeUnit.SECONDS);
-                assertOwnerReleased(old);
-                assertFalse(old.hasUnfinishedWork());
-                assertEquals(1, resources.leases.get(0).closes);
-                assertEquals(0, starts.get(), "Sealing before controller dispatch must reject the sound keyframe");
-                var fresh = new PlayerAnimatableCapability(player);
-                var nextResources = new OwnerResourceFixtures();
-                nextResources.attach(fresh);
-                var next = nextResources.target(1, module, fixture.model);
-                try {
-                    fresh.updateModelAndTexture(next.modelHash(), "variant0");
-                    assertNativeConsumption(fresh, DemandFixtures.produce(fresh, 0.5f, RenderContext.levelImmutable()));
-                    int reports = resources.activeReports;
-                    old.playExtraAnimation("voice");
-                    DemandFixtures.advance(old);
-                    assertFalse(old.consumePrepared(borrowed, data -> {
-                        fail("Retired callback must not run");
-                        return true;
-                    }));
-                    assertEquals(reports, resources.activeReports);
-                    assertEquals(0, starts.get());
-                    assertTrue(fresh.canEvaluate());
-                } finally {
-                    fresh.retire();
-                }
+                startAsync(early, 0.5f);
+                com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
+                assertEquals(2, early.actions);
             } finally {
                 release.countDown();
-                Thread.interrupted();
-                old.retire();
+                com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
+                early.retire();
+                slow.retire();
+            }
+        }
+    }
+
+    @Test
+    void invocationDrainJoinsAnUndrawnQueuedOwnerAfterAnotherWorkerFails() throws Exception {
+        try (var fixture = new Fixture("parts-a"); var module = TestExpressionModules.create()) {
+            var failed = new Timeline(player);
+            var queued = new Timeline(player);
+            var tasks = new ArrayList<Runnable>();
+            var failure = new AssertionError("worker fixture");
+            try {
+                failed.install(fixture.model, module);
+                queued.install(fixture.model, module);
+                for (var owner : List.of(failed, queued)) {
+                    var lifecycle = field(AnimatableEntity.class, "lifecycle").get(owner);
+                    field(EntityExecutionLifecycle.class, "executor").set(lifecycle,
+                        (java.util.concurrent.Executor)tasks::add);
+                }
+                failed.beforeAnimation = () -> { throw failure; };
+                startAsync(failed, 0.25f);
+                startAsync(queued, 0.25f);
+                assertEquals(2, tasks.size());
+                var main = Thread.currentThread();
+                var worker = new Thread(() -> {
+                    awaitWaiting(main);
+                    tasks.forEach(Runnable::run);
+                });
+                worker.start();
+                assertSame(failure, assertThrows(AssertionError.class,
+                    com.elfmcys.ysm.client.animation.AnimationParallelTicker::waitAll));
+                worker.join(5000);
+                assertFalse(worker.isAlive());
+                assertFalse(failed.hasPendingUpdate());
+                assertFalse(queued.hasPendingUpdate());
+                assertFalse(com.elfmcys.ysm.client.animation.AnimationParallelTicker.isInvocationActive());
+                assertEquals(1, queued.actions);
+                assertEquals(0, queued.resources.leases.get(0).closes);
+            } finally {
+                tasks.forEach(Runnable::run);
+                com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
+                failed.retire();
+                queued.retire();
+            }
+        }
+    }
+
+    @Test
+    void workerLifecycleReentryIsRejectedBeforeAnyOwnerChange() throws Exception {
+        try (var fixture = new Fixture("parts-a"); var module = TestExpressionModules.create()) {
+            var owner = new Timeline(player);
+            try {
+                owner.install(fixture.model, module);
+                owner.beforeAnimation = () -> {
+                    assertThrows(IllegalStateException.class, owner::retire);
+                    assertThrows(IllegalStateException.class, owner::reset);
+                    assertThrows(IllegalStateException.class, () -> owner.select(2));
+                };
+                startAsync(owner, 0.25f);
+                owner.waitForAsyncUpdate();
+                assertTrue(owner.isAssigned());
+                assertEquals(0, owner.resources.leases.get(0).closes);
+                assertNativeConsumption(owner, owner.produce(0.25f, RenderContext.levelImmutable()));
+            } finally {
+                owner.retire();
             }
         }
     }
@@ -1629,8 +1645,8 @@ class FirstPersonOwnerIntegrationTest {
             .putAnimationFiles("main", definition).build();
         var host = ExpressionHost.create(HostAvailability.all());
         var factory = new com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory(
-            new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
-                new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache)),
+            track(new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
+                track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache)))),
             host, new com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics());
         try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get(), true);
             var variant = new Fixture("parts-b", com.elfmcys.ysm.client.model.locator.PlayerLocator.get(), true);
@@ -2596,7 +2612,7 @@ class FirstPersonOwnerIntegrationTest {
             var body = new Timeline(player);
             try {
                 body.install(fixture.model, module);
-                body.beginAsyncUpdate(0.25f);
+                startAsync(body, 0.25f);
                 var lifecycle = field(AnimatableEntity.class, "lifecycle").get(body);
                 var future =
                     (java.util.concurrent.Future<?>)field(EntityExecutionLifecycle.class, "asyncTask").get(lifecycle);
@@ -2787,8 +2803,8 @@ class FirstPersonOwnerIntegrationTest {
         var strings = com.elfmcys.ysm.proto.mixel.asset.strings.StringDataProto.newBuilder()
             .addUserFunctions(com.elfmcys.ysm.proto.mixel.asset.strings.data.UserFunctionProto.newBuilder()
                 .setName("@sync").setBody(encoded).build()).build();
-        var artifactStore = new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
-            new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache));
+        var artifactStore = track(new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
+            track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache))));
         var factory = new com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory(artifactStore,
             ExpressionHost.create(HostAvailability.none()), new com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics());
         try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get());
@@ -2864,8 +2880,8 @@ class FirstPersonOwnerIntegrationTest {
         var strings = com.elfmcys.ysm.proto.mixel.asset.strings.StringDataProto.newBuilder()
             .addUserFunctions(com.elfmcys.ysm.proto.mixel.asset.strings.data.UserFunctionProto.newBuilder()
                 .setName("@sync").setBody(encoded).build()).build();
-        var store = new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
-            new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache));
+        var store = track(new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
+            track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache))));
         var factory = new com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory(store,
             ExpressionHost.create(HostAvailability.none()), new com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics());
         try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get());
@@ -3034,8 +3050,8 @@ class FirstPersonOwnerIntegrationTest {
         var model = com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto.newBuilder()
             .putAnimationFiles("main", definition).build();
         var host = ExpressionHost.create(HostAvailability.none());
-        var artifactStore = new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
-            new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache));
+        var artifactStore = track(new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
+            track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache))));
         var factory = new com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory(artifactStore, host,
             new com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics());
         try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get());

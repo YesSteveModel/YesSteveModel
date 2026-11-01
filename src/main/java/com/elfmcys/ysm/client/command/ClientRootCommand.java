@@ -46,6 +46,7 @@ public class ClientRootCommand {
         SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "vars"), (source, builder) -> {
             if (source.getSource() instanceof SharedSuggestionProvider && FMLEnvironment.dist == Dist.CLIENT) {
                 return getTarget().map(cap -> {
+                    cap.waitForAsyncUpdate();
                     Set<String> vars = Sets.newHashSet();
                     // v.roaming 变量
                     if (cap.getExpressionRuntime().roamingState().isPresent()) {
@@ -77,6 +78,7 @@ public class ClientRootCommand {
         SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "controllers"), (source, builder) -> {
             if (source.getSource() instanceof SharedSuggestionProvider && FMLEnvironment.dist == Dist.CLIENT) {
                 return getTarget().map(target -> {
+                    target.waitForAsyncUpdate();
                     Set<String> vars = target.getAnimationData().getAnimationControllers().stream()
                         .map(IAnimationController::getName).collect(Collectors.toSet());
                     return SharedSuggestionProvider.suggest(vars, builder);

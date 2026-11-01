@@ -37,6 +37,84 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 class AnimationStoreTest {
     @Test
+    void onlyCompleteNamespacesProveAbsenceAndPublishedNamesCannotChange() {
+        try (var incomplete = new AnimationStore(); var complete = AnimationStore.eager(Map.of())) {
+            assertFalse(incomplete.resolve("missing").cacheable());
+            incomplete.put("a", animation("a"));
+            assertFalse(incomplete.resolve("a").cacheable());
+            assertTrue(complete.resolve("missing").cacheable());
+            assertNull(complete.resolve("missing").animation());
+            assertThrows(UnsupportedOperationException.class, () -> complete.put("missing", animation("a")));
+            try (var local = AnimationStore.lazyBound(List.of(), name -> null, incomplete,
+                ignored -> ModelResourceFailureGate.none())) {
+                assertFalse(local.resolve("missing").cacheable(), "Fallback namespace is also required");
+            }
+        }
+    }
+
+    @Test
+    void failuresAndNullPayloadNeverBecomeAbsenceOrStableFallback() {
+        for (var first : new Object[] {new IOException("unavailable"), new IllegalArgumentException("bad content"),
+            "null payload"}) {
+            var loads = new AtomicInteger();
+            var replacement = animation("replacement");
+            var expected = animation("verified");
+            try (var fallback = AnimationStore.eager(Map.of("a", replacement));
+                var source = AnimationStore.lazyBound(List.of("a"), name -> {
+                    if (loads.incrementAndGet() == 1) {
+                        if (first instanceof Exception error)
+                            throw error;
+                        return null;
+                    }
+                    return expected;
+                }, fallback, ignored -> ModelResourceFailureGate.none()).shared()) {
+                var failed = source.resolve("a");
+                assertSame(replacement, failed.animation());
+                assertTrue(failed.fallback());
+                assertFalse(failed.cacheable());
+                var retry = source.resolve("a");
+                if (first instanceof IllegalArgumentException) {
+                    assertFalse(retry.cacheable(), "Deterministic failures remain with the resource gate");
+                    assertSame(replacement, retry.animation());
+                    assertEquals(1, loads.get());
+                } else {
+                    assertTrue(retry.cacheable());
+                    assertFalse(retry.fallback());
+                    assertSame(expected, retry.animation());
+                    assertEquals(2, loads.get());
+                }
+            }
+        }
+    }
+
+    @Test
+    void verifiedContentSurvivesUnreadableSourceAndFallbackOriginStaysContextLocal() {
+        var readable = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var loads = new AtomicInteger();
+        var expected = animation("a");
+        try (var backing = AnimationStore.lazyBound(List.of("a"), name -> {
+            loads.incrementAndGet();
+            if (!readable.get())
+                throw new IOException("removed");
+            return expected;
+        }, null, ignored -> ModelResourceFailureGate.none()).shared();
+            var inherited = AnimationStore.lazyBound(List.of(), name -> null, backing,
+                ignored -> ModelResourceFailureGate.none())) {
+            var direct = backing.resolve("a");
+            assertSame(expected, direct.animation());
+            assertFalse(direct.fallback());
+            readable.set(false);
+            var fallback = inherited.resolve("a");
+            assertSame(expected, fallback.animation());
+            assertTrue(fallback.cacheable());
+            assertTrue(fallback.fallback());
+            assertFalse(backing.resolve("a").fallback());
+            assertFalse(direct.fallback());
+            assertEquals(1, loads.get());
+        }
+    }
+
+    @Test
     void physicalCloseFailureDuringAFileReadCannotBeRecoveredByFallback(@TempDir Path root) throws Exception {
         var path = Files.write(root.resolve("input"), new byte[] {1});
         var opens = new AtomicInteger();
@@ -190,10 +268,11 @@ class AnimationStoreTest {
             var store = AnimationStore.lazyBound(List.of("local"), ignored -> local, defaults,
                 ignored -> ModelResourceFailureGate.none());
             var consumer = AnimationStore.consumerView(store, ignored -> ModelResourceFailureGate.none())) {
-            assertSame(local, consumer.get("local"));
-            assertFalse(local.isCopiedFromDefaultModel);
-            assertSame(inherited, consumer.get("inherited"));
-            assertTrue(inherited.isCopiedFromDefaultModel);
+            assertSame(local, consumer.resolve("local").animation());
+            assertFalse(consumer.resolve("local").fallback());
+            assertSame(inherited, consumer.resolve("inherited").animation());
+            assertTrue(consumer.resolve("inherited").fallback());
+            assertFalse(defaults.resolve("inherited").fallback(), "Shared content has no mutable origin flag");
         }
     }
 

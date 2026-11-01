@@ -18,7 +18,7 @@ import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.AbstractWidget;
 
-/** Drives normal screen input with controlled receiver barriers and observed production results. */
+/** Drives normal screen input and observes production installation results. */
 final class GuiPurposePageProbe {
     private final Minecraft minecraft;
     private final HostAction action;
@@ -143,7 +143,6 @@ final class GuiPurposePageProbe {
                 } finally {
                     GuiEntryObservation.set(state, "target", original);
                 }
-                rejectEntry("busy");
                 rejectEntry("permission");
                 rejectionsAt = ticks;
                 pointerAt(5, 5);
@@ -347,8 +346,6 @@ final class GuiPurposePageProbe {
         facts.put("navigated", minecraft.screen != models);
         require(facts.get("preparationsStarted").equals(0) && facts.get("networkFramesStarted").equals(0),
             "Rejected entry started preparation or network: " + facts);
-        if (condition.equals("busy"))
-            require(owner.get("installation").equals("BUSY"), "Receiver barrier did not produce real Busy");
         if (condition.equals("permission"))
             require(owner.get("permissionRevokedAfterReceive").equals(true), "Permission race did not run");
         rejectedEntries.add(facts);

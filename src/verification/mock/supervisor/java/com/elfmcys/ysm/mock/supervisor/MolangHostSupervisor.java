@@ -18,6 +18,7 @@ public final class MolangHostSupervisor {
     private static boolean observeEntities;
     private static boolean guiPurposeOnly;
     private static boolean catalogProgressOnly;
+    private static boolean ownershipOnly;
 
     public static void main(String[] arguments) throws Exception {
         var project = Path.of(arguments[0]);
@@ -30,13 +31,14 @@ public final class MolangHostSupervisor {
         var receipt = new LinkedHashMap<String, Object>();
         var failures = arguments.length > 2 && arguments[2].equals("failures");
         var lifecycleOnly = arguments.length > 2 && arguments[2].equals("entity-lifecycle");
+        ownershipOnly = arguments.length > 2 && arguments[2].equals("entity-ownership");
         var rolesOnly = arguments.length > 2 && arguments[2].equals("entity-roles");
         var optionalOnly = arguments.length > 2 && arguments[2].equals("entity-optional");
         var opportunitiesOnly = arguments.length > 2 && arguments[2].equals("entity-opportunities");
         catalogProgressOnly = arguments.length > 2 && arguments[2].equals("entity-catalog-progress");
         guiPurposeOnly = arguments.length > 2 && arguments[2].equals("entity-gui-purpose");
         var entityState = arguments.length > 2 && (arguments[2].equals("entity-state") || lifecycleOnly || rolesOnly
-            || optionalOnly || opportunitiesOnly || guiPurposeOnly);
+            || optionalOnly || opportunitiesOnly || guiPurposeOnly || ownershipOnly);
         observeEntities = entityState;
         if (arguments.length > 3 && !arguments[3].isBlank())
             entityFixtures = Path.of(arguments[3]);
@@ -54,6 +56,25 @@ public final class MolangHostSupervisor {
             ProcessSupervisor.awaitFile(root.resolve("client-a/ready.json"), client, TIMEOUT);
             receipt.put("connected", action(root, client, "01-connected", "await-state", Map.of("state", "ACTIVE")));
             receipt.put("before", action(root, client, "02-before", "snapshot", Map.of()));
+            if (ownershipOnly) {
+                receipt.put("fixture", action(root, client, "ownership-fixture", "await-path", Map.of("path", "molang/fault")));
+                command(root, server, "ownership-select", "ysm model set YsmHostA \"molang/fault\" - true");
+                entityView(root, client, receipt, "ownership-ready", "FIRST_PERSON", false, false, false,
+                    Map.of("ticks", "120"));
+                receipt.put("invocations", action(root, client, "ownership-invocations", "entity-ownership", Map.of()));
+                receipt.put("pageClose", action(root, client, "ownership-page-close", "entity-page-close", Map.of()));
+                receipt.put("undrawnRetire", action(root, client, "ownership-undrawn", "entity-undrawn-retire", Map.of()));
+                receipt.put("reconnect", action(root, client, "ownership-reconnect", "disconnect-reconnect", Map.of()));
+                entityView(root, client, receipt, "ownership-rejoined", "FIRST_PERSON", false, false, false,
+                    Map.of("ticks", "120"));
+                receipt.put("worker", action(root, client, "ownership-worker", "entity-worker", Map.of()));
+                receipt.put("clientStop", action(root, client, "07-stop", "stop", Map.of()));
+                receipt.put("serverStop", action(root, server, "08-stop", "stop", Map.of()));
+                receipt.put("clientExit", ProcessSupervisor.awaitExit(client, TIMEOUT));
+                receipt.put("serverExit", ProcessSupervisor.awaitExit(server, TIMEOUT));
+                receipt.put("status", "passed");
+                return;
+            }
             if (catalogProgressOnly) {
                 receipt.put("boundary",
                     "Actual Local Catalog HUD/page draws with controlled real scan checkpoints, multiplayer and integrated worlds; pending FULL contrast.");
@@ -571,7 +592,7 @@ public final class MolangHostSupervisor {
                 (guiPurposeOnly || catalogProgressOnly)
                     ? roleRoot.resolve("global").toString() : System.getenv("LOCALAPPDATA")),
             roleRoot.resolve("console.log"),
-            guiPurposeOnly && !role.equals("server")
+            (guiPurposeOnly || ownershipOnly) && !role.equals("server")
                 ? java.util.List
                     .of("-javaagent:" + project.resolve("build/model-management-mock/gui-entry-host-agent.jar"))
                 : java.util.List.of());

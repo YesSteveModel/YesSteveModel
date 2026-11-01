@@ -806,14 +806,16 @@ class EntityModelBindingTest {
         assertEquals(1, models.acquisitions.get());
         var replacement = FakeLease.ready(id, playerTarget(id, "main"));
         models.leases.add(replacement);
-        owner.updateModelAndTexture(id, "main");
-        DemandFixtures.advance(owner);
-        assertTrue(owner.isAssigned());
-        assertTrue(owner.hasInstalledModel());
-        owner.reset();
-        assertTrue(owner.isAssigned());
+        assertThrows(IllegalStateException.class, () -> owner.updateModelAndTexture(id, "main"));
+        var nextOwner = new TestHumanoid(new EntityModelBinding(models));
+        nextOwner.updateModelAndTexture(id, "main");
+        DemandFixtures.advance(nextOwner);
+        assertTrue(nextOwner.isAssigned());
+        assertTrue(nextOwner.hasInstalledModel());
+        nextOwner.reset();
+        assertTrue(nextOwner.isAssigned());
         assertEquals(1, replacement.closes.get());
-        owner.retire();
+        nextOwner.retire();
     }
 
     @Test

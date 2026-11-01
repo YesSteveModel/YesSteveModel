@@ -20,6 +20,7 @@
 - 异步求值没有不可变输入快照，会直接读取 live `Entity`、`level`、`Minecraft` 和可选模组 API；同次求值可能混入不同时间点数据或违反外部 API 的线程限制。
 - Controller、instruction、defer/event、config 与真实队列/watch 已有 cold/warm 值和 effect oracle；Forge 已观察消费与最终 framebuffer。同次逻辑推进次数、脚本/声音/粒子/同步事件和多 `RenderContext` once-only 仍未端到端联合验证。
 - 兼容纹理变体、双 owner 状态隔离、候选/清理失败及 worker 换模/退休已有受控回归。内容级准备复用的 pin、取消、默认初始化、跨 set 拒用和借用来源已有局部验证；真实 reload、重进、多实体/UI/export、联动组合、长期收敛及完整准备净成本仍未验。
+- 实体任务交接、完成未 get、Extract 普通失败隔离与动作／投影保留、不同输入和种子的串并行参考、联合 body／vehicle／arm 投影及 transient 关闭账本已有受控回归。真实 Forge 已观察正常与受控提前 `renderLevel` 返回、捕获提交／归约失败后正常返回、独立 compiler 跨返回，以及页面／world／旧 arm 退出；可选模组注入组合仍未验。方法见[实体所有权验证](../../verification/entity-animation-ownership.md)。
 - 组件五 hook、owner 时间裁决、六阶段故障、异步终态及 builtin-only default 已通过受控 owner 回归；打包矩阵和独立 JVM 冷/暖加载通过。资源消费阶段仍有替身，真实 Forge 的视觉、多 pass 和可选模组线程安全未验。入口见[组件生命周期验证](../../verification/molang-declarations.md#组件生命周期)。
 - 历史冷准备对照在共同保留 Janino linkage 与 BindingPlan 复用后，单消费者 MAIN 的耗时、CPU 和分配仍出现超过噪声的退化。多纹理/多消费者收益不能抵消该负样本；绕过 prepared target admission 的 Factory fixture 不能代表完整 startup 或活跃 target 复用。历史对照已结束，完整帧期性能仍无结论。
 - `AnimationProcessor` 原地修改本 owner 的 snapshot/attribute，没有事务 staging 或骨骼回滚。提取失败撤销输出，不恢复全部旧骨骼值，也不证明任意 controller 异常后可无损续用。
@@ -38,7 +39,7 @@ GUI 闭包、用途/主体隔离、玩家 MAIN 借用和 cache-only 门禁已有
 
 - Typed AOT、统一声明、固定许可、同轮共享状态、完整 builtin 静态计划与独立发布组合已有自动化。普通受控标量、同轮数量斜率和轮固定成本已有旧新配对样本；复杂表达式、完整安装和游戏帧期仍无净收益结论。旧数组夹具不满足当前缺值初始化规则，不能作为共同基线。
 - 普通 typed primitive、拒绝门禁、内部函数和准备后 transient 的稳态分配证据不包括 binding 构造、Object 观察装箱或真实载荷。Tail、record、效果、失败与单骨骼 literal 插值由独立探针单列；这些样本不代表完整姿态调度。冷编译/暖解码、制品、特化与进程峰值清单不能外推游戏常驻内存、动作、帧预算或长期回收。入口见[成本测量](../../verification/molang-declarations.md#成本测量)。
-- Java owner 严重返回违约已有事务丢弃、降级、隔离、失败记忆及内容变化恢复回归。Forge 已观察 command/watch 的 UNSET/0/false、ACTION 抑制、声音 handle/控制和重连拒绝旧连接；普通/shared-player/default 的完整 entity 路由、真实严重失败/default 故障与 retry、跨 owner/controller 声音 scope、听测和玩法权威快照仍未验。Test-only 开发审计不代表生产插桩。已有全套 Java 测试记录仍含范围外音频/纹理 fixture 失败，不能用局部通过代替全量通过。见[宿主验证](../../verification/model-management.md)。
+- Java owner 严重返回违约已有事务丢弃、降级、隔离、失败记忆及内容变化恢复回归。Forge 已观察 command/watch 的 UNSET/0/false、ACTION 抑制、声音 handle/控制和重连拒绝旧连接；普通/shared-player/default 的完整 entity 路由、真实严重失败/default 故障与 retry、跨 owner/controller 声音 scope、听测和玩法权威快照仍未验。Test-only 开发审计不代表生产插桩。无过滤 Java 套件仍有修改前基线也能复现的资源聚合边界失败，不能用局部通过代替全量通过。见[宿主验证](../../verification/model-management.md)。
 - Roaming 已接入 full/delta，但 inactive storage 仍按模型派生的 32-bit 短键分组，碰撞与无变量删除语义尚未解决。
 - Body dirty 与 arm 非消费快照已有局部回归，真实空手第一人称和 body/vehicle 发送、服务端接收已有轨迹。完整时钟、presence、失败/交错矩阵及帧期成本仍未闭环，见[Roaming 验证](../../verification/molang-declarations.md#准备复用与-roaming)。
 - `ysm.sync` 没有目标 identity 或独立频率限制；实体缺失、generation/model 或会话变化会丢弃事件。真实双端 relay/disconnect 尚未验证，正常协议边界见[状态同步](../../architecture/animation/implementation/state-inputs-and-sync.md)。

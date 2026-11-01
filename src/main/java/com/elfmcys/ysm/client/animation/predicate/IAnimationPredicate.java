@@ -27,8 +27,8 @@ public interface IAnimationPredicate<T extends AnimatableEntity<?>> {
         LoopType loopType) {
         var entity = event.getAnimatableEntity();
         var originVer = entity.getModelRenderTarget().info().originVer();
-        var animation = originVer < ModelOriginVersion.FILE_HAND_LOOP ? entity.getAnimation(animationName) : null;
-        return ModelOriginVersion.usesFileHandLoop(originVer, animation != null && animation.isCopiedFromDefaultModel)
+        var resolution = originVer < ModelOriginVersion.FILE_HAND_LOOP ? entity.resolveAnimation(animationName) : null;
+        return ModelOriginVersion.usesFileHandLoop(originVer, resolution != null && resolution.fallback())
             ? playAnimation(event, animationName) : playAnimation(event, animationName, loopType);
     }
 

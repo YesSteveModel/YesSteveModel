@@ -122,4 +122,10 @@ public class HybridAnimationController<T extends AnimatableEntity<?>> implements
             this.codedAnimationController.clear();
         }
     }
+
+    @Override
+    public void invalidateAnimationSource() {
+        codedAnimationController.invalidateAnimationSource();
+        bedrockAnimationController.invalidateAnimationSource();
+    }
 }

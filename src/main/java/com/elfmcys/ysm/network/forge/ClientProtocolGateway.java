@@ -103,6 +103,7 @@ public final class ClientProtocolGateway {
 
     private static void submitConfigAction(AnimatableEntity<?> animatable, long generation, ConfigActionRoute route,
         ConfigActionProto.Builder actionBuilder) {
+        animatable.waitForAsyncUpdate();
         var runtime = animatable.getExpressionRuntime();
         var module =
             runtime.module().orElseThrow(() -> new IllegalStateException("entity has no current expression target"));

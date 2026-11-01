@@ -108,6 +108,7 @@ public class AnimationRouletteScreen extends Screen {
         super(Component.literal("Animation Roulette GUI"));
         this.model = clientModel;
         this.animatableEntity = animatableEntity;
+        animatableEntity.waitForAsyncUpdate();
         this.expressionGeneration = animatableEntity.getExpressionRuntime().generation();
         this.classifyMap = classifyMap;
         this.buttonMap = buttonMap;
@@ -128,6 +129,7 @@ public class AnimationRouletteScreen extends Screen {
         super(Component.literal("Animation Roulette GUI"));
         this.model = model;
         this.animatableEntity = animatableEntity;
+        animatableEntity.waitForAsyncUpdate();
         this.expressionGeneration = animatableEntity.getExpressionRuntime().generation();
         this.classifyMap = model.info().getExtraAnimationClassifications();
         this.buttonMap = model.info().getExtraAnimationButtons();

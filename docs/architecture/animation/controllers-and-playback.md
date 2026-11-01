@@ -16,7 +16,11 @@ stateDiagram-v2
 
 Player 支持循环、单次播放和保持末帧。选择与当前相同的 animation 不会隐式重启；显式 reload 或状态重置才重建时间线。目标 animation 不存在时回到 idle，不以随机 fallback 掩盖资源错误；render target 不可用时的系统级回退另见[默认模型](../model-management/client-resources/default-model.md)。Coded controller 还可返回继续、暂停或停止，用于区分推进时间、保持当前值和结束播放。
 
-手部 hold/use/swing 的 coded 播放由 `ModelOriginVersion` 选择兼容规则：内部 `originVer < 19` 时，hold/use 强制循环，swing 强制单次；较新模型使用动画文件的播放类型。经默认动画补全取得的动画始终使用文件类型，资源 owner 保留来源标记。该映射只恢复 Java 播放语义，不改变 native UV 版本选择。
+每个运行时 Coded／Bedrock controller 缓存当前来源的稳定成功和证实缺失；同一 Bedrock controller 的 player 共用解析结果，子 controller 自有缓存。缓存不共享播放、随机或状态机历史。缓存命中不查询共享 store，也不建立 read batch；predicate 等直接资源查询仍由资源层服务。来源身份与可缓存性由[动画资源解析](../model-management/client-resources/implementation/resource-ownership.md#动画解析与保留)裁决。
+
+兼容纹理重绑定在新查询前清除缓存和旧缺失的同名跳过资格，同时保留已取得动画的播放历史。暂态失败和失败 fallback 不取得同名跳过资格；player 在后续求值重试，Bedrock 无需等待状态跳转。重试取得相同替代动画时继续原时间线，取得新动画时切换。显式重播重建时间线，但可复用已缓存的解析结果。使用结束清除缓存与播放引用。
+
+手部 hold/use/swing 的 coded 播放由 `ModelOriginVersion` 选择兼容规则：内部 `originVer < 19` 时，hold/use 强制循环，swing 强制单次；较新模型使用动画文件的播放类型。经默认动画补全取得的动画始终使用文件类型，资源解析结果保留本次 fallback 来源，不修改共享 Animation。该映射只恢复 Java 播放语义，不改变 native UV 版本选择。
 
 ## Bedrock 状态机
 

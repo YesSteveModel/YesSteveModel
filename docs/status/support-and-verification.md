@@ -15,8 +15,8 @@
 | Local Catalog 进度 | HUD 与页面各次绘制读取同轮阶段/输入计数；发现、最终交接与无活动分别呈现 | Windows 真实 Forge 单人/多人已验证逐项文字、右对齐深灰，以及 Catalog 空闲时 FULL 排队、真实远端 activation／metadata transfer 的独立隐藏对照；OOM 终态另有领域注入，未作 Forge OOM 注入；[进度验证](../verification/model-management.md#构建与进程-ownership) |
 | 已有 Java OOM 边界 | 实体执行、候选安装、资源取得与 Catalog 沿原 owner 终结受影响操作；内部不增加全入口 wrapper | Windows 定向注入覆盖整轮效果丢弃、旧内容/安装保留、异步终态和下一项独立工作；不证明全入口或真实堆耗尽存活；[验证范围](../verification/model-management.md#输入与证据门禁) |
 | 模型冷加载与图片交接 | 内存 Ready 与可选持久化分离、原始冷编译证明、共享声音首块及一次图片解码交接已接入；客户端非音频字节政策已删除，数量与借用保护保留 | 超旧额度输入、完整 MAIN 新 JVM 重开及额度隔离已有定向证据；真实 integrated 联合场景、GL 大图和长期 RSS 仍未验证，固定内容收益仍未通过；[交接验证边界](known-issues/model-management.md#模型加载与图片交接) |
-| Java 动画与模型声音 | Controller、typed AOT、统一声明、固定许可与轮级共享状态已接入；独立发布组合、标量成本、真实 JNI、代表性默认程序和隔离 Forge 有局部证据 | 完整启动/热性能收益、实体动作、多 pass、双端同步、设备声音和长期回收尚未完成验证；[动画问题](known-issues/animation.md) |
-| Molang 重复编译与宿主预算 | 完整入口契约共享分析、source／entry 分离和显式宿主策略已接入；三档规模、冷暖来源／资格及代表模型 GUI/FULL 完整准备通过 | Windows Forge 已观察该模型冷暖预览、选用与第一／第三人称；完整动作、逐骨骼视觉、声音及净性能收益仍未验证；[复现与边界](../verification/animation-bake-benchmark.md#model-scaling) |
+| Java 动画与模型声音 | Controller、typed AOT、固定许可、实体显式交接与来源缓存已接入；JNI 及 Forge 正常／受控提前返回、捕获失败后返回和退出账本有局部证据 | 可选模组注入组合、游戏性能、双端同步、设备声音和长期回收未完成验证；[实体所有权验证](../verification/entity-animation-ownership.md)、[动画问题](known-issues/animation.md) |
+| Molang 重复编译与宿主预算 | 完整入口契约共享分析、source／entry 分离和显式宿主策略已接入；三档规模、冷暖来源／资格及代表模型 GUI/FULL 完整准备通过 | Windows Forge 已观察该模型冷暖预览、选用与第一／第三人称；完整动作、逐骨骼视觉、声音及净性能收益仍未验证；[复现与边界](../verification/animation-bake-benchmark.md#模型输入与共享规模) |
 | Native CPU renderer | Bake/extract/render、SIMD 与并行顶点生成已有生产入口；hermetic clang Release 聚焦回归通过 | Cube-info Java view 已复现越界；MSVC、完整游戏视觉及其他平台未通过验收；[渲染问题](known-issues/rendering.md)、[构建问题](known-issues/format-and-schema.md#codec导入与平台) |
 | GUI 模型准备与取景 | 完整闭包、主体特化和动画复用已接入；当前卡片与生成图已有有限像素验证；完整地址、Ctrl 分派和跨根 pack 导航有局部测试 | 真实 Ctrl 点击、剪贴板和文件管理器响应、完整模型/动画矩阵、输入往返与最终主循环成本未验；[取景边界](known-issues/rendering.md#gui-取景)、[冷准备性能](known-issues/animation.md#gui-与模型冷准备) |
 | 第一人称与重复消费 | 标准/SW 手部和初始背景已接入持久局部输出；受控 JNI 与部分实机路径通过 | 完整资源生命周期、动态 renderer oracle、native 成本与用户视觉未验；[第一人称证据](known-issues/rendering.md#重复消费与第一人称) |

@@ -40,9 +40,9 @@ Roaming 随 PlayerState FULL/DELTA 的到达机会累积；消息没有 revision
 Roaming 是模型作用域内、可跨帧和 controller 使用的一组 float 变量，通过 `v.roaming` 暴露给 Molang。加载期分别为 main/arm 解析静态字段，并验证整个 target 并集，entity 侧按 producer／consumer role 持有独立的 generated state。
 
 - `ClientRoamingSession` 按模型派生的 32-bit `modelHash` 保存服务端投影；当前 generated state 由 entity expression runtime 持有。
-- `LocalPlayer` body 使用 producer role，每次合法赋值（包括同值）置单一 dirty。正常动画更新结束一次消费完整 body delta，先维护所属 `ClientRoamingSession` 和载具投影，再对 body/arm 预计算交集尝试一次 arm patch。Action/control/transient 的写入等下一次正常更新消费；arm 缺席、busy 或退休只丢弃本次 arm 投影，不截断 body-only 字段，不排队或重试。
+- `LocalPlayer` body 使用 producer role，每次合法赋值（包括同值）置单一 dirty。正常动画更新结束形成完整 body delta 源结果，worker 不进入会话、载具或 arm。主线程取得源 get 后维护所属 `ClientRoamingSession`；目标也完成对应 get 后，才按精确连接与安装身份采用投影。目标仍忙时结果只保留到本次调用末尾；完整 drain 后最终采用或丢弃，不跨调用重试。Action/control/transient 的写入等下一次正常更新消费。Arm 交集不截断 body-only 字段，逻辑成功后的 Extract 失败不撤回 delta 或动作。
 - 远端玩家、投射物与载具使用 consumer role：模型脚本可以推进当前 state，但写入不置 dirty、不上报，也不在 runtime 替换时额外保留。FULL/DELTA 先校验字段名与有限值再修正当前 state，失败不产生部分更新；vehicle 变更会被转发给乘客。
-- 新 arm 安装对交集作一次非消费 body snapshot/full 初始化（含空交集）；body 或 arm busy 时失败即结束初始化机会。报告端也非消费采样，不依赖正常 delta 是否已消费；安装、退休和 snapshot/planner/编码/提交由原 body barrier 与 exact installation 资格排序。模型上下文改变时创建独立 state；报告机会、真实 FULL baseline 与 best-effort 失败边界由[玩家状态与控制](../../network/player-state.md)定义。
+- 新 arm 安装在主线程取得 body 交接后，对交集作一次非消费 snapshot/full 初始化（含空交集）。投影先验证完整字段与有限值，再一次采用；连接或任一端安装换代会丢弃旧结果。报告端也非消费采样，不依赖正常 delta 是否已消费；报告业务入口先取得 body get，再以 exact installation 资格约束 snapshot/planner/编码/提交。模型上下文改变时创建独立 state；报告机会、真实 FULL baseline 与 best-effort 失败边界由[玩家状态与控制](../../network/player-state.md)定义。
 
 Roaming 当前没有删除语义，也不能作为可靠事件队列。短键碰撞与真正 Forge 双端收敛仍有缺口，见[动画已知问题](../../../status/known-issues/animation.md)。
 

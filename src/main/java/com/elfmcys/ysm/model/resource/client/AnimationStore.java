@@ -31,6 +31,7 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
     private final Map<String, Throwable> failures = new HashMap<>();
     private AnimationStore backing;
     private boolean sharedBacking;
+    private boolean completeNames;
     private volatile boolean closed;
 
     public AnimationStore() {
@@ -75,6 +76,7 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
             result.put(name, null);
             result.slots.put(name, new Slot(State.UNLOADED, null));
         }
+        result.completeNames = true;
         return result;
     }
 
@@ -86,12 +88,14 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
             result.put(checkedName, checkedAnimation);
             result.slots.put(checkedName, new Slot(State.READY, checkedAnimation));
         });
+        result.completeNames = true;
         return result;
     }
 
     public synchronized AnimationStore shared() {
         requireOpen();
         sharedBacking = true;
+        completeNames = true;
         return this;
     }
 
@@ -128,18 +132,21 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
 
     @Override
     public synchronized Animation get(Object key) {
-        return get(key, readContext);
+        requireOpen();
+        return key instanceof String name ? resolve(name).animation() : null;
     }
 
-    private synchronized Animation get(Object key, ReadContext context) {
+    public Resolution resolve(String name) {
+        return resolve(Objects.requireNonNull(name, "animation name"), readContext);
+    }
+
+    private synchronized Resolution resolve(String name, ReadContext context) {
         requireOpen();
         if (backing != null) {
-            if (!(key instanceof String name))
-                return null;
             var gate = Objects.requireNonNull(failureGates.apply(name), "failure gate");
             if (gate.failure().isPresent())
-                return backing.fallbackAnimation(name, context);
-            var value = backing.get(name, context);
+                return backing.fallbackAnimation(name, context).unstable();
+            var value = backing.resolve(name, context);
             Throwable failure;
             synchronized (backing) {
                 failure = backing.failures.get(name);
@@ -148,18 +155,19 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
                 gate.fail(failure);
             return value;
         }
-        if (key instanceof String name && containsLocal(name)) {
+        if (containsLocal(name)) {
             var slot = slots.get(name);
             if (slot == null || slot.state() == State.READY || source == null) {
-                return slot == null ? local.get(name) : slot.animation();
+                var animation = slot == null ? local.get(name) : slot.animation();
+                return new Resolution(animation, false, completeNames && animation != null);
             }
             if (slot.state() == State.FAILED) {
-                return fallbackAnimation(name, context);
+                return fallbackAnimation(name, context).unstable();
             }
             var failureGate = Objects.requireNonNull(failureGates.apply(name), "failure gate");
             if (failureGate.failure().isPresent()) {
                 slots.put(name, new Slot(State.FAILED, null));
-                return fallbackAnimation(name, context);
+                return fallbackAnimation(name, context).unstable();
             }
             try {
                 var value = context == null ? source.load(name) : context.load(name);
@@ -170,12 +178,12 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
                     failureGate.fail(missing);
                     failures.put(name, missing);
                     slots.put(name, new Slot(sharedBacking ? State.UNLOADED : State.FAILED, null));
-                    return fallbackAnimation(name, context);
+                    return fallbackAnimation(name, context).unstable();
                 }
                 failures.remove(name);
                 local.put(name, value);
                 slots.put(name, new Slot(State.READY, value));
-                return value;
+                return new Resolution(value, false, completeNames);
             } catch (Exception error) {
                 if (error instanceof ReadBatchCloseFailure closeFailure)
                     throw closeFailure;
@@ -205,17 +213,18 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
                     ? asset.reason() == com.elfmcys.ysm.format.AssetLoadException.Reason.CONTENT
                     : !(error instanceof IOException);
                 slots.put(name, new Slot(sharedBacking && !deterministic ? State.UNLOADED : State.FAILED, null));
-                return fallbackAnimation(name, context);
+                return fallbackAnimation(name, context).unstable();
             }
         }
-        return fallbackAnimation(key, context);
+        var value = fallbackAnimation(name, context);
+        return completeNames ? value : value.unstable();
     }
 
-    private Animation fallbackAnimation(Object name, ReadContext context) {
-        var animation = fallback == null ? null : fallback.get(name, context == null ? null : context.fallback);
-        if (animation != null)
-            animation.isCopiedFromDefaultModel = true;
-        return animation;
+    private Resolution fallbackAnimation(String name, ReadContext context) {
+        if (fallback == null)
+            return new Resolution(null, false, true);
+        var result = fallback.resolve(name, context == null ? null : context.fallback);
+        return new Resolution(result.animation(), result.animation() != null, result.cacheable());
     }
 
     @Override
@@ -302,6 +311,8 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
         requireOpen();
         if (backing != null)
             throw new UnsupportedOperationException("Consumer animation views are read-only");
+        if (completeNames)
+            throw new UnsupportedOperationException("Published animation names are immutable");
     }
 
     private void requireOpen() {
@@ -395,6 +406,13 @@ public final class AnimationStore extends AbstractObject2ReferenceMap<String, An
 
     public enum State {
         UNLOADED, READY, FAILED
+    }
+
+    /** A null value is proven absent only when the full resolution is cacheable. */
+    public record Resolution(Animation animation, boolean fallback, boolean cacheable) {
+        public Resolution unstable() {
+            return cacheable ? new Resolution(animation, fallback, false) : this;
+        }
     }
 
     private record Slot(State state, Animation animation) {

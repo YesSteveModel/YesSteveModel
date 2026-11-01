@@ -33,6 +33,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
     private static final int MAX_HIERARCHY_DEPTH = 5;
 
     private final T animatableEntity;
+    private final ControllerAnimationCache animationCache;
     private final String name;
     private final float initTransitionLengthTicks;
     /**
@@ -75,6 +76,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
      */
     public BedrockAnimationController(T animatableEntity, String name, float transitionLengthTicks) {
         this.animatableEntity = animatableEntity;
+        this.animationCache = new ControllerAnimationCache(animatableEntity);
         this.name = name;
         this.initTransitionLengthTicks = transitionLengthTicks;
         this.hierarchy = null;
@@ -312,7 +314,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
 
         // 扩容动画播放器列表
         for (var i = this.animationPlayers.size(); i < animationSize; i++) {
-            this.animationPlayers.add(new AnimationPlayerHolder(this.animatableEntity, this.initTransitionLengthTicks));
+            this.animationPlayers.add(new AnimationPlayerHolder(this.animatableEntity, this.initTransitionLengthTicks,
+                this.animationCache));
         }
         // 停用多余的动画播放器
         for (var i = animationSize; i < this.activeAnimationPlayerSize; i++) {
@@ -354,19 +357,29 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
 
     @Override
     public void clear() {
+        this.animationCache.clear();
         this.modelBones = ReferenceLists.emptyList();
         this.data = null;
         this.state = null;
         this.activeAnimationPlayerSize = 0;
         this.activeBlendAnimationQueues.clear();
         this.blendAnimationQueues.clear();
-        if (this.hierarchyDepth == 1) {
-            this.subController = null;
-        }
+        if (this.subController != null)
+            this.subController.clear();
+        this.subController = null;
         for (var holder : this.animationPlayers) {
             holder.animationPlayer.clear();
         }
         this.animationPlayers.clear();
+    }
+
+    @Override
+    public void invalidateAnimationSource() {
+        animationCache.clear();
+        for (var holder : animationPlayers)
+            holder.animationPlayer.invalidateAnimationSource();
+        if (subController != null)
+            subController.invalidateAnimationSource();
     }
 
     private static class AnimationPlayerHolder {
@@ -374,9 +387,10 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
         private final AnimationPlayer animationPlayer;
         private boolean dirty;
 
-        private AnimationPlayerHolder(AnimatableEntity<?> animatableEntity, float transitionLengthTicks) {
+        private AnimationPlayerHolder(AnimatableEntity<?> animatableEntity, float transitionLengthTicks,
+            ControllerAnimationCache animationCache) {
             conditionHolder = new ConditionHolder();
-            animationPlayer = new AnimationPlayer(animatableEntity, transitionLengthTicks);
+            animationPlayer = new AnimationPlayer(animatableEntity, transitionLengthTicks, animationCache);
             dirty = true;
         }
 

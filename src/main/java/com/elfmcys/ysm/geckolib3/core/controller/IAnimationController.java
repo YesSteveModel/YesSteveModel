@@ -34,6 +34,8 @@ public interface IAnimationController<T extends AnimatableEntity<?>> {
         return () -> {};
     }
 
+    default void invalidateAnimationSource() {}
+
     void process(AnimationEvent<T> event, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents);
 
     void visitBoneAnimationQueues(Consumer<IBoneAnimationQueue> visitor);

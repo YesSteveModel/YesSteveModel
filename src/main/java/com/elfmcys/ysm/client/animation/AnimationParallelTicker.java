@@ -18,12 +18,23 @@ public class AnimationParallelTicker {
         new ReferenceArrayList<>(64);
     private static final ReferenceArrayList<AnimatableEntity<?>> TASK_LIST = new ReferenceArrayList<>(16);
 
+    private static boolean invocationActive;
+    private static Throwable invocationFailure;
+
+    public static boolean isInvocationActive() { return invocationActive; }
+
+    public static void retainForFinalProjection(AnimatableEntity<?> owner) {
+        if (invocationActive && !TASK_LIST.contains(owner))
+            TASK_LIST.add(owner);
+    }
+
     public static void add(AnimatableEntity<?> instance) {
         ANIMATABLE_LIST.add(new WeakReference<>(instance));
     }
 
     public static void retireLevel(Level level) {
         int retired = 0;
+        Throwable failure = null;
         var iterator = ANIMATABLE_LIST.iterator();
         while (iterator.hasNext()) {
             var animatable = iterator.next().get();
@@ -31,15 +42,25 @@ public class AnimationParallelTicker {
                 iterator.remove();
             } else if (animatable.getEntity().level() == level) {
                 iterator.remove();
-                animatable.retire();
+                try {
+                    animatable.retire();
+                } catch (RuntimeException | Error next) {
+                    failure = appendFailure(failure, next);
+                }
                 retired++;
             }
         }
         TASK_LIST.removeIf(animatable -> animatable.getEntity().level() == level);
         ResourceDiagnostics.log("world animatables retired: world={} count={}", System.identityHashCode(level), retired);
+        if (failure instanceof RuntimeException error) throw error;
+        if (failure instanceof Error error) throw error;
     }
 
     public static void scheduleAll(final float partialTick) {
+        if (invocationActive)
+            throw new IllegalStateException("Recursive world animation invocation");
+        invocationActive = true;
+        invocationFailure = null;
         final Minecraft mc = Minecraft.getInstance();
         final LocalPlayer localPlayer = mc.player;
         if (localPlayer == null) {
@@ -55,27 +76,62 @@ public class AnimationParallelTicker {
             if (!animatable.isActive()) {
                 // Client entity revival is outside this scheduler's lifecycle contract.
                 iterator.remove();
-                animatable.retire();
+                try {
+                    animatable.retire();
+                } catch (RuntimeException | Error failure) {
+                    invocationFailure = appendFailure(invocationFailure, failure);
+                }
                 continue;
             }
 
-            animatable.checkModelUpdate();
-            if (!animatable.canEvaluate())
-                continue;
+            try {
+                schedule(animatable, partialTick);
+            } catch (RuntimeException | Error failure) {
+                invocationFailure = appendFailure(invocationFailure, failure);
+            }
+        }
+    }
 
-            animatable.beginAsyncUpdate(partialTick);
-            TASK_LIST.add(animatable);
+    public static void schedule(AnimatableEntity<?> owner, float partialTick) {
+        if (!invocationActive)
+            throw new IllegalStateException("Asynchronous animation requires a world invocation");
+        TASK_LIST.add(owner);
+        try {
+            owner.beginAsyncUpdate(partialTick);
+        } catch (RuntimeException | Error failure) {
+            if (!owner.hasPendingUpdate())
+                TASK_LIST.remove(owner);
+            throw failure;
         }
     }
 
     public static void waitAll() {
+        Throwable failure = invocationFailure;
         for (var animatable : TASK_LIST) {
             try {
-                animatable.waitForAsyncUpdate();
-            } catch (Throwable throwable) {
-                throwable.printStackTrace();
+                if (animatable.hasPendingUpdate())
+                    animatable.waitForAsyncUpdate();
+            } catch (RuntimeException | Error next) {
+                failure = appendFailure(failure, next);
+            }
+        }
+        for (var animatable : TASK_LIST) {
+            try {
+                animatable.finishProjections(true);
+            } catch (RuntimeException | Error next) {
+                failure = appendFailure(failure, next);
             }
         }
         TASK_LIST.clear();
+        invocationFailure = null;
+        invocationActive = false;
+        if (failure instanceof RuntimeException error) throw error;
+        if (failure instanceof Error error) throw error;
+    }
+
+    private static Throwable appendFailure(Throwable primary, Throwable next) {
+        if (primary == null) return next;
+        if (primary != next) primary.addSuppressed(next);
+        return primary;
     }
 }

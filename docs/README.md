@@ -23,6 +23,7 @@
 - [术语表](glossary.md)
 - [文档政策](governance/documentation-policy.md) / [架构文档维护](governance/architecture-docs.md)
 - [资源诊断](verification/resource-diagnostics.md)
+- [实体动画所有权验证](verification/entity-animation-ownership.md)
 - 未来方向：[独立 Backend](future/independent-backend.md)、[外部模型源](future/external-model-sources.md)、[模组动画联动](future/mod-animation-integration.md)、[GPU Compute Renderer](future/gpu-compute-renderer.md)
 
 ## 文档检查

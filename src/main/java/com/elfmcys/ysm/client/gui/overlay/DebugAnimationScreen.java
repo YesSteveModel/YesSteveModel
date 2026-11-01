@@ -140,6 +140,7 @@ public class DebugAnimationScreen {
             return;
         }
 
+        target.waitForAsyncUpdate();
         observeReplacementNotices(target);
 
         int[] y = {5};

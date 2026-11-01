@@ -72,7 +72,6 @@ public final class RenderUtil {
                 if (index < 0) {
                     return;
                 }
-                AnimatedGeoModel loadedGeoModel = vehicleCap.getLoadedGeoModel();
                 // TODO
                 // if (loadedGeoModel == null || loadedGeoModel.passengerBones().isEmpty() || index >=
                 // loadedGeoModel.passengerBones().size()) {

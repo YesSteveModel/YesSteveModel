@@ -47,6 +47,7 @@ public class PlayerMoveEvent {
         LocalPlayer player = Minecraft.getInstance().player;
         if (player != null && isMoveKey(player)) {
             player.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+                cap.waitForAsyncUpdate();
                 if (cap.isPlayingExtraAnimation()) {
                     cap.stopExtraAnimation();
                     if (NetworkHandler.isRemoteChannelPresent()) {

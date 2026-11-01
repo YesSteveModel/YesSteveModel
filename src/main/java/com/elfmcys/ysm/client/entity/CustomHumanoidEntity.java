@@ -122,14 +122,16 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Anima
     }
 
     public void updateTextureName(String textureName) {
-        rejectCandidateMutation();
+        rejectNewUse();
+        waitForAsyncUpdate();
         this.textureName = textureName;
         if (isAssigned())
             updateModelHash(getModelHash());
     }
 
     public void updateModelAndTexture(Hash256 modelHash, String textureName) {
-        rejectCandidateMutation();
+        rejectNewUse();
+        waitForAsyncUpdate();
         this.textureName = textureName;
         updateModelHash(modelHash);
     }
@@ -146,6 +148,7 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Anima
 
     public void setDisabled(boolean disabled) {
         rejectCandidateMutation();
+        waitForAsyncUpdate();
         this.disabled = disabled;
         restrictionsChanged();
     }

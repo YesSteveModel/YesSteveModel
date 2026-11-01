@@ -51,7 +51,7 @@ final class EntityModelBinding implements AutoCloseable {
 
     private final ModelAccess models;
     private final LongSupplier clock;
-    private volatile boolean assigned;
+    private boolean assigned;
     private ModelIntent intent;
     private AnimatableEntity.ResourceHolder resourceHolder;
     private ResourceRequest installedRequest;
@@ -381,7 +381,7 @@ final class EntityModelBinding implements AutoCloseable {
             .orElse(null) == com.elfmcys.ysm.model.session.client.ClientModelSession.State.INTRINSIC_DEFAULT_ONLY;
     }
 
-    private boolean isIntrinsicDefault() {
+    boolean isIntrinsicDefault() {
         return installedRequest != null
             && installedRequest.modelId().equals(models.defaultResourceRequest("player").modelId());
     }

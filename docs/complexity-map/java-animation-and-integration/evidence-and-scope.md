@@ -6,9 +6,13 @@
 
 | 已建图内容 | 未闭合 / 未检查 |
 |---|---|
-| Entity、异步/多 pass、动作门禁、defer 排空、模型声音完整后端与 host adapter、混合补丁、checker、生成 builtin/call plan、输出桥；AN-01–06、08–12、19–21 | Forge/联动、第三方线程安全、完整数值/视觉、真实 OpenAL/设备容量未验；AN-19 在 Forge 实机中的排空时机与 AN-21 的 optional-present classpath 未核验 |
+| Entity、异步/多 pass、动作门禁、defer 排空、模型声音完整后端与 host adapter、混合补丁、checker、生成 builtin/call plan、controller 来源缓存、输出桥；AN-01–06、08–12、19–21 | Forge/联动、第三方线程安全、完整数值/视觉、真实 OpenAL/设备容量未验；AN-19 在 Forge 实机中的排空时机与 AN-21 的 optional-present classpath 未核验 |
 
 声音 pending/submitted/terminal 顺序已有局部自动化；Forge once-only、真实 host 拒绝/替换与设备容量、第三方后端、真实多 pass 画面和跨线程可见性仍需运行验证。
+
+实体交接的受控 executor、JNI owner、Roaming 与 transient 测试覆盖局部所有权和失败收尾。测试不证明真实 Forge 的全部正常返回接线，也不证明删除 barrier 后的性能收益。
+
+Controller 缓存的真实 Coded／Bedrock 序列覆盖切换、显式重播、多 player 复用、失败恢复、来源失效和结束撤引用。资源 fixture 区分稳定缺失、失败 fallback 与不完整范围。边界计数只解释共享解析调用，不证明吞吐、分配或大量动态名称的保留字节；这些成本仍需同条件采样。
 
 ## 证据入口
 

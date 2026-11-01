@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.mock.host;
 
 import com.elfmcys.ysm.YesSteveModel;
+import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.resource.client.asset.ClientAssetBatch;
 import com.elfmcys.ysm.model.service.ClientModelService;
@@ -184,7 +185,7 @@ public final class ClientProbe {
         pending = start(action);
     }
 
-    private PendingAction start(HostAction next) {
+    private PendingAction start(HostAction next) throws Exception {
         return switch (next.name()) {
             case "await-state" -> () -> awaitState(next.require("state"));
             case "snapshot" -> () -> snapshot();
@@ -257,6 +258,11 @@ public final class ClientProbe {
             }
             case "entity-timeline" -> () -> EntityLifecycleProbe.timeline(minecraft);
             case "entity-worker" -> () -> EntityLifecycleProbe.worker(minecraft);
+            case "entity-ownership" -> OwnershipHostObservation::poll;
+            case "entity-page-close", "entity-undrawn-retire" -> {
+                var probe = new OwnershipLifecycleHostProbe(minecraft, next.name().equals("entity-page-close"));
+                yield probe::poll;
+            }
             case "entity-audio" -> {
                 var probe = new EntityAudioProbe(minecraft);
                 yield probe::poll;
@@ -341,12 +347,21 @@ public final class ClientProbe {
         };
     }
 
-    private PendingAction reconnect() {
+    private PendingAction reconnect() throws Exception {
         if (currentConnection == null || minecraft.getConnection() == null) {
             throw new IllegalStateException("Reconnect requires an active Minecraft connection");
         }
         var old = currentConnection;
         var ordinal = connectionOrdinal;
+        var previousOwner = minecraft.player.getCapability(PlayerAnimatableCapabilityProvider.CAP)
+            .orElseThrow(IllegalStateException::new);
+        previousOwner.waitForAsyncUpdate();
+        var previousLease = EntityUseProbe.watch(previousOwner);
+        var renderer = com.elfmcys.ysm.client.event.RegisterEntityRenderersEvent.getFirstPersonArmRenderer();
+        var armField = com.elfmcys.ysm.client.renderer.CustomFirstPersonArmRenderer.class.getDeclaredField("armEntity");
+        armField.setAccessible(true);
+        var previousArm = (com.elfmcys.ysm.client.entity.AnimatableEntity<?>)armField.get(renderer);
+        var previousArmLease = previousArm == null ? null : EntityUseProbe.watch(previousArm);
         reconnectRequested = true;
         old.disconnect(Component.literal("YSM mock reconnect"));
         return () -> {
@@ -354,8 +369,21 @@ public final class ClientProbe {
                 || ClientSessionRuntime.state().orElse(null) != ClientModelSession.State.ACTIVE) {
                 return null;
             }
+            if (previousOwner.isAssigned() || previousOwner.getExpressionRuntime().module().isPresent())
+                throw new AssertionError("World unload retained its old player owner");
+            if (previousLease != null && !previousLease.snapshot().get("leaseCloses").equals(1))
+                throw new AssertionError("World unload did not close the old player lease once");
+            if (previousArm != null && (previousArm.isAssigned()
+                || previousArm.getExpressionRuntime().module().isPresent()))
+                throw new AssertionError("Player replacement retained the old arm owner");
+            if (previousArmLease != null && !previousArmLease.snapshot().get("leaseCloses").equals(1))
+                throw new AssertionError("Player replacement did not close the old arm lease once");
             return Map.of("currentConnection", connectionId(currentConnection), "currentOrdinal", connectionOrdinal,
-                "oldConnection", connectionId(old), "sameProcess", true);
+                "oldConnection", connectionId(old), "sameProcess", true,
+                "oldPlayerAssigned", false, "oldPlayerRuntimeInstalled", false,
+                "oldPlayerLease", previousLease == null ? Map.of() : previousLease.snapshot(),
+                "oldArmObserved", previousArm != null,
+                "oldArmLease", previousArmLease == null ? Map.of() : previousArmLease.snapshot());
         };
     }
 

@@ -16,6 +16,7 @@ public class TacEvent {
         }
         LivingEntity shooter = event.getShooter();
         shooter.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+            cap.waitForAsyncUpdate();
             cap.setTacGunAnimationNeedReload(true);
         });
     }
@@ -27,6 +28,7 @@ public class TacEvent {
         }
         LivingEntity shooter = event.getShooter();
         shooter.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+            cap.waitForAsyncUpdate();
             cap.setTacGunAnimationNeedReload(true);
         });
     }
@@ -38,6 +40,7 @@ public class TacEvent {
         }
         LivingEntity shooter = event.getEntity();
         shooter.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+            cap.waitForAsyncUpdate();
             cap.setTacGunAnimationNeedReload(true);
         });
     }

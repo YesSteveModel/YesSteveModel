@@ -30,9 +30,6 @@ public class Animation {
     public final List<ParticleEventKeyFrame> particleKeyFrames;
     public final List<EventKeyFrame<VoidProgram[]>> customInstructionKeyframes;
 
-    // 是否是复制自默认模型的动画，用来纠正 2.4.1 及以前手部动画播放错误的问题
-    public boolean isCopiedFromDefaultModel = false;
-
     public Animation(String name, double animationLength, LoopType loop, @Nullable FloatExpression blendWeight,
         List<BoneAnimation> boneAnimations, List<EventKeyFrame<String>> soundKeyFrames,
         List<EventKeyFrame<VoidProgram[]>> customInstructionKeyframes) {

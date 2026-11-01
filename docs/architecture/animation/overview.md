@@ -45,9 +45,9 @@ Coded、Bedrock 与 hybrid controller 使用同一 processor 和骨骼输出边�
 
 连续采样、controller animation 选择与 config read 不获得 ACTION；instruction、状态进入/退出、coded predicate 和显式动作仍应满足宿主资格。共享函数继承实际入口权限，声明 effect 不提升入口权限。Effect batch 只有整次逻辑事务成功才提交，多次观察不能重复提交。
 
-同一实体的求值、换模和关闭串行。启动新任务、覆盖输出或释放资源前，应确认旧任务结束；不同实体可并行。按 tick 采样再逐帧插值仍是后续方向，不能当作当前行为。契约见[时间语义](../../product-decisions/decisions/animation-sampling.md)与[重复观察隔离](../../product-decisions/decisions/animation-isolation.md)，当前调度见[实体与帧状态](implementation/entity-and-frame-state.md)。
+同一实体的求值、换模和关闭串行。启动新任务、读取或覆盖更新态、换模及释放前，主线程应取得旧任务的对应 `get`；不同实体可并行。按 tick 采样再逐帧插值仍是后续方向，不能当作当前行为。契约见[时间语义](../../product-decisions/decisions/animation-sampling.md)与[重复观察隔离](../../product-decisions/decisions/animation-isolation.md)，当前调度见[实体与帧状态](implementation/entity-and-frame-state.md)。
 
-等待中断不证明 worker 已退出。Owner 应继续确认真实终态，再恢复中断标志。封口先撤销效果资格，物理清理等本次借用结束；独立接纳的音频不随模型使用结束而回滚。
+等待中断后继续取得对应 `get`，再恢复中断标志。普通结束在交接后变更生命周期；同步绘制回调可立即撤资格，物理清理等局部借用结束。独立接纳的音频不随模型使用结束而回滚。
 
 ### 输入、输出与替换
 
@@ -59,7 +59,7 @@ Coded、Bedrock 与 hybrid controller 使用同一 processor 和骨骼输出边�
 
 ### 实体使用的结束与复用
 
-一次模型使用结束先撤销效果和输出资格，确认任务真实终态与最外层借用退出后才释放私有状态和自身 lease。`retire()` 撤销指派，reset 保留指派；对象寿命可覆盖多次使用。完整规则和失败记忆见[实体生命周期](entity-lifecycle.md)。
+主线程在对应任务 `get` 后结束模型使用并释放私有状态和自身 lease。同步绘制借用的例外见生命周期正文。`retire()` 永久终结 owner 并撤销指派；reset/reload 保留指派，允许建立新的使用。完整规则和失败记忆见[实体生命周期](entity-lifecycle.md)。
 
 ### 声音与宿主
 
@@ -75,7 +75,7 @@ Molang 的共享 module、实体 instance、效果事务与失败门禁由[Molan
 
 ## 实现与验证入口
 
-- [实体与帧状态](implementation/entity-and-frame-state.md)：安装 barrier、任务真实终态和清理责任。
+- [实体与帧状态](implementation/entity-and-frame-state.md)：主线程任务交接、安装与清理责任。
 - [Controller 与播放](controllers-and-playback.md)：动作来源、离散区间和声音作用域。
 - [骨骼输出](implementation/processor-and-bone-output.md)：动画到 renderer 的通道与借用。
 - [Molang 落实关系](implementation/molang-runtime.md)：编译身份、实例和效果提交。

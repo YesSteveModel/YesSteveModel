@@ -46,7 +46,7 @@ final class RuntimeRoamingOwnershipTest {
             assertEquals(7F, arm.roamingState().orElseThrow().read("shared"));
             assertEquals(0F, arm.roamingState().orElseThrow().read("arm_only"));
             assertTrue(body.hasRoamingDelta());
-            body.normalUpdate(inputs(), evaluation -> null, delta -> batches.add(delta.values()));
+            round(body, evaluation -> null, delta -> batches.add(delta.values()));
             assertEquals(Map.of("shared", 7F, "body_only", 9F), batches.get(0));
             assertFalse(body.hasRoamingDelta());
 
@@ -58,7 +58,7 @@ final class RuntimeRoamingOwnershipTest {
             body.action(inputs(), evaluation -> evaluation.evaluate(fixture.bodyProgram));
             var before = body.snapshot().orElseThrow();
             assertTrue(body.hasRoamingDelta());
-            body.normalUpdate(inputs(), evaluation -> null, delta -> batches.add(delta.values()));
+            round(body, evaluation -> null, delta -> batches.add(delta.values()));
             assertEquals(2, batches.size());
             assertEquals(batches.get(0), batches.get(1));
             assertEquals(7F, arm.roamingState().orElseThrow().read("shared"));
@@ -69,9 +69,11 @@ final class RuntimeRoamingOwnershipTest {
     }
 
     @Test
-    void busyArmDropsOnePayloadButPreservesBodyOnlyProjectionAndFutureAssignment(@TempDir Path root) throws Exception {
+    void targetMustBeJoinedBeforeThePendingProjectionIsAdopted(@TempDir Path root) throws Exception {
         try (var fixture = fixture(root)) {
             fixture.arm.connectArmTo(fixture.body);
+            boolean[] joined = {false};
+            fixture.arm.projectionAvailability(() -> joined[0]);
             var entered = new CountDownLatch(1);
             var release = new CountDownLatch(1);
             var busy = CompletableFuture.runAsync(() -> fixture.arm.update(inputs(), evaluation -> {
@@ -80,43 +82,43 @@ final class RuntimeRoamingOwnershipTest {
                 assertTrue(release.await(10, TimeUnit.SECONDS));
                 return null;
             }));
-            assertTrue(entered.await(10, TimeUnit.SECONDS));
-            var projection = new ArrayList<Map<String, Float>>();
-            fixture.body.normalUpdate(inputs(), evaluation -> evaluation.evaluate(fixture.bodyProgram),
-                delta -> projection.add(delta.values()));
-            assertEquals(Map.of("shared", 7F, "body_only", 9F), projection.get(0));
-            assertFalse(fixture.body.hasRoamingDelta());
-            release.countDown();
-            busy.get(10, TimeUnit.SECONDS);
-            assertEquals(99F, fixture.arm.roamingState().orElseThrow().read("shared"));
-            fixture.body.normalUpdate(inputs(), evaluation -> null, delta -> fail("old payload retried"));
-            assertEquals(99F, fixture.arm.roamingState().orElseThrow().read("shared"));
-            fixture.body.normalUpdate(inputs(), evaluation -> evaluation.evaluate(fixture.bodyProgram),
-                delta -> projection.add(delta.values()));
-            assertEquals(2, projection.size());
-            assertEquals(7F, fixture.arm.roamingState().orElseThrow().read("shared"));
+            try {
+                assertTrue(entered.await(10, TimeUnit.SECONDS));
+                var projection = new ArrayList<Map<String, Float>>();
+                round(fixture.body, evaluation -> evaluation.evaluate(fixture.bodyProgram),
+                    delta -> projection.add(delta.values()));
+                assertEquals(Map.of("shared", 7F, "body_only", 9F), projection.get(0));
+                assertFalse(fixture.body.hasRoamingDelta());
+                release.countDown();
+                busy.get(10, TimeUnit.SECONDS);
+                // Actual execution has ended, but the owner has not opened the target window.
+                fixture.body.adoptProjections(false);
+                assertEquals(99F, fixture.arm.roamingState().orElseThrow().read("shared"));
+                joined[0] = true;
+                fixture.body.adoptProjections(true);
+                assertEquals(7F, fixture.arm.roamingState().orElseThrow().read("shared"));
+                fixture.body.adoptProjections(true);
+                assertEquals(1, projection.size());
+                assertEquals(11F, fixture.arm.roamingState().orElseThrow().read("arm_only"));
+            } finally {
+                release.countDown();
+                busy.get(10, TimeUnit.SECONDS);
+            }
         }
     }
 
     @Test
-    void busyBodyInitializationHasOneAttemptAndNormalDeltaIsIndependent(@TempDir Path root) throws Exception {
+    void armConnectionRequiresTheBodyHandoffAndThenCopiesTheFullIntersection(@TempDir Path root) throws Exception {
         try (var fixture = fixture(root)) {
-            var entered = new CountDownLatch(1);
-            var release = new CountDownLatch(1);
-            var busy = CompletableFuture.runAsync(() -> fixture.body.action(inputs(), evaluation -> {
-                evaluation.evaluate(fixture.bodyProgram);
-                entered.countDown();
-                assertTrue(release.await(10, TimeUnit.SECONDS));
-                return null;
-            }));
-            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            boolean[] joined = {false};
+            fixture.body.projectionAvailability(() -> joined[0]);
+            assertThrows(IllegalStateException.class, () -> fixture.arm.connectArmTo(fixture.body));
+            joined[0] = true;
+            fixture.body.action(inputs(), evaluation -> evaluation.evaluate(fixture.bodyProgram));
             fixture.arm.connectArmTo(fixture.body);
-            assertEquals(0F, fixture.arm.roamingState().orElseThrow().read("shared"));
-            release.countDown();
-            busy.get(10, TimeUnit.SECONDS);
-            assertEquals(0F, fixture.arm.roamingState().orElseThrow().read("shared"));
-            fixture.body.normalUpdate(inputs(), evaluation -> null, delta -> assertEquals(2, delta.values().size()));
             assertEquals(7F, fixture.arm.roamingState().orElseThrow().read("shared"));
+            assertEquals(0F, fixture.arm.roamingState().orElseThrow().read("arm_only"));
+            assertTrue(fixture.body.hasRoamingDelta());
         }
     }
 
@@ -132,18 +134,26 @@ final class RuntimeRoamingOwnershipTest {
             TestExpressionModules.replace(fixture.body, fixture.bodyModule, Map.of(), RoamingRole.PRODUCER);
             assertFalse(sampled.installation().commit(sends::incrementAndGet));
             assertEquals(1, sends.get());
-            fixture.body.normalUpdate(inputs(), evaluation -> evaluation.evaluate(fixture.bodyProgram), delta -> {
+            round(fixture.body, evaluation -> evaluation.evaluate(fixture.bodyProgram), delta -> {
             });
             assertEquals(0F, fixture.arm.roamingState().orElseThrow().read("shared"));
 
             TestExpressionModules.replace(fixture.arm, fixture.armModule, Map.of(), RoamingRole.CONSUMER);
             fixture.arm.connectArmTo(fixture.body);
-            fixture.body.normalUpdate(inputs(), evaluation -> evaluation.evaluate(fixture.bodyProgram),
+            round(fixture.body, evaluation -> evaluation.evaluate(fixture.bodyProgram),
                 delta -> fixture.arm.clear());
             assertTrue(fixture.arm.module().isEmpty());
             assertFalse(fixture.body.hasRoamingDelta());
             assertEquals(9F, fixture.body.snapshot().orElseThrow().payload().values().get("body_only"));
         }
+    }
+
+    private static <T> T round(EntityExpressionRuntime runtime, EntityExpressionRuntime.Body<T> body,
+        java.util.function.Consumer<RoamingPayload> projection) {
+        runtime.prepareExecution();
+        var result = runtime.normalUpdate(inputs(), body, projection);
+        runtime.adoptProjections(false);
+        return result;
     }
 
     private static Fixture fixture(Path root) throws Exception {

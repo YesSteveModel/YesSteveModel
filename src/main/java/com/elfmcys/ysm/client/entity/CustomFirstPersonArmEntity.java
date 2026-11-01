@@ -121,7 +121,7 @@ public class CustomFirstPersonArmEntity extends AnimatableEntity<LocalPlayer> {
 
     public boolean renderPart(PreparedPart prepared, Supplier<VertexConsumer> output, PoseStack.Pose pose, int light,
         int overlay, int color) {
-        return inCall(() -> {
+        return inDrawBorrow(() -> {
             if (!canConsume(prepared))
                 return false;
             var consumer = output.get();
@@ -226,6 +226,7 @@ public class CustomFirstPersonArmEntity extends AnimatableEntity<LocalPlayer> {
     @Override
     protected @Nullable Runnable prepareRoleInstallation(ModelRenderTarget target,
         com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.PreparedInstallation prepared) {
+        mainModelEntity.waitForAsyncUpdate();
         prepared.connectArmTo(mainModelEntity.getExpressionRuntime());
         return null;
     }

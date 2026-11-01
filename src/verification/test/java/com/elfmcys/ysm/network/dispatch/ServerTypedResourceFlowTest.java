@@ -303,7 +303,7 @@ class ServerTypedResourceFlowTest {
                     runtime.invalidatePreview(identity.containerId());
                     transfers.tick();
                     if (index < 8)
-                        assertTrue(failures.isEmpty());
+                        assertTrue(failures.isEmpty(), "Unexpected failure after preview " + index + ": " + failures);
                 }
                 runtime.tick();
                 assertEquals(0, reads.pending(), "The action must reject before starting its tenth read");

@@ -9,8 +9,6 @@ import com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Controls existing host owners at the receiving seam; all installation results remain production results. */
@@ -21,8 +19,6 @@ public final class GuiEntryObservation {
     public static int rejectedRenders;
     public static long vertices;
     private static String mode;
-    private static Thread borrower;
-    private static CountDownLatch release;
     private static Object catalogs;
     private static ClientCatalogSnapshot original;
     private static ClientDemandCoordinator.InstallationResult observed;
@@ -52,45 +48,9 @@ public final class GuiEntryObservation {
             networkFrames.incrementAndGet();
     }
 
-    public static void beforeInstallation(Object candidate) {
-        var owner = (AnimatableEntity<?>)candidate;
-        if (!"busy".equals(mode) || !(owner instanceof CustomGuiPlayerEntity) || borrower != null)
-            return;
-        release = new CountDownLatch(1);
-        var entered = new CountDownLatch(1);
-        borrower = new Thread(() -> owner.getExpressionRuntime().serialized(() -> {
-            entered.countDown();
-            try {
-                if (!release.await(5, TimeUnit.SECONDS))
-                    throw new IllegalStateException("GUI barrier observation timed out");
-            } catch (InterruptedException failure) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException(failure);
-            }
-            return null;
-        }), "ysm-gui-receiver-borrow");
-        borrower.start();
-        try {
-            if (!entered.await(5, TimeUnit.SECONDS))
-                throw new IllegalStateException("GUI barrier was not borrowed");
-        } catch (InterruptedException failure) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(failure);
-        }
-    }
-
     public static void afterInstallation(Object owner, Object value) {
         if (owner instanceof CustomGuiPlayerEntity && mode != null) {
             observed = (ClientDemandCoordinator.InstallationResult)value;
-            if (release != null) {
-                release.countDown();
-                try {
-                    borrower.join(5000);
-                } catch (InterruptedException failure) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException(failure);
-                }
-            }
         }
     }
 
@@ -112,10 +72,6 @@ public final class GuiEntryObservation {
     static Map<String, ?> finish() throws Exception {
         var facts = Map.of("installation", String.valueOf(observed), "permissionRevokedAfterReceive", revoked);
         mode = null;
-        if (release != null)
-            release.countDown();
-        borrower = null;
-        release = null;
         if (original != null)
             set(catalogs, "catalog", original);
         original = null;

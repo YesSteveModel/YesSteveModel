@@ -77,6 +77,7 @@ final class ClientControlHandler {
                 var entity = level == null ? null : level.getEntity(message.subject().entityId());
                 if (entity != null)
                     entity.getCapability(PlayerAnimatableCapabilityProvider.CAP).ifPresent(capability -> {
+                        capability.waitForAsyncUpdate();
                         var module = capability.getExpressionRuntime().module().orElse(null);
                         if (module == null || capability.getModelRenderTarget() == null
                             || !acceptsMolangSync(message, capability.getModelRenderTarget().sharedSemantics()))
@@ -110,6 +111,7 @@ final class ClientControlHandler {
 
     private static void applyConfigAction(AnimatableEntity<?> capability, ExpressionTargetIdentityProto identity,
         ConfigActionProto action) {
+        capability.waitForAsyncUpdate();
         var runtime = capability.getExpressionRuntime();
         var module = runtime.module().orElse(null);
         var entity = capability;

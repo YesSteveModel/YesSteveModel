@@ -28,6 +28,14 @@ Worker terminal 交付 pre-Ready candidate。Candidate guard 在等待 host 时�
 
 本地 `ContentBinding` 与 `ModelContent` 只提供强保留，不提供共享 close 权。JNI token 与 borrowed view 的释放规则见[JNI 与内存](../../../native-runtime/implementation/jni-and-memory.md)。
 
+## 动画解析与保留
+
+`AnimationStore` 拥有 local／fallback 解析、完整名称范围和原有 failure gate。完整工厂产物与共享发布后的名称不可修改；可变构造期 store 不提供缺失证明。Target 的 consumer view 是稳定解析来源，固定精确内容、绑定、fallback 和 failure gate；每轮 read batch 只是借用视图，不创建新来源。
+
+解析结果包含 Animation、本次有效 fallback 来源与可缓存性。完整名称范围中的稳定成功可以缓存；只有有效 local 与 fallback 范围均证实不存在，才可缓存缺失。I/O、空载荷、确定性坏内容及失败 fallback 沿原资源失败边界裁决，不成为缺失证明或稳定替代结果。取消和 OOM 不转换为缺失。已验证内容可继续使用，不要求源文件保持可读。Fallback 标记属于解析上下文，不写入共享 Animation。
+
+Controller 缓存只有派生查询状态，不拥有加载失败记忆或 store 的关闭权。兼容绑定更换与使用结束撤销缓存条目和来源引用，不关闭其他 owner 的 store／backing；既有合法播放按[播放历史](../../../animation/controllers-and-playback.md#播放状态)独立保留。缓存不设容量上限；成功引用和负缓存 key 随不同名称数量增长，失效与结束边界负责撤引用。
+
 ## 图片内容与 CPU 像素
 
 `PreviewStore.EncodedPreview` 只由首次完整解码建立；外部原始副本不继承资格。独立引用可共用封闭 bytes，各引用只结束自身能力。`PreviewPixels` 区分引用与同步上传借用，最后引用退出且借用结束后释放 backing。`PreviewPixels.Owner` 在 shutdown 时封口并退休保留；活动借用归还后释放 backing。Owner 拒绝接管时，解码方仍负责关闭本次 buffer。

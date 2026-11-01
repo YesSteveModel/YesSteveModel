@@ -90,42 +90,37 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
     }
 
     public void resetRoamingVars(int modelHashShort, Int2FloatOpenHashMap vars) {
-        getExpressionRuntime().serialized(() -> {
-            roamingSession.resetFromServer(getExpressionRuntime(), modelHashShort, vars);
-            return null;
-        });
+        waitForAsyncUpdate();
+        roamingSession.resetFromServer(getExpressionRuntime(), modelHashShort, vars);
     }
 
     public void clearRoamingVars() {
-        getExpressionRuntime().serialized(() -> {
-            roamingSession.clearFromServer(getExpressionRuntime());
-            return null;
-        });
+        waitForAsyncUpdate();
+        roamingSession.clearFromServer(getExpressionRuntime());
     }
 
     public boolean hasRoamingStorage(int hashShort) {
-        return getExpressionRuntime().serialized(() -> roamingSession.hasStorage(hashShort));
+        return roamingSession.hasStorage(hashShort);
     }
 
     public void updateRemoteRoamingVars(int modelHashShort, Int2FloatMap vars) {
-        getExpressionRuntime().serialized(() -> {
-            roamingSession.updateRemote(getExpressionRuntime(), modelHashShort, vars);
-            return null;
-        });
+        waitForAsyncUpdate();
+        roamingSession.updateRemote(getExpressionRuntime(), modelHashShort, vars);
     }
 
     @Override
-    protected void onNormalRoamingChanges(dev.semaweave.RoamingPayload changes) {
-        roamingSession.maintainLocalChanges(changes);
+    protected com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.ProjectionSink prepareLocalProjection() {
+        return roamingSession.prepareLocalProjection();
     }
 
     public RoamingSnapshot roamingSnapshot(int authoritativeModelKey) {
+        waitForAsyncUpdate();
         return roamingSession.snapshot(getExpressionRuntime(), authoritativeModelKey);
     }
 
     /** The roaming namespace of the applied model, or null before one is loaded. */
     public Integer localRoamingKey() {
-        return getExpressionRuntime().serialized(roamingSession::currentRoamingKey);
+        return roamingSession.currentRoamingKey();
     }
 
     public record RoamingSnapshot(int modelKey, Int2FloatOpenHashMap values,
@@ -133,6 +128,8 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
     }
 
     public void moveFrom(PlayerAnimatableCapability source) {
+        waitForAsyncUpdate();
+        source.waitForAsyncUpdate();
         roamingSession.moveFrom(source.roamingSession);
         if (source.isAssigned())
             updateModelAndTexture(source.getModelHash(), source.textureName);

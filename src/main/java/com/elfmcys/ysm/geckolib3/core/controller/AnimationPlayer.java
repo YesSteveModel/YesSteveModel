@@ -47,6 +47,7 @@ public class AnimationPlayer {
      * 实体对象
      */
     private final AnimatableEntity<?> animatableEntity;
+    private final ControllerAnimationCache animationCache;
     /**
      * 是否对缩放帧禁用起始过渡
      */
@@ -64,6 +65,8 @@ public class AnimationPlayer {
     private float endingTransitionSrcTick;
 
     private Pair<@Nullable LoopType, String> lastSetAnim = null;
+    private boolean stableRequest;
+    private Animation lastResolvedAnimation;
     private Pair<LoopType, Animation> nextAnim = null;
 
     private Animation currentAnim;
@@ -78,8 +81,9 @@ public class AnimationPlayer {
      * @param animatableEntity 实体
      * @param transitionLengthTicks 动画过渡时间（tick）
      */
-    public AnimationPlayer(AnimatableEntity<?> animatableEntity, float transitionLengthTicks) {
-        this(animatableEntity, transitionLengthTicks, false);
+    AnimationPlayer(AnimatableEntity<?> animatableEntity, float transitionLengthTicks,
+        ControllerAnimationCache animationCache) {
+        this(animatableEntity, transitionLengthTicks, false, animationCache);
     }
 
     /**
@@ -89,9 +93,10 @@ public class AnimationPlayer {
      * @param transitionLengthTicks 动画过渡时间（tick）
      * @param disableBeginningTransitionScale 是否对缩放帧禁用起始过渡
      */
-    public AnimationPlayer(AnimatableEntity<?> animatableEntity, float transitionLengthTicks,
-        boolean disableBeginningTransitionScale) {
+    AnimationPlayer(AnimatableEntity<?> animatableEntity, float transitionLengthTicks,
+        boolean disableBeginningTransitionScale, ControllerAnimationCache animationCache) {
         this.animatableEntity = animatableEntity;
+        this.animationCache = animationCache;
         this.beginningTransition = new LinearBlendTransition(transitionLengthTicks);
         this.disableBeginningTransitionScale = disableBeginningTransitionScale;
         this.animTickOffset = 0.0f;
@@ -126,15 +131,21 @@ public class AnimationPlayer {
             return;
         }
 
-        if (lastSetAnim != null && lastSetAnim.getSecond().equals(animationName)
-            && lastSetAnim.getFirst() == loopTypeOverride) {
+        var sameRequest = lastSetAnim != null && lastSetAnim.getSecond().equals(animationName)
+            && lastSetAnim.getFirst() == loopTypeOverride;
+        if (sameRequest && stableRequest) {
             return;
         }
 
-        resetToIdle();
+        var resolution = animationCache.resolve(animationName);
+        var animation = resolution.animation();
         this.lastSetAnim = new Pair<>(loopTypeOverride, animationName);
-
-        var animation = animatableEntity.getAnimation(animationName);
+        this.stableRequest = resolution.cacheable();
+        if (sameRequest && animation != null && animation == lastResolvedAnimation)
+            return;
+        this.lastResolvedAnimation = animation;
+        this.nextAnim = null;
+        resetToIdle();
         if (animation == null) {
             return;
         }
@@ -148,6 +159,7 @@ public class AnimationPlayer {
      * @param renderTicks 当前 tick + 插值 tick
      */
     public void process(final float renderTicks, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents) {
+        retryAnimation();
         evaluation.setAnimationContext(animationContext);
         try {
             var animTicks = getAnimTicks(renderTicks);
@@ -536,6 +548,8 @@ public class AnimationPlayer {
      */
     public void reset() {
         this.lastSetAnim = null;
+        this.stableRequest = false;
+        this.lastResolvedAnimation = null;
         this.nextAnim = null;
         resetToIdle();
     }
@@ -555,6 +569,17 @@ public class AnimationPlayer {
      */
     public void indicateReload() {
         this.lastSetAnim = null;
+    }
+
+    void invalidateAnimationSource() {
+        // Verified playback survives resource rebinding; a previous absence does not.
+        if (lastResolvedAnimation == null)
+            stableRequest = false;
+    }
+
+    void retryAnimation() {
+        if (lastSetAnim != null && !stableRequest)
+            setAnimation(lastSetAnim.getSecond(), lastSetAnim.getFirst());
     }
 
     /**

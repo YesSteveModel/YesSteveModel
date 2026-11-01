@@ -25,6 +25,7 @@ public class VehicleAnimatableCapability extends CustomVehicleEntity {
     }
 
     public void initRoamingVars(@NotNull Int2FloatOpenHashMap vars) {
+        waitForAsyncUpdate();
         com.elfmcys.ysm.network.NetworkHandler.traceNetwork("vehicle-roaming-full-apply",
             "vehicleId=" + getEntity().getId(), "variables=" + vars.size());
         // 无条件同步服务端数据
@@ -42,6 +43,7 @@ public class VehicleAnimatableCapability extends CustomVehicleEntity {
     }
 
     public void updateRoamingVars(@NotNull Int2FloatMap vars) {
+        waitForAsyncUpdate();
         com.elfmcys.ysm.network.NetworkHandler.traceNetwork("vehicle-roaming-delta-apply",
             "vehicleId=" + getEntity().getId(), "variables=" + vars.size());
         var payload = RoamingPayloads.fromNetwork(vars);

@@ -762,6 +762,194 @@ class ExpressionArtifactPipelineTest {
     }
 
     @Test
+    void compileInboxPublishCloseOrdersReturnEveryProgramOnceWithoutOpeningAccess(@TempDir Path temp)
+        throws Exception {
+        boolean diagnostics = com.elfmcys.ysm.util.ResourceDiagnostics.isEnabled();
+        com.elfmcys.ysm.util.ResourceDiagnostics.setEnabled(true);
+        var programMetrics = transientProgramMetrics();
+        long programHolds = programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES);
+        var metrics = new ExpressionEngineMetrics();
+        var input = input("1");
+        int programs = TransientExpressionSession.liveLeaseCount();
+        var type = Class.forName("com.elfmcys.ysm.geckolib3.core.processor.AnimationProcessor$CompileInbox");
+        var constructor = type.getDeclaredConstructor();
+        var publish = type.getDeclaredMethod("publish", Object.class);
+        var close = type.getDeclaredMethod("close");
+        constructor.setAccessible(true);
+        publish.setAccessible(true);
+        close.setAccessible(true);
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try (var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
+            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+                input.settings(), input.configBytes());
+            var runtime = new EntityExpressionRuntime()) {
+            TestExpressionModules.replace(runtime, module, Map.of());
+            long installation = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
+            for (int order = 0; order < 18; order++) {
+                var request = runtime.prepareTransient(runtime.generation(), "return 7;",
+                    TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
+                    "test:inbox-race-" + order);
+                assertEquals(installation + 1, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+                var session = request.compile(() -> false);
+                request.close();
+                assertEquals(installation, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+                assertEquals(programs + 1, TransientExpressionSession.liveLeaseCount());
+                assertEquals(programHolds + 1,
+                    programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES));
+                assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_ACCESS_LEASES));
+                var inbox = constructor.newInstance();
+                var closes = new AtomicInteger();
+                AutoCloseable delivery = () -> {
+                    assertEquals(1, closes.incrementAndGet());
+                    session.close();
+                };
+                java.util.concurrent.Callable<Void> publishing = () -> {
+                    if (!(boolean)publish.invoke(inbox, delivery)) delivery.close();
+                    return null;
+                };
+                java.util.concurrent.Callable<Void> closing = () -> {
+                    for (var owned : (List<?>)close.invoke(inbox)) ((AutoCloseable)owned).close();
+                    return null;
+                };
+                if (order == 0) {
+                    publishing.call();
+                    closing.call();
+                } else if (order == 1) {
+                    closing.call();
+                    publishing.call();
+                } else {
+                    var start = new java.util.concurrent.CyclicBarrier(2);
+                    var worker = pool.submit(() -> { start.await(); return publishing.call(); });
+                    var retirement = pool.submit(() -> { start.await(); return closing.call(); });
+                    worker.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    retirement.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                }
+                closing.call();
+                assertEquals(1, closes.get());
+                assertEquals(programs, TransientExpressionSession.liveLeaseCount());
+                assertEquals(programHolds,
+                    programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES));
+                assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_ACCESS_LEASES));
+                assertEquals(installation, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+            }
+        } finally {
+            pool.shutdownNow();
+            com.elfmcys.ysm.util.ResourceDiagnostics.setEnabled(diagnostics);
+        }
+        assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+    }
+
+    @Test
+    void retiringAnExecutingWatchJoinsBeforeClosingItsProgramAccessAndInstallation(@TempDir Path temp)
+        throws Exception {
+        boolean diagnostics = com.elfmcys.ysm.util.ResourceDiagnostics.isEnabled();
+        com.elfmcys.ysm.util.ResourceDiagnostics.setEnabled(true);
+        var programMetrics = transientProgramMetrics();
+        long programHolds = programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES);
+        var metrics = new ExpressionEngineMetrics();
+        var input = input("1");
+        int programs = TransientExpressionSession.liveLeaseCount();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var events = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var closes = new AtomicInteger();
+        try (var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
+            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+                input.settings(), input.configBytes());
+            var runtime = new EntityExpressionRuntime()) {
+            long moduleHolds = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
+            TestExpressionModules.replace(runtime, module, Map.of());
+            long installation = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
+            var request = runtime.prepareTransient(runtime.generation(), "return 3;",
+                TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
+                "test:executing-watch");
+            assertEquals(installation + 1, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+            var session = request.compile(() -> false);
+            assertEquals(installation, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+            runtime.attachTransient(request, session);
+            long preparedHolds = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
+            var field = TransientExpressionSession.class.getDeclaredField("lease");
+            field.setAccessible(true);
+            var lease = field.get(session);
+            var leaseType = dev.semaweave.compilation.TransientProgramLease.class;
+            var programType = dev.semaweave.compilation.TransientProgram.class;
+            var program = leaseType.getMethod("program").invoke(lease);
+            var blockedProgram = java.lang.reflect.Proxy.newProxyInstance(programType.getClassLoader(),
+                new Class<?>[] {programType}, (proxy, method, arguments) -> {
+                    if (!method.getName().startsWith("execute")) return method.invoke(program, arguments);
+                    entered.countDown();
+                    try {
+                        assertTrue(release.await(10, java.util.concurrent.TimeUnit.SECONDS));
+                        return method.invoke(program, arguments);
+                    } finally { events.add("execution-exit"); }
+                });
+            // The Cleaner still owns the original lease; this proxy only gates the invocation.
+            field.set(session, java.lang.reflect.Proxy.newProxyInstance(leaseType.getClassLoader(),
+                new Class<?>[] {leaseType}, (proxy, method, arguments) -> method.getName().equals("program")
+                    ? blockedProgram : method.invoke(lease, arguments)));
+            var lifecycleType = Class.forName("com.elfmcys.ysm.client.entity.EntityExecutionLifecycle");
+            var constructor = lifecycleType.getDeclaredConstructor(EntityExpressionRuntime.class, Runnable.class,
+                java.util.function.Consumer.class, java.util.concurrent.Executor.class);
+            constructor.setAccessible(true);
+            var lifecycle = constructor.newInstance(runtime, (Runnable)() -> {
+                events.add("close");
+                closes.incrementAndGet();
+                session.close();
+                session.close();
+                runtime.clear();
+            }, (java.util.function.Consumer<Throwable>)failure -> { throw new AssertionError(failure); },
+                (java.util.concurrent.Executor)task -> new Thread(task, "executing-watch").start());
+            var submit = lifecycleType.getDeclaredMethod("submit", java.util.function.Supplier.class);
+            var retire = lifecycleType.getDeclaredMethod("retire");
+            submit.setAccessible(true);
+            retire.setAccessible(true);
+            submit.invoke(lifecycle, (java.util.function.Supplier<Object>)() -> runtime.observe(inputs(),
+                evaluation -> evaluation.executeTransient(session)));
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            var main = Thread.currentThread();
+            var gateFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            var gate = new Thread(() -> {
+                try {
+                    long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+                    while (main.getState() != Thread.State.WAITING && System.nanoTime() < deadline)
+                        Thread.onSpinWait();
+                    assertEquals(Thread.State.WAITING, main.getState());
+                    assertEquals(0, closes.get());
+                    assertEquals(programs + 1, TransientExpressionSession.liveLeaseCount());
+                    assertEquals(programHolds + 1,
+                        programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES));
+                    assertEquals(1, metrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_ACCESS_LEASES));
+                    assertEquals(preparedHolds, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+                } catch (Throwable failure) { gateFailure.set(failure); }
+                finally { release.countDown(); }
+            }, "watch-close-observer");
+            gate.start();
+            try {
+                retire.invoke(lifecycle);
+                events.add("retire-return");
+                retire.invoke(lifecycle);
+                gate.join(10000);
+                assertFalse(gate.isAlive());
+                assertEquals(null, gateFailure.get());
+                assertEquals(List.of("execution-exit", "close", "retire-return"), events);
+                assertEquals(1, closes.get());
+                assertEquals(programs, TransientExpressionSession.liveLeaseCount());
+                assertEquals(programHolds,
+                    programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES));
+                assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_ACCESS_LEASES));
+                assertEquals(moduleHolds, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+            } finally { release.countDown(); session.close(); }
+        } finally { com.elfmcys.ysm.util.ResourceDiagnostics.setEnabled(diagnostics); }
+        assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+    }
+
+    private static ExpressionEngineMetrics transientProgramMetrics() throws Exception {
+        var field = TransientExpressionSession.class.getDeclaredField("RESOURCE_METRICS");
+        field.setAccessible(true);
+        return (ExpressionEngineMetrics)field.get(null);
+    }
+
+    @Test
     void transientPreparationRejectsRetiredStateAndReleasesTheCompileHold(@TempDir Path temp) throws Exception {
         var metrics = new ExpressionEngineMetrics();
         var input = input("1");
@@ -1099,6 +1287,7 @@ class ExpressionArtifactPipelineTest {
         var invocation = new EntityExpressionRuntime.InvocationInputs(productionInputs,
             (commands, provenance) -> () -> effects.addAll(commands), () -> false);
         var watches = new com.elfmcys.ysm.geckolib3.core.processor.DebugInfo();
+        int programsBefore = TransientExpressionSession.liveLeaseCount();
         processor.setDebugInfo(watches);
         try {
             assertEquals("UNSET", queued(model, processor, invocation, "return q.position(3);",
@@ -1126,6 +1315,21 @@ class ExpressionArtifactPipelineTest {
             assertEquals("6.0", queued(model, processor, invocation, "return fn.actor()+1;",
                 TransientExpressionSession.Privilege.LOCAL_EXECUTE));
             assertEquals(1, effects.size());
+            var cancelledResults = new java.util.ArrayList<String>();
+            model.executeTransient("return 19;", TransientExpressionSession.Privilege.LOCAL_DEBUG, true,
+                cancelledResults::add);
+            var pendingField = processor.getClass().getDeclaredField("pendingTransientCompiles");
+            pendingField.setAccessible(true);
+            var pending = (AtomicInteger)pendingField.get(processor);
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15);
+            while (pending.get() != 0 && System.nanoTime() < deadline)
+                Thread.sleep(10);
+            assertEquals(0, pending.get());
+            assertTrue(TransientExpressionSession.liveLeaseCount() > programsBefore);
+            processor.clearModel();
+            assertEquals(List.of("Error: transient request cancelled"), cancelledResults);
+            assertEquals(programsBefore, TransientExpressionSession.liveLeaseCount(),
+                "Closing the inbox must close compiled but unadopted programs and active watches");
         } finally {
             ((AutoCloseable)binding).close();
             runtime.close();
@@ -1141,6 +1345,7 @@ class ExpressionArtifactPipelineTest {
         model.executeTransient(source, privilege, true, result::complete);
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15);
         while (!result.isDone() && System.nanoTime() < deadline) {
+            processor.prepareTransientWork();
             model.getExpressionRuntime().animationPass(inputs, false, evaluation -> {
                 processor.processTransientTasks(evaluation, true);
                 return null;
@@ -1158,6 +1363,7 @@ class ExpressionArtifactPipelineTest {
         var values = new java.util.HashMap<String, String>();
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15);
         do {
+            processor.prepareTransientWork();
             model.getExpressionRuntime().animationPass(inputs, false, evaluation -> {
                 processor.processTransientTasks(evaluation, true);
                 return null;
@@ -1322,6 +1528,45 @@ class ExpressionArtifactPipelineTest {
         assertEquals("npc", rebuilt.identity().targetId());
         assertEquals(1, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
         rebuilt.close();
+    }
+
+    @Test
+    void frozenTransientCompilationOutlivesItsInstallationAndClosesTheLateProgram(@TempDir Path temp)
+        throws Exception {
+        var metrics = new ExpressionEngineMetrics();
+        var input = input();
+        var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
+            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+                input.settings(), input.configBytes());
+        var runtime = new EntityExpressionRuntime();
+        TestExpressionModules.replace(runtime, module, Map.of());
+        int programs = TransientExpressionSession.liveLeaseCount();
+        var request = runtime.prepareTransient(runtime.generation(), "return 7;",
+            TransientExpressionSession.Privilege.LOCAL_DEBUG, TransientExpressionSession.Purpose.ONE_SHOT, "late");
+        var closedRequest = runtime.prepareTransient(runtime.generation(), "return 11;",
+            TransientExpressionSession.Privilege.LOCAL_DEBUG, TransientExpressionSession.Purpose.ONE_SHOT, "closed");
+        runtime.close();
+        var compiler = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var result = compiler.submit(() -> request.compile(() -> false));
+            try (var session = result.get(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                assertThrows(IllegalStateException.class, () -> runtime.attachTransient(request, session));
+                assertEquals(programs + 1, TransientExpressionSession.liveLeaseCount());
+            }
+            assertEquals(programs, TransientExpressionSession.liveLeaseCount());
+            module.close();
+            var rejected = compiler.submit(() -> closedRequest.compile(() -> false));
+            var failure = assertThrows(java.util.concurrent.ExecutionException.class,
+                () -> rejected.get(30, java.util.concurrent.TimeUnit.SECONDS));
+            assertInstanceOf(dev.semaweave.compilation.TransientAccessException.class, failure.getCause());
+            assertEquals(programs, TransientExpressionSession.liveLeaseCount());
+            assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+        } finally {
+            compiler.shutdownNow();
+            request.close();
+            closedRequest.close();
+            module.close();
+        }
     }
 
     @Test

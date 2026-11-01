@@ -596,7 +596,7 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                                 textures, target, textureProto, defaultModel, cacheOnly));
                         var animations = resources.own(AnimationStore.consumerView(prepared.main().animations(),
                             name -> resourceFailures.animation(targetId + "/main/" + name)));
-                        var firstPersonAnimations = resources.own(prepared.arm() == null ? new AnimationStore()
+                        var firstPersonAnimations = resources.own(prepared.arm() == null ? AnimationStore.eager(Map.of())
                             : AnimationStore.consumerView(prepared.arm().animations(),
                                 name -> resourceFailures.animation(targetId + "/fp_arm/" + name)));
                         var variants = new FifoHashMap<>(new String[] {selectedTexture},

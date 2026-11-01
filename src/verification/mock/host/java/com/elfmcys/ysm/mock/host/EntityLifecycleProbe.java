@@ -43,7 +43,12 @@ final class EntityLifecycleProbe {
         if (current == null)
             return;
         current.thread = Thread.currentThread().getName();
-        current.owner.retire();
+        try {
+            current.owner.retire();
+            throw new AssertionError("Worker lifecycle reentry was accepted");
+        } catch (IllegalStateException expected) {
+            current.reentryRejected = true;
+        }
         current.entered.countDown();
         try {
             if (!current.release.await(5, TimeUnit.SECONDS))
@@ -86,8 +91,7 @@ final class EntityLifecycleProbe {
             for (var suppress : new boolean[] {false, true}) {
                 ClientConfig.DISABLE_SELF_MODEL.set(suppress);
                 minecraft.player.tickCount = 0;
-                owner.reset();
-                owner.checkModelUpdate();
+                owner.waitForAsyncUpdate();
                 owner.getExpressionRuntime().roamingState().orElseThrow().write("trace", 0f);
                 owner.playExtraAnimation("trace");
                 synchronized (EntityLifecycleProbe.class) {
@@ -96,8 +100,9 @@ final class EntityLifecycleProbe {
                 var values = new ArrayList<Float>();
                 for (var sample : new float[] {0, 0.01f, 2.5f, 4.5f, 3.5f}) {
                     minecraft.player.tickCount = (int)sample;
-                    owner.beginAsyncUpdate(sample - minecraft.player.tickCount);
+                    com.elfmcys.ysm.client.animation.AnimationParallelTicker.scheduleAll(sample - minecraft.player.tickCount);
                     owner.waitForAsyncUpdate();
+                    com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
                     values.add(owner.roamingSnapshot(owner.localRoamingKey()).values()
                         .get(com.elfmcys.ysm.util.StringPool.computeIfAbsent("trace")));
                 }
@@ -105,12 +110,12 @@ final class EntityLifecycleProbe {
             }
             result.put("samples", new float[] {0, 0.01f, 2.5f, 4.5f, 3.5f});
             result.put("opportunities",
-                "Only beginAsyncUpdate/waitForAsyncUpdate; no synchronous output or host draw between samples");
+                "Explicit invocation schedule/get/drain; no host draw between samples");
             return result;
         } finally {
             minecraft.player.tickCount = tick;
             ClientConfig.DISABLE_SELF_MODEL.set(hidden);
-            owner.reset();
+            owner.stopExtraAnimation();
         }
     }
 
@@ -118,9 +123,8 @@ final class EntityLifecycleProbe {
         var owner = minecraft.player.getCapability(PlayerAnimatableCapabilityProvider.CAP)
             .orElseThrow(IllegalStateException::new);
         var tick = minecraft.player.tickCount;
-        minecraft.player.tickCount = 0;
-        owner.reset();
-        owner.checkModelUpdate();
+        minecraft.player.tickCount = tick + 1;
+        owner.waitForAsyncUpdate();
         owner.playExtraAnimation("worker");
         var borrowed = update(owner, 0);
         if (borrowed == null)
@@ -179,16 +183,26 @@ final class EntityLifecycleProbe {
         gate = current;
         var result = new LinkedHashMap<String, Object>();
         try {
-            minecraft.player.tickCount = 2;
-            owner.beginAsyncUpdate(0.5f);
+            minecraft.player.tickCount = tick + 3;
+            com.elfmcys.ysm.client.animation.AnimationParallelTicker.scheduleAll(0.5f);
             if (!current.entered.await(5, TimeUnit.SECONDS))
                 throw new IllegalStateException("Actual worker did not reach the gate");
             result.put("beforeExit",
                 Map.of("assigned", owner.isAssigned(), "unfinished", owner.hasUnfinishedWork(), "leaseCloses",
-                    closes.get(), "borrowedNativeValid", borrowed.modelState.isValid(), "workerThread",
+                    closes.get(), "workerReentryRejected", current.reentryRejected, "workerThread",
                     current.thread));
-            current.release.countDown();
-            owner.waitForAsyncUpdate();
+            var main = Thread.currentThread();
+            var releaser = new Thread(() -> {
+                var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (main.getState() != Thread.State.WAITING && System.nanoTime() < deadline)
+                    Thread.onSpinWait();
+                current.closeBeforeRelease = closes.get();
+                current.release.countDown();
+            }, "YSM Ownership Gate");
+            releaser.start();
+            owner.retire();
+            releaser.join(5000);
+            com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
             result.put("afterExit",
                 Map.of("assigned", owner.isAssigned(), "unfinished", owner.hasUnfinishedWork(), "leaseCloses",
                     closes.get(), "borrowedNativeValid", borrowed.modelState.isValid(), "callbackExited",
@@ -200,7 +214,8 @@ final class EntityLifecycleProbe {
                 late.put(name, installation.commit(accepted::incrementAndGet));
             result.put("lateAdmission", late);
             result.put("lateCallbacksExecuted", accepted.get());
-            result.put("stagedAfterSeal", current.staged);
+            result.put("stagedBeforeRetireReturn", current.staged);
+            result.put("leaseClosesBeforeWorkerRelease", current.closeBeforeRelease);
             reporter.invoke(null, planner, System.nanoTime() + TimeUnit.SECONDS.toNanos(60), minecraft.player.getId(),
                 sample, installation, sender);
             result.put("qualifiedReportCallbacks",
@@ -209,6 +224,7 @@ final class EntityLifecycleProbe {
         } finally {
             current.release.countDown();
             owner.waitForAsyncUpdate();
+            com.elfmcys.ysm.client.animation.AnimationParallelTicker.waitAll();
             minecraft.player.tickCount = tick;
             gate = null;
         }
@@ -233,6 +249,8 @@ final class EntityLifecycleProbe {
         final CountDownLatch exited = new CountDownLatch(1);
         volatile String thread;
         volatile List<String> staged = List.of();
+        volatile boolean reentryRejected;
+        volatile int closeBeforeRelease = -1;
 
         Gate(PlayerAnimatableCapability owner) {
             this.owner = owner;

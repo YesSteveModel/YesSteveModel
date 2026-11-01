@@ -10,9 +10,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -48,48 +45,29 @@ final class QualifiedStateReportTest {
     }
 
     @Test
-    void retirementWaitsForOriginalQualifiedEncodingAndSendAttempt() throws Exception {
-        for (boolean beforeEncoding : new boolean[] {true, false}) {
-            try (var module = TestExpressionModules.create(Set.of("a")); var runtime = new EntityExpressionRuntime()) {
-                TestExpressionModules.replace(runtime, module, Map.of());
-                runtime.roamingState().orElseThrow().write("a", 7);
-                var snapshot = runtime.snapshot().orElseThrow();
-                var entered = new CountDownLatch(1);
-                var release = new CountDownLatch(1);
-                var retirementStarted = new CountDownLatch(1);
-                var sent = new AtomicInteger();
-                var encoded = new AtomicReference<byte[]>();
-                var submission = CompletableFuture.runAsync(() -> LocalPlayerStateReporter.submitOpportunity(planner(),
-                    1_000_000_000L, 42, new PlayerStateReportPlanner.RoamingSample(11, snapshot.payload().values()),
-                    snapshot.installation(), report -> {
-                        if (beforeEncoding)
-                            await(entered, release);
-                        try (var frame = FrameCodec.encode(1, report.toByteArray(), null)) {
-                            encoded.set(frame.bytes());
-                            if (!beforeEncoding)
-                                await(entered, release);
-                            sent.incrementAndGet();
-                        }
-                    }));
-                assertTrue(entered.await(10, TimeUnit.SECONDS));
-                var retirement = CompletableFuture.runAsync(() -> {
-                    retirementStarted.countDown();
-                    TestExpressionModules.replace(runtime, module, Map.of());
+    void mainThreadQualifiedEncodingPrecedesReplacementAndRejectsTheOldSample() throws Exception {
+        try (var module = TestExpressionModules.create(Set.of("a")); var runtime = new EntityExpressionRuntime()) {
+            TestExpressionModules.replace(runtime, module, Map.of());
+            runtime.roamingState().orElseThrow().write("a", 7);
+            var snapshot = runtime.snapshot().orElseThrow();
+            var sent = new AtomicInteger();
+            var encoded = new AtomicReference<byte[]>();
+            LocalPlayerStateReporter.submitOpportunity(planner(),
+                1_000_000_000L, 42, new PlayerStateReportPlanner.RoamingSample(11, snapshot.payload().values()),
+                snapshot.installation(), report -> {
+                    try (var frame = FrameCodec.encode(1, report.toByteArray(), null)) {
+                        encoded.set(frame.bytes());
+                        sent.incrementAndGet();
+                    }
                 });
-                assertTrue(retirementStarted.await(10, TimeUnit.SECONDS));
-                assertThrows(java.util.concurrent.TimeoutException.class,
-                    () -> retirement.get(50, TimeUnit.MILLISECONDS));
-                release.countDown();
-                submission.get(10, TimeUnit.SECONDS);
-                retirement.get(10, TimeUnit.SECONDS);
-                assertEquals(1, sent.get());
-                var payload = java.util.Arrays.copyOfRange(encoded.get(), 1, encoded.get().length);
-                var report = PlayerStateReportProto.parseFrom(payload);
-                assertEquals(42, report.subject().entityId());
-                assertEquals(11, report.roamingUnsafe().modelKey());
-                assertEquals(7F, report.roamingUnsafe().variables().get(0).value_());
-                assertFalse(snapshot.installation().commit(() -> fail("retired sample reused")));
-            }
+            TestExpressionModules.replace(runtime, module, Map.of());
+            assertEquals(1, sent.get());
+            var payload = java.util.Arrays.copyOfRange(encoded.get(), 1, encoded.get().length);
+            var report = PlayerStateReportProto.parseFrom(payload);
+            assertEquals(42, report.subject().entityId());
+            assertEquals(11, report.roamingUnsafe().modelKey());
+            assertEquals(7F, report.roamingUnsafe().variables().get(0).value_());
+            assertFalse(snapshot.installation().commit(() -> fail("retired sample reused")));
         }
     }
 
@@ -121,12 +99,4 @@ final class QualifiedStateReportTest {
         return planner;
     }
 
-    private static void await(CountDownLatch entered, CountDownLatch release) {
-        entered.countDown();
-        try {
-            assertTrue(release.await(10, TimeUnit.SECONDS));
-        } catch (InterruptedException interrupted) {
-            throw new AssertionError(interrupted);
-        }
-    }
 }

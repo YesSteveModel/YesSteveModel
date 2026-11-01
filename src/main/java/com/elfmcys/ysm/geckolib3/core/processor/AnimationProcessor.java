@@ -30,17 +30,16 @@ import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3f;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 public class AnimationProcessor<TEntity extends Entity> {
@@ -66,12 +65,11 @@ public class AnimationProcessor<TEntity extends Entity> {
 
     private final SoundInstanceManager globalSoundManager = new SoundInstanceManager();
     private final RandomSource random = new XoroshiroRandomSource(RandomSupport.generateUniqueSeed());
-    private final ConcurrentLinkedQueue<TransientTask> readyTransients = new ConcurrentLinkedQueue<>();
+    private final ArrayDeque<TransientTask> readyTransients = new ArrayDeque<>();
     private final AtomicInteger ownedTransientRequests = new AtomicInteger();
     private final AtomicInteger pendingTransientCompiles = new AtomicInteger();
-    private final AtomicLong transientEpoch = new AtomicLong();
-    private final AtomicLong watchEpoch = new AtomicLong();
-    private final ConcurrentLinkedQueue<WatchCompilation> readyWatches = new ConcurrentLinkedQueue<>();
+    private CompileInbox<TransientTask> transientInbox = new CompileInbox<>();
+    private CompileInbox<WatchCompilation> watchInbox = new CompileInbox<>();
     private final Map<String, WatchState> watches = new HashMap<>();
 
     private float lastTrimTime = 0;
@@ -316,15 +314,15 @@ public class AnimationProcessor<TEntity extends Entity> {
             this.eventHandlers = eventHandlers;
             for (var binding : bindings)
                 binding.run();
+            for (var controller : animations.getAnimationControllers())
+                controller.invalidateAnimationSource();
         };
     }
 
     public void enqueueTransient(String source, TransientExpressionSession.Privilege privilege, boolean beforeAnimation,
         @Nullable Consumer<String> resultConsumer) {
         var runtime = animatable.getExpressionRuntime();
-        var module = runtime.module().orElse(null);
-        var generation = runtime.generation();
-        if (module == null || generation <= 0) {
+        if (runtime.module().isEmpty()) {
             acceptResult(resultConsumer, "Error: no current expression target");
             return;
         }
@@ -333,47 +331,103 @@ public class AnimationProcessor<TEntity extends Entity> {
             acceptResult(resultConsumer, "Error: transient request queue is full");
             return;
         }
-        var pending = pendingTransientCompiles.incrementAndGet();
-        if (pending > MAX_PENDING_TRANSIENTS) {
+        if (pendingTransientCompiles.incrementAndGet() > MAX_PENDING_TRANSIENTS) {
             pendingTransientCompiles.decrementAndGet();
             ownedTransientRequests.decrementAndGet();
             acceptResult(resultConsumer, "Error: transient compile queue is full");
             return;
         }
-        var epoch = transientEpoch.get();
+        EntityExpressionRuntime.TransientCompilation request;
         try {
-            CompletableFuture.runAsync(() -> {
-                TransientExpressionSession session = null;
-                Throwable failure = null;
-                try {
-                    session = runtime.compileTransient(generation, source, privilege,
-                        TransientExpressionSession.Purpose.ONE_SHOT,
-                        "transient:" + privilege.name().toLowerCase(java.util.Locale.ROOT),
-                        () -> epoch != transientEpoch.get() || animatable.getEntity().isRemoved());
-                } catch (Throwable error) {
-                    failure = error;
-                } finally {
-                    pendingTransientCompiles.decrementAndGet();
-                }
-                if (epoch != transientEpoch.get()) {
-                    if (session != null)
-                        session.close();
-                    ownedTransientRequests.decrementAndGet();
-                    return;
-                }
-                var ready = new TransientTask(session, failure, beforeAnimation, resultConsumer);
-                readyTransients.add(ready);
-                if (epoch != transientEpoch.get() && readyTransients.remove(ready)) {
-                    if (session != null)
-                        session.close();
-                    ownedTransientRequests.decrementAndGet();
-                }
-            }, TRANSIENT_COMPILER);
-        } catch (RuntimeException rejected) {
+            request = runtime.prepareTransient(runtime.generation(), source, privilege,
+                TransientExpressionSession.Purpose.ONE_SHOT,
+                "transient:" + privilege.name().toLowerCase(java.util.Locale.ROOT));
+        } catch (RuntimeException | Error failure) {
             pendingTransientCompiles.decrementAndGet();
             ownedTransientRequests.decrementAndGet();
+            throw failure;
+        }
+        var inbox = transientInbox;
+        var pending = pendingTransientCompiles;
+        var owned = ownedTransientRequests;
+        try {
+            TRANSIENT_COMPILER.execute(() -> compileTransient(request, inbox, beforeAnimation, resultConsumer,
+                pending, owned));
+        } catch (RuntimeException rejected) {
+            request.close();
+            pending.decrementAndGet();
+            owned.decrementAndGet();
             acceptResult(resultConsumer, "Error: transient compiler is busy");
         }
+    }
+
+    private static void compileTransient(EntityExpressionRuntime.TransientCompilation request,
+        CompileInbox<TransientTask> inbox, boolean before, Consumer<String> consumer,
+        AtomicInteger pending, AtomicInteger owned) {
+        TransientExpressionSession session = null;
+        Throwable failure = null;
+        try {
+            try {
+                session = request.compile(inbox::isClosed);
+            } catch (Throwable error) {
+                failure = error;
+            }
+            if (!inbox.publish(new TransientTask(request, session, failure, before, consumer))) {
+                try {
+                    if (session != null)
+                        session.close();
+                } finally {
+                    owned.decrementAndGet();
+                }
+            }
+        } finally {
+            pending.decrementAndGet();
+        }
+    }
+
+    /** The main-thread preparation window is the only place that attaches instance access. */
+    public void prepareTransientWork() {
+        var runtime = animatable.getExpressionRuntime();
+        for (var result : transientInbox.drain()) {
+            var task = result;
+            if (result.session() != null) {
+                try {
+                    runtime.attachTransient(result.request(), result.session());
+                } catch (Throwable failure) {
+                    try {
+                        result.session().close();
+                    } catch (Throwable cleanup) {
+                        if (cleanup != failure) failure.addSuppressed(cleanup);
+                    }
+                    task = new TransientTask(result.request(), null, failure, result.beforeAnimation(),
+                        result.resultConsumer());
+                }
+            }
+            readyTransients.addLast(task);
+        }
+        var owner = debugInfo;
+        var retained = new HashSet<String>();
+        if (owner != null) {
+            for (var entry : owner.entries()) {
+                retained.add(entry.name());
+                var state = watches.get(entry.name());
+                if (state != null && state.entry.revision() != entry.revision()) {
+                    state.close();
+                    watches.remove(entry.name());
+                    state = null;
+                }
+                if (state == null)
+                    scheduleWatch(entry);
+            }
+        }
+        for (var iterator = watches.entrySet().iterator(); iterator.hasNext();) {
+            var entry = iterator.next();
+            if (!retained.contains(entry.getKey())) {
+                entry.getValue().close();
+                iterator.remove();
+            }
+        }
+        acceptWatchCompilations();
     }
 
     public void processTransientTasks(EntityExpressionRuntime.Evaluation evaluation, boolean beforeAnimation) {
@@ -409,24 +463,11 @@ public class AnimationProcessor<TEntity extends Entity> {
     }
 
     private void processWatches(EntityExpressionRuntime.Evaluation evaluation, boolean beforeAnimation) {
-        acceptWatchCompilations();
         var owner = debugInfo;
         if (owner == null)
             return;
-        var entries = owner.entries();
-        var retained = new HashSet<String>();
-        for (var entry : entries) {
-            retained.add(entry.name());
-            var state = watches.get(entry.name());
-            if (state != null && state.revision != entry.revision()) {
-                state.close();
-                watches.remove(entry.name());
-                state = null;
-            }
-            if (state == null) {
-                scheduleWatch(entry);
-                continue;
-            }
+        for (var state : watches.values()) {
+            var entry = state.entry;
             if (state.session == null || state.failed
                 || (entry.phase() == DebugInfo.Phase.PRE_ANIMATION) != beforeAnimation)
                 continue;
@@ -435,70 +476,65 @@ public class AnimationProcessor<TEntity extends Entity> {
                 owner.result(entry.name(), entry.revision(), display(result, state.session.resultType()));
             } catch (Throwable failure) {
                 state.failed = true;
-                state.closeSession();
+                try {
+                    state.closeSession();
+                } catch (Throwable cleanup) {
+                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                }
                 owner.result(entry.name(), entry.revision(), error(failure));
                 rethrowSevere(failure);
-            }
-        }
-        var iterator = watches.entrySet().iterator();
-        while (iterator.hasNext()) {
-            var entry = iterator.next();
-            if (!retained.contains(entry.getKey())) {
-                entry.getValue().close();
-                iterator.remove();
             }
         }
     }
 
     private void scheduleWatch(DebugInfo.Entry entry) {
         var runtime = animatable.getExpressionRuntime();
-        var module = runtime.module().orElse(null);
-        var generation = runtime.generation();
-        if (module == null || generation <= 0 || pendingTransientCompiles.incrementAndGet() > MAX_PENDING_TRANSIENTS) {
-            if (module != null && generation > 0)
-                pendingTransientCompiles.decrementAndGet();
-            var state = new WatchState(entry.revision());
+        var state = new WatchState(entry);
+        watches.put(entry.name(), state);
+        if (pendingTransientCompiles.incrementAndGet() > MAX_PENDING_TRANSIENTS) {
+            pendingTransientCompiles.decrementAndGet();
             state.failed = true;
-            watches.put(entry.name(), state);
             if (debugInfo != null)
                 debugInfo.result(entry.name(), entry.revision(), "Error: transient compile queue is full");
             return;
         }
-        var state = new WatchState(entry.revision());
-        watches.put(entry.name(), state);
-        var epoch = transientEpoch.get();
-        var expectedWatchEpoch = watchEpoch.get();
+        EntityExpressionRuntime.TransientCompilation request;
         try {
-            CompletableFuture.runAsync(() -> {
-                TransientExpressionSession session = null;
-                Throwable failure = null;
-                try {
-                    session = runtime.compileTransient(generation, entry.source(),
-                        TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
-                        "transient:local-watch:" + entry.name(), () -> epoch != transientEpoch.get()
-                            || expectedWatchEpoch != watchEpoch.get() || animatable.getEntity().isRemoved());
-                } catch (Throwable error) {
-                    failure = error;
-                } finally {
-                    pendingTransientCompiles.decrementAndGet();
-                }
-                if (epoch != transientEpoch.get() || expectedWatchEpoch != watchEpoch.get()) {
-                    if (session != null)
-                        session.close();
-                    return;
-                }
-                var ready = new WatchCompilation(entry.name(), entry.revision(), session, failure);
-                readyWatches.add(ready);
-                if ((epoch != transientEpoch.get() || expectedWatchEpoch != watchEpoch.get())
-                    && readyWatches.remove(ready) && session != null) {
-                    session.close();
-                }
-            }, TRANSIENT_COMPILER);
-        } catch (RuntimeException rejected) {
+            request = runtime.prepareTransient(runtime.generation(), entry.source(),
+                TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
+                "transient:local-watch:" + entry.name());
+        } catch (RuntimeException | Error failure) {
             pendingTransientCompiles.decrementAndGet();
+            throw failure;
+        }
+        var inbox = watchInbox;
+        var pending = pendingTransientCompiles;
+        try {
+            TRANSIENT_COMPILER.execute(() -> compileWatch(request, inbox, entry, pending));
+        } catch (RuntimeException rejected) {
+            request.close();
+            pending.decrementAndGet();
             state.failed = true;
             if (debugInfo != null)
                 debugInfo.result(entry.name(), entry.revision(), "Error: transient compiler is busy");
+        }
+    }
+
+    private static void compileWatch(EntityExpressionRuntime.TransientCompilation request,
+        CompileInbox<WatchCompilation> inbox, DebugInfo.Entry entry, AtomicInteger pending) {
+        TransientExpressionSession session = null;
+        Throwable failure = null;
+        try {
+            try {
+                session = request.compile(inbox::isClosed);
+            } catch (Throwable error) {
+                failure = error;
+            }
+            if (!inbox.publish(new WatchCompilation(entry.name(), entry.revision(), request, session, failure))
+                && session != null)
+                session.close();
+        } finally {
+            pending.decrementAndGet();
         }
     }
 
@@ -514,48 +550,106 @@ public class AnimationProcessor<TEntity extends Entity> {
     }
 
     private void acceptWatchCompilations() {
-        WatchCompilation result;
-        while ((result = readyWatches.poll()) != null) {
+        Throwable terminalFailure = null;
+        for (var result : watchInbox.drain()) {
             var state = watches.get(result.name());
-            if (state == null || state.revision != result.revision()) {
-                if (result.session() != null)
-                    result.session().close();
-                continue;
-            }
-            if (result.failure() != null) {
-                state.failed = true;
-                if (debugInfo != null)
-                    debugInfo.result(result.name(), result.revision(), error(result.failure()));
-            } else {
+            try {
+                if (state == null || state.entry.revision() != result.revision()) {
+                    result.close();
+                    continue;
+                }
+                if (result.failure() != null)
+                    throw result.failure();
+                animatable.getExpressionRuntime().attachTransient(result.request(), result.session());
                 state.session = result.session();
+            } catch (Throwable failure) {
+                try {
+                    result.close();
+                } catch (Throwable cleanup) {
+                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                }
+                if (state != null) state.failed = true;
+                if (debugInfo != null)
+                    debugInfo.result(result.name(), result.revision(), error(failure));
+                try {
+                    rethrowSevere(failure);
+                } catch (RuntimeException | Error severe) {
+                    if (terminalFailure == null) terminalFailure = severe;
+                    else if (terminalFailure != severe) terminalFailure.addSuppressed(severe);
+                }
             }
         }
+        if (terminalFailure instanceof RuntimeException error) throw error;
+        if (terminalFailure instanceof Error error) throw error;
     }
 
     private void closeTransientWork() {
-        transientEpoch.incrementAndGet();
-        TransientTask task;
-        while ((task = readyTransients.poll()) != null) {
-            if (task.session() != null)
-                task.session().close();
+        var previous = transientInbox;
+        transientInbox = new CompileInbox<>();
+        var pending = previous.close();
+        readyTransients.addAll(pending);
+        Throwable failure = null;
+        while (!readyTransients.isEmpty()) {
+            var task = readyTransients.removeFirst();
             try {
+                task.close();
                 acceptResult(task.resultConsumer(), "Error: transient request cancelled");
+            } catch (RuntimeException | Error error) {
+                if (failure == null) failure = error;
+                else failure.addSuppressed(error);
             } finally {
                 ownedTransientRequests.decrementAndGet();
             }
         }
-        closeWatches();
-        WatchCompilation compiled;
-        while ((compiled = readyWatches.poll()) != null) {
-            if (compiled.session() != null)
-                compiled.session().close();
+        try {
+            closeWatches();
+        } catch (RuntimeException | Error next) {
+            if (failure == null) failure = next;
+            else if (failure != next) failure.addSuppressed(next);
         }
+        if (failure instanceof RuntimeException error) throw error;
+        if (failure instanceof Error error) throw error;
     }
 
     private void closeWatches() {
-        watchEpoch.incrementAndGet();
-        watches.values().forEach(WatchState::close);
+        var previous = watchInbox;
+        watchInbox = new CompileInbox<>();
+        Throwable failure = null;
+        var resources = new ArrayList<AutoCloseable>(previous.close());
+        resources.addAll(watches.values());
         watches.clear();
+        for (var resource : resources) {
+            try {
+                resource.close();
+            } catch (Exception | LinkageError next) {
+                if (failure == null) failure = next;
+                else if (failure != next) failure.addSuppressed(next);
+            }
+        }
+        if (failure instanceof RuntimeException error) throw error;
+        if (failure instanceof Error error) throw error;
+        if (failure != null) throw new IllegalStateException("Failed to close watch programs", failure);
+    }
+
+    /** This lock transfers only independently compiled programs, never entity execution state. */
+    private static final class CompileInbox<T> {
+        private final ArrayDeque<T> ready = new ArrayDeque<>();
+        private boolean closed;
+        synchronized boolean isClosed() { return closed; }
+        synchronized boolean publish(T value) {
+            if (closed) return false;
+            ready.addLast(value);
+            return true;
+        }
+        synchronized List<T> drain() {
+            var result = List.copyOf(ready);
+            ready.clear();
+            return result;
+        }
+        synchronized List<T> close() {
+            closed = true;
+            return drain();
+        }
     }
 
     private static String display(Object value, dev.semaweave.ValueType type) {
@@ -587,28 +681,32 @@ public class AnimationProcessor<TEntity extends Entity> {
             consumer.accept(result);
     }
 
-    private record TransientTask(@Nullable TransientExpressionSession session, @Nullable Throwable failure,
-        boolean beforeAnimation, @Nullable Consumer<String> resultConsumer) {
+    private record TransientTask(EntityExpressionRuntime.TransientCompilation request,
+        @Nullable TransientExpressionSession session, @Nullable Throwable failure,
+        boolean beforeAnimation, @Nullable Consumer<String> resultConsumer) implements AutoCloseable {
+        @Override public void close() { if (session != null) session.close(); }
     }
 
-    private record WatchCompilation(String name, long revision, @Nullable TransientExpressionSession session,
-        @Nullable Throwable failure) {
+    private record WatchCompilation(String name, long revision, EntityExpressionRuntime.TransientCompilation request,
+        @Nullable TransientExpressionSession session, @Nullable Throwable failure) implements AutoCloseable {
+        @Override public void close() { if (session != null) session.close(); }
     }
 
     private static final class WatchState implements AutoCloseable {
-        private final long revision;
+        private final DebugInfo.Entry entry;
         @Nullable
         private TransientExpressionSession session;
         private boolean failed;
 
-        private WatchState(long revision) {
-            this.revision = revision;
+        private WatchState(DebugInfo.Entry entry) {
+            this.entry = entry;
         }
 
         private void closeSession() {
             if (session != null) {
-                session.close();
+                var previous = session;
                 session = null;
+                previous.close();
             }
         }
 

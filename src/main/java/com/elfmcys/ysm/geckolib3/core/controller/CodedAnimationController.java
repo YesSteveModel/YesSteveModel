@@ -26,6 +26,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 public class CodedAnimationController<T extends AnimatableEntity<?>> implements IAnimationController<T> {
+    private final ControllerAnimationCache animationCache;
     private final String name;
     private final IAnimationPredicate<T> animationPredicate;
     private final AnimationPlayer animationPlayer;
@@ -55,7 +56,8 @@ public class CodedAnimationController<T extends AnimatableEntity<?>> implements 
         IAnimationPredicate<T> animationPredicate, boolean blendRotation) {
         this.name = name;
         this.animationPredicate = animationPredicate;
-        this.animationPlayer = new AnimationPlayer(animatableEntity, transitionLengthTicks, true);
+        this.animationCache = new ControllerAnimationCache(animatableEntity);
+        this.animationPlayer = new AnimationPlayer(animatableEntity, transitionLengthTicks, true, animationCache);
         this.defaultTransitionTicks = transitionLengthTicks;
         this.blendRotation = blendRotation;
         this.ctx = new ControllerExecutionState(false, this);
@@ -117,6 +119,7 @@ public class CodedAnimationController<T extends AnimatableEntity<?>> implements 
         Object2ReferenceMap<String, List<EventProgram>> eventHandlers, java.util.function.Function<String,
             com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData> definitions) {
         this.animationPlayer.updateModel(modelBones);
+        this.animationCache.clear();
         this.animationPlayer.setBeginningTransition(new LinearBlendTransition(defaultTransitionTicks));
         prepareResourceBinding(eventHandlers, definitions).run();
     }
@@ -186,8 +189,15 @@ public class CodedAnimationController<T extends AnimatableEntity<?>> implements 
     }
 
     public void clear() {
+        this.animationCache.clear();
         this.animationPlayer.clear();
         this.molangPredicate = null;
+    }
+
+    @Override
+    public void invalidateAnimationSource() {
+        animationCache.clear();
+        animationPlayer.invalidateAnimationSource();
     }
 
     public void indicateReload() {

@@ -383,7 +383,7 @@ tasks.register('verifyEntityPresentationForge', JavaExec) {
     mainClass = 'com.elfmcys.ysm.mock.supervisor.MolangHostSupervisor'
     doFirst {
         def scope = providers.gradleProperty('entityPresentationScope').getOrElse('all')
-        if (!(scope in ['all', 'lifecycle', 'roles', 'optional', 'opportunities', 'gui-purpose', 'catalog-progress'])) throw new GradleException('entityPresentationScope must be all, lifecycle, roles, optional, opportunities, gui-purpose or catalog-progress')
+        if (!(scope in ['all', 'lifecycle', 'roles', 'optional', 'opportunities', 'gui-purpose', 'catalog-progress', 'ownership'])) throw new GradleException('Invalid entityPresentationScope')
         args projectDir.absolutePath, providers.gradleProperty('entityPresentationEvidenceDir').get(), scope == 'all' ? 'entity-state' : 'entity-' + scope
         args providers.gradleProperty('entityPresentationFixtureDir').getOrElse('')
     }

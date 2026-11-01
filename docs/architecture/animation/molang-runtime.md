@@ -34,9 +34,9 @@ Factory 完整验证、加载、绑定并检查 target 的 Roaming 并集后才�
 
 ## Invocation 与效果
 
-YSM 的 entity owner barrier 串行安排 update、evaluate、迁移和 close。同一 runtime 可以由 render thread 与 worker 先后接管，调用不能重叠。引擎的 instance/access 活跃检查不替代宿主串行、跨 instance 借用约束或关闭排序。
+主线程通过对应任务的 `Future.get` 交接 entity 私有执行态。Worker 执行期间独占 runtime；主线程只维护待交接句柄，不读取更新态。安装、迁移、reset、reload 和 retire 只在主线程交接窗口发生。引擎的 instance/access 活跃检查不替代这条顺序或跨 instance 禁止重入。
 
-该 barrier 同时排序完整实体安装与效果封口。候选只构造私有 instance/组件，当前查询仍见旧安装；封口立即拒绝旧 instance 的报告、Roaming 投影与新效果。物理关闭等已接纳任务及同步借用结束。同 module 重装仍更换资格，兼容变体只撤销几何输出。
+候选只构造私有 instance/组件，当前查询仍见旧安装；交接后的发布撤销旧资格。Worker 的失败不触发生命周期变化，主线程接纳失败后才结束 exact installation。同步绘制回调可撤资格并延后释放，普通求值不能重入生命周期。同 module 重装仍更换资格，兼容变体只撤销几何输出。
 
 完整逻辑求值是一轮，包含组件生命周期及 pre/main/post 执行。每轮复用同一个 `MolangContext`，同时承担 context 与 frame；公共统一 view 引用同一载体，不逐表达式或逐 provider 建立 wrapper。业务 view 只同步借用 subject、只读轮输入和申请提交能力，不暴露入口执行、预算、batch 或 reset；精确签名和借用契约见[声明边界](molang-declarations.md#公共业务-view)。
 
@@ -74,8 +74,8 @@ Provider 不得直接或经 helper 同步重入任何 persistent/transient 入�
 
 ## 短期执行
 
-Command、watch 和网络执行使用当前 target generation、SubjectBinding 与冻结 layout 的短期 lease，仍由同一 owner barrier 执行。临时程序不能扩展持久 slot、提升表示或反向重编模型；这类请求在调用 provider、写状态或提交动作前拒绝。
+Command、watch 和网络执行使用当前 target generation、SubjectBinding 与冻结 layout 的短期 lease，在同一实体执行窗口执行。临时程序不能扩展持久 slot、提升表示或反向重编模型；这类请求在调用 provider、写状态或提交动作前拒绝。
 
 Debug/watch 与 execute 使用同一正常持久写语义。结构 read/write/call 授权和 RoamingRole 仍有效；EXECUTE 可申请 ACTION，WATCH 的 entry 上限为 CONTEXT，均与本次短期宿主窗口求交。Pre/main/post 短期任务共用所在轮的 context 与首次失败，不另开嵌套轮。CONTEXT 的随机/物理推进属于正常 owner 状态，不复制或回滚任意 component。
 
-短期 program lease 与 access 各自关闭，同 hash 的新 generation 不复活旧资格。具体入口、静态表示交接和资源上限见[短期执行实现](implementation/molang-runtime.md#privileged-ingress)。
+主线程准备冻结编译输入并取得独立 module lease；后台只编译独立程序。主线程复核 exact installation 后才 attach access。编译结果交付与关闭 inbox 原子转移关闭责任，迟到结果应关闭。短期 program lease 与 access 各自关闭，同 hash 的新 generation 不复活旧资格。具体入口、静态表示交接和资源上限见[短期执行实现](implementation/molang-runtime.md#privileged-ingress)。

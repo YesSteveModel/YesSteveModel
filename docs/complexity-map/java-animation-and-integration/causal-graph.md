@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     ENTITY["D-ENTITY"] --> AN01["AN-01 entity state"]
-    ASYNC["A-AN-01"] --> OVERLAP["P-ENTITY-OVERLAP"] --> AN02["AN-02 serialize/join"]
+    ASYNC["A-AN-01"] --> OVERLAP["P-ENTITY-OVERLAP"] --> AN02["AN-02 main-thread get"]
     MULTIPASS["A-AN-02"] --> PASS["P-PASS-OVERWRITE"] --> AN04["AN-04 pose recovery"]
     MULTIPASS --> EFFECT["P-REPEAT-EFFECT"] --> AN05["AN-05 effect gate"]
     DEFFECT["D-EFFECT"] --> AN20["AN-20 audio owner"]
@@ -36,7 +36,8 @@ flowchart LR
 
 | 子图 | 派生负担与可改变前提 | 不随上游自动消失的义务 |
 |---|---|---|
-| `A-AN-01 → AN-02` 与 `A-AN-02 → AN-04/AN-05` | 原地异步求值带来串行/汇合；多 pass 共用历史带来姿态恢复。worker 发布依赖真实任务完成关系；额外 fence 已删除 | 单实体隔离、动作次数、Ready lease、native view 有效期；取消异步不证明可删多 pass 或动作门禁 |
+| `A-AN-01 → AN-02` 与 `A-AN-02 → AN-04/AN-05` | 原地异步求值带来串行/汇合；多 pass 共用历史带来姿态恢复。worker 发布依赖对应 get；主线程生命周期替代通用 runtime barrier，局部绘制借用和独立编译交付仍保留 | 单实体隔离、动作次数、Ready lease、native view 有效期；取消异步不证明可删多 pass 或动作门禁 |
+| `D-CONTROLLER → AN-06` | controller 解析复用减少共享查询，但产生精确来源失效与无上限名称保留。删除缓存可消除这两项派生责任；桥接与缓存不共享必要性结论 | 同名成功播放不重启、失败可恢复、来源隔离和共享资源关闭责任仍成立 |
 | `AN-05 → P-PARTIAL-EFFECT` | 解释器在求值窗口内直接提交宿主 effect，原先的 batch/eligibility 收口已不存在；能力门禁本身不能保证半次动作安全 | Observation 仍不得提交，generation 切换与旧表现不污染仍需保持；半次动作当前没有回滚或丢弃保证，不能声称该风险已收口 |
 | `A-DEFER → P-CALL-LOCAL-ESCAPE → AN-19` | 延后执行带来参数留存和排空顺序；改调度可收缩留存窗口，但需保持既有动作语义 | Entity 隔离、capture 值含义、模型切换/结束时的排空终态；如改变可观察顺序，需要回到产品/兼容边界裁决 |
 

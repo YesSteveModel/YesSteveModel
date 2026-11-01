@@ -90,6 +90,7 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> {
 
     public void playExtraAnimation(String animationName) {
         rejectCandidateMutation();
+        waitForAsyncUpdate();
         if (!canAcceptPlayback())
             return;
         if (getAnimation(animationName) != null) {
@@ -119,6 +120,7 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> {
 
     public void stopExtraAnimation() {
         rejectCandidateMutation();
+        waitForAsyncUpdate();
         this.isPlayingExtraAnimation = false;
     }
 
@@ -133,7 +135,7 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> {
         if (localPlayer && shouldTick) {
             if (isPlayingExtraAnimation()
                 && getCodedAnimationStates(PlayerControllerCollection.CAP_CONTROLLER) == AnimationState.IDLE) {
-                stopExtraAnimation();
+                isPlayingExtraAnimation = false;
                 if (NetworkHandler.isRemoteChannelPresent()) {
                     ClientProtocolGateway.stopSelfAnimation();
                 }

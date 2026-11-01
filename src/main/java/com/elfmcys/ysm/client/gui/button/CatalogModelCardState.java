@@ -122,7 +122,7 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
         active = false;
         scope = null;
         try {
-            entity.retire();
+            entity.revokeAssignment();
         } finally {
             configuredTarget = null;
             previewAnimations.reset();
@@ -131,7 +131,11 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
 
     @Override
     public void close() {
-        page.removeCard(this);
-        deactivate();
+        try {
+            page.removeCard(this);
+            deactivate();
+        } finally {
+            entity.retire();
+        }
     }
 }

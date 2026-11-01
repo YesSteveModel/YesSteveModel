@@ -35,7 +35,7 @@ Artifact 的显式 replacement 集合是 builtin 准入依据，诊断文字或 
 
 ## Binding 与 invocation
 
-`EntityExpressionRuntime.ownerBarrier` 串行安排安装、求值、迁移和 close。`MolangContext` 是每轮共用的业务 view 与 frame；provider 只同步借用，轮结束解除宿主引用。引擎的活跃检查不替代宿主串行与跨 instance 的禁止重入约束。
+`EntityExecutionLifecycle` 以主线程待交接句柄和对应 `Future.get` 串行安排安装、求值、迁移和 close。Runtime 的普通访问不使用通用锁或隐式等待。`MolangContext` 是每轮共用的业务 view 与 frame；provider 只同步借用，轮结束解除宿主引用。引擎的活跃检查不替代宿主串行与跨 instance 的禁止重入约束。
 
 `ExpressionHost` 冻结 `ExpressionBinding`；声明环境、BindingPlan 与静态入口上限进入身份，subject 实例和当前许可不进入 key。执行前由引擎核对已绑定 source/entry 配对、shape 和 exact generation；同内容重建也不能复活旧引用。安装为真实 subject 创建同代 SubjectBinding；获准调用缺失精确 provider 时，在求参前失败。
 
@@ -43,9 +43,9 @@ Collector 先完成来源、冲突、完整 all-of 依赖与类资格，再绑�
 
 每条表达式绑定固定 ACTION 许可，由宿主窗口与 entry/layout 上限求交。表达式 reset 清除本次借用，不清整轮首次失败、输入或 batch。独立 action、observation、配置与短期轮通过既有 `ComponentScope.evaluate` 借用输入 event；动画 pass 复用实体外层的同一 hook 窗口，不重复 begin。`EffectTransaction` 在全部 program、必要 hook、效果验证与 owner 资格成功后提交一次；清理失败也阻止提交。已提交的外部效果不回滚。
 
-OOM 保留资源失败归属，越过单 program 的零值或 UNSET 分支，终结包含该求值的整轮执行。实体操作 owner 接纳失败，context、效果 batch 和 barrier 按正常路径退出；不因 OOM 停用 program 或进入默认模型恢复。Transient/watch 先交付已有结果通知，再把执行失败交回同一 owner。
+OOM 保留资源失败归属，越过单 program 的零值或 UNSET 分支，终结包含该求值的整轮执行。实体操作 owner 接纳失败，context、效果 batch 和组件借用按正常路径退出；不因 OOM 停用 program 或进入默认模型恢复。Transient/watch 先交付已有结果通知，再把执行失败交回同一 owner。
 
-声明类在准备普通效果时选定精确 target。声音实现捕获当时的 animation/controller/global manager，controller 实现捕获当时的 coded controller，骨骼实现捕获当时的 bone。`MolangContext.submit` 只检查许可、资格和容量，再验证并登记通用申请。`EffectBatch` 完成全批验证和最终资格检查后，runtime 先关闭当前轮，再在同一 owner barrier 内按申请顺序提交。提交异常解除剩余引用，不新增重试状态。
+声明类在准备普通效果时选定精确 target。声音实现捕获当时的 animation/controller/global manager，controller 实现捕获当时的 coded controller，骨骼实现捕获当时的 bone。`MolangContext.submit` 只检查许可、资格和容量，再验证并登记通用申请。`EffectBatch` 完成全批验证和最终资格检查后，runtime 先关闭当前轮，再在同一实体执行窗口按申请顺序提交。提交异常解除剩余引用，不新增重试状态。
 
 `ysm.defer` 提交 `DeferredRequest`。Runtime 保存已复制的有限 F32、独立来源、安装及采样 context，不登记 postcommit 闭包。`AnimationPlayer` 和 coded controller 的上下文退出触发逆序排空；组件 `endEval` 前也排空轮内剩余 capture。排空调用普通 handler 入口，重建顶层许可与预算，效果继续进入当前 batch。整轮累计捕获上限限制递归登记；失败、过期或轮退出均清除未分发 capture。
 
@@ -55,11 +55,13 @@ OOM 保留资源失败归属，越过单 program 的零值或 UNSET 分支，终
 
 `@eventType` 登记 target handler，未知后缀不自动获得调用者。Player init/update 由实体前置任务触发；sync 由已验证消息或本地调用触发；defer 在当前 animation context 结束时逆序排空。Coded override 的选择见[Controller](../controllers-and-playback.md#coded-controller-override)。
 
-本地 `sync` 效果捕获当前 processor 和复制后的参数。效果提交时，processor 在已关闭的来源轮之后创建新的 ACTION 轮，不再经过实体顶层入口。实体操作仍持有 barrier；provider 在活跃轮内同步调用实体入口仍被拒绝。本地交付不需要第二份 pending 队列。
+本地 `sync` 效果捕获当前 processor 和复制后的参数。效果提交时，processor 在已关闭的来源轮之后创建新的 ACTION 轮，不再经过实体顶层入口。实体仍处于同一执行窗口；provider 在活跃轮内同步调用实体入口仍被拒绝。本地交付不需要第二份 pending 队列。
 
 ## Privileged ingress
 
-`TransientExpressionSession` 使用 exact installation/generation、SubjectBinding 与冻结 layout。准备先在 barrier 保留资源，离开 barrier 编译，再回到 barrier 复核安装、取消与非执行状态；过期候选关闭。成功 access 由 session 持有，排队、watch 与直接执行复用它。
+`TransientExpressionSession` 使用 exact installation/generation、SubjectBinding 与冻结 layout。主线程 Prepare 冻结 source、授权、purpose、位置、module 和 exact installation key，并取得独立编译 lease。后台 Compile 只使用冻结输入，不捕获 mutable runtime、instance 或实体。主线程在下一次执行准备窗口 Attach，复核当前 installation/generation 后才创建 access；过期候选关闭。成功 access 由 session 持有。
+
+`AnimationProcessor` 的短临界区 inbox 只转移独立编译产物：关闭前 publish 成功则接收方负责关闭，关闭后 publish 失败则编译方负责关闭。关闭不依赖先检查 epoch 再入队。Watch 发现、revision 替换与 attach 均在主线程准备窗口；worker 只执行本轮已接纳的 pre/post 任务。
 
 Session 显式关闭 access 和 program lease。各自 Cleaner 只保存 detached lease 与必要配额信息，不保留 context、provider 或 session。相同 hash 的新 generation 不复活旧 access。短期程序不得扩 slot、提升表示或重编模型；拒绝发生在 provider、状态或动作之前。
 

@@ -286,6 +286,7 @@ public final class PlayerStateHandler {
     private static void applyClientUpdate(Player player,
         com.elfmcys.ysm.capability.PlayerAnimatableCapability capability, PlayerStateUpdateProto update,
         @Nullable Hash256 builtinDefaultHash) {
+        capability.waitForAsyncUpdate();
         var full = update.mode() == StateWriteMode.FULL;
         var authoritativeModelHash = update.hasModel() ? ModelReferenceCodec.read(update.modelUnsafe().model()) : null;
         var appliedModelHash =

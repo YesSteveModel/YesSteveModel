@@ -52,7 +52,7 @@ Owner 测试在独立 JVM 中编译并接纳第三方组件，经过真实安装
 
 源阶段比较应覆盖相同模型/集合的完整 ProgramSource 序列，并核对 wall time、CPU 与分配。评估跨模型缓存时须计入首次构造及后续组合成本。源阶段不包含语义分析、后端、GPU 或可见内容等待，不能据此裁决完整模型与帧期不退化。
 
-Roaming owner 测试使用真实安装/barrier/投影和受控 module；报告测试使用真实 planner 与 FrameCodec，但宿主发送为接收器。分别核对同值写仍进入本地 delta、快照不消费 dirty、body-only 字段、arm 一次 full/一次非阻塞 patch、退休拒用与发送失败策略。受控 module、consumer stage 和发送接收器均不能代替真实 Minecraft provider、正常第一人称 hook、载具与双端网络的完整轨迹。
+Roaming owner 测试使用真实安装、对应 get、主线程投影和受控 module；报告测试使用真实 planner 与 FrameCodec，但宿主发送为接收器。测试核对同值写仍进入本地 delta、快照不消费 dirty、body-only 字段、arm full/patch、退休拒用与发送失败策略。受控 module、consumer stage 和发送接收器均不能代替真实 Minecraft provider、正常第一人称 hook、载具与双端网络的完整轨迹。
 
 实机验收应固定模型输入及 hash。通过正常模型选择、相机、客户端 execute/watch 和乘坐操作进入生产路径，核对 body/arm 独立状态、实际报告、载具消费与安装退休。默认初始化后应独立观察磁盘访问，实体运行与资源关闭应保留工作计数；少一次准备或一个正确值不足以证明净收益。完整准备和帧期比较遵循[持续性能基建](../tools/benchmark/README.md)的证据要求。比较应固定旧新源码、共同工作量、独立 fork 和噪声边界，包含静态计划、subject binding、双集合、保留、快照和投影成本。
 

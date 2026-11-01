@@ -128,8 +128,35 @@ final class ClientRoamingSession {
             remote.variables = new Int2FloatOpenHashMap();
         }
         remote.variables.putAll(changes);
-        updateVehicle(currentHash, changes);
 
+    }
+
+    EntityExpressionRuntime.ProjectionSink prepareLocalProjection() {
+        var hash = currentHash;
+        var module = currentModule;
+        var vehicle = player.getVehicle();
+        var target = vehicle == null ? null
+            : vehicle.getCapability(VehicleAnimatableCapabilityProvider.CAP).orElse(null);
+        var installation = target == null ? null : target.projectionIdentity();
+        return new EntityExpressionRuntime.ProjectionSink() {
+            private boolean localApplied;
+            public boolean adopt(dev.semaweave.RoamingPayload delta, boolean finalWindow) {
+                if (!localPlayer || hash == 0 || currentHash != hash || currentModule != module)
+                    return true;
+                if (!localApplied) {
+                    module.validateRoamingPatch(delta);
+                    maintainLocalChanges(delta);
+                    localApplied = true;
+                }
+                if (target == null || player.getVehicle() != vehicle || vehicle.getFirstPassenger() != player
+                    || target.projectionIdentity() != installation)
+                    return true;
+                if (!target.canAdoptProjection(installation))
+                    return finalWindow;
+                target.updateRoamingVars(RoamingPayloads.toNetwork(delta));
+                return true;
+            }
+        };
     }
 
     PlayerAnimatableCapability.RoamingSnapshot snapshot(EntityExpressionRuntime runtime, int authoritativeHash) {

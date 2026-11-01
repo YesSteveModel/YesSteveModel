@@ -10,6 +10,19 @@ sourceSets {
     }
 }
 
+// The ownership workload reuses the independently checked JNI owner fixtures.
+sourceSets.benchmark.compileClasspath += sourceSets.test.output + sourceSets.test.runtimeClasspath
+sourceSets.benchmark.runtimeClasspath += sourceSets.test.output + sourceSets.test.runtimeClasspath
+tasks.named('compileBenchmarkJava') { dependsOn tasks.named('testClasses') }
+
+tasks.register('entityOwnershipProbeAgent', Jar) {
+    dependsOn tasks.named('benchmarkClasses')
+    archiveFileName = 'entity-ownership-probe-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('benchmark')
+    from(sourceSets.benchmark.output) { include 'com/elfmcys/ysm/client/entity/EntityOwnershipProbeAgent*.class' }
+    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.client.entity.EntityOwnershipProbeAgent' }
+}
+
 tasks.named('processBenchmarkResources') {
     from('src/verification/test/resources') {
         include 'audio-playback/**', 'audio-fixtures/opus-long.ogg'

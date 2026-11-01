@@ -127,6 +127,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         this.entity = Objects.requireNonNull(entity, "entity");
         this.modelBinding = Objects.requireNonNull(modelBinding, "modelBinding");
         this.lifecycle = new EntityExecutionLifecycle(expressionRuntime, this::clearEndedUse, this::handleAsyncFailure);
+        expressionRuntime.projectionAvailability(lifecycle::canAdoptProjection);
         this.rateLimiter = new RateLimiter();
         this.stateTracker = createStateTracker(entity);
         this.physicsManager = new PhysicsManager();
@@ -202,9 +203,14 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         codedAnimationStates.clear();
     }
 
-    /** Releases the current use and assignment; a later explicit assignment may reuse this owner. */
+    /** Retirement is permanent; reload/reset only end the current use. */
     public final void retire() {
-        revokeAssignment();
+        lifecycle.rejectCandidateMutation();
+        try {
+            lifecycle.retire();
+        } finally {
+            modelBinding.revokeAssignment();
+        }
     }
 
     private void clearEndedUse() {
@@ -258,14 +264,37 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     private AnimationStore readAnimationSource;
     private AnimationStore.ReadBatch animationReads;
+    private boolean animationReadScope;
 
     protected AnimationStore animationSource() {
         return null;
     }
 
     protected final Animation readAnimation(AnimationStore source, String name) {
-        var phase = animationReads;
-        return (phase != null && readAnimationSource == source ? phase.animations() : source).get(name);
+        return animationReadView(source).get(name);
+    }
+
+    public final AnimationStore animationResolutionSource() {
+        return animationSource();
+    }
+
+    public final AnimationStore.Resolution resolveAnimation(String name) {
+        var source = animationSource();
+        return source == null ? new AnimationStore.Resolution(getAnimation(name), false, false)
+            : animationReadView(source).resolve(name);
+    }
+
+    private AnimationStore animationReadView(AnimationStore source) {
+        if (!animationReadScope || readAnimationSource != source)
+            return source;
+        if (animationReads == null) {
+            try {
+                animationReads = source.openReadPhase();
+            } catch (IOException failure) {
+                throw new UncheckedIOException(failure);
+            }
+        }
+        return animationReads.animations();
     }
 
     public Optional<AudioPlaybackFactory> getSoundPlayback(String name) {
@@ -353,11 +382,15 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         lifecycle.rejectRecursiveCall();
         waitForAsyncUpdate();
         checkModelUpdate();
+        prepareEvaluation();
         var resolved = resolveRenderContext(context);
         try {
             return inCall(() -> computePose(partialTicks, resolved));
         } catch (OutOfMemoryError failure) {
             currentFrameExtracted = false;
+            return null;
+        } catch (FailedExtract failure) {
+            handleFailedExtract(failure);
             return null;
         } catch (FailedUse failure) {
             handleFailedUse(failure);
@@ -365,6 +398,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         } catch (ExecutionFailure failure) {
             handleExpressionFailure(failure);
             return null;
+        } finally {
+            finishProjections(!AnimationParallelTicker.isInvocationActive());
         }
     }
 
@@ -375,22 +410,22 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         try (var ignored = NativeProfiler.beginAnimatableUpdate()) {
             var event = createAnimationEvent(partialTicks, context);
             tickAnimation(event);
-            if (!isCurrent(installation))
-                return null;
             var data = getRenderData(context);
             if (!context.immutable() || !currentFrameExtracted || !data.modelState.isValid()
                 || data.modelState.getModel() != installation.geoModel.getModel() || !context.equals(data.ctx)
                 || partialTicks != data.partialTicks) {
                 currentFrameExtracted = false;
                 data.installation = null;
-                data.modelState.extract(installation.geoModel);
-                if (!isCurrent(installation) || !data.modelState.isValid())
+                try {
+                    data.modelState.extract(installation.geoModel);
+                } catch (RuntimeException failure) {
+                    throw new FailedExtract(installation, event, failure);
+                }
+                if (!data.modelState.isValid())
                     return null;
                 currentFrameExtracted = context.immutable();
             }
             updateRenderData(event, data);
-            if (!isCurrent(installation))
-                return null;
             data.owner = this;
             data.installation = installation;
             return data;
@@ -403,13 +438,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         lifecycle.rejectRecursiveCall();
         waitForAsyncUpdate();
         checkModelUpdate();
+        prepareEvaluation();
         try {
             return inCall(() -> {
                 if (!canEvaluate())
                     return false;
-                var installation = requireInstallation();
                 tickAnimation(createAnimationEvent(partialTicks, resolveRenderContext(context)));
-                return isCurrent(installation);
+                return true;
             });
         } catch (OutOfMemoryError failure) {
             currentFrameExtracted = false;
@@ -420,6 +455,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         } catch (ExecutionFailure failure) {
             handleExpressionFailure(failure);
             return false;
+        } finally {
+            finishProjections(!AnimationParallelTicker.isInvocationActive());
         }
     }
 
@@ -514,23 +551,37 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     protected void tickAnimation(@NotNull AnimationEvent<AnimatableEntity<TEntity>> animationEvent) {
         var source = animationSource();
-        if (source == null || animationReads != null && readAnimationSource == source) {
+        if (source == null || animationReadScope && readAnimationSource == source) {
             tickAnimationNow(animationEvent);
             return;
         }
-        try (var phase = source.openReadPhase()) {
-            var previousSource = readAnimationSource;
-            var previousReads = animationReads;
-            readAnimationSource = source;
-            animationReads = phase;
-            try {
-                tickAnimationNow(animationEvent);
-            } finally {
-                animationReads = previousReads;
-                readAnimationSource = previousSource;
+        var previousSource = readAnimationSource;
+        var previousReads = animationReads;
+        var previousScope = animationReadScope;
+        readAnimationSource = source;
+        animationReads = null;
+        animationReadScope = true;
+        Throwable primaryFailure = null;
+        try {
+            tickAnimationNow(animationEvent);
+        } catch (RuntimeException | Error failure) {
+            primaryFailure = failure;
+            throw failure;
+        } finally {
+            var reads = animationReads;
+            animationReads = previousReads;
+            readAnimationSource = previousSource;
+            animationReadScope = previousScope;
+            if (reads != null) {
+                try {
+                    reads.close();
+                } catch (IOException failure) {
+                    if (primaryFailure != null)
+                        primaryFailure.addSuppressed(failure);
+                    else
+                        throw new UncheckedIOException(failure);
+                }
             }
-        } catch (IOException failure) {
-            throw new UncheckedIOException(failure);
         }
     }
 
@@ -560,56 +611,39 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             var shouldTick = (!mutableRender || (seekTime == 0 && !currentFrameTicked)) && currentFrameShouldTick
                 && !currentFrameTicked;
             recoverLastCodedAnimation();
-            if (!isCurrent(installation))
-                return;
             if (shouldUpdate) {
                 currentFrameExtracted = false;
                 try {
                     var inputs = getAnimationProcessor().invocationInputs(animationEvent);
-                    expressionRuntime.animationPass(inputs, shouldTick, evaluation -> {
-                        installation.components.evaluate(animationEvent, () -> isCurrent(installation), () -> {
+                    expressionRuntime.animationPassProjected(inputs, shouldTick, evaluation -> {
+                        installation.components.evaluate(animationEvent, () -> true, () -> {
                             if (shouldTick) {
                                 currentFrameTicked = true;
                                 advanceComponentTime(installation, animationEvent);
                             }
-                            if (!isCurrent(installation))
-                                return;
                             getPhysicsManager(animationEvent).update(this.seekTime);
                             getAnimationProcessor().processTransientTasks(evaluation, true);
-                            if (!isCurrent(installation))
-                                return;
                             if (shouldTick)
                                 evaluation.dispatchPendingDeferred();
                             if (shouldTick)
                                 dispatchPersistentEvents(evaluation, true);
-                            if (!isCurrent(installation))
-                                return;
                             getAnimationProcessor().tickAnimation(animationEvent, shouldTick,
                                 shouldTick && allowEmitting(), evaluation);
-                            if (isCurrent(installation))
-                                postAnimationSetup(this.seekTime, shouldTick);
-                            if (!isCurrent(installation))
-                                return;
+                            postAnimationSetup(this.seekTime, shouldTick);
                             getAnimationProcessor().processTransientTasks(evaluation, false);
-                            if (isCurrent(installation))
-                                codeAnimation(animationEvent, true);
-                            if (isCurrent(installation))
-                                evaluation.dispatchPendingDeferred();
+                            codeAnimation(animationEvent, true);
+                            evaluation.dispatchPendingDeferred();
                         });
                         return null;
-                    }, this::onNormalRoamingChanges);
+                    }, localProjection);
                 } catch (RuntimeException failure) {
                     if (!containsComponentFailure(failure)) {
                         if (failure instanceof CancellationException)
                             return;
                         throw failure;
                     }
-                    var notice = modelBinding.rejectActiveInstallation(installation, failure);
-                    lifecycle.endUse();
-                    throw new FailedUse(this, installation, notice, animationEvent, failure);
+                    throw new FailedUse(this, installation, animationEvent, failure);
                 }
-                if (!isCurrent(installation))
-                    return;
                 lastMutableRender = mutableRender;
             } else {
                 codeAnimation(animationEvent, false);
@@ -634,12 +668,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             stateTracker.tick(previousTick, currentTick);
         if (firstComponentSample || currentTick > previousTick)
             installation.components.tick(firstComponentSample ? currentTick : previousTick, currentTick,
-                () -> isCurrent(installation));
+                () -> true);
         if (firstOwnerSample || currentTime > previousTime)
             stateTracker.update(previousTime, currentTime, event.getPartialTick());
         if (firstComponentSample || currentTime > previousTime)
             installation.components.update(firstComponentSample ? currentTime : previousTime, currentTime,
-                event.getPartialTick(), () -> isCurrent(installation));
+                event.getPartialTick(), () -> true);
     }
 
     protected void codeAnimation(AnimationEvent<? extends AnimatableEntity<TEntity>> animationEvent,
@@ -840,10 +874,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     public final void reloadGeoModel() {
         rejectCandidateMutation();
-        expressionRuntime.serialized(() -> {
-            modelBinding.retryRejectedInstallations();
-            return null;
-        });
+        waitForAsyncUpdate();
+        modelBinding.retryRejectedInstallations();
         reset();
     }
 
@@ -875,6 +907,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     public void executeTransient(String source, TransientExpressionSession.Privilege privilege, boolean pre,
         @Nullable Consumer<String> resultConsumer) {
         rejectCandidateMutation();
+        waitForAsyncUpdate();
         if (canEvaluate())
             getAnimationProcessor().enqueueTransient(source, privilege, pre, resultConsumer);
     }
@@ -899,7 +932,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     /** Composite state is queried in the client/render owner window; queries never join or advance. */
     public final boolean isAssigned() {
-        return modelBinding.isAssigned();
+        return !lifecycle.isRetired() && modelBinding.isAssigned();
     }
 
     public final boolean hasUnfinishedWork() {
@@ -995,21 +1028,21 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     protected final void updateModelHash(Hash256 hash) {
         rejectCandidateMutation();
-        expressionRuntime.serialized(() -> {
-            modelBinding.updateModelHash(hash, requestedRenderTargetId(), requestedTextureName());
-            return null;
-        });
+        waitForAsyncUpdate();
+        if (lifecycle.isRetired())
+            throw new IllegalStateException("Retired entity cannot be assigned");
+        modelBinding.updateModelHash(hash, requestedRenderTargetId(), requestedTextureName());
         registerDemandIfAvailable();
     }
 
     public final void revokeAssignment() {
         rejectCandidateMutation();
-        if (!isAssigned() && modelBinding.resourceHolder() == null && !lifecycle.hasTask()
-            && expressionRuntime.module().isEmpty() && demandScope == null)
-            return;
-        modelBinding.revokeAssignment();
-        lifecycle.endUse();
-        ResourceDiagnostics.log("animatable assignment retired: owner={} subject={} world={}",
+        try {
+            lifecycle.endUse();
+        } finally {
+            modelBinding.revokeAssignment();
+        }
+        ResourceDiagnostics.log("animatable assignment revoked: owner={} subject={} world={}",
             System.identityHashCode(this), entity.getClass().getSimpleName(), System.identityHashCode(entity.level()));
     }
 
@@ -1139,10 +1172,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         lifecycle.rejectRecursiveCall();
         waitForAsyncUpdate();
         updateModelHash(request.modelId());
-        expressionRuntime.serialized(() -> {
-            modelBinding.installReadyForPreview(request, lease, this::prepareInstallation);
-            return null;
-        });
+        modelBinding.installReadyForPreview(request, lease, this::prepareInstallation);
     }
 
     private static void reportCleanupFailure(Throwable failure) {
@@ -1164,6 +1194,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         lifecycle.rejectCandidateMutation();
     }
 
+    protected final void rejectNewUse() {
+        lifecycle.rejectCandidateMutation();
+        if (lifecycle.isRetired())
+            throw new IllegalStateException("Retired entity cannot be assigned");
+    }
+
     protected final <R> R inCall(Supplier<R> operation) {
         return lifecycle.inCall(operation);
     }
@@ -1182,7 +1218,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final boolean canConsume(GeoRenderData data, RenderContext context) {
-        return data != null && data.owner == this && canPrepare(context)
+        return !lifecycle.hasTask() && data != null && data.owner == this && canPrepare(context)
             && data.installation == modelBinding.resourceHolder() && data.modelState.isValid()
             && context.equals(data.ctx) && getLoadedGeoModel() != null
             && data.modelState.getModel() == getLoadedGeoModel().getModel();
@@ -1198,29 +1234,71 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     public final boolean consumePrepared(GeoRenderData data, java.util.function.Predicate<GeoRenderData> consumer) {
         if (data == null)
             return false;
-        return inCall(() -> {
+        waitForAsyncUpdate();
+        return inDrawBorrow(() -> {
             if (!canConsume(data, data.ctx))
                 return false;
             return consumer.test(data);
         });
     }
 
+    private EntityExpressionRuntime.ProjectionSink localProjection;
+
+    protected EntityExpressionRuntime.ProjectionSink prepareLocalProjection() {
+        return (delta, finalWindow) -> { onNormalRoamingChanges(delta); return true; };
+    }
+
+    private void prepareEvaluation() {
+        if (!canEvaluate())
+            return;
+        expressionRuntime.prepareExecution();
+        localProjection = prepareLocalProjection();
+        getAnimationProcessor().prepareTransientWork();
+    }
+
+    protected final <R> R inDrawBorrow(Supplier<R> operation) {
+        return lifecycle.inDraw(operation);
+    }
+
+    public final boolean hasPendingUpdate() { return lifecycle.hasTask(); }
+
+    /** Stable installation routing; this identity does not grant access to its mutable state. */
+    public final Object projectionIdentity() { return modelBinding.resourceHolder(); }
+
+    public final boolean canAdoptProjection(Object identity) {
+        return lifecycle.canAdoptProjection() && identity != null && identity == modelBinding.resourceHolder()
+            && canEvaluate();
+    }
+
+    public final void finishProjections(boolean finalWindow) {
+        lifecycle.assertMainThread();
+        if (!finalWindow)
+            AnimationParallelTicker.retainForFinalProjection(this);
+        if (!lifecycle.hasTask())
+            expressionRuntime.adoptProjections(finalWindow);
+    }
+
     public final void beginAsyncUpdate(float partialTicks) {
         lifecycle.rejectRecursiveCall();
+        if (!AnimationParallelTicker.isInvocationActive()) {
+            update(partialTicks, RenderContext.levelImmutable());
+            return;
+        }
         waitForAsyncUpdate();
         checkModelUpdate();
         if (!canEvaluate())
             return;
-        var installation = requireInstallation();
-        lifecycle.submit(() -> {
-            if (!isCurrent(installation))
-                return null;
-            return computePose(partialTicks, RenderContext.levelImmutable());
-        });
+        prepareEvaluation();
+        lifecycle.submit(() -> computePose(partialTicks, RenderContext.levelImmutable()));
     }
 
     public final void waitForAsyncUpdate() {
-        lifecycle.awaitTask();
+        try {
+            lifecycle.awaitTask();
+        } finally {
+            if (!lifecycle.hasTask())
+                finishProjections(!AnimationParallelTicker.isInvocationActive());
+        }
     }
 
     private void handleAsyncFailure(Throwable failure) {
@@ -1228,7 +1306,9 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             currentFrameExtracted = false;
             return;
         }
-        if (failure instanceof FailedUse failedUse)
+        if (failure instanceof FailedExtract failedExtract)
+            handleFailedExtract(failedExtract);
+        else if (failure instanceof FailedUse failedUse)
             handleFailedUse(failedUse);
         else if (failure instanceof ExecutionFailure expressionFailure)
             handleExpressionFailure(expressionFailure);
@@ -1249,8 +1329,29 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         return false;
     }
 
+    private void handleFailedExtract(FailedExtract failure) {
+        if (modelBinding.resourceHolder() != failure.installation)
+            return;
+        if (modelBinding.isIntrinsicDefault())
+            throw (RuntimeException)failure.getCause();
+        // The logical round has already committed; ending its runtime would discard pending projections.
+        com.elfmcys.ysm.YesSteveModel.LOGGER.warn("Entity output extraction failed", failure);
+    }
+
+    private static final class FailedExtract extends RuntimeException {
+        private final ResourceHolder installation;
+
+        private FailedExtract(ResourceHolder installation, AnimationEvent<?> event, RuntimeException cause) {
+            super("Output extraction failed: model=" + installation.model.modelHash() + " target="
+                + installation.model.renderTargetId() + " context=" + event.getRenderContext() + " tick="
+                + event.getEntityTickCount() + " time=" + event.renderTicks, cause);
+            this.installation = installation;
+        }
+    }
+
     private void handleFailedUse(FailedUse failure) {
-        var notice = failure.notice;
+        var notice = modelBinding.rejectActiveInstallation(failure.installation, (RuntimeException)failure.getCause());
+        lifecycle.endUse();
         if (notice == null)
             return;
         com.elfmcys.ysm.YesSteveModel.LOGGER.warn("Entity component lifecycle failed: installation={}",
@@ -1264,21 +1365,20 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     private static final class FailedUse extends RuntimeException {
         private final ResourceHolder installation;
-        private final EntityModelBinding.FailureNotice notice;
 
         private FailedUse(AnimatableEntity<?> owner, ResourceHolder installation,
-            EntityModelBinding.FailureNotice notice, AnimationEvent<?> event, RuntimeException cause) {
+            AnimationEvent<?> event, RuntimeException cause) {
             super("Component lifecycle failed: owner=" + owner.getClass().getName() + "@"
                 + Integer.toHexString(System.identityHashCode(owner)) + " request="
-                + (notice == null ? null : notice.request()) + " target=" + installation.model.modelHash() + "/"
+                + installation.model.modelHash() + " target=" + installation.model.modelHash() + "/"
                 + installation.model.renderTargetId() + " context=" + event.getRenderContext() + " tick="
                 + event.getEntityTickCount() + " time=" + event.renderTicks, cause);
             this.installation = installation;
-            this.notice = notice;
         }
     }
 
     public final void setDebugInfo(@Nullable DebugInfo debugInfo) {
+        waitForAsyncUpdate();
         if (hasInstalledModel())
             getAnimationProcessor().setDebugInfo(debugInfo);
     }

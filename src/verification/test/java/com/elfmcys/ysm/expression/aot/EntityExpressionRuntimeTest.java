@@ -419,7 +419,7 @@ final class EntityExpressionRuntimeTest {
     }
 
     @Test
-    void replacementWaitsForEligibleInvocationThenRejectsOldBindings() throws Exception {
+    void replacementRequiresMainThreadHandoffThenRejectsOldBindings() throws Exception {
         var oldScript = new Script();
         var oldHarness = harness(oldScript);
         var newHarness = harness(new Script());
@@ -438,11 +438,14 @@ final class EntityExpressionRuntimeTest {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             var replacement =
                     executor.submit(() -> TestExpressionModules.replace(runtime, newHarness.module, newHarness.events));
-            assertFalse(replacement.isDone());
+            var rejected = assertThrows(java.util.concurrent.ExecutionException.class,
+                () -> replacement.get(5, TimeUnit.SECONDS));
+            assertTrue(rejected.getCause() instanceof IllegalStateException);
             release.countDown();
             assertEquals(1.0f, invocation.get(5, TimeUnit.SECONDS));
-            replacement.get(5, TimeUnit.SECONDS);
+            TestExpressionModules.replace(runtime, newHarness.module, newHarness.events);
         } finally {
+            release.countDown();
             executor.shutdownNow();
         }
 

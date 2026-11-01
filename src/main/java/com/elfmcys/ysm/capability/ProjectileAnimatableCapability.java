@@ -22,6 +22,7 @@ public class ProjectileAnimatableCapability extends CustomProjectileEntity {
     }
 
     public void initRoamingVars(Int2FloatOpenHashMap vars) {
+        waitForAsyncUpdate();
         if (vars != null) {
             // 无条件同步服务端数据
             roamingValues = new Int2FloatOpenHashMap(vars);

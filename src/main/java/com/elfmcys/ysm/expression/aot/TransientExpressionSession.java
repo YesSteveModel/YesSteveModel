@@ -72,9 +72,36 @@ public final class TransientExpressionSession implements AutoCloseable {
         });
     }
 
+    record CompilationInputs(ResourceGenerationToken generation, TransientLayout<MolangContext> layout,
+        TransientDynamicAccess dynamic) {}
+
+    static CompilationInputs prepare(RenderTargetExpressionModule module, Privilege privilege) {
+        var instanceNames = new TreeSet<LocalName>(Comparator.comparing(LocalName::name));
+        var writes = new TreeSet<LocalName>(Comparator.comparing(LocalName::name));
+        var userFunctions = new TreeSet<ProgramKey>();
+        instanceNames.addAll(module.transientInstanceSlots());
+        writes.addAll(instanceNames);
+        userFunctions.addAll(module.transientUserFunctions());
+        var dynamic = TransientDynamicAccess.none(ExpressionIdentityHash.SHA_256);
+        var persistentPolicy = module.host().compilationPolicy();
+        var transientPolicy = new CompilationPolicy(persistentPolicy.missingSymbols(),
+            SemanticFailurePolicy.FAIL_UNIT, persistentPolicy.arityMismatch(), persistentPolicy.numericPolicy(),
+            persistentPolicy.executionLimits(), persistentPolicy.compilerLimits(),
+            persistentPolicy.objectLanguageRules());
+        var request = new TransientAccessRequest(instanceNames, writes, userFunctions, dynamic.descriptor(),
+            transientPolicy, new dev.semaweave.EntryPermissions(privilege.effects()));
+        TransientLayout<MolangContext> layout = module.createTransientLayout(request);
+        return new CompilationInputs(module.generation(), layout, dynamic);
+    }
+
     static TransientExpressionSession compile(RenderTargetExpressionModule module, long entityGeneration, String source,
         Privilege privilege, Purpose purpose, String sourceLocation, BooleanSupplier cancelled) throws Exception {
-        Objects.requireNonNull(module, "module");
+        return compile(prepare(module, privilege), entityGeneration, source, privilege, purpose, sourceLocation, cancelled);
+    }
+
+    static TransientExpressionSession compile(CompilationInputs prepared, long entityGeneration, String source,
+        Privilege privilege, Purpose purpose, String sourceLocation, BooleanSupplier cancelled) throws Exception {
+        Objects.requireNonNull(prepared, "prepared");
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(privilege, "privilege");
         Objects.requireNonNull(purpose, "purpose");
@@ -99,21 +126,8 @@ public final class TransientExpressionSession implements AutoCloseable {
                 new MolangFrontend.SourceLocation(sourceLocation));
             checkCancelled(cancelled);
 
-            var instanceNames = new TreeSet<LocalName>(Comparator.comparing(LocalName::name));
-            var writes = new TreeSet<LocalName>(Comparator.comparing(LocalName::name));
-            var userFunctions = new TreeSet<ProgramKey>();
-            instanceNames.addAll(module.transientInstanceSlots());
-            writes.addAll(instanceNames);
-            userFunctions.addAll(module.transientUserFunctions());
-            var dynamic = TransientDynamicAccess.none(ExpressionIdentityHash.SHA_256);
-            var persistentPolicy = module.host().compilationPolicy();
-            var transientPolicy = new CompilationPolicy(persistentPolicy.missingSymbols(),
-                SemanticFailurePolicy.FAIL_UNIT, persistentPolicy.arityMismatch(), persistentPolicy.numericPolicy(),
-                persistentPolicy.executionLimits(), persistentPolicy.compilerLimits(),
-                persistentPolicy.objectLanguageRules());
-            var request = new TransientAccessRequest(instanceNames, writes, userFunctions, dynamic.descriptor(),
-                transientPolicy, new dev.semaweave.EntryPermissions(privilege.effects()));
-            TransientLayout<MolangContext> layout = module.createTransientLayout(request);
+            var layout = prepared.layout();
+            var dynamic = prepared.dynamic();
             checkCancelled(cancelled);
             var metrics = ResourceDiagnostics.isEnabled() ? RESOURCE_METRICS : EngineMetrics.none();
             lease = TransientCompilers.<MolangContext>standard(new JaninoJavaCompilerBackend(), metrics).compile(
@@ -121,7 +135,7 @@ public final class TransientExpressionSession implements AutoCloseable {
                 purpose == Purpose.WATCH ? TransientPurpose.WATCH : TransientPurpose.ONE_SHOT,
                 ExpressionIdentityHash.SHA_256);
             checkCancelled(cancelled);
-            return new TransientExpressionSession(module.generation(), entityGeneration, privilege, sourceLocation,
+            return new TransientExpressionSession(prepared.generation(), entityGeneration, privilege, sourceLocation,
                 layout, dynamic, lease);
         } catch (Throwable failure) {
             try {

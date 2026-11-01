@@ -76,7 +76,7 @@ public final class CatalogTextureButton extends Button
         displaying = false;
         renderTarget = null;
         error = null;
-        entity.retire();
+        entity.revokeAssignment();
     }
 
     @Override
@@ -127,8 +127,12 @@ public final class CatalogTextureButton extends Button
     @Override
     public void close() {
         closed = true;
-        page.removeCard(this);
-        deactivate();
+        try {
+            page.removeCard(this);
+            deactivate();
+        } finally {
+            entity.retire();
+        }
     }
 
     private void renderEntity(GuiGraphics graphics) {

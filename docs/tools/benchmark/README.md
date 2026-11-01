@@ -45,6 +45,30 @@ python src/verification/benchmark/molang_execution_campaign.py --legacy-launch <
 
 配对成本分析应使用同一输入、JDK、fork 参数与原始 JSON。旧实现的适配夹具应保留原权限与预算检查。单条表达式、同轮数量斜率和完整轮成本分别报告，不能从源码对象数推定净收益。
 
+### 实体动画所有权
+
+`EntityOwnershipBenchmark` 复用受控 owner fixture，执行真实生命周期、processor 与 controller。`frame` 覆盖同步逻辑轮；`earlyConsumption` 另包含固定 worker 池的异步提交、单 owner 提前 get／消费和最终汇合。Trial setup 独立检查动作次数、动画和 JNI 输出。夹具、内存统计和宿主边界见[实体所有权验证](../../verification/entity-animation-ownership.md)。
+
+```powershell
+$env:YSM_FIRST_PERSON_FIXTURES='<absolute-fixture-directory>'
+.\gradlew.bat prepareBenchmark entityOwnershipProbeAgent
+.\gradlew.bat benchmark '-PbenchmarkInclude=.*EntityOwnershipBenchmark.frame' '-PbenchmarkArgs=-p owners=1,64 -p query=same,switch,replay,absent,dynamic -f 3 -wi 2 -i 3 -w 1s -r 1s -prof gc'
+python src/verification/benchmark/entity_ownership_campaign.py --legacy-launch <legacy-launch.json> --output <new-output-directory>
+```
+
+历史源码使用相同 benchmark 和原有 fixture 入口；适配只补测量接线，不改生产锁、播放短路或失败门禁。Campaign 在计时前分别执行真值，随后先跑旧／旧校准，再固定判据并交错独立 fork。每个 Iteration 检查动作与逻辑轮一一对应；单 owner 先重建私有状态和时钟。主矩阵十组等权，早消费另列；原始 JSON 保留 B/op。固定动态序列为一万个循环名称，不能解释为无限名称输入。
+
+计数和内存探针使用独立进程，计时进程不加载 agent：
+
+```powershell
+$ownershipLaunch = Get-Content build/benchmark/launch.json | ConvertFrom-Json
+$env:YSM_NATIVE_PATH = $ownershipLaunch.nativeLibrary
+& $ownershipLaunch.java '-javaagent:build/benchmark/entity-ownership-probe-agent.jar' -cp ($ownershipLaunch.classpath -join ';') com.elfmcys.ysm.client.entity.EntityOwnershipBenchmark 64 switch probe
+& $ownershipLaunch.java '--add-opens=java.base/java.util=ALL-UNNAMED' '--add-opens=java.base/java.lang=ALL-UNNAMED' '-javaagent:build/benchmark/entity-ownership-probe-agent.jar' -cp ($ownershipLaunch.classpath -join ';') com.elfmcys.ysm.client.entity.EntityOwnershipMemoryProbe 64 negative
+```
+
+`probe` 记录预热后百帧的 runtime owner 锁调用、公开解析入口和 AnimationStore monitor 进入数。`EntityOwnershipMemoryProbe` 的最后一个参数取 `positive`／`negative`，分别观察成功／缺失缓存；`owners` 取 1／64。该字节总量只覆盖可达缓存存储，跨 owner 共用对象去重，不计共享资源图。
+
 ### JNI entry 开销
 
 `JniEntryBenchmark` 对比裸 JNI 与 `YSM_JNI_ENTRY` 的正常返回路径。`rawVoid` / `entryVoid` 测空调用；`rawIdentity` / `entryIdentity` 测整数原样返回。两组分别覆盖 `Status` 和 `StatusOr<jint>` 包装。每次操作调用一次 JNI，JMH 消费整数结果。Trial setup 加载库并校验入口；计时区不含加载、注册或输入校验。
@@ -196,4 +220,4 @@ $catalogAgent = (Resolve-Path build/benchmark/catalog-reload-timing-agent.jar).P
 
 保存源码/native/依赖 hashes、硬件与电源状态、JDK/JVM/JMH、worker/ISA/toolchain、模型 hashes、参数、顺序和全部原始结果后，比较单位操作时间与 `gc.alloc.rate.norm`。对照使用匹配的历史 Java/native；历史缺 harness 时只添加等价测量接线。先重复 baseline 校准每指标自身噪声，再独立交错对照；分配指标按实际计数精度校准。结果有分歧、漂移或预算不足时保留未验证。
 
-JMH 证明所测 native 提取与输出工作量，不覆盖 AnimatableEntity、动画 processor、控制器、动作提交、异步 join、客户端 FPS、GPU/shader、视觉或任意模型规模。资源释放与 schedule 次数需要单独观察；JMH GC 分配量不包含 native 持久内存。
+Native 渲染基准只证明所测提取与输出工作量。实体 owner／processor／controller 与异步交接使用本页的实体专用基准。各基准均不证明客户端 FPS、GPU/shader、完整用户视觉或任意模型规模。资源释放与 schedule 次数需要单独观察；JMH GC 分配量不包含 native 持久内存。
