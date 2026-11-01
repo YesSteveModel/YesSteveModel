@@ -59,14 +59,12 @@ final class BuiltinCallContractOracleTest {
     void legalArityTypeFailuresStaySemanticFailuresInsteadOfArityZeros() throws Exception {
         var programs = List.of(new OracleSemanticProbe.Program("bone-string", "ysm.bone_rot(1)", "VECTOR"),
             new OracleSemanticProbe.Program("animation-string", "ctrl.set_animation(1)", "VOID"),
-            new OracleSemanticProbe.Program("version-string", "ysm.mod_version(1)", "OPTIONAL_STRING"),
-            new OracleSemanticProbe.Program("sound-domain", "ysm.play_sound(ysm.bone_rot('b'),'o')", "VOID"));
+            new OracleSemanticProbe.Program("version-string", "ysm.mod_version(1)", "OPTIONAL_STRING"));
         var names = programs.stream().map(OracleSemanticProbe.Program::name)
             .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
 
         var outcome = OracleSemanticProbe.compile(HOST, programs, true);
-        assertEquals(new TreeSet<>(List.of("animation-string", "sound-domain")),
-            new TreeSet<>(outcome.localRecoveryPrograms()),
+        assertEquals(new TreeSet<>(List.of("animation-string")), new TreeSet<>(outcome.localRecoveryPrograms()),
             "whole-program replacement discards the abandoned original tree's records");
         assertEquals(new TreeSet<>(List.of("bone-string", "version-string")), new TreeSet<>(outcome.fallbackPrograms()),
             "unsupported final object entry still uses its separate whole-program fallback");

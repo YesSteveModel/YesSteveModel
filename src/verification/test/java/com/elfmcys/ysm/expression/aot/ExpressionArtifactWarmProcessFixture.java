@@ -261,7 +261,7 @@ public final class ExpressionArtifactWarmProcessFixture {
         var replacements = module.compilationReport().replacements();
         require(replacements.size() == 1, "expected one invalid-sentinel replacement: " + replacements);
         var replacement = replacements.get(0);
-        require(replacement.reason() == SemanticFailureReason.TYPE_MISMATCH, "invalid sentinel reason");
+        require(replacement.reason() == SemanticFailureReason.INVALID_MEMBER, "invalid sentinel reason");
         require(replacement.result() == ReplacementResult.F32_ZERO, "invalid sentinel result");
         require(
             module.programLocations().get(replacement.programKey())
@@ -347,7 +347,7 @@ public final class ExpressionArtifactWarmProcessFixture {
             .build();
         var objectClear = animation("object_clear", "((fn.clear_object()??'replacement')=='replacement')?11:0");
         var objectPresent = animation("object_present", "((fn.present_object()??'replacement')=='value')?12:0");
-        var invalidSentinel = animation("invalid_sentinel", "('value'==(1-1))?9:0");
+        var invalidSentinel = animation("invalid_sentinel", "v.object.missing");
         var state = StateProto.newBuilder().setName("default")
             .setBlendTransition(BlendTransitionProto.newBuilder().build())
             .addAnimations(AnimationReferenceProto.newBuilder().setName("idle").setCondition(program("true")).build())

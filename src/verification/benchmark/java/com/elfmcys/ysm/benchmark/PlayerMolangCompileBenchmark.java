@@ -11,6 +11,7 @@ import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.resource.client.render.ModelMolangBenchmarkInput;
 import com.elfmcys.ysm.model.storage.AtomicSharedCache;
+import com.elfmcys.ysm.model.storage.DerivedStorageWork;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationProto;
@@ -61,7 +62,8 @@ public class PlayerMolangCompileBenchmark {
         private Hash256 containerId;
         private ExpressionEngineMetrics metrics;
         private RenderTargetExpressionModuleFactory factory;
-        private RenderTargetExpressionModule module;
+        RenderTargetExpressionModule module;
+        private DerivedStorageWork storage;
         private int expectedPrograms = -1;
 
         @Setup(Level.Trial)
@@ -115,8 +117,10 @@ public class PlayerMolangCompileBenchmark {
             }
             // A fresh store and factory also prevent in-memory artifact and backend linkage reuse.
             metrics = new ExpressionEngineMetrics();
-            factory = new RenderTargetExpressionModuleFactory(
-                new ExpressionArtifactStore(cache, new AtomicSharedCache(cache)), host, metrics);
+            var sharedCache = new AtomicSharedCache(cache);
+            storage = sharedCache.derivedWork();
+            factory =
+                new RenderTargetExpressionModuleFactory(new ExpressionArtifactStore(cache, sharedCache), host, metrics);
         }
 
         @TearDown(Level.Invocation)
@@ -147,11 +151,20 @@ public class PlayerMolangCompileBenchmark {
             } finally {
                 module.close();
                 module = null;
+                // The process owner must release asynchronous writers before deleting their cache.
+                storage.awaitIdle();
+                var writes = storage.snapshot();
+                storage.close();
+                storage = null;
+                if (writes.failed() != 0 || writes.cancelled() != 0 || writes.shutdown() != 0)
+                    throw new IllegalStateException("artifact persistence failed: " + writes);
             }
         }
 
         @TearDown(Level.Trial)
         public void close() throws Exception {
+            if (storage != null)
+                storage.close();
             if (modelInput != null)
                 modelInput.close();
             deleteCache();
@@ -228,6 +241,39 @@ public class PlayerMolangCompileBenchmark {
         state.selection = "full";
         try {
             state.setup();
+            if (args[0].equals("--probe")) {
+                state.coldCache();
+                new PlayerMolangCompileBenchmark().coldCompile(state);
+                var report = state.module.compilationReport();
+                state.storage.awaitIdle();
+                Path artifactPath;
+                try (var files = Files.walk(state.cache)) {
+                    artifactPath = files
+                        .filter(path -> path.getFileName().toString()
+                            .equals(state.module.identity().lookupKey()
+                                + com.elfmcys.ysm.model.resource.client.render.BakedAnimationCache.CACHE_SUFFIX))
+                        .findFirst().orElseThrow();
+                }
+                dev.semaweave.compilation.CompiledArtifact artifact;
+                try (var channel = Files.newByteChannel(artifactPath)) {
+                    var view = new com.elfmcys.ysm.format.schema.baked.asset.BakedAssetView(channel);
+                    var bytes = view.readExpression(channel, dev.semaweave.compilation.ArtifactCodecs.v1()
+                        .maximumEncodedBytes(state.module.identity().expected()));
+                    artifact = dev.semaweave.compilation.ArtifactCodecs.v1().decodeAndVerify(
+                        dev.semaweave.program.ReadOnlyBytes.copyOf(bytes), state.module.identity().expected(),
+                        ExpressionIdentityHash.SHA_256);
+                }
+                System.out
+                    .println("PLAYER_RESULT " + new com.google.gson.Gson()
+                        .toJson(Map.of("metrics", state.metrics.snapshot(), "report", report.metrics(),
+                            "localRecoveries", report.localRecoveries().stream().map(Object::toString).toList(),
+                            "replacements", report.replacements().stream().map(Object::toString).toList(), "programs",
+                            state.module.programs().size(), "classBytes", artifact.classes().values().stream()
+                                .mapToLong(dev.semaweave.program.ReadOnlyBytes::size).sum(),
+                            "classCount", artifact.classes().size())));
+                state.verifyCold();
+                return;
+            }
             var output = new StringBuilder("index\tfile\tanimation\n");
             int[] index = {0};
             state.definition.animationFiles().entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(file -> {

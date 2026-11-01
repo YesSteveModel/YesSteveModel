@@ -24,11 +24,11 @@ namespace 仅决定导出名，不决定 mod 或组件身份。`modId` 默认空
 
 F 为固定脚本参数数，D 为尾部默认参数数。显式 FIXED/OPTIONAL arity 只能等于推导值。VARIADIC 不与默认参数混用。除 `-1` 外的负数、矛盾范围、无界 tail 和 `max>255` 均拒绝。`argc` 为实际 supplied 数，不计 context、argc 或补齐默认；合法空 tail 供应空数组。
 
-Fixed 参数与 tail 元素只允许 Java boolean/int/float/String，不接纳 boxed、record、语言数组、Object、union 或 SoundId。默认 literal 在声明期检查类型和有限性，int 默认保留精确 int。仅 omitted 参数补默认，supplied UNSET 按 Java 消费规则转换。
+Fixed 参数与 tail 元素的 Java carrier 只允许 boolean/int/float/String，不接纳 boxed、record、语言数组、Object、union 或 SoundId。语言来源可在编译期按[统一 scalar 消费](molang-static-language.md#对象-presence)转换到 boolean/int/float；扩大来源接纳不扩大 carrier 闭集。默认 literal 在声明期检查类型和有限性，int 默认保留精确 int。仅 omitted 参数补默认，supplied UNSET 按 Java 消费规则转换。
 
 同一声明类内的同 symbol 方法组成重载组。组共享 subject、static/member、effect、逻辑结果与可能缺值事实。float/Float 均为可能缺值的 F32；int 为必有值 F32，Integer 为可能缺值 F32。int/float 规范化重复参数签名拒绝。跨类同 symbol 按整类冲突拒绝，不构成重载。
 
-冷编译先匹配精确实参类型，再匹配合法 scalar 转换；最佳集合并列时选择 canonical exact JVM member 最小者。default/tail 重叠和零实参没有额外优先级。预期返回、运行时值、门禁和发现顺序不选择方法。String 只接受 String 或普通 UNSET 的 Java 消费。
+冷编译先匹配精确实参类型，再匹配合法 scalar 转换。逐 supplied 参数比较时，精确匹配优于转换；所有参数均不差且至少一项更好的候选淘汰较差候选，互有优势的候选保留并列。并列时选择 canonical exact JVM member 最小者。default/tail 重叠和零实参没有额外优先级。预期返回、运行时值、门禁和发现顺序不选择方法。String 只接受 String 或普通 UNSET 的 Java 消费。
 
 ## 公共业务 view
 
@@ -79,7 +79,7 @@ record 应 public、非泛型，字段仅 primitive boolean/int/float 或非 nul
 
 专用注解是 `com.elfmcys.ysm.api.annotation.MolangNullable`（RUNTIME、METHOD），只适用于精确 record 返回。同名/第三方 Nullable 不授权；给其他结果种类加此注解拒绝接纳。它不允许可空字段、元素或参数。
 
-空列表、全零 record 和零向量仍 present。String 内容 presence 与语言投影由[静态语言](molang-static-language.md)拥有；空串是合法 Java String。missing 与普通 UNSET 消费为 Java boolean/int/float/String 时分别供应 false、0、+0 和空串，provider 正常调用。non-null record/数组实际返回 null 是严重违约，丢弃结果也检查。boxed/Nullable null 和 String null 归一保持原规则。
+空列表、空串、全零 record 和零向量仍有值；空列表与空串转为 0/false，全零 record 与零向量转为 1/true。语言投影由[静态语言](molang-static-language.md)拥有；空串是合法 Java String。missing 与普通 UNSET 消费为 Java boolean/int/float/String 时分别供应 false、0、+0 和空串，provider 正常调用。non-null record/数组实际返回 null 是严重违约，丢弃结果也检查。boxed/Nullable null 和 String null 归一保持原规则。
 
 ## 门禁默认表
 

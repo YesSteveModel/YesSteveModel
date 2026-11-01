@@ -38,6 +38,7 @@ public class MolangCompilationScalingBenchmark {
         private ExpressionEngineMetrics metrics;
         private CompiledArtifact artifact;
         private CompilationUnit unit;
+        private String compileFailure;
 
         @Setup(Level.Trial)
         public void setup() throws Exception {
@@ -61,6 +62,19 @@ public class MolangCompilationScalingBenchmark {
                 reads.add(ProgramNode.F32.of(3));
                 for (int index = 1; index <= 12; index++)
                     sources.add(source(index, new ProgramNode.Block(reads)));
+            } else if (scenario.startsWith("scalar")) {
+                registry = ScalarCompilationCases.registry();
+                for (var root : ScalarCompilationCases.roots(scenario)) {
+                    var original = source(sources.size(), root);
+                    var signature = scenario.equals("scalarJoin") && sources.size() == 3
+                        ? new TopLevelEntrySignature(ProgramShape.F32, new EntryResult.Value(BuiltinType.F32),
+                            List.of(), List.of(new LocalName("joined")))
+                        : original.signature();
+                    sources.add(new ProgramSource(original.key(), original.program(), signature,
+                        Optional.of(PortableProgramCodecs.v1()
+                            .encode(PortablePrograms.ofRoots(List.of(ProgramNode.F32.of(0))))),
+                        original.location(), original.entryPermissions()));
+                }
             } else {
                 throw new IllegalArgumentException("unknown scenario");
             }
@@ -69,10 +83,30 @@ public class MolangCompilationScalingBenchmark {
         @Setup(Level.Invocation)
         public void reset() {
             metrics = new ExpressionEngineMetrics();
+            artifact = null;
+            compileFailure = null;
         }
 
         @TearDown(Level.Invocation)
         public void verify() {
+            var snapshot = metrics.snapshot();
+            var nanos = snapshot.stageNanos();
+            if (artifact == null) {
+                require(scenario.equals("scalarConflicts") && compileFailure != null, "expected conflict failure");
+                PlayerMolangCompileBenchmark.PHASES.add(new PlayerMolangCompileBenchmark.PhaseSample(
+                    nanos[EngineMetrics.Stage.SEMANTIC_ANALYSIS.ordinal()] / 1e6, 0, 0, sources.size(), -1, -1, -1));
+                return;
+            }
+            var report = artifact.report();
+            PlayerMolangCompileBenchmark.PHASES.add(new PlayerMolangCompileBenchmark.PhaseSample(
+                nanos[EngineMetrics.Stage.SEMANTIC_ANALYSIS.ordinal()] / 1e6,
+                nanos[EngineMetrics.Stage.SOURCE_GENERATION.ordinal()] / 1e6,
+                nanos[EngineMetrics.Stage.BACKEND_COMPILATION.ordinal()] / 1e6, sources.size(),
+                report.metrics().typedNodes(), report.metrics().generatedSourceBytes(), report.replacements().size()));
+            if (scenario.startsWith("scalar")) {
+                require(artifact.catalog().size() == sources.size(), "scalar source inventory");
+                return;
+            }
             int entries = scenario.equals("unique") ? size : scenario.equals("repeated") ? 1 : 2;
             require(artifact.catalog().size() == sources.size(), "source inventory");
             require(artifact.catalog().entries().size() == entries, "complete contracts");
@@ -93,8 +127,20 @@ public class MolangCompilationScalingBenchmark {
             result.put("scenario", scenario);
             result.put("size", size);
             result.put("expectedSources", sources.size());
+            if (artifact == null) {
+                result.put("compileFailure", compileFailure);
+                result.put("metrics", metrics.snapshot());
+                result.put("inputHex", sources.stream()
+                    .map(source -> HexFormat.of().formatHex(source.program().payload().toByteArray())).toList());
+                return result;
+            }
             result.put("report", artifact.report().metrics());
             result.put("metrics", metrics.snapshot());
+            result.put("localRecoveries", artifact.report().localRecoveries().stream().map(Object::toString).toList());
+            result.put("replacements", artifact.report().replacements().stream().map(Object::toString).toList());
+            result.put("diagnostics", artifact.report().diagnostics().stream().map(Object::toString).toList());
+            result.put("inputHex", sources.stream()
+                .map(source -> HexFormat.of().formatHex(source.program().payload().toByteArray())).toList());
             result.put("rootFloatCases", cases(artifact, true));
             result.put("shardFloatCases", cases(artifact, false));
             result.put("physicalBodies", bodies(artifact));
@@ -111,13 +157,20 @@ public class MolangCompilationScalingBenchmark {
         for (var source : state.sources)
             builder.addProgram(source);
         state.unit = builder.build();
-        state.artifact = new DefaultExpressionAotCompiler<Object>(new JaninoJavaCompilerBackend(), state.metrics)
-            .compile(TaskContext.NONE, state.unit, host(), state.registry, CompilerOptions.DEFAULT,
-                BindingPlan.identity(), HASH);
+        try {
+            state.artifact = new DefaultExpressionAotCompiler<Object>(new JaninoJavaCompilerBackend(), state.metrics)
+                .compile(TaskContext.NONE, state.unit, host(), state.registry, CompilerOptions.DEFAULT,
+                    BindingPlan.identity(), HASH);
+        } catch (SemanticCompilationException failure) {
+            if (!state.scenario.equals("scalarConflicts"))
+                throw failure;
+            state.compileFailure = failure.toString();
+            return 0;
+        }
         return state.artifact.catalog().size();
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) throws Throwable {
         if (args.length != 2)
             throw new IllegalArgumentException("expected scenario and size");
         var state = new Workload();
@@ -133,6 +186,10 @@ public class MolangCompilationScalingBenchmark {
         state.verify();
         var result = state.record();
         result.put("coldNanos", coldNanos);
+        if (state.artifact == null) {
+            System.out.println("SCALING_RESULT " + new Gson().toJson(result));
+            return;
+        }
         var expected = ExpectedArtifactIdentity.create(state.unit, host(), state.registry, CompilerOptions.DEFAULT,
             BindingPlan.identity(), new JaninoJavaCompilerBackend().descriptor(), HASH);
         var encoded = ArtifactCodecs.v1().encode(state.artifact, HASH);
@@ -142,6 +199,9 @@ public class MolangCompilationScalingBenchmark {
             state.registry.visibilityRoot(), HASH)) {
             result.put("warmDecodeLoadNanos", System.nanoTime() - started);
             result.put("payloadBytes", encoded.size());
+            if (state.scenario.startsWith("scalar"))
+                result.put("oracle",
+                    ScalarCompilationCases.execute(resource, restored, state.registry, state.scenario));
         }
         System.out.println("SCALING_RESULT " + new Gson().toJson(result));
     }

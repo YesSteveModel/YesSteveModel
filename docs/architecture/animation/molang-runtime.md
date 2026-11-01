@@ -12,7 +12,7 @@ Main 与 first-person arm 各自闭合 inventory、module、普通变量和动�
 
 每个模型独立完成函数解析、语义闭合、类型/槽位推导、链接和后端生成。完整 inventory 保留每个来源；同次编译内只有完整程序、签名、固定许可和 fallback 契约相等时才共享分析与执行 entry。ProgramId 表示原始来源，entryId 表示完整执行契约，两者均只属于当前产物。共享不缓存求值结果或实体状态。冻结 registry、host 与 binding 参与产物身份，准备成本证据见[集成验证](../../verification/molang-declarations.md#成本测量)。
 
-Artifact identity 覆盖内容/集合、配置、ABI、冻结 host 与 specialization，也覆盖声明、语言语义及生成/执行兼容内容的确定性摘要。同 source、Java 签名和版本号不代表语义未变；旧 expected 失配后沿已有缓存重建路径收敛，[开发期 Molang 契约](../../product-decisions/decisions/model-compatibility.md#bcdevelopment-molang-semantics-use-current-contract)不设旧语义执行分支。跨纹理复用准备资源减少重复 decode、生成、load 和首次动画绑定；main/arm 的独立闭合则增加冷准备与默认驻留成本。Pin 把共享寿命归入现有 target 保留，不新增永久缓存。
+Artifact identity 覆盖内容/集合、配置、ABI、冻结 host 与 specialization，也覆盖声明、语言语义及生成/执行兼容内容的确定性摘要。源码摘要将转换、比较与类型合流的实现纳入 expected identity。同 source、Java 签名和版本号不代表语义未变；旧 artifact 与当前 expected 失配后沿已有缓存路径重新编译，[开发期 Molang 契约](../../product-decisions/decisions/model-compatibility.md#bcdevelopment-molang-semantics-use-current-contract)不设旧语义执行分支。跨纹理复用准备资源减少重复 decode、生成、load 和首次动画绑定；main/arm 的独立闭合则增加冷准备与默认驻留成本。Pin 把共享寿命归入现有 target 保留，不新增永久缓存。
 
 Cold 路径编译并验证 artifact；warm 路径只验证、加载和绑定，不重新分析源。持久执行不解析 source 或按名字查找 builtin。该选择减少动态查找，但不能据此推定帧预算、零分配或普遍提速。成本方法见[集成验证](../../verification/molang-declarations.md)，当前证据范围见[动画问题](../../status/known-issues/animation.md)。
 

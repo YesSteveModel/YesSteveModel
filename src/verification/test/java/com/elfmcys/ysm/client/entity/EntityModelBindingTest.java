@@ -162,7 +162,9 @@ class EntityModelBindingTest {
             cleanupCalls.incrementAndGet();
         };
         assertEquals(ClientDemandCoordinator.InstallationResult.REJECTED,
-            binding.accept(request, rejected, false, false, (lease, fallback) -> { throw memory; }));
+            binding.accept(request, rejected, false, false, (lease, fallback) -> {
+                throw memory;
+            }));
         assertSame(old, binding.resourceHolder());
         assertNull(binding.failure(request));
         assertEquals(1, cleanupCalls.get());
@@ -182,7 +184,9 @@ class EntityModelBindingTest {
         var lease = FakeLease.ready(models.defaultId, target());
         var memory = new OutOfMemoryError("injected required default");
         assertSame(memory, assertThrows(OutOfMemoryError.class,
-            () -> binding.accept(request, lease, false, false, (owned, fallback) -> { throw memory; })));
+            () -> binding.accept(request, lease, false, false, (owned, fallback) -> {
+                throw memory;
+            })));
         assertEquals(1, lease.closes.get());
         assertNull(binding.resourceHolder());
         DemandFixtures.close(binding);
@@ -1015,13 +1019,18 @@ class EntityModelBindingTest {
             track(new ExpressionArtifactStore(cache, track(new AtomicSharedCache(cache)))), host,
             new ExpressionEngineMetrics());
         try (var value = faultModule(factory, 70, "broken.value(); broken.after();", false);
-            var array = faultModule(factory, 71, "broken.array(); broken.after();", false)) {
-            for (var failed : List.of(value, array)) {
+            var array = faultModule(factory, 71, "broken.array(); broken.after();", false);
+            var valueScalar = faultModule(factory, 72, "broken.value()+1; broken.after();", false);
+            var arrayScalar = faultModule(factory, 73, "broken.array()+1; broken.after();", false);
+            var valueCompare = faultModule(factory, 74, "broken.value()==2; broken.after();", false);
+            var arrayCompare = faultModule(factory, 75, "2==broken.array(); broken.after();", false)) {
+            var failedModules = List.of(value, array, valueScalar, arrayScalar, valueCompare, arrayCompare);
+            for (var failed : failedModules) {
                 providerClass.getField("mode").setInt(null, 0);
                 providerClass.getField("after").setInt(null, 0);
                 var models = new FakeModelAccess();
                 models.host = host;
-                var primaryId = hash(failed == value ? 70 : 71);
+                var primaryId = hash(70 + failedModules.indexOf(failed));
                 models.contents.put(primaryId, content(primaryId));
                 var primary = FakeLease.ready(primaryId, playerTarget(primaryId, "main", failed));
                 var defaultLease = FakeLease.ready(models.defaultId,
@@ -1435,8 +1444,7 @@ class EntityModelBindingTest {
         @Override
         public boolean isCurrent(ResourceRequest request) {
             requireOpen();
-            return modelId.equals(request.modelId())
-                && purpose == request.purpose()
+            return modelId.equals(request.modelId()) && purpose == request.purpose()
                 && (textureName == null || textureName.equals(request.requestedTexture()));
         }
 

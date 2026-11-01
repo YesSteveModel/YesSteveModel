@@ -22,6 +22,7 @@
   - [standard](../../standards/protocol-v1/README.md#当前网络协议)
   - [design](../../architecture/asset-pipeline/overview.md)
   - [design](../../architecture/model-management/storage/overview.md#共享存储与清理)
+  - [design](../../architecture/animation/molang-static-language.md)
   - [design](../../architecture/animation/molang-runtime.md#展示闭包与主体特化)
   - [implementation](../../architecture/animation/implementation/molang-runtime.md#源码解析与缓存)
   - [ABI](../../abi/maintenance.md#开发版本的特殊门禁)
@@ -37,7 +38,7 @@
 
 ### BC.development-molang-semantics-use-current-contract
 
-- Claim: 当前未发布开发期模型的 Molang source 在重新编译或加载时采用现行契约。范围限于[函数裸调用与浮点缺值](../../architecture/animation/molang-static-language.md)、[固定顶层动作许可与轮级借用](../../architecture/animation/molang-runtime.md)及[公共业务 view](../../architecture/animation/molang-declarations.md)。旧 provider 从源码重建，不保留旧注解或旧求值语义的兼容入口。此例外仅覆盖上述 Molang 变化，不放宽模型数据完整性及其他已支持行为的兼容承诺。旧派生物的身份失配沿[运行时缓存规则](../../architecture/animation/implementation/molang-runtime.md)收敛，不改变模型 source 的 wire 形状。
+- Claim: 当前未发布开发期模型的 Molang source 在重新编译或加载时采用现行契约。范围限于[函数裸调用、浮点缺值、变量默认初始化与缺值复制传播、统一 scalar 消费、数值比较与 F32/BOOL 合流](../../architecture/animation/molang-static-language.md)、[固定顶层动作许可与轮级借用](../../architecture/animation/molang-runtime.md)及[公共业务 view](../../architecture/animation/molang-declarations.md)。旧 provider 从源码重建，不保留旧注解或旧求值语义的兼容入口。此例外仅覆盖上述 Molang 变化，不放宽模型数据完整性及其他已支持行为的兼容承诺。旧派生物的身份失配沿[运行时缓存规则](../../architecture/animation/implementation/molang-runtime.md)收敛，不改变模型 source 的 wire 形状。
 
 ### BC.development-version-qualifiers-are-exact
 

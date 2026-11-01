@@ -1647,7 +1647,7 @@ class ExpressionArtifactPipelineTest {
     }
 
     @Test
-    void unsetEqualityRestoresInitialModelVisibilityAndWatchSemantics(@TempDir Path temp) throws Exception {
+    void defaultEqualityAndFrozenWatchPresenceFollowModelDemand(@TempDir Path temp) throws Exception {
         var input = input("(v.hh==0)+(v.hhh==0)+(v.yj==0)+(r.b==0)+(null==0)+(''==null)+(null=='')+(null==null)");
         var paths = temp.resolve("cache");
         try (
@@ -1669,11 +1669,12 @@ class ExpressionArtifactPipelineTest {
                     assertEquals(true, runtime.executeTransient(inputs(), watch), source);
                 }
             }
-            for (var source : List.of("v.hh??99", "r.b??99")) {
-                try (var watch = runtime.compileTransient(runtime.generation(), source,
+            var frozenDefaults = Map.of("v.hh??99", 0f, "r.b??99", 99f);
+            for (var entry : frozenDefaults.entrySet()) {
+                try (var watch = runtime.compileTransient(runtime.generation(), entry.getKey(),
                     TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
                     "test:unset-coalesce", () -> false)) {
-                    assertEquals(99f, runtime.executeTransient(inputs(), watch), source);
+                    assertEquals(entry.getValue(), runtime.executeTransient(inputs(), watch), entry.getKey());
                 }
             }
             var presentDefaults = Map.<String, Object>of("0??99", 0f, "false??true", false, "''??'fallback'", "");
