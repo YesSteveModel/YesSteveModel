@@ -39,7 +39,8 @@ Roaming 随 PlayerState FULL/DELTA 的到达机会累积；消息没有 revision
 
 Roaming 是模型作用域内、可跨帧和 controller 使用的一组 float 变量，通过 `v.roaming` 暴露给 Molang。加载期分别为 main/arm 解析静态字段，并验证整个 target 并集，entity 侧按 producer／consumer role 持有独立的 generated state。
 
-- `ClientRoamingSession` 按模型派生的 32-bit `modelHash` 保存服务端投影；当前 generated state 由 entity expression runtime 持有。
+- `ClientRoamingSession` 按模型派生的 32-bit `modelHash` 保存会话数据；当前 generated state 由 entity expression runtime 持有。LocalPlayer 的保留快照独立于安装，区分未知与已知空；采样不建立恢复资格。首份 self FULL 接纳基线，普通回显保留本地连续性，省略 Roaming 的 FULL 明确清空。接收时校验结构、容量与有限值，安装时再校验字段布局；布局失败保留原数据。
+- LocalPlayer 安装从保留快照初始化候选，再发布精确安装资格。联网基线到达前的实例只提供临时表现，不能保留默认值或提交报告；基线到达后先封口，再沿 reload 安装恢复实例。仅本地会话可在成功安装时建立空基线。隐藏、卸载和安装失败保留数据，同会话玩家实例替换通过 `moveFrom()` 转移快照；连接结束沿实体 owner 退休撤销资格。
 - `LocalPlayer` body 使用 producer role，每次合法赋值（包括同值）置单一 dirty。正常动画更新结束形成完整 body delta 源结果，worker 不进入会话、载具或 arm。主线程取得源 get 后维护所属 `ClientRoamingSession`；目标也完成对应 get 后，才按精确连接与安装身份采用投影。目标仍忙时结果只保留到本次调用末尾；完整 drain 后最终采用或丢弃，不跨调用重试。Action/control/transient 的写入等下一次正常更新消费。Arm 交集不截断 body-only 字段，逻辑成功后的 Extract 失败不撤回 delta 或动作。
 - 远端玩家、投射物与载具使用 consumer role：模型脚本可以推进当前 state，但写入不置 dirty、不上报，也不在 runtime 替换时额外保留。FULL/DELTA 先校验字段名与有限值再修正当前 state，失败不产生部分更新；vehicle 变更会被转发给乘客。
 - 新 arm 安装在主线程取得 body 交接后，对交集作一次非消费 snapshot/full 初始化（含空交集）。投影先验证完整字段与有限值，再一次采用；连接或任一端安装换代会丢弃旧结果。报告端也非消费采样，不依赖正常 delta 是否已消费；报告业务入口先取得 body get，再以 exact installation 资格约束 snapshot/planner/编码/提交。模型上下文改变时创建独立 state；报告机会、真实 FULL baseline 与 best-effort 失败边界由[玩家状态与控制](../../network/player-state.md)定义。
@@ -56,7 +57,7 @@ Roaming 是按模型命名空间同步的自定义 float 状态：
 | 客户端会话投影 | `PlayerAnimatableCapability` 的 `ClientRoamingSession` |
 | 模型可见结构 | 每个 entity runtime 持有 generated roaming state；本地玩家为 producer，其他对象为 consumer |
 
-模型通过 `v.roaming.<name>` 访问当前 state；普通 entity 不共享这份 scoped storage。Producer 的命名 snapshot 用于网络采样，正常更新 delta 用于本地投影。Consumer 写入只推进当前 runtime，不产生上行状态；服务端 full 或 delta 可以修正当前值。远端 full 建立命名空间基线，基线前到达的 delta 只在所属会话投影内排队。模型切换、远端重置和会话结束分别按其 owner 清理实例或命名空间，不能由动画 processor 推断网络 authority。
+模型通过 `v.roaming.<name>` 访问当前 state；普通 entity 不共享这份 scoped storage。Producer 的命名 snapshot 用于网络采样，正常更新 delta 用于本地投影。主线程只接纳原 installation 仍有效的变化；endUse 在封口前完成最终 adoption，随后撤销安装引用并保留 LocalPlayer 快照。Consumer 写入只推进当前 runtime，不产生上行状态；服务端 full 或 delta 可以修正当前值。远端 full 建立命名空间基线，基线前到达的 delta 只在所属会话投影内排队。模型切换、远端重置和会话结束分别按其 owner 清理实例或命名空间，不能由动画 processor 推断网络 authority。
 
 ## `ysm.sync`
 

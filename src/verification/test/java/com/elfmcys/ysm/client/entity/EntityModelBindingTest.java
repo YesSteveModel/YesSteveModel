@@ -141,6 +141,29 @@ class EntityModelBindingTest {
     }
 
     @Test
+    void workerDebugQueryDoesNotCleanUpAnInactiveTarget() throws Exception {
+        var owner = new TestHumanoid(new EntityModelBinding());
+        owner.active = false;
+        var targetField = com.elfmcys.ysm.client.gui.overlay.DebugAnimationScreen.class.getDeclaredField("TARGET");
+        targetField.setAccessible(true);
+        var previous = targetField.get(null);
+        var selected = new java.lang.ref.WeakReference<AnimatableEntity<?>>(owner);
+        targetField.set(null, selected);
+        try {
+            var task = new java.util.concurrent.FutureTask<>(owner::getDebugSource);
+            var worker = new Thread(task);
+            worker.start();
+            worker.join(5000);
+            assertFalse(worker.isAlive());
+            assertNull(task.get(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertSame(selected, targetField.get(null));
+        } finally {
+            targetField.set(null, previous);
+            owner.reset();
+        }
+    }
+
+    @Test
     void memoryFailurePreservesTheOldInstallationWithoutPermanentFailureMemory() throws Exception {
         var firstId = hash(116);
         var secondId = hash(117);
@@ -1346,6 +1369,12 @@ class EntityModelBindingTest {
 
     private static final class TestHumanoid extends CustomHumanoidEntity<LivingEntity> {
         private ModelResourceDemand.Mode mode = ModelResourceDemand.Mode.ONLINE;
+        private Boolean active;
+
+        @Override
+        public boolean isActive() {
+            return active == null ? super.isActive() : active;
+        }
 
         @Override
         protected ModelResourceDemand.Mode resourceDemandMode() {

@@ -16,14 +16,15 @@ import java.util.Optional;
 public final class PlayerStateReportPlanner {
     private static final int MAX_ANIMATION_ID_BYTES = 256;
 
-    /**
-     * The roaming section one report opportunity can express. It is absent while no namespace is known: a FULL that
-     * omitted roaming still binds the report authority, and the applied model names that namespace once it is
-     * available.
-     */
-    public record RoamingSample(Integer modelKey, Map<String, Float> values) {
+    /** An unavailable sample cannot consume an opportunity that requires roaming; absent intentionally omits it. */
+    public record RoamingSample(Integer modelKey, Map<String, Float> values, boolean available) {
 
         private static final RoamingSample ABSENT = new RoamingSample(null, Map.of());
+        private static final RoamingSample UNAVAILABLE = new RoamingSample(null, Map.of(), false);
+
+        public RoamingSample(Integer modelKey, Map<String, Float> values) {
+            this(modelKey, values, true);
+        }
 
         public RoamingSample {
             values = Map.copyOf(values);
@@ -31,6 +32,14 @@ public final class PlayerStateReportPlanner {
 
         public static RoamingSample absent() {
             return ABSENT;
+        }
+
+        public static RoamingSample unavailable() {
+            return UNAVAILABLE;
+        }
+
+        public static RoamingSample unavailable(int modelKey) {
+            return new RoamingSample(modelKey, Map.of(), false);
         }
 
         public boolean present() {
@@ -83,11 +92,7 @@ public final class PlayerStateReportPlanner {
             || animationId.getBytes(StandardCharsets.UTF_8).length > MAX_ANIMATION_ID_BYTES ? "" : animationId;
     }
 
-    /**
-     * Accepts the authority of an applied self FULL. A FULL whose roaming section is absent resets that scope to empty;
-     * it therefore still binds the report authority, and until the applied model names the namespace the planner only
-     * withholds that one section.
-     */
+    /** Accepts self FULL authority after its roaming baseline has been applied. */
     public boolean acceptAuthority(Hash256 modelHash, Integer roamingKey) {
         if (policy == null) {
             return false;
@@ -113,7 +118,8 @@ public final class PlayerStateReportPlanner {
     }
 
     public Optional<PlayerStateReportProto> observe(long nowNanos, int entityId, RoamingSample roaming) {
-        if (policy == null || !authorityKnown) {
+        if (policy == null || !authorityKnown
+            || policy.requestedSections().contains(PlayerStateSection.ROAMING) && !roaming.available()) {
             return Optional.empty();
         }
         var minInterval = policy.minDeltaIntervalMillis() * 1_000_000L;

@@ -108,14 +108,20 @@ public class MolangCommand {
             return Command.SINGLE_SUCCESS;
         }
         String exp = StringArgumentType.getString(ctx, EXPRESSION_NAME);
+        var minecraft = Minecraft.getInstance();
+        var player = minecraft.player;
         var target = DebugAnimationScreen.getTarget();
         if (target == null) {
-            target = Minecraft.getInstance().player.getCapability(PlayerAnimatableCapabilityProvider.CAP).orElse(null);
+            target = player.getCapability(PlayerAnimatableCapabilityProvider.CAP).orElse(null);
         }
         if (target != null) {
             target.executeTransient(exp, TransientExpressionSession.Privilege.LOCAL_EXECUTE, false, result -> {
-                Minecraft.getInstance().player.sendSystemMessage(
-                    Component.translatable("message.yes_steve_model.model.debug_animation.result", result));
+                minecraft.execute(() -> {
+                    if (minecraft.player == player) {
+                        player.sendSystemMessage(
+                            Component.translatable("message.yes_steve_model.model.debug_animation.result", result));
+                    }
+                });
             });
         }
 

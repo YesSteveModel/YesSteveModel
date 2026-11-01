@@ -41,6 +41,7 @@ GUI 闭包、用途/主体隔离、玩家 MAIN 借用和 cache-only 门禁已有
 - 普通 typed primitive、拒绝门禁、内部函数和准备后 transient 的稳态分配证据不包括 binding 构造、Object 观察装箱或真实载荷。Tail、record、效果、失败与单骨骼 literal 插值由独立探针单列；这些样本不代表完整姿态调度。冷编译/暖解码、制品、特化与进程峰值清单不能外推游戏常驻内存、动作、帧预算或长期回收。入口见[成本测量](../../verification/molang-declarations.md#成本测量)。
 - Java owner 严重返回违约已有事务丢弃、降级、隔离、失败记忆及内容变化恢复回归。Forge 已观察 command/watch 的 UNSET/0/false、ACTION 抑制、声音 handle/控制和重连拒绝旧连接；普通/shared-player/default 的完整 entity 路由、真实严重失败/default 故障与 retry、跨 owner/controller 声音 scope、听测和玩法权威快照仍未验。Test-only 开发审计不代表生产插桩。无过滤 Java 套件仍有修改前基线也能复现的资源聚合边界失败，不能用局部通过代替全量通过。见[宿主验证](../../verification/model-management.md)。
 - Roaming 已接入 full/delta，但 inactive storage 仍按模型派生的 32-bit 短键分组，碰撞与无变量删除语义尚未解决。
+- LocalPlayer 恢复已有 NBT、先上报／先安装、临时实例、清空、卸载和玩家实例转移的受控回归。JNI 投影和第一人称 owner 回归通过。2026-10-30，Windows／Forge 47.4.3 的酒狐存档副本完成轮盘变身、退出主菜单和重进。重进首轮 FULL 含 2 个 roaming 变量，Watch 的 `a=b=1` 与小狐狸形态保持。两次保存后的 NBT 均保留 `a=b=1`。真实多人和故障交错矩阵未验。
 - Body dirty 与 arm 非消费快照已有局部回归，真实空手第一人称和 body/vehicle 发送、服务端接收已有轨迹。完整时钟、presence、失败/交错矩阵及帧期成本仍未闭环，见[Roaming 验证](../../verification/molang-declarations.md#准备复用与-roaming)。
 - `ysm.sync` 没有目标 identity 或独立频率限制；实体缺失、generation/model 或会话变化会丢弃事件。真实双端 relay/disconnect 尚未验证，正常协议边界见[状态同步](../../architecture/animation/implementation/state-inputs-and-sync.md)。
 

@@ -66,23 +66,23 @@ final class LocalPlayerStateReporter {
             installation.commit(submit);
     }
 
-    /**
-     * Samples this producer's roaming under the authority's namespace. A self FULL that omitted roaming leaves the
-     * namespace to the applied model, and while neither is known the opportunity still forms for the independent
-     * animation section.
-     */
+    /** Preserves the session's sampling qualification without inferring recovery from model installation. */
     private Sample roamingSample(PlayerAnimatableCapability capability) {
         if (!policy.stateReportPolicy().requestedSections().contains(PlayerStateSection.ROAMING)) {
             return new Sample(PlayerStateReportPlanner.RoamingSample.absent(), null);
         }
         var namespace = planner.authoritativeRoamingKey();
         if (namespace == null) {
-            namespace = capability.localRoamingKey();
+            var modelHash = capability.getModelHash();
+            namespace = modelHash == null ? null : modelHash.roamingHash();
         }
         if (namespace == null) {
-            return new Sample(PlayerStateReportPlanner.RoamingSample.absent(), null);
+            return new Sample(PlayerStateReportPlanner.RoamingSample.unavailable(), null);
         }
         var snapshot = capability.roamingSnapshot(namespace);
+        if (!snapshot.available()) {
+            return new Sample(PlayerStateReportPlanner.RoamingSample.unavailable(snapshot.modelKey()), null);
+        }
         return new Sample(new PlayerStateReportPlanner.RoamingSample(snapshot.modelKey(), roaming(snapshot.values())),
             snapshot.installation());
     }

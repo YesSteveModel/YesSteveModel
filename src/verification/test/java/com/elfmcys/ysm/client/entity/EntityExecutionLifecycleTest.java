@@ -1,9 +1,15 @@
 package com.elfmcys.ysm.client.entity;
 
 import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
+import com.elfmcys.ysm.expression.aot.TestExpressionModules;
+import com.elfmcys.ysm.expression.host.InvocationInputs;
+import dev.semaweave.RoamingPayload;
+import dev.semaweave.RoamingRole;
 import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -51,6 +57,88 @@ class EntityExecutionLifecycleTest {
     }
 
     private static final class Nested { int value; }
+
+    @Test
+    void endingUseAdoptsPendingLocalDeltaBeforeSealingTheInstallation() {
+        for (boolean permanently : List.of(false, true)) {
+            for (boolean asynchronous : List.of(false, true)) {
+                try (var module = TestExpressionModules.create(Set.of("value"));
+                    var runtime = new EntityExpressionRuntime()) {
+                    TestExpressionModules.replace(runtime, module, Map.of(), RoamingRole.PRODUCER);
+                    runtime.initializeRoaming(new RoamingPayload(new java.util.TreeMap<>()));
+                    var installation = runtime.snapshot().orElseThrow().installation();
+                    var retained = new java.util.HashMap<String, Float>();
+                    var events = new ArrayList<String>();
+                    var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+                        events.add("close");
+                        runtime.clear();
+                    }, failure -> fail(failure), task -> new Thread(task).start());
+                    var inputs = new EntityExpressionRuntime.InvocationInputs(
+                        new InvocationInputs<net.minecraft.world.entity.Entity>() {},
+                        (commands, provenance) -> () -> {}, () -> false);
+                    java.util.function.Supplier<Object> update = () -> runtime.normalUpdate(inputs, evaluation -> {
+                        runtime.roamingState().orElseThrow().write("value", 7);
+                        return null;
+                    }, delta -> {
+                        assertTrue(installation.commit(() -> retained.putAll(delta.values())));
+                        events.add("adopt");
+                    });
+                    if (asynchronous)
+                        lifecycle.submit(update);
+                    else
+                        update.get();
+                    assertTrue(retained.isEmpty());
+
+                    if (permanently)
+                        lifecycle.retire();
+                    else
+                        lifecycle.endUse();
+
+                    assertEquals(Map.of("value", 7F), retained);
+                    assertEquals(List.of("adopt", "close"), events);
+                    assertFalse(installation.commit(() -> fail("Retired installation committed")));
+                    assertEquals(permanently, lifecycle.isRetired());
+                }
+            }
+        }
+    }
+
+    @Test
+    void adoptionFailurePreservesTaskFailureAndStillSealsAndCleansUp() {
+        try (var module = TestExpressionModules.create(Set.of("value"));
+            var runtime = new EntityExpressionRuntime()) {
+            TestExpressionModules.replace(runtime, module, Map.of(), RoamingRole.PRODUCER);
+            runtime.initializeRoaming(new RoamingPayload(new java.util.TreeMap<>()));
+            var installation = runtime.snapshot().orElseThrow().installation();
+            var original = new IllegalArgumentException("task");
+            var adoptionFailure = new IllegalStateException("adoption");
+            var closeFailure = new IllegalStateException("close");
+            var events = new ArrayList<String>();
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+                events.add("close");
+                throw closeFailure;
+            }, failure -> { throw (RuntimeException)failure; }, task -> new Thread(task).start());
+            var inputs = new EntityExpressionRuntime.InvocationInputs(
+                new InvocationInputs<net.minecraft.world.entity.Entity>() {},
+                (commands, provenance) -> () -> {}, () -> false);
+            lifecycle.submit(() -> {
+                runtime.normalUpdate(inputs, evaluation -> {
+                    runtime.roamingState().orElseThrow().write("value", 7);
+                    return null;
+                }, delta -> {
+                    events.add("adopt");
+                    throw adoptionFailure;
+                });
+                throw original;
+            });
+
+            assertSame(original, assertThrows(IllegalArgumentException.class, lifecycle::retire));
+            assertEquals(List.of("adopt", "close"), events);
+            assertArrayEquals(new Throwable[] {adoptionFailure, closeFailure}, original.getSuppressed());
+            assertFalse(installation.commit(() -> fail("Failed retirement left the installation open")));
+            assertTrue(lifecycle.isRetired());
+        }
+    }
 
     @Test
     void retirementWaitsThroughInterruptAndCleanupFollowsExecutionFinally() throws Exception {

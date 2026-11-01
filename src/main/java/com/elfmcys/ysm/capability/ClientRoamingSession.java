@@ -16,9 +16,12 @@ final class ClientRoamingSession {
     private final boolean localPlayer;
     private final Runnable reloadModel;
     private final Int2ReferenceOpenHashMap<RemoteStorage> storage = new Int2ReferenceOpenHashMap<>(8);
+    private final Int2ReferenceOpenHashMap<Int2FloatOpenHashMap> retained = new Int2ReferenceOpenHashMap<>(8);
 
     private int currentHash;
     private RenderTargetExpressionModule currentModule;
+    private EntityExpressionRuntime.Installation currentInstallation;
+    private boolean restored;
 
     ClientRoamingSession(Player player, boolean localPlayer, Runnable reloadModel) {
         this.player = player;
@@ -28,25 +31,41 @@ final class ClientRoamingSession {
 
     Runnable prepare(int roamingHash, RenderTargetExpressionModule module,
         EntityExpressionRuntime.PreparedInstallation prepared) {
+        return prepare(roamingHash, module, prepared, false);
+    }
+
+    Runnable prepare(int roamingHash, RenderTargetExpressionModule module,
+        EntityExpressionRuntime.PreparedInstallation prepared, boolean localOnly) {
         var current = storage.get(roamingHash);
-        var values = current == null ? new Int2FloatOpenHashMap() : current.candidate(module);
+        var baseline = retained.get(roamingHash);
+        var known = baseline != null || localOnly;
+        var values = localPlayer
+            ? baseline == null ? new Int2FloatOpenHashMap() : new Int2FloatOpenHashMap(baseline)
+            : current == null ? new Int2FloatOpenHashMap() : current.candidate(module);
         var payload = RoamingPayloads.fromNetwork(values);
         module.validateRoamingFull(payload);
         prepared.initializeRoaming(payload);
+        var installation = prepared.installation();
         return () -> {
-            if (current != null) {
+            if (localPlayer && known) {
+                retained.put(roamingHash, values);
+            } else if (current != null) {
                 current.variables = values;
                 current.pendingFull = null;
                 current.pendingChanges.clear();
             }
             currentHash = roamingHash;
             currentModule = module;
+            currentInstallation = installation;
+            restored = known;
         };
     }
 
     void modelReset() {
         currentHash = 0;
         currentModule = null;
+        currentInstallation = null;
+        restored = false;
     }
 
     /** The roaming namespace of the currently applied model, or null before one is loaded. */
@@ -56,25 +75,37 @@ final class ClientRoamingSession {
 
     void resetFromServer(EntityExpressionRuntime runtime, int roamingHash, Int2FloatOpenHashMap variables) {
         var payload = RoamingPayloads.fromNetwork(variables);
-        var remote = storage.get(roamingHash);
-        if (localPlayer && remote != null && remote.variables != null) {
+        if (localPlayer) {
+            if (retained.containsKey(roamingHash)) {
+                return;
+            }
+            retained.put(roamingHash, new Int2FloatOpenHashMap(variables));
+            if (currentHash == roamingHash) {
+                reloadCurrent(runtime);
+            }
             return;
         }
-        if (roamingHash != currentHash) {
+        var remote = storage.get(roamingHash);
+        if (currentModule == null || roamingHash != currentHash) {
             storage.computeIfAbsent(roamingHash, ignored -> new RemoteStorage()).stageFull(variables);
             return;
         }
         requireCurrentModule().validateRoamingFull(payload);
         remote = storage.computeIfAbsent(roamingHash, ignored -> new RemoteStorage());
         remote.replaceFull(variables);
-        if (localPlayer) {
-            reloadModel.run();
-        } else if (runtime.module().isPresent()) {
+        if (runtime.module().isPresent()) {
             runtime.applyRoamingFull(payload);
         }
     }
 
     void clearFromServer(EntityExpressionRuntime runtime) {
+        if (localPlayer) {
+            retained.clear();
+            if (currentModule != null) {
+                clearFromServer(runtime, currentHash);
+            }
+            return;
+        }
         var values = new Int2FloatOpenHashMap();
         var payload = RoamingPayloads.fromNetwork(values);
         if (currentModule != null) {
@@ -84,15 +115,32 @@ final class ClientRoamingSession {
         if (currentModule == null) {
             return;
         }
-        if (localPlayer) {
-            reloadModel.run();
-        } else if (runtime.module().isPresent()) {
+        if (runtime.module().isPresent()) {
             runtime.applyRoamingFull(payload);
         }
     }
 
+    void clearFromServer(EntityExpressionRuntime runtime, int roamingHash) {
+        if (!localPlayer) {
+            clearFromServer(runtime);
+            return;
+        }
+        retained.clear();
+        retained.put(roamingHash, new Int2FloatOpenHashMap());
+        reloadCurrent(runtime);
+    }
+
+    private void reloadCurrent(EntityExpressionRuntime runtime) {
+        if (currentModule == null) {
+            return;
+        }
+        restored = false;
+        runtime.invalidate();
+        reloadModel.run();
+    }
+
     boolean hasStorage(int roamingHash) {
-        return storage.containsKey(roamingHash);
+        return localPlayer ? retained.containsKey(roamingHash) : storage.containsKey(roamingHash);
     }
 
     void updateRemote(EntityExpressionRuntime runtime, int roamingHash, Int2FloatMap variables) {
@@ -101,7 +149,7 @@ final class ClientRoamingSession {
             return;
         }
         var payload = RoamingPayloads.fromNetwork(variables);
-        if (roamingHash != currentHash) {
+        if (currentModule == null || roamingHash != currentHash) {
             storage.computeIfAbsent(roamingHash, ignored -> new RemoteStorage()).stagePatch(variables);
             return;
         }
@@ -119,21 +167,16 @@ final class ClientRoamingSession {
     }
 
     void maintainLocalChanges(dev.semaweave.RoamingPayload delta) {
-        if (!localPlayer || currentHash == 0) {
+        if (!localPlayer || !restored) {
             return;
         }
         var changes = RoamingPayloads.toNetwork(delta);
-        var remote = storage.computeIfAbsent(currentHash, ignored -> new RemoteStorage());
-        if (remote.variables == null) {
-            remote.variables = new Int2FloatOpenHashMap();
-        }
-        remote.variables.putAll(changes);
-
+        retained.get(currentHash).putAll(changes);
     }
 
     EntityExpressionRuntime.ProjectionSink prepareLocalProjection() {
-        var hash = currentHash;
         var module = currentModule;
+        var source = currentInstallation;
         var vehicle = player.getVehicle();
         var target = vehicle == null ? null
             : vehicle.getCapability(VehicleAnimatableCapabilityProvider.CAP).orElse(null);
@@ -141,11 +184,14 @@ final class ClientRoamingSession {
         return new EntityExpressionRuntime.ProjectionSink() {
             private boolean localApplied;
             public boolean adopt(dev.semaweave.RoamingPayload delta, boolean finalWindow) {
-                if (!localPlayer || hash == 0 || currentHash != hash || currentModule != module)
+                if (!localPlayer || !restored || source == null || currentInstallation != source)
                     return true;
                 if (!localApplied) {
-                    module.validateRoamingPatch(delta);
-                    maintainLocalChanges(delta);
+                    if (!source.commit(() -> {
+                        module.validateRoamingPatch(delta);
+                        maintainLocalChanges(delta);
+                    }))
+                        return true;
                     localApplied = true;
                 }
                 if (target == null || player.getVehicle() != vehicle || vehicle.getFirstPassenger() != player
@@ -167,22 +213,24 @@ final class ClientRoamingSession {
                 .orElseGet(() -> new PlayerAnimatableCapability.RoamingSnapshot(authoritativeHash,
                     storedValues(authoritativeHash), null));
         }
-        var sampled = runtime.sample(snapshot -> {
-            if (localPlayer && authoritativeHash == currentHash) {
-                var values = RoamingPayloads.toNetwork(snapshot.payload());
-                var remote = storage.computeIfAbsent(authoritativeHash, ignored -> new RemoteStorage());
-                remote.variables = new Int2FloatOpenHashMap(values);
-                return new PlayerAnimatableCapability.RoamingSnapshot(authoritativeHash, values,
-                    snapshot.installation());
-            }
-            return new PlayerAnimatableCapability.RoamingSnapshot(authoritativeHash, storedValues(authoritativeHash),
-                snapshot.installation());
-        });
-        return sampled.orElseGet(() -> new PlayerAnimatableCapability.RoamingSnapshot(authoritativeHash,
-            storedValues(authoritativeHash), null));
+        var baseline = retained.get(authoritativeHash);
+        if (baseline == null) {
+            return PlayerAnimatableCapability.RoamingSnapshot.unavailable(authoritativeHash);
+        }
+        if (authoritativeHash == currentHash && restored && currentInstallation != null) {
+            var installation = currentInstallation;
+            return runtime.sample(snapshot -> new PlayerAnimatableCapability.RoamingSnapshot(authoritativeHash,
+                RoamingPayloads.toNetwork(snapshot.payload()), installation))
+                .orElseGet(() -> PlayerAnimatableCapability.RoamingSnapshot.unavailable(authoritativeHash));
+        }
+        return new PlayerAnimatableCapability.RoamingSnapshot(authoritativeHash, storedValues(authoritativeHash), null);
     }
 
     private Int2FloatOpenHashMap storedValues(int authoritativeHash) {
+        if (localPlayer) {
+            var values = retained.get(authoritativeHash);
+            return values == null ? new Int2FloatOpenHashMap() : new Int2FloatOpenHashMap(values);
+        }
         var remote = storage.get(authoritativeHash);
         return remote == null || remote.variables == null ? new Int2FloatOpenHashMap()
             : new Int2FloatOpenHashMap(remote.variables);
@@ -191,6 +239,9 @@ final class ClientRoamingSession {
     void moveFrom(ClientRoamingSession source) {
         storage.putAll(source.storage);
         source.storage.clear();
+        retained.putAll(source.retained);
+        source.retained.clear();
+        source.modelReset();
     }
 
     private void updateVehicle(int roamingHash, Int2FloatMap variables) {

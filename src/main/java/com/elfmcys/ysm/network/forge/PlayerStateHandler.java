@@ -289,8 +289,8 @@ public final class PlayerStateHandler {
         capability.waitForAsyncUpdate();
         var full = update.mode() == StateWriteMode.FULL;
         var authoritativeModelHash = update.hasModel() ? ModelReferenceCodec.read(update.modelUnsafe().model()) : null;
-        var appliedModelHash =
-            update.hasModel() ? appliedPlayerModelHash(authoritativeModelHash, builtinDefaultHash) : null;
+        var appliedModelHash = update.hasModel() ? appliedPlayerModelHash(authoritativeModelHash, builtinDefaultHash)
+            : capability.getModelHash();
         if (full) {
             capability.getStateTracker().reset();
         }
@@ -310,10 +310,12 @@ public final class PlayerStateHandler {
         } else if (full) {
             capability.stopExtraAnimation();
         }
-        var roaming = roamingApplication(update);
+        var roaming = roamingApplication(update, appliedModelHash);
         if (roaming != null) {
             if (roaming.modelKey() == null) {
                 capability.clearRoamingVars();
+            } else if (full && !update.hasRoaming()) {
+                capability.clearRoamingVars(roaming.modelKey());
             } else if (roaming.full()) {
                 capability.resetRoamingVars(roaming.modelKey(), roaming.values());
             } else {
@@ -331,10 +333,8 @@ public final class PlayerStateHandler {
     }
 
     /**
-     * The roaming namespace an accepted self FULL binds. A FULL expresses its complete scope, so an absent roaming
-     * section is the empty state of the namespace named by that same model, not a reason to withhold the report
-     * authority. The wire compresses the builtin default model to a flag, and such a FULL leaves the namespace to the
-     * applied model.
+     * A FULL that omits roaming clears the namespace of its accepted model description, including the concrete builtin
+     * default hash. Resolving this identity does not require a model installation.
      */
     static Integer selfFullRoamingKey(PlayerStateUpdateProto update, Hash256 modelHash) {
         if (update.hasRoaming()) {
@@ -343,13 +343,13 @@ public final class PlayerStateHandler {
         return modelHash == null ? null : modelHash.roamingHash();
     }
 
-    static RoamingApplication roamingApplication(PlayerStateUpdateProto update) {
+    static RoamingApplication roamingApplication(PlayerStateUpdateProto update, @Nullable Hash256 modelHash) {
         var full = update.mode() == StateWriteMode.FULL;
         if (!update.hasRoaming()) {
             if (!full) {
                 return null;
             }
-            return new RoamingApplication(true, null, new Int2FloatOpenHashMap());
+            return new RoamingApplication(true, selfFullRoamingKey(update, modelHash), new Int2FloatOpenHashMap());
         }
         var values = new Int2FloatOpenHashMap(update.roamingUnsafe().variables().size());
         for (var variable : update.roamingUnsafe().variables()) {

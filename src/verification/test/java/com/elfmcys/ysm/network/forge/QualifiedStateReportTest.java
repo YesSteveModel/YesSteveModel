@@ -92,6 +92,23 @@ final class QualifiedStateReportTest {
         }
     }
 
+    @Test
+    void unknownStorageCannotSendOrConsumeTheFirstFull() {
+        var planner = planner();
+        planner.acceptAuthority(TestExpressionModules.consumerId(), 11);
+        var sent = new AtomicReference<PlayerStateReportProto>();
+
+        LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_000L, 42,
+            PlayerStateReportPlanner.RoamingSample.unavailable(11), null, sent::set);
+        assertNull(sent.get());
+
+        LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_001L, 42,
+            new PlayerStateReportPlanner.RoamingSample(11, Map.of("a", 1F)), null, sent::set);
+        assertNotNull(sent.get());
+        assertEquals(com.elfmcys.ysm.proto.network.StateWriteMode.FULL, sent.get().mode());
+        assertEquals(1F, sent.get().roamingUnsafe().variables().get(0).value_());
+    }
+
     private static PlayerStateReportPlanner planner() {
         var planner = new PlayerStateReportPlanner();
         planner.beginSession(PlayerStateReportPolicy.gameServer(true));

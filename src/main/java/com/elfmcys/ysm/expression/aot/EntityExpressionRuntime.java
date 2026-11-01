@@ -113,6 +113,11 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             EntityExpressionRuntime.initializeRoaming(candidate, payload);
         }
 
+        public Installation installation() {
+            return new Installation(EntityExpressionRuntime.this,
+                Objects.requireNonNull(state, "installation already transferred"));
+        }
+
         public void connectArmTo(EntityExpressionRuntime body) {
             prepareArmConnection(Objects.requireNonNull(state, "installation already transferred"), body);
         }

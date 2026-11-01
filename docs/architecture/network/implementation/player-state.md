@@ -10,7 +10,9 @@
 
 ## 客户端报告机会
 
-Reporter 在原 installation barrier 内捕获 Roaming 值、presence 与 token，并在同一安装的有效窗口投影、编码和尝试发送。退休优先则整个机会失效，不能从 replacement 重新采样。
+`ClientRoamingSession` 提供未知、已知空或已知值的采样结果。Reporter 不从安装状态推断恢复资格；Planner 在请求 Roaming 而样本不可用时结束机会，不消费首轮 FULL 或推进观测。未请求 Roaming 的报告继续形成。
+
+保留快照可在模型安装前编码和发送。Runtime 样本携带精确 installation token，并在同一安装的有效窗口投影、编码和尝试发送。退休优先则整个机会失效，不能改用保留快照或从 replacement 重采样。
 
 Reporter 在宿主调用前提交观测进度；发送失败不回写 dirty。服务端完整应用 FULL 才登记 baseline，广播失败不撤销 baseline。Tracker 与周期机会独立形成当前 FULL，不能从本地提交结果推断送达。
 

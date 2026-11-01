@@ -38,7 +38,9 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
     protected Runnable prepareRoleInstallation(ModelRenderTarget target,
         com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.PreparedInstallation prepared) {
         var player = super.prepareRoleInstallation(target, prepared);
-        var roaming = roamingSession.prepare(target.modelHash().roamingHash(), target.expressions(), prepared);
+        var localOnly = com.elfmcys.ysm.network.forge.ClientSessionRuntime.state().orElse(null)
+            == com.elfmcys.ysm.model.session.client.ClientModelSession.State.LOCAL;
+        var roaming = roamingSession.prepare(target.modelHash().roamingHash(), target.expressions(), prepared, localOnly);
         return () -> {
             player.run();
             roaming.run();
@@ -99,6 +101,11 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
         roamingSession.clearFromServer(getExpressionRuntime());
     }
 
+    public void clearRoamingVars(int modelHashShort) {
+        waitForAsyncUpdate();
+        roamingSession.clearFromServer(getExpressionRuntime(), modelHashShort);
+    }
+
     public boolean hasRoamingStorage(int hashShort) {
         return roamingSession.hasStorage(hashShort);
     }
@@ -124,7 +131,15 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
     }
 
     public record RoamingSnapshot(int modelKey, Int2FloatOpenHashMap values,
-        com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.Installation installation) {
+        com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.Installation installation, boolean available) {
+        public RoamingSnapshot(int modelKey, Int2FloatOpenHashMap values,
+            com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.Installation installation) {
+            this(modelKey, values, installation, true);
+        }
+
+        public static RoamingSnapshot unavailable(int modelKey) {
+            return new RoamingSnapshot(modelKey, new Int2FloatOpenHashMap(), null, false);
+        }
     }
 
     public void moveFrom(PlayerAnimatableCapability source) {

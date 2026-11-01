@@ -70,13 +70,13 @@ flowchart LR
 
 主线程拥有指派、安装、reset、reload 和 retire。Worker 与同步求值回调不能重入这些入口；拒绝发生在状态变化之前。同步 owner 的上级在页面或操作结束时显式退休。
 
-普通结束先取得任务的对应 `get`，再撤销资格并清理。`get` 覆盖 worker 的完整 finally；等待中断后继续等待，再恢复中断标志。同步绘制回调是局部例外：回调内 reset/retire 立即撤销消费资格，私有状态和 lease 延后到绘制借用退出才释放。普通求值不使用这条延后释放路径。
+普通结束先取得任务的对应 `get`，在原安装仍有效时完成最终投影接纳，再撤销资格并清理。LocalPlayer 的保留责任见 [Roaming](implementation/state-inputs-and-sync.md#roaming)。`get` 覆盖 worker 的完整 finally；等待中断后继续等待，再恢复中断标志。同步绘制回调是局部例外：回调内 reset/retire 立即撤销消费资格，私有状态和 lease 延后到绘制借用退出才释放。普通求值不使用这条延后释放路径。
 
 显式路径在安全边界执行 `onModelEnded()`；组件没有 reset/retire hook，真实换模创建新 holder。单项清理失败不跳过后续清理，既有主失败保留，清理失败作为 suppressed。
 
 ## 失败记忆与恢复
 
-普通 Extract 异常只撤销本次几何输出。主线程在同步调用或对应 `get` 后记录 exact installation、采样上下文和原异常；已成功提交的逻辑轮与投影保留。结束整个使用会撤掉尚待目标汇合的合法投影，因此 Extract 失败不沿用组件失败的结束使用路径。Required default 的原异常仍传播；宿主顶点消费和其他 `Error` 保持原边界。
+普通 Extract 异常只撤销本次几何输出。主线程在同步调用或对应 `get` 后记录 exact installation、采样上下文和原异常；已成功提交的逻辑轮与投影保留。结束整个使用不等待目标汇合，仍会丢弃尚无接纳资格的投影，因此 Extract 失败不沿用组件失败的结束使用路径。Required default 的原异常仍传播；宿主顶点消费和其他 `Error` 保持原边界。
 
 实体的同步求值或异步任务发生 OOM 时，本次执行不交付准备结果；owner 消费任务失败，后续独立执行仍可进入。私有候选安装的 OOM 只拒绝本次安装，不写入 exact content 的永久失败记忆。已发布安装和独立 lease 保留；required default 失败仍传播。共享 holder 激活已改变状态时，仍按原规则结束旧使用。
 

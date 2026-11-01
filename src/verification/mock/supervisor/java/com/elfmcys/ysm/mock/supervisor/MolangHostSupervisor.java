@@ -410,6 +410,8 @@ public final class MolangHostSupervisor {
             receipt.put("serverStop", action(root, server, "08-stop", "stop", Map.of()));
             receipt.put("clientExit", ProcessSupervisor.awaitExit(client, TIMEOUT));
             receipt.put("serverExit", ProcessSupervisor.awaitExit(server, TIMEOUT));
+            if (!entityState)
+                receipt.put("commandResults", assertCommandResults(root));
             receipt.put("status", "passed");
         } catch (Exception failure) {
             receipt.put("status", "unreviewable");
@@ -436,6 +438,23 @@ public final class MolangHostSupervisor {
             receipt.put("cleanup", cleanups);
             Files.writeString(root.resolve("receipt.json"), JSON.toJson(receipt) + "\n");
         }
+    }
+
+    private static Map<String, Object> assertCommandResults(Path root) throws java.io.IOException {
+        // Console output mixes host encodings; this oracle matches only ASCII markers.
+        var results = Files.readAllLines(root.resolve("client-a/console.log"),
+            java.nio.charset.StandardCharsets.ISO_8859_1).stream()
+            .filter(line -> line.contains("[CHAT] [YSM] Execution result: ")).toList();
+        var expected = java.util.List.of("UNSET", "0.0", "false");
+        if (results.size() != expected.size())
+            throw new IllegalStateException("Missing or duplicate execute feedback: " + results);
+        for (var value : expected) {
+            if (results.stream().filter(line -> line.endsWith("Execution result: " + value)
+                && line.contains("[Render thread/INFO]")).count() != 1) {
+                throw new IllegalStateException("Execute feedback did not reach the client main thread: " + results);
+            }
+        }
+        return Map.of("values", expected, "ownerThread", true);
     }
 
     private static void assertSelected(Map<String, Object> receipt, String window) {

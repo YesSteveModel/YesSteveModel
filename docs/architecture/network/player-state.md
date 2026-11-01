@@ -29,7 +29,9 @@ flowchart LR
 
 报告者在调用宿主发送前推进观测、首次机会与周期时序。编码或提交失败不恢复 dirty，不在下一 tick 重放。Server 只有完整应用成功的 FULL 才建立真实 baseline；此前 DELTA 被拒绝，直到后续独立 FULL 到达，不立即补发。
 
-Roaming 机会绑定原 installation。在该 installation barrier 内取得与投影数据；退休使机会失效，同 module 重装不能恢复资格，也不能从 replacement 重采样。已编码 payload 保留原 subject/namespace。
+Roaming 报告需要当前 namespace 的已知恢复基线。未知状态暂缓机会，不推进首轮 FULL、观测或周期时序；明确空状态允许空 FULL。自身 FULL 先接纳恢复基线，再发布 reporter authority。FULL 省略 Roaming 时按已接受模型描述解析 namespace 并明确清空，不等待模型安装。
+
+`ClientRoamingSession` 选择保留快照或已恢复的 runtime。保留快照不依赖 installation；runtime 样本在原 installation barrier 内捕获并提交。退休使 runtime 机会失效，同 module 重装不能恢复资格，也不能从 replacement 重采样。捕获与提交在同次主线程调用中完成，保留快照仍服从当前 `BusinessSession` 与模型 authority。已编码 payload 保留原 subject/namespace。
 
 ## 应用与失败
 

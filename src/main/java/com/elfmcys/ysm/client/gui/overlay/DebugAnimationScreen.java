@@ -34,7 +34,7 @@ public class DebugAnimationScreen {
     private static final DebugInfo DEBUG_INFO = new DebugInfo();
     private static final ReferenceArrayList<String> DEBUG_CONTROLLERS = new ReferenceArrayList<>();
     private static final ReplacementNoticeTracker REPLACEMENT_NOTICES = new ReplacementNoticeTracker();
-    private static WeakReference<AnimatableEntity<?>> TARGET = null;
+    private static volatile WeakReference<AnimatableEntity<?>> TARGET = null;
 
     public static IGuiOverlay getGuiOverlay() {
         return (ForgeGui gui, GuiGraphics graphics, float partialTick, int screenWidth, int screenHeight) -> {
@@ -123,12 +123,12 @@ public class DebugAnimationScreen {
 
     @Nullable
     public static AnimatableEntity<?> getTarget() {
-        if (TARGET != null) {
-            var entity = TARGET.get();
+        var selected = TARGET;
+        if (selected != null) {
+            var entity = selected.get();
             if (entity != null && entity.isActive()) {
                 return entity;
             }
-            disable();
         }
         return null;
     }
@@ -137,6 +137,8 @@ public class DebugAnimationScreen {
     private static void renderCustom(ForgeGui gui, GuiGraphics graphics, int screenWidth, int screenHeight) {
         AnimatableEntity<?> target = getTarget();
         if (target == null) {
+            // Detach stale state on the HUD thread, not from animation-worker queries.
+            disable();
             return;
         }
 

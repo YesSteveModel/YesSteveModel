@@ -108,6 +108,56 @@ class PlayerStateReportPlannerTest {
         assertEquals(2F, delta.roamingUnsafe().variables().get(0).value_());
     }
 
+    @Test
+    void unavailableRoamingPreservesTheFirstFullAndItsAnimationObservation() {
+        var planner = planner(true);
+        planner.setAnimation("wave");
+
+        assertTrue(planner.observe(1, 7, PlayerStateReportPlanner.RoamingSample.unavailable(1)).isEmpty());
+
+        var restored = planner.observe(2, 7, sample(1, Map.of("a", 1F))).orElseThrow();
+        assertEquals(StateWriteMode.FULL, restored.mode());
+        assertEquals("wave", restored.animationUnsafe().animationId());
+        assertEquals(1F, restored.roamingUnsafe().variables().get(0).value_());
+    }
+
+    @Test
+    void unavailableRoamingDoesNotAdvanceDeltaObservationsOrRateLimit() {
+        var planner = planner(true);
+        planner.observe(1, 7, sample(1, Map.of("a", 1F))).orElseThrow();
+        planner.setAnimation("wave");
+
+        assertTrue(planner.observe(1 + DELTA_INTERVAL_NANOS, 7,
+            PlayerStateReportPlanner.RoamingSample.unavailable(1)).isEmpty());
+
+        var changed = planner.observe(2 + DELTA_INTERVAL_NANOS, 7, sample(1, Map.of("a", 2F))).orElseThrow();
+        assertEquals(StateWriteMode.DELTA, changed.mode());
+        assertEquals("wave", changed.animationUnsafe().animationId());
+        assertEquals(2F, changed.roamingUnsafe().variables().get(0).value_());
+    }
+
+    @Test
+    void knownEmptyRoamingCanFormTheFirstFull() {
+        var full = planner(true).observe(1, 7, sample(1, Map.of())).orElseThrow();
+
+        assertEquals(StateWriteMode.FULL, full.mode());
+        assertTrue(full.hasRoaming());
+        assertEquals(1, full.roamingUnsafe().modelKey());
+        assertTrue(full.roamingUnsafe().variables().isEmpty());
+    }
+
+    @Test
+    void unavailableRoamingDoesNotBlockAnAnimationOnlyPolicy() {
+        var planner = planner(false);
+        planner.setAnimation("wave");
+
+        var full = planner.observe(1, 7, PlayerStateReportPlanner.RoamingSample.unavailable(1)).orElseThrow();
+
+        assertEquals(StateWriteMode.FULL, full.mode());
+        assertEquals("wave", full.animationUnsafe().animationId());
+        assertFalse(full.hasRoaming());
+    }
+
     private static PlayerStateReportPlanner planner(boolean syncRoaming) {
         var planner = new PlayerStateReportPlanner();
         planner.beginSession(PlayerStateReportPolicy.gameServer(syncRoaming));

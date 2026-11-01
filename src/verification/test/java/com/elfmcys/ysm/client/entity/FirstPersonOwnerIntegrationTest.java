@@ -3118,6 +3118,7 @@ class FirstPersonOwnerIntegrationTest {
         var target = resources.target(modelMarker, module, geometry, geometry);
         target.playerResources().animations().put("trace", animation);
         owner.updateModelAndTexture(modelMarker == 0 ? null : target.modelHash(), "variant0");
+        owner.resetRoamingVars(target.modelHash().roamingHash(), new it.unimi.dsi.fastutil.ints.Int2FloatOpenHashMap());
         DemandFixtures.advance(owner);
         owner.playExtraAnimation("trace");
         var trace = new ArrayList<Float>();

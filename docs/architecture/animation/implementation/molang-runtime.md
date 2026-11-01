@@ -59,6 +59,8 @@ OOM 保留资源失败归属，越过单 program 的零值或 UNSET 分支，终
 
 ## Privileged ingress
 
+`/ysmclient` 通过 `RegisterClientCommandsEvent` 注册在客户端 dispatcher。命令执行与补全在客户端主线程访问实体 owner，不依赖服务端命令树或服务端权限。`debug` 默认选择自己，也接受 `@s`、玩家名、实体 ID 或 UUID；目标限于客户端已加载实体，不解析服务端选择器。动画 worker 查询调试目标时不清理状态；HUD 在主线程解除失效目标。Execute 结果反馈回客户端主线程；玩家实例已替换时丢弃反馈。
+
 `TransientExpressionSession` 使用 exact installation/generation、SubjectBinding 与冻结 layout。主线程 Prepare 冻结 source、授权、purpose、位置、module 和 exact installation key，并取得独立编译 lease。后台 Compile 只使用冻结输入，不捕获 mutable runtime、instance 或实体。主线程在下一次执行准备窗口 Attach，复核当前 installation/generation 后才创建 access；过期候选关闭。成功 access 由 session 持有。
 
 `AnimationProcessor` 的短临界区 inbox 只转移独立编译产物：关闭前 publish 成功则接收方负责关闭，关闭后 publish 失败则编译方负责关闭。关闭不依赖先检查 epoch 再入队。Watch 发现、revision 替换与 attach 均在主线程准备窗口；worker 只执行本轮已接纳的 pre/post 任务。

@@ -34,13 +34,13 @@ class PlayerStateHandlerDeltaTest {
                 .setModel(ModelReferenceProto.newBuilder().setBuiltinDefault(true).build()).build())
             .build();
 
-        var reset = PlayerStateHandler.roamingApplication(full);
+        var reset = PlayerStateHandler.roamingApplication(full, null);
 
         assertNotNull(reset);
         assertTrue(reset.full());
         assertNull(reset.modelKey());
         assertTrue(reset.values().isEmpty());
-        assertNull(PlayerStateHandler.roamingApplication(PlayerStateHandler.newDelta(42).build()));
+        assertNull(PlayerStateHandler.roamingApplication(PlayerStateHandler.newDelta(42).build(), null));
     }
 
     @Test
@@ -72,6 +72,34 @@ class PlayerStateHandlerDeltaTest {
 
         assertEquals(selected, PlayerStateHandler.appliedPlayerModelHash(selected, builtinDefault));
         assertEquals(builtinDefault, PlayerStateHandler.appliedPlayerModelHash(null, builtinDefault));
+    }
+
+    @Test
+    void omittedRoamingClearsTheAcceptedDefaultNamespaceBeforeItIsInstalled() {
+        var builtinDefault = hash(11);
+        var full = PlayerStateUpdateProto.newBuilder().setSubject(EntityRefProto.newBuilder().setEntityId(42).build())
+            .setMode(StateWriteMode.FULL).setModel(ModelSelectionStateProto.newBuilder()
+                .setModel(ModelReferenceProto.newBuilder().setBuiltinDefault(true).build()).build())
+            .build();
+        var acceptedModel = PlayerStateHandler.appliedPlayerModelHash(null, builtinDefault);
+
+        var reset = PlayerStateHandler.roamingApplication(full, acceptedModel);
+
+        assertNotNull(reset);
+        assertEquals(builtinDefault.roamingHash(), reset.modelKey().intValue());
+        assertTrue(reset.values().isEmpty());
+        assertEquals(reset.modelKey(), PlayerStateHandler.selfFullRoamingKey(full, acceptedModel));
+    }
+
+    @Test
+    void explicitRoamingNamespaceDoesNotDependOnTheAcceptedModelsInstallation() {
+        var update = PlayerStateHandler.newDelta(42)
+            .setRoaming(RoamingStateProto.newBuilder().setModelKey(77).build()).build();
+
+        var patch = PlayerStateHandler.roamingApplication(update, hash(11));
+
+        assertNotNull(patch);
+        assertEquals(77, patch.modelKey().intValue());
     }
 
     private static Hash256 hash(int seed) {

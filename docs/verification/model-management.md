@@ -22,7 +22,7 @@ Classpath 的 full 与 exact-100 各执行两次受控回放并核对输入身�
 
 验证任务是显式入口，普通 `check` 不因此覆盖所有 mock 层。`verifyMockHostPackaging` 检查发布 archives 中不存在 mock host/supervisor/evidence/classpath 类、双端入口及专用日志资源，防止测试控制面进入正式包；打包隔离通过不代表业务场景通过。
 
-`verifyMolangForgeConsumer` 复用这些隔离宿主、probe action/ack 和进程 ownership，接受 `molangForgeEvidenceDir` 指定的全新绝对目录。它运行真实 command/watch、保存 framebuffer、观察 generated transient 声音提交后的 Minecraft backend handle，并断线重连检查旧连接拒绝。`molangForgeFailures=true` 另安装隔离普通模型，经真实选择入口等待 world owner 就绪后注入 record/array non-null 违约并比较保护状态；就绪失败应报告不可审查，不直接改 owner 绕过。故障声明与 AUTO checker 仅由 mockHost 的既有处理器生成；声音表反射也仅属 mock probe。`SoundManager.isActive` 不等于听测，状态投影不等于全存档；入口不覆盖所有 entity profile、default 故障、explicit retry/reload 或 controller-local 声音 scope。
+`verifyMolangForgeConsumer` 复用这些隔离宿主、probe action/ack 和进程 ownership，接受 `molangForgeEvidenceDir` 指定的全新绝对目录。它经 Forge 客户端 dispatcher 运行 command/watch，核对执行反馈的值和线程、命令树补全与 Debug 目标。它保存 framebuffer、观察 generated transient 声音提交后的 Minecraft backend handle，并断线重连检查旧连接拒绝。`molangForgeFailures=true` 另安装隔离普通模型，经真实选择入口等待 world owner 就绪后注入 record/array non-null 违约并比较保护状态；就绪失败应报告不可审查，不直接改 owner 绕过。故障声明与 AUTO checker 仅由 mockHost 的既有处理器生成；声音表反射也仅属 mock probe。`SoundManager.isActive` 不等于听测，状态投影不等于全存档；入口不覆盖所有 entity profile、default 故障、explicit retry/reload 或 controller-local 声音 scope。
 
 `verifyEntityPresentationForge` 复用同一 supervisor，接受 `entityPresentationEvidenceDir` 指定的全新绝对目录。可选 `entityPresentationFixtureDir` 提供含 `raw-packs/` 的真实 first-person 语料目录。该任务运行第一/第三人称、限制叠加、服务端指派、reload、目标 GUI、worker 封口与重连；`entityPresentationScope=lifecycle` 只执行选模及生命周期部分。`mockVanilla` 客户端只加载 Forge 和探针，用于没有 YSM 注册的真实主体；LOCAL 客户端仍有 YSM 通道，两者分别记录。
 

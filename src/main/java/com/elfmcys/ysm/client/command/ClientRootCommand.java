@@ -47,6 +47,9 @@ public class ClientRootCommand {
             if (source.getSource() instanceof SharedSuggestionProvider && FMLEnvironment.dist == Dist.CLIENT) {
                 return getTarget().map(cap -> {
                     cap.waitForAsyncUpdate();
+                    var target = cap.getModelRenderTarget();
+                    if (target == null)
+                        return Suggestions.empty();
                     Set<String> vars = Sets.newHashSet();
                     // v.roaming 变量
                     if (cap.getExpressionRuntime().roamingState().isPresent()) {
@@ -64,7 +67,7 @@ public class ClientRootCommand {
                     }
 
                     // 自定义函数
-                    for (var name : cap.getModelRenderTarget().assets().userFunctions().keySet()) {
+                    for (var name : target.assets().userFunctions().keySet()) {
                         vars.add(String.format("fn.%s", name));
                     }
 
@@ -79,6 +82,8 @@ public class ClientRootCommand {
             if (source.getSource() instanceof SharedSuggestionProvider && FMLEnvironment.dist == Dist.CLIENT) {
                 return getTarget().map(target -> {
                     target.waitForAsyncUpdate();
+                    if (target.getModelRenderTarget() == null)
+                        return Suggestions.empty();
                     Set<String> vars = target.getAnimationData().getAnimationControllers().stream()
                         .map(IAnimationController::getName).collect(Collectors.toSet());
                     return SharedSuggestionProvider.suggest(vars, builder);

@@ -60,6 +60,15 @@ final class EntityExecutionLifecycle {
         } catch (RuntimeException | Error failure) {
             primary = failure;
         }
+        try {
+            // Sealing discards queued projections, including valid deltas from the joined task.
+            runtime.adoptProjections(true);
+        } catch (RuntimeException | Error failure) {
+            if (primary == null)
+                primary = failure;
+            else if (failure != primary)
+                primary.addSuppressed(failure);
+        }
         retired |= permanently;
         endingUse = true;
         runtime.invalidate();

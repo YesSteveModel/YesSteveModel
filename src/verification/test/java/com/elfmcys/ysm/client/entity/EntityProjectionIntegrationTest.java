@@ -188,9 +188,10 @@ class EntityProjectionIntegrationTest {
             com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.PreparedInstallation prepared) {
             try {
                 var method = session.getClass().getDeclaredMethod("prepare", int.class,
-                    com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule.class, prepared.getClass());
+                    com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule.class, prepared.getClass(), boolean.class);
                 method.setAccessible(true);
-                return (Runnable)method.invoke(session, target.modelHash().roamingHash(), target.expressions(), prepared);
+                return (Runnable)method.invoke(session, target.modelHash().roamingHash(), target.expressions(), prepared,
+                    true);
             } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
         }
         @Override protected com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.ProjectionSink prepareLocalProjection() {

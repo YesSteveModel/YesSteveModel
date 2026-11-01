@@ -1,7 +1,6 @@
 package com.elfmcys.ysm.event;
 
 import com.elfmcys.ysm.YesSteveModel;
-import com.elfmcys.ysm.client.command.ClientRootCommand;
 import com.elfmcys.ysm.model.service.ClientModelService;
 import com.elfmcys.ysm.command.RootCommand;
 import com.elfmcys.ysm.model.service.ServerModelService;
@@ -81,9 +80,6 @@ public final class CommandRegistry {
         }
 
         RootCommand.register(event.getDispatcher());
-        if (FMLEnvironment.dist == Dist.CLIENT) {
-            ClientRootCommand.register(event.getDispatcher());
-        }
     }
 
     private static String filterSuggestionStr(String str) {
