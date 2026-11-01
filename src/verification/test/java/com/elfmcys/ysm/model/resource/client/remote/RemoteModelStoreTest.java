@@ -1,5 +1,8 @@
 package com.elfmcys.ysm.model.resource.client.remote;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
+import java.util.Map;
+
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -39,7 +42,6 @@ import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.natives.Blake3;
 import com.elfmcys.ysm.util.UnsafeUtil;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -171,7 +173,8 @@ class RemoteModelStoreTest {
 
             assertEquals(AssetLoadException.Reason.CONTENT, failure.reason());
             assertArrayEquals(valid, Files.readAllBytes(path));
-            try (var stored = writer.chunkSource(identity).readStoredVerified(chunk, BufferType.ARRAY)) {
+            {
+                var stored = writer.chunkSource(identity).readStoredVerified(chunk, BufferType.ARRAY);
                 assertArrayEquals(valid, bytes(stored));
             }
         }
@@ -211,7 +214,8 @@ class RemoteModelStoreTest {
             secondStore.publishChunk(modelId, chunk, valid);
 
             var identity = new ModelFileIdentity(modelId, hash(34));
-            try (var stored = firstStore.chunkSource(identity).readStoredVerified(chunk, BufferType.ARRAY)) {
+            {
+                var stored = firstStore.chunkSource(identity).readStoredVerified(chunk, BufferType.ARRAY);
                 assertArrayEquals(valid, bytes(stored));
             }
         }
@@ -262,7 +266,8 @@ class RemoteModelStoreTest {
             Files.write(outside.resolve(new Hash256(chunk.hash()) + ".bin"), valid);
 
             assertThrows(AssetLoadException.class, () -> {
-                try (var ignored = store.chunkSource(identity).readStoredVerified(chunk, BufferType.ARRAY)) {
+                {
+                    var ignored = store.chunkSource(identity).readStoredVerified(chunk, BufferType.ARRAY);
                     // A physical path outside the cache root must never become a cache hit.
                 }
             });
@@ -335,10 +340,13 @@ class RemoteModelStoreTest {
         assertFalse(Files.exists(store.metadataPath(identity).getParent().resolve("preamble.bin")));
         assertFalse(Files.exists(store.metadataPath(identity).getParent().resolve("manifest.bin")));
         var cached = store.probeMetadata(identity).orElseThrow();
-        try (var encoded = cached.representation().metadataPrefix().orElseThrow();
-            var prefix = encoded.acquireArray()) {
-            assertArrayEquals(metadataPrefix(),
-                Arrays.copyOfRange(prefix.array(), prefix.arrayOffset(), prefix.arrayOffset() + prefix.size()));
+        {
+            var encoded = cached.representation().metadataPrefix().orElseThrow();
+            try (var prefix = encoded.copyArray()) {
+                assertArrayEquals(metadataPrefix(),
+                    Arrays.copyOfRange(prefix.array(), prefix.arrayOffset(), prefix.arrayOffset() + prefix.size()));
+
+            }
         }
     }
 
@@ -405,7 +413,8 @@ class RemoteModelStoreTest {
                 remote.chunks(), store).cachedOnlyView();
 
             assertSame(remote.representation(), targetProbe.representation());
-            try (var bytes = targetProbe.chunks().readStoredVerified(required, BufferType.ARRAY)) {
+            {
+                var bytes = targetProbe.chunks().readStoredVerified(required, BufferType.ARRAY);
                 assertArrayEquals(storedBytes(required), bytes(bytes));
             }
             assertFalse(
@@ -543,12 +552,12 @@ class RemoteModelStoreTest {
     }
 
     @Test
-    void rejectedContinuationReleasesReceivedInputsOnceAndRemainsTransient() throws Exception {
+    void rejectedContinuationPreservesSharedInputsAndRemainsTransient() throws Exception {
         var scheduler = new ClientResourceScheduler(2);
         try (var store = new RemoteModelStore(temp)) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
-            var references = new CopyOnWriteArrayList<TrackingBuffer>();
+            var references = new CopyOnWriteArrayList<SharedBuffer>();
             var loading = loadThroughManager(remote, scheduler.dispatch(WorkPriority.BACKGROUND), transfer);
             var input = transfer.input.get(5, TimeUnit.SECONDS);
             input.receive(references);
@@ -557,7 +566,7 @@ class RemoteModelStoreTest {
             assertFalse(loading.isDone());
             assertFalse(transfer.finished.isCancelled());
             assertFalse(references.isEmpty());
-            assertTrue(references.stream().allMatch(reference -> reference.closes.get() == 0));
+            assertRetainedInputsValid(references);
 
             transfer.finished.complete(null);
 
@@ -569,7 +578,7 @@ class RemoteModelStoreTest {
             assertInstanceOf(RejectedExecutionException.class, cause.getCause());
             assertTrue(loading.isDone());
             assertFalse(transfer.finished.isCancelled());
-            assertClosedOnce(references);
+            assertRetainedInputsValid(references);
         } finally {
             scheduler.shutdown();
             scheduler.awaitTermination();
@@ -582,7 +591,7 @@ class RemoteModelStoreTest {
         try (var store = new RemoteModelStore(temp)) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
-            var references = new CopyOnWriteArrayList<TrackingBuffer>();
+            var references = new CopyOnWriteArrayList<SharedBuffer>();
             var selected = selection();
             var loading = remote.loadRenderTarget(() -> false, selected.targetId(), selected.texture(), transfer,
                 scheduler.dispatch(WorkPriority.BACKGROUND), prepared -> true);
@@ -593,7 +602,7 @@ class RemoteModelStoreTest {
 
             var failure = assertThrows(CompletionException.class, loading::join);
             assertSame(rejected, failure.getCause());
-            assertClosedOnce(references);
+            assertRetainedInputsValid(references);
         } finally {
             scheduler.shutdown();
             scheduler.awaitTermination();
@@ -602,7 +611,7 @@ class RemoteModelStoreTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void asyncCancellationBeforeInnerRegistrationCancelsOrDiscardsAndReleasesInputsOnce(boolean innerCompleted)
+    void asyncCancellationBeforeInnerRegistrationCancelsOrDiscardsWithoutRevokingInputs(boolean innerCompleted)
         throws Exception {
         var scheduler = new ClientResourceScheduler(2);
         var loadEntered = new CountDownLatch(1);
@@ -612,7 +621,7 @@ class RemoteModelStoreTest {
         try (var store = new RemoteModelStore(temp)) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
-            var references = new CopyOnWriteArrayList<TrackingBuffer>();
+            var references = new CopyOnWriteArrayList<SharedBuffer>();
             var selected = selection();
             var loading = remote.loadRenderTargetAsync(() -> false, selected.targetId(), selected.texture(), transfer,
                 scheduler.backgroundExecutor(), prepared -> {
@@ -639,7 +648,8 @@ class RemoteModelStoreTest {
             frontierPassed.get(5, TimeUnit.SECONDS);
 
             assertTrue(loading.isCancelled());
-            assertAll(() -> assertEquals(!innerCompleted, inner.isCancelled()), () -> assertClosedOnce(references),
+            assertAll(() -> assertEquals(!innerCompleted, inner.isCancelled()),
+                () -> assertRetainedInputsValid(references),
                 () -> assertEquals(innerCompleted ? 1 : 0, discarded.get()));
         } finally {
             releaseLoad.countDown();
@@ -658,7 +668,7 @@ class RemoteModelStoreTest {
             try (var store = new RemoteModelStore(temp.resolve(Boolean.toString(cancelAfterRegistration)))) {
                 var remote = commitMetadata(store);
                 var transfer = new PendingTransfer();
-                var references = new CopyOnWriteArrayList<TrackingBuffer>();
+                var references = new CopyOnWriteArrayList<SharedBuffer>();
                 var selected = selection();
                 var loading =
                     remote.loadRenderTargetAsync(() -> false, selected.targetId(), selected.texture(), transfer,
@@ -678,7 +688,7 @@ class RemoteModelStoreTest {
                     assertTrue(loading.get(5, TimeUnit.SECONDS));
                     assertFalse(inner.isCancelled());
                 }
-                assertAll(() -> assertEquals(0, discarded.get()), () -> assertClosedOnce(references));
+                assertAll(() -> assertEquals(0, discarded.get()), () -> assertRetainedInputsValid(references));
             } finally {
                 inner.cancel(false);
                 scheduler.shutdown();
@@ -693,7 +703,7 @@ class RemoteModelStoreTest {
         try (var store = new RemoteModelStore(temp)) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
-            var references = new CopyOnWriteArrayList<TrackingBuffer>();
+            var references = new CopyOnWriteArrayList<SharedBuffer>();
             var selected = selection();
             var loading = remote.loadRenderTargetAsync(() -> false, selected.targetId(), selected.texture(), transfer,
                 scheduler.backgroundExecutor(), prepared -> CompletableFuture.completedFuture(prepared.chunks()),
@@ -705,7 +715,7 @@ class RemoteModelStoreTest {
             var frontierPassed = new CompletableFuture<Void>();
             scheduler.backgroundExecutor().execute(() -> frontierPassed.complete(null));
             frontierPassed.get(5, TimeUnit.SECONDS);
-            assertClosedOnce(references);
+            assertRetainedInputsValid(references);
 
             var source = representation.view().requireRenderTarget(selected.targetId())
                 .textureSources(() -> false, chunks, selected.texture()).uv();
@@ -716,7 +726,7 @@ class RemoteModelStoreTest {
                     assertTrue(image.data().size() > 0);
                 }
             }
-            assertClosedOnce(references);
+            assertRetainedInputsValid(references);
         } finally {
             scheduler.shutdown();
             scheduler.awaitTermination();
@@ -725,42 +735,25 @@ class RemoteModelStoreTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void asyncCancellationKeepsAnInProgressReceivedReadAlive(boolean batch) throws Exception {
+    void asyncCancellationDoesNotInvalidateASharedReceivedRead(boolean batch) throws Exception {
         var scheduler = new ClientResourceScheduler(2);
-        var reader = Executors.newSingleThreadExecutor();
-        var copying = new CountDownLatch(1);
-        var releaseCopy = new CountDownLatch(1);
-        var blockCopy = new AtomicBoolean();
-        var blocked = new AtomicBoolean();
         var inner = new CompletableFuture<Boolean>();
         try (var store = new RemoteModelStore(temp)) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
-            var references = new CopyOnWriteArrayList<TrackingBuffer>();
+            var references = new CopyOnWriteArrayList<SharedBuffer>();
             var selected = selection();
-            var prepared = new AtomicReference<ModelContent>();
+            var prepared = new CompletableFuture<ModelContent>();
             var loading = remote.loadRenderTargetAsync(() -> false, selected.targetId(), selected.texture(), transfer,
                 scheduler.backgroundExecutor(), input -> {
-                    prepared.set(input);
+                    prepared.complete(input);
                     return inner;
                 }, ignored -> {
                 });
             var input = transfer.input.get(5, TimeUnit.SECONDS);
-            input.receive(references, () -> {
-                if (!blockCopy.get() || !blocked.compareAndSet(false, true))
-                    return;
-                copying.countDown();
-                try {
-                    assertTrue(releaseCopy.await(5, TimeUnit.SECONDS));
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new AssertionError(interrupted);
-                }
-            });
+            input.receive(references);
             transfer.finished.complete(null);
-            var frontierPassed = new CompletableFuture<Void>();
-            scheduler.backgroundExecutor().execute(() -> frontierPassed.complete(null));
-            frontierPassed.get(5, TimeUnit.SECONDS);
+            var content = prepared.get(5, TimeUnit.SECONDS);
             var chunk = input.chunks().get(0);
             var expected = storedBytes(chunk);
             if (batch && com.elfmcys.ysm.format.container.ChunkDecoding.isZstd(chunk)) {
@@ -769,41 +762,16 @@ class RemoteModelStoreTest {
                     expected = bytes(decoded);
                 }
             }
-            blockCopy.set(true);
-            var reading = CompletableFuture.supplyAsync(() -> {
-                if (batch) {
-                    try {
-                        var payloads =
-                            prepared.get().chunks().readPayloads(() -> false, input.chunks(), BufferType.ARRAY);
-                        try {
-                            assertEquals(input.chunks().size(), payloads.size());
-                            return bytes(payloads.get(chunk.type()));
-                        } finally {
-                            payloads.values().forEach(UniBuffer::close);
-                        }
-                    } catch (IOException failure) {
-                        throw new CompletionException(failure);
-                    }
-                }
-                try (var stored = prepared.get().chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
-                    return bytes(stored);
-                } catch (IOException failure) {
-                    throw new CompletionException(failure);
-                }
-            }, reader);
-            assertTrue(copying.await(5, TimeUnit.SECONDS));
-
-            assertTrue(loading.cancel(false));
+            Map<String, SharedBuffer> payloads =
+                batch ? content.chunks().readPayloads(() -> false, input.chunks(), BufferType.ARRAY)
+                    : Map.of(chunk.type(), content.chunks().readStoredVerified(chunk, BufferType.ARRAY));
+            org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(5),
+                () -> assertTrue(loading.cancel(false)));
             assertTrue(inner.isCancelled());
-            releaseCopy.countDown();
-
-            assertArrayEquals(expected, reading.get(5, TimeUnit.SECONDS));
-            assertClosedOnce(references);
+            assertArrayEquals(expected, bytes(payloads.get(chunk.type())));
+            assertRetainedInputsValid(references);
         } finally {
-            releaseCopy.countDown();
             inner.cancel(false);
-            reader.shutdown();
-            assertTrue(reader.awaitTermination(5, TimeUnit.SECONDS));
             scheduler.shutdown();
             scheduler.awaitTermination();
         }
@@ -815,7 +783,7 @@ class RemoteModelStoreTest {
         try (var store = new RemoteModelStore(temp)) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
-            var references = new CopyOnWriteArrayList<TrackingBuffer>();
+            var references = new CopyOnWriteArrayList<SharedBuffer>();
             var rejected = new RejectedExecutionException("Load failed after continuation was claimed");
             var selected = selection();
             var loading = remote.loadRenderTarget(() -> false, selected.targetId(), selected.texture(), transfer,
@@ -828,7 +796,7 @@ class RemoteModelStoreTest {
 
             var failure = assertThrows(CompletionException.class, loading::join);
             assertSame(rejected, failure.getCause());
-            assertClosedOnce(references);
+            assertRetainedInputsValid(references);
         } finally {
             scheduler.shutdown();
             scheduler.awaitTermination();
@@ -1003,10 +971,11 @@ class RemoteModelStoreTest {
             dispatch, resolved, fetcher);
     }
 
-    private static void assertClosedOnce(List<TrackingBuffer> references) {
+    private static void assertRetainedInputsValid(List<SharedBuffer> references) {
         assertFalse(references.isEmpty());
         for (var reference : references) {
-            assertEquals(1, reference.closes.get());
+            assertTrue(reference.size() > 0);
+            assertEquals(reference.size(), reference.nio().remaining());
         }
     }
 
@@ -1023,80 +992,13 @@ class RemoteModelStoreTest {
     }
 
     private record TransferInput(List<AssetContainerView.ChunkInfo> chunks, RemoteChunkFetcher.ChunkReceiver receiver) {
-        private void receive(List<TrackingBuffer> references) throws IOException {
-            receive(references, null);
-        }
-
-        private void receive(List<TrackingBuffer> references, Runnable beforeCopy) throws IOException {
+        private void receive(List<SharedBuffer> references) throws IOException {
             assertFalse(chunks.isEmpty());
             for (var chunk : chunks) {
-                var source = new TrackingBuffer(ArrayBuffer.move(storedBytes(chunk)), references, beforeCopy);
-                try (source) {
-                    receiver.accept(chunk, source);
-                    assertEquals(0, source.closes.get());
-                }
-                assertEquals(1, source.closes.get());
+                var source = SharedBuffer.adopt(ArrayBuffer.move(storedBytes(chunk)));
+                references.add(source);
+                receiver.accept(chunk, source);
             }
-        }
-    }
-
-    private static final class TrackingBuffer implements ArrayBuffer {
-        private final ArrayBuffer delegate;
-        private final List<TrackingBuffer> references;
-        private final Runnable beforeCopy;
-        private final AtomicInteger closes = new AtomicInteger();
-
-        private TrackingBuffer(ArrayBuffer delegate, List<TrackingBuffer> references, Runnable beforeCopy) {
-            this.delegate = delegate;
-            this.references = references;
-            this.beforeCopy = beforeCopy;
-        }
-
-        @Override
-        public byte[] array() {
-            return delegate.array();
-        }
-
-        @Override
-        public int arrayOffset() {
-            return delegate.arrayOffset();
-        }
-
-        @Override
-        public ByteBuffer nio() {
-            return delegate.nio();
-        }
-
-        @Override
-        public int size() {
-            return delegate.size();
-        }
-
-        @Override
-        public ArrayBuffer slice(int offset, int size) {
-            return delegate.slice(offset, size);
-        }
-
-        @Override
-        public ArrayBuffer acquire() {
-            var acquired = new TrackingBuffer(delegate.acquire(), references, beforeCopy);
-            references.add(acquired);
-            return acquired;
-        }
-
-        @Override
-        public ArrayBuffer copy() {
-            if (beforeCopy != null) {
-                beforeCopy.run();
-                assertEquals(0, closes.get(), "An in-progress read must keep its own token open");
-            }
-            return ArrayBuffer.super.copy();
-        }
-
-        @Override
-        public void close() {
-            closes.incrementAndGet();
-            delegate.close();
         }
     }
 
@@ -1107,13 +1009,13 @@ class RemoteModelStoreTest {
     private static ChunkDataSource forbiddenPrimarySource(AtomicInteger reads) {
         return new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) {
                 reads.incrementAndGet();
                 throw new AssertionError("A cached target probe must not use its primary chunk source");
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type) {
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type) {
                 reads.incrementAndGet();
                 throw new AssertionError("A cached target probe must not use its primary chunk source");
             }
@@ -1144,7 +1046,8 @@ class RemoteModelStoreTest {
     private static void verifyChunks(ModelContent content, List<AssetContainerView.ChunkInfo> chunks) {
         try {
             for (var chunk : chunks) {
-                try (var stored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                {
+                    var stored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                     assertArrayEquals(storedBytes(chunk), bytes(stored));
                 }
             }
@@ -1154,7 +1057,8 @@ class RemoteModelStoreTest {
     }
 
     private static byte[] storedBytes(AssetContainerView.ChunkInfo chunk) throws IOException {
-        try (var stored = sourceContent.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+        {
+            var stored = sourceContent.chunks().readStoredVerified(chunk, BufferType.ARRAY);
             return bytes(stored);
         }
     }
@@ -1176,14 +1080,19 @@ class RemoteModelStoreTest {
     }
 
     private static byte[] prefixRange(int offset, int size) {
-        try (var encoded = representation.metadataPrefix().orElseThrow(); var prefix = encoded.acquireArray()) {
-            return Arrays.copyOfRange(prefix.array(), prefix.arrayOffset() + offset,
-                prefix.arrayOffset() + offset + size);
+        {
+            var encoded = representation.metadataPrefix().orElseThrow();
+            try (var prefix = encoded.copyArray()) {
+                return Arrays.copyOfRange(prefix.array(), prefix.arrayOffset() + offset,
+                    prefix.arrayOffset() + offset + size);
+
+            }
         }
     }
 
     private static byte[] metadataPrefix() {
-        try (var prefix = representation.metadataPrefix().orElseThrow()) {
+        {
+            var prefix = representation.metadataPrefix().orElseThrow();
             return prefixRange(0, prefix.size());
         }
     }

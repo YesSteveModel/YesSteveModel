@@ -10,28 +10,26 @@ public interface ArrayBuffer extends UniBuffer {
     int arrayOffset();
 
     @Override
-    ArrayBuffer slice(int offset, int size);
-
-    @Override
-    default ArrayBuffer borrow() {
-        return new ArrayHeapBuffer(array(), arrayOffset(), size(), false);
+    default BorrowedArrayBuffer slice(int offset, int size) {
+        return BorrowedArrayBuffer.of(this, array(), arrayOffset(), size(), offset, size);
     }
 
     @Override
-    ArrayBuffer acquire();
+    default BorrowedArrayBuffer borrow() {
+        return slice(0, size());
+    }
 
     @Override
-    default ArrayBuffer copy() {
-        var size = size();
-        try (var bufScope = allocateWithScope(size)) {
-            var target = bufScope.get();
-            try {
-                System.arraycopy(array(), arrayOffset(), target.array(), target.arrayOffset(), size);
-            } finally {
-                Reference.reachabilityFence(this);
-                Reference.reachabilityFence(target);
-            }
-            return bufScope.release();
+    default ArrayStorage copy() {
+        return copyArray();
+    }
+
+    @Override
+    default ArrayStorage copy(int offset, int size) {
+        try {
+            return ArrayBuffer.copyOf(slice(offset, size));
+        } finally {
+            Reference.reachabilityFence(this);
         }
     }
 
@@ -40,71 +38,60 @@ public interface ArrayBuffer extends UniBuffer {
         return BufferType.ARRAY;
     }
 
-    @Override
-    default ArrayBuffer acquireArray() {
-        return acquire();
-    }
-
-    @Override
-    default NativeBuffer acquireNative() {
-        var result = NativeBuffer.allocate(size());
-        try {
-            UniBufferIO.copy(this, 0, result, 0, size());
-            return result;
-        } catch (Throwable error) {
-            result.close();
-            throw error;
-        }
-    }
-
-    static ArrayBuffer allocate(int size) {
+    static ArrayStorage allocate(int size) {
         return new ArrayHeapBuffer(size, size > 1024);
     }
 
-    static ScopeGuard<ArrayBuffer> allocateWithScope(int size) {
+    static ScopeGuard<ArrayStorage> allocateWithScope(int size) {
         return ScopeGuard.create(allocate(size));
     }
 
-    static ArrayBuffer move(byte[] array) {
-        return new ArrayHeapBuffer(array, true);
+    static ArrayStorage move(byte[] array) {
+        return new ArrayHeapBuffer(array, 0, array.length);
     }
 
-    static ArrayBuffer move(ByteBuffer buffer) {
-        return new ArrayHeapBuffer(buffer, true);
+    static ArrayStorage move(byte[] array, int offset, int size) {
+        return new ArrayHeapBuffer(array, offset, size);
     }
 
-    static ArrayBuffer move(byte[] array, int offset, int size) {
-        return new ArrayHeapBuffer(array, offset, size, true);
+    static ArrayStorage move(ByteBuffer data) {
+        return move(data.array(), data.arrayOffset() + data.position(), data.remaining());
     }
 
-    static ArrayBuffer borrow(byte[] array) {
-        return new ArrayHeapBuffer(array, false);
+    static BorrowedArrayBuffer borrow(byte[] array) {
+        return borrow(array, 0, array.length);
     }
 
-    static ArrayBuffer borrow(ByteBuffer buffer) {
-        return new ArrayHeapBuffer(buffer, false);
+    static BorrowedArrayBuffer borrow(byte[] array, int offset, int size) {
+        return BorrowedArrayBuffer.of(array, array, 0, array.length, offset, size);
     }
 
-    static ArrayBuffer borrow(byte[] array, int offset, int size) {
-        return new ArrayHeapBuffer(array, offset, size, false);
+    static BorrowedArrayBuffer borrow(ByteBuffer data) {
+        return borrow(data.array(), data.arrayOffset() + data.position(), data.remaining());
     }
 
-    static ArrayBuffer copyOf(ByteBuffer data) {
-        var result = allocate(data.remaining());
+    static ArrayStorage copyOf(UniBuffer source) {
+        var target = allocate(source.size());
         try {
-            if (data.hasArray()) {
-                System.arraycopy(data.array(), data.arrayOffset() + data.position(), result.array(),
-                    result.arrayOffset(), result.size());
-            } else {
-                result.nio().put(data.duplicate());
-            }
-        } catch (RuntimeException | Error error) {
-            result.close();
-            throw error;
-        } finally {
-            Reference.reachabilityFence(data);
-            Reference.reachabilityFence(result);
+            UniBufferIO.copy(source, 0, target, 0, source.size());
+            return target;
+        } catch (RuntimeException | Error failure) {
+            target.close();
+            throw failure;
         }
-        return result;
+    }
+
+    static ArrayStorage copyOf(ByteBuffer source) {
+        var target = allocate(source.remaining());
+        try {
+            target.nio().put(source.duplicate());
+            return target;
+        } catch (RuntimeException | Error failure) {
+            target.close();
+            throw failure;
+        } finally {
+            Reference.reachabilityFence(source);
+            Reference.reachabilityFence(target);
+        }
     }
 }

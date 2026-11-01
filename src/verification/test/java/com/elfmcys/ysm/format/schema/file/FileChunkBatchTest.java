@@ -1,13 +1,12 @@
 package com.elfmcys.ysm.format.schema.file;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.model.storage.ModelHashing;
 import com.elfmcys.ysm.testutil.NativeLibraryExtension;
 import java.io.IOException;
-import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.SeekableByteChannel;
@@ -35,16 +34,16 @@ class FileChunkBatchTest {
         var reads = new AtomicInteger();
         var source = new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
                 return readStoredVerified(chunk, type);
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
                 throws IOException {
                 if (reads.incrementAndGet() == 1)
                     throw new IOException("failed single stream");
-                return com.elfmcys.ysm.buffer.ArrayBuffer.move(new byte[] {1});
+                return SharedBuffer.adopt(com.elfmcys.ysm.buffer.ArrayBuffer.move(new byte[] {1}));
             }
         };
         var descriptor = chunk("test", 0, new byte[] {1});
@@ -54,7 +53,8 @@ class FileChunkBatchTest {
                 () -> phase.readPayload(descriptor, BufferType.ARRAY));
             assertEquals(1, reads.get());
         }
-        try (var phase = source.openReadPhase(); var value = phase.readPayload(descriptor, BufferType.ARRAY)) {
+        try (var phase = source.openReadPhase()) {
+            var value = phase.readPayload(descriptor, BufferType.ARRAY);
             assertEquals(1, value.nio().get());
         }
         assertEquals(2, reads.get());
@@ -67,16 +67,17 @@ class FileChunkBatchTest {
         var opens = new AtomicInteger();
         var closes = new AtomicInteger();
         var source = new FileChunkDataSource(file, 2, () -> ChannelReadPhaseTest.counting(file, opens, closes));
-        UniBuffer verified;
+        SharedBuffer verified;
         try (var phase = source.openReadPhase()) {
             verified = phase.readPayload(chunk("first", 0, new byte[] {1}), BufferType.ARRAY);
-            try (var second = phase.readPayload(chunk("second", 1, new byte[] {2}), BufferType.ARRAY)) {
+            {
+                var second = phase.readPayload(chunk("second", 1, new byte[] {2}), BufferType.ARRAY);
                 assertEquals(2, second.nio().get());
             }
             assertEquals(1, opens.get());
             assertEquals(0, closes.get());
         }
-        try (verified) {
+        {
             assertEquals(1, closes.get());
             var replacement = root.resolve("replacement");
             Files.write(replacement, new byte[] {9, 8});
@@ -87,7 +88,8 @@ class FileChunkBatchTest {
                 () -> source.readPayload(chunk("first", 0, new byte[] {1}), BufferType.ARRAY));
             assertEquals(2, opens.get());
             assertEquals(2, closes.get());
-            try (var current = source.readPayload(chunk("first", 0, new byte[] {9}), BufferType.ARRAY)) {
+            {
+                var current = source.readPayload(chunk("first", 0, new byte[] {9}), BufferType.ARRAY);
                 assertEquals(9, current.nio().get());
             }
             assertEquals(3, closes.get());
@@ -102,8 +104,8 @@ class FileChunkBatchTest {
             var opens = new AtomicInteger();
             var closes = new AtomicInteger();
             var source = new FileChunkDataSource(file, 2, () -> ChannelReadPhaseTest.counting(file, opens, closes));
-            try (var phase = source.openReadPhase();
-                var verified = phase.readPayload(chunk("first", 0, new byte[] {1}), BufferType.ARRAY)) {
+            try (var phase = source.openReadPhase()) {
+                var verified = phase.readPayload(chunk("first", 0, new byte[] {1}), BufferType.ARRAY);
                 if (mutation == 2) {
                     assertThrows(CancellationException.class, () -> phase.readPayloads(() -> true,
                         List.of(chunk("second", 1, new byte[] {2})), BufferType.ARRAY));
@@ -142,7 +144,7 @@ class FileChunkBatchTest {
             assertEquals(2, batch.size());
             assertEquals(1, batch.get("first").nio().get());
         } finally {
-            batch.values().forEach(UniBuffer::close);
+            batch.clear();
         }
         Files.write(file, new byte[] {1, 2, 9, 4});
         assertEquals(AssetLoadException.Reason.CONTENT, assertThrows(AssetLoadException.class,
@@ -150,32 +152,27 @@ class FileChunkBatchTest {
     }
 
     @Test
-    void cancellationAndLateFailureReleaseEveryUnpublishedReference() throws Exception {
+    void cancellationAndLateFailureDoNotRevokeSourceSharedBytes() throws Exception {
         var first = chunk("first", 0, new byte[] {1});
         var second = chunk("second", 1, new byte[] {2});
         for (boolean cancel : List.of(false, true)) {
             var cancelled = new AtomicBoolean();
-            var closed = new AtomicInteger();
-            var buffers = new ArrayList<UniBuffer>();
+            var buffers = new ArrayList<SharedBuffer>();
             var source = new ChunkDataSource() {
                 @Override
-                public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
+                public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type)
+                    throws IOException {
                     if (chunk == second)
                         throw AssetLoadException.access("Source expired");
-                    var delegate = UniBuffer.allocate(1, BufferType.ARRAY);
-                    var buffer = (UniBuffer)Proxy.newProxyInstance(UniBuffer.class.getClassLoader(),
-                        new Class<?>[] {UniBuffer.class}, (proxy, method, arguments) -> {
-                            if (method.getName().equals("close"))
-                                closed.incrementAndGet();
-                            return method.invoke(delegate, arguments);
-                        });
+                    var buffer = com.elfmcys.ysm.buffer.SharedArrayBuffer.allocate(1);
+                    buffer.array()[0] = 1;
                     buffers.add(buffer);
                     cancelled.set(cancel);
                     return buffer;
                 }
 
                 @Override
-                public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type) {
+                public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type) {
                     throw new AssertionError();
                 }
             };
@@ -183,7 +180,7 @@ class FileChunkBatchTest {
                 () -> source.readPayloads(cancelled::get, List.of(first, second), BufferType.ARRAY));
             assertEquals(cancel ? CancellationException.class : AssetLoadException.class, failure.getClass());
             assertEquals(1, buffers.size());
-            assertEquals(1, closed.get());
+            assertEquals(1, buffers.get(0).nio().get());
         }
     }
 

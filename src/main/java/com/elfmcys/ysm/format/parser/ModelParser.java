@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.buffer.SharedArrayBuffer;
 import com.elfmcys.ysm.format.schema.model.ModelOriginVersion;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
@@ -91,7 +92,8 @@ public final class ModelParser {
         try (var output = Channels.newChannel(bytes); var assembler = new RawModelAssembler(source, output,
             DefaultAnimationFilter.keepAll(), false, defaultFrontend(MolangFrontend.CompilationObserver.none()))) {
             var result = assembler.parse();
-            return new MemoryContainer(result.modelHash(), ArrayBuffer.move(bytes.toByteArray()));
+            return new MemoryContainer(result.modelHash(),
+                SharedArrayBuffer.adopt(ArrayBuffer.move(bytes.toByteArray())));
         } catch (java.io.IOException failure) {
             throw new UncheckedIOException("Failed to build the builtin default in memory", failure);
         }
@@ -131,20 +133,10 @@ public final class ModelParser {
         }
     }
 
-    public record MemoryContainer(Hash256 modelHash, ArrayBuffer bytes) implements AutoCloseable {
+    public record MemoryContainer(Hash256 modelHash, SharedArrayBuffer bytes) {
         public MemoryContainer {
             Objects.requireNonNull(modelHash, "modelHash");
             Objects.requireNonNull(bytes, "bytes");
-        }
-
-        @Override
-        public ArrayBuffer bytes() {
-            return bytes.acquire();
-        }
-
-        @Override
-        public void close() {
-            bytes.close();
         }
     }
 }

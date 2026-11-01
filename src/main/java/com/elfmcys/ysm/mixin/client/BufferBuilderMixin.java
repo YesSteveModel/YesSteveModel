@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.mixin.client;
 
+import com.elfmcys.ysm.buffer.BorrowedNativeBuffer;
 import com.elfmcys.ysm.accessor.VertexBufferAccessor;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.mojang.blaze3d.vertex.BufferBuilder;
@@ -38,10 +39,12 @@ public abstract class BufferBuilderMixin implements VertexBufferAccessor {
 
     @Unique
     @Override
-    public NativeBuffer ysm$reserve(int vertexCount) {
-        var requiredBytes = vertexCount * this.format.getVertexSize();
+    public BorrowedNativeBuffer ysm$reserve(int vertexCount) {
+        if (vertexCount < 0)
+            throw new IllegalArgumentException("Negative vertex count");
+        var requiredBytes = Math.multiplyExact(vertexCount, this.format.getVertexSize());
         ensureCapacity(requiredBytes);
-        return NativeBuffer.borrow(this.buffer.slice(this.nextElementByte, requiredBytes));
+        return BorrowedNativeBuffer.at(this, this.buffer, this.nextElementByte, requiredBytes);
     }
 
     @Override

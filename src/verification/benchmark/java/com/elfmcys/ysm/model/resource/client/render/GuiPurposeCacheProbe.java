@@ -94,8 +94,9 @@ public final class GuiPurposeCacheProbe {
             new RenderTargetExpressionModuleFactory(store, host, metrics), scheduler, defaults);
         ModelRenderTargetLoader.ModelCandidate boot = null;
         ModelRenderTargetLoader.ModelCandidate fullReady = null;
-        try (var directory = new Directory(builtinRoot); var parsed = ModelParser.parseBuiltinDefaultMemory(directory);
-            var bytes = parsed.bytes()) {
+        try (var directory = new Directory(builtinRoot)) {
+            var parsed = ModelParser.parseBuiltinDefaultMemory(directory);
+            var bytes = parsed.bytes();
             var builtin = ManagedContainer.openResidentDefault(bytes,
                 new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
             try (var representation = builtin.representation()) {

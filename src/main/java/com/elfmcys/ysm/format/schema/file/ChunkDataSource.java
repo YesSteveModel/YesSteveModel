@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.format.schema.file;
 
 import com.elfmcys.ysm.buffer.BufferType;
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerView;
@@ -25,7 +26,7 @@ public interface ChunkDataSource {
             }
 
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
                 requireOpen();
                 try {
                     return ChunkDataSource.this.readPayload(chunk, type);
@@ -36,7 +37,7 @@ public interface ChunkDataSource {
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
                 throws IOException {
                 requireOpen();
                 try {
@@ -48,7 +49,7 @@ public interface ChunkDataSource {
             }
 
             @Override
-            public Map<String, UniBuffer> readPayloads(BooleanSupplier cancelled,
+            public Map<String, SharedBuffer> readPayloads(BooleanSupplier cancelled,
                 Collection<AssetContainerView.ChunkInfo> chunks, BufferType type) throws IOException {
                 requireOpen();
                 try {
@@ -68,7 +69,7 @@ public interface ChunkDataSource {
 
     interface ReadPhase extends ChunkDataSource, AutoCloseable {
         @Override
-        default UniBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk, BufferType type)
+        default SharedBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk, BufferType type)
             throws IOException {
             try {
                 return ChunkDataSource.super.readPayload(cancelled, chunk, type);
@@ -86,32 +87,31 @@ public interface ChunkDataSource {
         void close() throws IOException;
     }
 
-    /** Returns the decoded logical payload, or the stored bytes for direct media encodings. */
-    UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException;
+    /** Returns shared decoded or direct media bytes. Consumers must not modify them. */
+    SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException;
 
-    /** Returns the exact stored representation after validating its logical content. */
-    UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException;
+    /** Returns the validated stored representation. Consumers must not modify shared bytes. */
+    SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException;
 
-    default UniBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk, BufferType bufferType)
-        throws IOException {
+    default SharedBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
+        BufferType bufferType) throws IOException {
         if (cancelled.getAsBoolean()) {
             throw new CancellationException("Chunk read was cancelled");
         }
         var result = readPayload(chunk, bufferType);
         if (cancelled.getAsBoolean()) {
-            result.close();
             throw new CancellationException("Chunk read was cancelled");
         }
         return result;
     }
 
-    /** Returns one owned payload per chunk type, or releases the entire unpublished batch on failure. */
-    default Map<String, UniBuffer> readPayloads(BooleanSupplier cancelled,
+    /** Returns one shared payload per chunk type; failure discards the unpublished batch. */
+    default Map<String, SharedBuffer> readPayloads(BooleanSupplier cancelled,
         Collection<AssetContainerView.ChunkInfo> chunks, BufferType bufferType) throws IOException {
         return collectPayloads(cancelled, chunks, chunk -> readPayload(cancelled, chunk, bufferType));
     }
 
-    static Map<String, UniBuffer> collectPayloads(BooleanSupplier cancelled,
+    static Map<String, SharedBuffer> collectPayloads(BooleanSupplier cancelled,
         Collection<AssetContainerView.ChunkInfo> chunks, PayloadReader reader) throws IOException {
         var descriptors = new LinkedHashMap<String, AssetContainerView.ChunkInfo>();
         for (var chunk : chunks) {
@@ -120,18 +120,13 @@ public interface ChunkDataSource {
                 throw AssetLoadException.content("Conflicting chunk descriptors: " + chunk.type());
             }
         }
-        var result = new LinkedHashMap<String, UniBuffer>();
-        try {
-            for (var chunk : descriptors.values()) {
-                requireActive(cancelled);
-                result.put(chunk.type(), reader.read(chunk));
-            }
+        var result = new LinkedHashMap<String, SharedBuffer>();
+        for (var chunk : descriptors.values()) {
             requireActive(cancelled);
-            return result;
-        } catch (IOException | RuntimeException | Error failure) {
-            result.values().forEach(UniBuffer::close);
-            throw failure;
+            result.put(chunk.type(), reader.read(chunk));
         }
+        requireActive(cancelled);
+        return result;
     }
 
     private static void requireActive(BooleanSupplier cancelled) {
@@ -148,19 +143,15 @@ public interface ChunkDataSource {
 
     @FunctionalInterface
     interface PayloadReader {
-        UniBuffer read(AssetContainerView.ChunkInfo chunk) throws IOException;
+        SharedBuffer read(AssetContainerView.ChunkInfo chunk) throws IOException;
     }
 
     default byte[] readPayloadBytes(AssetContainerView.ChunkInfo chunk) throws IOException {
-        try (var payload = readPayload(chunk, BufferType.ARRAY)) {
-            return toByteArray(payload);
-        }
+        return toByteArray(readPayload(chunk, BufferType.ARRAY));
     }
 
     default byte[] readStoredVerifiedBytes(AssetContainerView.ChunkInfo chunk) throws IOException {
-        try (var stored = readStoredVerified(chunk, BufferType.ARRAY)) {
-            return toByteArray(stored);
-        }
+        return toByteArray(readStoredVerified(chunk, BufferType.ARRAY));
     }
 
     default InputStream openPayloadStream(AssetContainerView.ChunkInfo chunk) throws IOException {

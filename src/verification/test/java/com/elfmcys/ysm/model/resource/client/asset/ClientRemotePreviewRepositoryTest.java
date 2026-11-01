@@ -396,7 +396,8 @@ class ClientRemotePreviewRepositoryTest {
         private Request request(boolean declaresEmbedded) throws Exception {
             var source = declaresEmbedded ? embedded : standalone;
             final RemoteModelContent content;
-            try (var prefix = source.representation().metadataPrefix().orElseThrow()) {
+            {
+                var prefix = source.representation().metadataPrefix().orElseThrow();
                 content = store.commitMetadataPrefix(source.representation().identity(), prefix);
             }
             contents.add(content);
@@ -427,10 +428,13 @@ class ClientRemotePreviewRepositoryTest {
             var image = view.getManifest().info().metadataUnsafe().authors().get(0).avatarUnsafe();
             var chunk = view.getFileView().blobChunkInfo(image.blobId());
             var source = view.getThumbnailPreviewSource() == PreviewSource.UNSPECIFIED ? standalone : embedded;
-            try (var bytes = source.chunks().readStoredVerified(chunk, BufferType.ARRAY);
-                var array = bytes.acquireArray()) {
-                return java.util.Arrays.copyOfRange(array.array(), array.arrayOffset(),
-                    array.arrayOffset() + array.size());
+            {
+                var bytes = source.chunks().readStoredVerified(chunk, BufferType.ARRAY);
+                try (var array = bytes.copyArray()) {
+                    return java.util.Arrays.copyOfRange(array.array(), array.arrayOffset(),
+                        array.arrayOffset() + array.size());
+
+                }
             }
         }
 

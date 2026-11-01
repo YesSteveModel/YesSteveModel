@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
+import com.elfmcys.ysm.buffer.BorrowedNativeBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.format.vfs.VirtualFileSystem;
 import org.jetbrains.annotations.NotNull;
@@ -25,7 +27,7 @@ public interface CaptureData extends AutoCloseable {
 final class CapturedSourceData implements CaptureData, VirtualFileSystem {
     private final Map<String, DirectoryEntries> directories = new HashMap<>();
     private final Set<String> sourceFiles = new HashSet<>();
-    private final Map<String, NativeBuffer> capturedFiles = new HashMap<>();
+    private final Map<String, NativeStorage> capturedFiles = new HashMap<>();
     private VirtualFileSystem source;
     private State state = State.CAPTURING;
 
@@ -88,7 +90,7 @@ final class CapturedSourceData implements CaptureData, VirtualFileSystem {
             captured = borrowed.copy();
             capturedFiles.put(path, captured);
         }
-        return new ReadOnlyBorrow(captured);
+        return BorrowedNativeBuffer.of(this, captured.nio().asReadOnlyBuffer(), 0, captured.size());
     }
 
     @Override
@@ -225,41 +227,6 @@ final class CapturedSourceData implements CaptureData, VirtualFileSystem {
     }
 
     private record DirectoryEntries(String[] files, String[] directories) {
-    }
-
-    private record ReadOnlyBorrow(NativeBuffer underlying) implements NativeBuffer {
-        @Override
-        public long ptr() {
-            return underlying.ptr();
-        }
-
-        @Override
-        public NativeBuffer slice(int offset, int size) {
-            return new ReadOnlyBorrow(underlying.slice(offset, size));
-        }
-
-        @Override
-        public NativeBuffer acquire() {
-            return underlying.copy();
-        }
-
-        @Override
-        public NativeBuffer borrow() {
-            return new ReadOnlyBorrow(underlying);
-        }
-
-        @Override
-        public ByteBuffer nio() {
-            return underlying.nio().asReadOnlyBuffer();
-        }
-
-        @Override
-        public int size() {
-            return underlying.size();
-        }
-
-        @Override
-        public void close() {}
     }
 
     private enum State {

@@ -1,5 +1,8 @@
 package com.elfmcys.ysm.model.storage;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
+import com.elfmcys.ysm.buffer.BufferStorage;
+import com.elfmcys.ysm.buffer.ArrayStorage;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
 
 import com.elfmcys.ysm.YesSteveModel;
@@ -10,6 +13,7 @@ import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.natives.image.Image;
 import com.elfmcys.ysm.natives.image.ImageEncoder;
 import com.elfmcys.ysm.natives.image.ImageSource;
+import com.elfmcys.ysm.util.ScopeGuard;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
@@ -84,9 +88,9 @@ public final class PreviewStore implements PreviewStorage {
     }
 
     /** Returns owned encoded bytes without interpreting media; access failures remain failures. */
-    public Optional<ArrayBuffer> readEncoded(Hash256 containerId) throws IOException {
+    public Optional<ArrayStorage> readEncoded(Hash256 containerId) throws IOException {
         var path = previewPath(Objects.requireNonNull(containerId, "containerId"));
-        Optional<ArrayBuffer> stored = Optional.empty();
+        Optional<ArrayStorage> stored = Optional.empty();
         try {
             var parent = cache.observe(path.resolveSibling(".guard"), false);
             var fixed = parent.target().getParent().resolve(path.getFileName());
@@ -99,18 +103,18 @@ public final class PreviewStore implements PreviewStorage {
             }
             return stored;
         } catch (NoSuchFileException absent) {
-            stored.ifPresent(ArrayBuffer::close);
+            stored.ifPresent(ArrayStorage::close);
             return Optional.empty();
         } catch (IOException failure) {
-            stored.ifPresent(ArrayBuffer::close);
+            stored.ifPresent(ArrayStorage::close);
             throw AssetLoadException.access("Failed to read guarded preview cache", failure);
         } catch (RuntimeException | Error failure) {
-            stored.ifPresent(ArrayBuffer::close);
+            stored.ifPresent(ArrayStorage::close);
             throw failure;
         }
     }
 
-    static Optional<ArrayBuffer> readSnapshot(SeekableByteChannel input) throws IOException {
+    static Optional<ArrayStorage> readSnapshot(SeekableByteChannel input) throws IOException {
         var size = input.size();
         if (size <= 0 || size > MAX_STORED_BYTES)
             return Optional.empty();
@@ -135,14 +139,13 @@ public final class PreviewStore implements PreviewStorage {
         var stored = readEncoded(containerId);
         if (stored.isEmpty())
             return Optional.empty();
-        try (var bytes = stored.orElseThrow()) {
-            try {
-                return Optional.of(decode(bytes));
-            } catch (AssetLoadException invalidMedia) {
-                if (invalidMedia.reason() != AssetLoadException.Reason.CONTENT)
-                    throw invalidMedia;
-                return Optional.empty();
-            }
+        var bytes = SharedBuffer.adopt(stored.orElseThrow());
+        try {
+            return Optional.of(read(() -> Image.probe(bytes), bytes.size()));
+        } catch (AssetLoadException invalidMedia) {
+            if (invalidMedia.reason() != AssetLoadException.Reason.CONTENT)
+                throw invalidMedia;
+            return Optional.empty();
         }
     }
 
@@ -198,7 +201,8 @@ public final class PreviewStore implements PreviewStorage {
         throws IOException {
         Objects.requireNonNull(containerId, "containerId");
         Objects.requireNonNull(gate, "gate");
-        try (var encoded = preview.retainBytes()) {
+        var encoded = preview.retainBytes();
+        try {
             cache.replaceValidated("preview", containerId.toString(), previewPath(containerId), path -> {
                 try (var input = path; var scratch = ArrayBuffer.allocate(24 * 1024)) {
                     if (input.size() != encoded.size())
@@ -225,6 +229,8 @@ public final class PreviewStore implements PreviewStorage {
                 }
             }, gate);
             notifyStored(containerId);
+        } finally {
+            java.lang.ref.Reference.reachabilityFence(encoded);
         }
     }
 
@@ -234,30 +240,42 @@ public final class PreviewStore implements PreviewStorage {
         }
     }
 
-    /** Copies raw input before establishing any media qualification. */
+    /** Consumes the opened image; its completed bytes must remain unmodified. */
     public static PendingPreview pending(ImageSource source, int encodedSize) throws IOException {
         Objects.requireNonNull(source, "source");
         validateStoredSize(encodedSize);
-        try (var image = source.open()) {
-            validateDimensions(image.width(), image.height());
-            if (image.format() == Image.Format.RGBA) {
-                try (var pixels = image.data().acquireNative();
-                    var encoded = ImageEncoder.encodeLossless(pixels, image.width(), image.height())) {
-                    return pending(encoded.data());
-                }
-            }
-            validateStoredSize(image.data().size());
-            return new PendingPreview(new Image(image.format(), image.width(), image.height(), image.data().copy()));
+        try {
+            return pending(source.open());
+        } catch (UnsupportedEncodingException invalidMedia) {
+            throw AssetLoadException.content("Standalone preview media is invalid", invalidMedia);
         }
     }
 
+    /** Consumes the image on success and failure; the caller must stop using all mutable aliases. */
+    public static PendingPreview pending(Image image) throws IOException {
+        try (var scope = ScopeGuard.create(image)) {
+            validateDimensions(image.width(), image.height());
+            if (image.format() == Image.Format.RGBA) {
+                var pixels = image.data().shareNative();
+                return pending(ImageEncoder.encodeLossless(pixels, image.width(), image.height()));
+            }
+            validateStoredSize(image.data().size());
+            var result = new PendingPreview(image);
+            scope.release();
+            return result;
+        }
+    }
+
+    /** Copies mutable or borrowed input before establishing any media qualification. */
     public static PendingPreview pending(UniBuffer bytes) throws IOException {
         validateStoredSize(bytes.size());
-        try (var fixed = bytes.copy(); var image = Image.probe(fixed)) {
-            if (image.format() == Image.Format.RGBA)
+        try {
+            var image = Image.probe(SharedBuffer.copyOf(bytes));
+            if (image.format() == Image.Format.RGBA) {
+                image.close();
                 throw AssetLoadException.content("Standalone preview must use a self-describing encoding");
-            validateDimensions(image.width(), image.height());
-            return new PendingPreview(image.share());
+            }
+            return pending(image);
         } catch (UnsupportedEncodingException invalidMedia) {
             throw AssetLoadException.content("Standalone preview media is invalid", invalidMedia);
         }
@@ -301,13 +319,10 @@ public final class PreviewStore implements PreviewStorage {
                         pixels = owner.adopt(decoded, image.width(), image.height());
                         decoded = null;
                     }
-                    try (var content = com.elfmcys.ysm.util.ScopeGuard.create(image.data().acquire())) {
-                        var result = new EncodedPreview(content.get(), image.format(), image.width(), image.height(),
-                            pixels, owner);
-                        content.release();
-                        pixels = null;
-                        return result;
-                    }
+                    var result =
+                        new EncodedPreview(image.data(), image.format(), image.width(), image.height(), pixels, owner);
+                    pixels = null;
+                    return result;
                 } finally {
                     if (pixels != null)
                         pixels.close();
@@ -355,7 +370,7 @@ public final class PreviewStore implements PreviewStorage {
     }
 
     public static final class EncodedPreview implements ImageSource, AutoCloseable {
-        private final UniBuffer bytes;
+        private SharedBuffer bytes;
         private final Image.Format format;
         private final int width;
         private final int height;
@@ -363,7 +378,7 @@ public final class PreviewStore implements PreviewStorage {
         private final PreviewPixels.Owner pixelOwner;
         private boolean closed;
 
-        private EncodedPreview(UniBuffer bytes, Image.Format format, int width, int height, PreviewPixels pixels,
+        private EncodedPreview(SharedBuffer bytes, Image.Format format, int width, int height, PreviewPixels pixels,
             PreviewPixels.Owner pixelOwner) {
             this.bytes = bytes;
             this.format = format;
@@ -381,25 +396,25 @@ public final class PreviewStore implements PreviewStorage {
         }
 
         /** External callers receive a copy, never a mutable alias of qualified content. */
-        public synchronized UniBuffer acquireBytes() {
+        public synchronized BufferStorage acquireBytes() {
             requireOpen();
             return bytes.copy();
         }
 
-        private synchronized UniBuffer retainBytes() {
+        private synchronized SharedBuffer retainBytes() {
             requireOpen();
-            return bytes.acquire();
+            return bytes;
         }
 
         public synchronized EncodedPreview acquire() {
             requireOpen();
-            return new EncodedPreview(bytes.acquire(), format, width, height, pixels == null ? null : pixels.acquire(),
+            return new EncodedPreview(bytes, format, width, height, pixels == null ? null : pixels.acquire(),
                 pixelOwner);
         }
 
         public synchronized EncodedPreview acquireContent() {
             requireOpen();
-            return new EncodedPreview(bytes.acquire(), format, width, height, null, pixelOwner);
+            return new EncodedPreview(bytes, format, width, height, null, pixelOwner);
         }
 
         public synchronized PreviewPixels.Reload beginReload() {
@@ -427,7 +442,7 @@ public final class PreviewStore implements PreviewStorage {
                 return;
             closed = true;
             releasePixels();
-            bytes.close();
+            bytes = null;
         }
 
         public Image.Format format() {
@@ -444,7 +459,7 @@ public final class PreviewStore implements PreviewStorage {
 
         @Override
         public synchronized Image open() {
-            return new Image(format, width, height, acquireBytes());
+            return Image.adopt(format, width, height, acquireBytes());
         }
 
         public synchronized boolean matches(Image image) {

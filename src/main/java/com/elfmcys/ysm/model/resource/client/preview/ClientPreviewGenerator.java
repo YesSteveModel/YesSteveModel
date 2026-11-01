@@ -25,6 +25,8 @@ import com.elfmcys.ysm.model.service.ModelExportService;
 import com.elfmcys.ysm.model.storage.PreviewStore;
 import com.elfmcys.ysm.model.storage.PreviewPixels;
 import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.SharedBuffer;
+import com.elfmcys.ysm.natives.image.Image;
 import com.elfmcys.ysm.natives.image.ImageEncoder;
 import com.elfmcys.ysm.natives.image.ImageSource;
 import com.elfmcys.ysm.util.Closeable;
@@ -334,9 +336,8 @@ public final class ClientPreviewGenerator implements Closeable {
             try {
                 var stored = previewStore.forContent(content).readEncoded(content.representation().containerId());
                 if (stored.isPresent()) {
-                    try (var bytes = stored.orElseThrow()) {
-                        return new ProbeFact(PreviewStore.pending(bytes), true, null);
-                    }
+                    var bytes = SharedBuffer.adopt(stored.orElseThrow());
+                    return new ProbeFact(PreviewStore.pending(() -> Image.probe(bytes), bytes.size()), true, null);
                 }
             } catch (IOException | RuntimeException invalidCache) {
                 // Standalone previews remain optional; a declared embedded image was handled above.
@@ -858,9 +859,8 @@ public final class ClientPreviewGenerator implements Closeable {
     }
 
     static PreviewStore.PendingPreview encode(NativeImage pixels) throws IOException {
-        try (var encoded = ImageEncoder.encodeLossy(pixels, PreviewRenderHost.WIDTH, PreviewRenderHost.HEIGHT)) {
-            return PreviewStore.pending(encoded.data());
-        }
+        return PreviewStore
+            .pending(ImageEncoder.encodeLossy(pixels, PreviewRenderHost.WIDTH, PreviewRenderHost.HEIGHT));
     }
 
     record RenderInput(ResourceRequest request, ResourceLease lease) {
@@ -972,8 +972,7 @@ public final class ClientPreviewGenerator implements Closeable {
         Throwable failure) implements Fact {
     }
 
-    private record PixelsFact(NativeImage pixels,
-        Throwable failure) implements Fact {
+    private record PixelsFact(NativeImage pixels, Throwable failure) implements Fact {
     }
 
     private record EncodedFact(PreviewStore.PendingPreview pending, Throwable failure) implements Fact {

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.mixin.client.embeddium;
 
+import com.elfmcys.ysm.buffer.BorrowedNativeBuffer;
 import com.elfmcys.ysm.accessor.VertexBufferAccessor;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
@@ -30,7 +31,7 @@ public class SodiumBufferBuilderMixin implements VertexBufferAccessor {
 
     @Unique
     @Override
-    public NativeBuffer ysm$reserve(int vertexCount) {
+    public BorrowedNativeBuffer ysm$reserve(int vertexCount) {
         return ((VertexBufferAccessor)builder).ysm$reserve(vertexCount);
     }
 

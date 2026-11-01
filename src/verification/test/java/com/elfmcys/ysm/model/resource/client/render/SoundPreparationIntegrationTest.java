@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.expression.aot.ExpressionArtifactStore;
 import com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics;
 import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory;
@@ -103,7 +103,8 @@ class SoundPreparationIntegrationTest {
                         VerifiedChunkAccess.create(sourceA, fixture.content, null, Runnable::run, Runnable::run)) {
                         a.close();
                         assertThrows(AssetLoadException.class, sourceA::acquireFirstChunk);
-                        try (var bytes = sourceB.acquireFirstChunk()) {
+                        {
+                            var bytes = sourceB.acquireFirstChunk();
                             assertTrue(bytes.size() > 0);
                         }
                         fixture.loader.close();
@@ -111,7 +112,8 @@ class SoundPreparationIntegrationTest {
                         assertEquals(0, prepared.retainedBytes());
                         assertThrows(IllegalStateException.class, prepared::acquire);
                         for (int index = 0; index < sourceA.media().chunkInfos().size(); index++) {
-                            try (var chunk = access.request(index).result().join(); var bytes = chunk.acquireBuffer()) {
+                            try (var chunk = access.request(index).result().join()) {
+                                var bytes = chunk.acquireBuffer();
                                 assertTrue(bytes.size() > 0);
                             }
                         }
@@ -183,7 +185,7 @@ class SoundPreparationIntegrationTest {
     }
 
     @Test
-    void hashValidButInvalidMediaRejectsPreparationAndReleasesTheWholeBatch() throws Exception {
+    void hashValidButInvalidMediaRejectsPreparationWithoutRevokingSharedBytes() throws Exception {
         try (var fixture = new Fixture(root)) {
             var sound = fixture.sounds().get("tone");
             var first = sound.chunkInfos().get(0);
@@ -206,23 +208,24 @@ class SoundPreparationIntegrationTest {
                         return chunk.type().equals(first.type()) ? replacement : chunk;
                     }
                 }).sounds().get("tone");
-            var retained = new java.util.concurrent.atomic.AtomicReference<Map<String, UniBuffer>>();
+            var retained = new java.util.concurrent.atomic.AtomicReference<Map<String, SharedBuffer>>();
             var delegate = fixture.content.chunks();
             var captured = new ChunkDataSource() {
                 @Override
-                public UniBuffer readPayload(com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
+                public SharedBuffer readPayload(com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
                     BufferType type) throws IOException {
                     return delegate.readPayload(chunk, type);
                 }
 
                 @Override
-                public UniBuffer readStoredVerified(com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
-                    BufferType type) throws IOException {
+                public SharedBuffer readStoredVerified(
+                    com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk, BufferType type)
+                    throws IOException {
                     return delegate.readStoredVerified(chunk, type);
                 }
 
                 @Override
-                public Map<String, UniBuffer> readPayloads(java.util.function.BooleanSupplier cancelled,
+                public Map<String, SharedBuffer> readPayloads(java.util.function.BooleanSupplier cancelled,
                     java.util.Collection<com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo> chunks,
                     BufferType type) throws IOException {
                     var batch = delegate.readPayloads(cancelled, chunks, type);
@@ -236,7 +239,7 @@ class SoundPreparationIntegrationTest {
             assertThrows(IllegalArgumentException.class, () -> TargetSoundResources.prepare(() -> false,
                 fixture.content.representation().identity(), inputs, captured));
             assertEquals(2, retained.get().size());
-            retained.get().values().forEach(bytes -> assertThrows(IllegalStateException.class, bytes::nio));
+            retained.get().values().forEach(value -> assertTrue(value.size() > 0));
         }
     }
 

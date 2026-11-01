@@ -63,17 +63,13 @@ public final class BuiltinModelCatalog implements AutoCloseable {
         try (var vfs = new Directory(source)) {
             generated = ModelParser.parseBuiltinDefaultMemory(vfs);
         }
-        try (generated) {
-            var location = new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default"));
-            var expected = index.require(location.path());
-            if (!expected.equals(generated.modelHash())) {
-                throw new IOException(
-                    "Builtin default model hash mismatch: index=" + expected + ", generated=" + generated.modelHash());
-            }
-            try (var bytes = generated.bytes()) {
-                return ManagedContainer.openResidentDefault(bytes, location);
-            }
+        var location = new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default"));
+        var expected = index.require(location.path());
+        if (!expected.equals(generated.modelHash())) {
+            throw new IOException(
+                "Builtin default model hash mismatch: index=" + expected + ", generated=" + generated.modelHash());
         }
+        return ManagedContainer.openResidentDefault(generated.bytes(), location);
     }
 
     @Override

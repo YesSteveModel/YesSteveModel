@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.natives.image.Image;
@@ -48,14 +49,14 @@ final class RawImageCompressor {
     }
 
     interface Codec {
-        NativeBuffer decode(Image image) throws IOException;
+        NativeStorage decode(Image image) throws IOException;
 
         Image encode(NativeBuffer pixels, int width, int height, Policy policy) throws IOException;
     }
 
     private static final class NativeCodec implements Codec {
         @Override
-        public NativeBuffer decode(Image image) throws IOException {
+        public NativeStorage decode(Image image) throws IOException {
             return image.decodeToBuffer();
         }
 

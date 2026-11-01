@@ -179,9 +179,12 @@ class ModelAudioContentPathTest {
             assertTrue(chunk.encoding().isEmpty());
             assertEquals(0, chunk.decodeSize());
             assertEquals(0, chunk.flags());
-            try (var payload = content.chunks().readPayload(chunk, BufferType.ARRAY);
-                var array = payload.acquireArray()) {
-                output.write(array.array(), array.arrayOffset(), array.size());
+            {
+                var payload = content.chunks().readPayload(chunk, BufferType.ARRAY);
+                try (var array = payload.copyArray()) {
+                    output.write(array.array(), array.arrayOffset(), array.size());
+
+                }
             }
         }
         return output.toByteArray();

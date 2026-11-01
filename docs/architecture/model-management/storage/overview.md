@@ -60,7 +60,7 @@ Remote descriptor 只选择固定 encoding，不能提供路径、URL 或 provid
 
 独立 preview 以 `ContainerId` 弱关联，不改变源 bytes 或模型身份。声明内嵌图优先，声明图失败不回退；未声明才探测独立 cache。坏独立图只是 miss，不把模型标记为损坏。可替换独立图不放宽模型内嵌媒体、icon 或 pack cover 的验证。
 
-普通服务端分发只读有界 encoded bytes，客户端完整解码后才展示或写已验证图片；管理探测与上传仍完整验证媒体。`PreviewStore` 在完整解码前复制原始输入，资格只随封闭内容存在，对外 bytes 与 image 均给副本。新磁盘读取和外部 raw 输入各自验证；accept/commit 的封闭内容入口复用资格，staging 逐字节核对副本，不重复媒体解码。弱关联减少模型重新封装，代价是图片不证明模型内容有效，坏媒体也可能先被传输。
+普通服务端分发只读有界 encoded bytes，客户端完整解码后才展示或写已验证图片；管理探测与上传仍完整验证媒体。`PreviewStore` 复制外部任意 bytes；内部 `Image` 直接移交给 `PendingPreview`，生产方停止使用可变别名，后续消费者只读共享内容。直接移交保留原 allocation，编码输出切片可能持有大于 encoded 长度的容量。资格仍由完整解码建立，只随封闭内容存在，对外 bytes 与 image 均给副本。新磁盘读取和外部 raw 输入各自验证；accept/commit 的封闭内容入口复用资格，staging 逐字节核对副本，不重复媒体解码。弱关联减少模型重新封装，代价是图片不证明模型内容有效，坏媒体也可能先被传输。
 
 普通 accept 可交付有效内存图；管理 commit 只以持久替换成功完成。Worker 完整验证并准备 staging 后，在原 session/member effect gate 内复核资格并原子替换；gate 内不解码、不执行 staging I/O 或等待文件锁。
 

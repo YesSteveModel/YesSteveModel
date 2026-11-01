@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -37,7 +38,7 @@ public final class ForgeUniBufferIO {
         }
     }
 
-    public static NativeBuffer readNative(FriendlyByteBuf source, int length) {
+    public static NativeStorage readNative(FriendlyByteBuf source, int length) {
         if (length < 0 || length > source.readableBytes()) {
             throw new IndexOutOfBoundsException();
         }

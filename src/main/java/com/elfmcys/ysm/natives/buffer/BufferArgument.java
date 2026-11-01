@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.natives.buffer;
 
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -21,7 +22,7 @@ public class BufferArgument {
     }
 
     @Owned
-    public static UniBuffer unpackOutput(Object buf) {
+    public static BufferStorage unpackOutput(Object buf) {
         if (buf instanceof byte[] array) {
             return ArrayBuffer.move(array);
         } else if (buf instanceof ByteBuffer nio) {

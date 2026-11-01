@@ -1,5 +1,8 @@
 package com.elfmcys.ysm.natives.image;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
+import com.elfmcys.ysm.buffer.BufferStorage;
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.natives.buffer.BufferArgument;
@@ -15,18 +18,56 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
-public record Image(Format format, int width, int height, UniBuffer data) implements AutoCloseable {
-    private Image(long packedInfo, UniBuffer buffer) {
+public final class Image implements AutoCloseable {
+    private final Format format;
+    private final int width;
+    private final int height;
+    private SharedBuffer data;
+
+    /** Establishes GC ownership before allocating the image carrier. */
+    public static Image adopt(Format format, int width, int height, BufferStorage data) {
+        var owner = SharedBuffer.adopt(data);
+        return new Image(format, width, height, owner);
+    }
+
+    /** Retains the supplied GC view without copying its bytes. */
+    public Image(Format format, int width, int height, SharedBuffer data) {
+        this.format = format;
+        this.width = width;
+        this.height = height;
+        this.data = java.util.Objects.requireNonNull(data);
+    }
+
+    private Image(long packedInfo, SharedBuffer buffer) {
         this(Format.VALUES.get((int)(packedInfo >>> 32) & 0xFF), (int)(packedInfo >>> 16) & 0xFFFF,
             (int)(packedInfo & 0xFFFF), buffer);
     }
 
+    public Format format() {
+        return format;
+    }
+
+    public int width() {
+        return width;
+    }
+
+    public int height() {
+        return height;
+    }
+
+    public SharedBuffer data() {
+        if (data == null)
+            throw new IllegalStateException("Image is closed");
+        return data;
+    }
+
     public Image share() {
-        return new Image(format, width, height, data.acquire());
+        return new Image(format, width, height, data());
     }
 
     @SuppressWarnings("DataFlowIssue")
     public NativeImage decode() throws UnsupportedEncodingException {
+        var data = data();
         var args = BufferArgument.packInput(data);
         try (var dstScope = ScopeGuard.create(new NativeImage(NativeImage.Format.RGBA, width, height, false))) {
             var dst = dstScope.get();
@@ -46,7 +87,8 @@ public record Image(Format format, int width, int height, UniBuffer data) implem
         throw new UnsupportedEncodingException("Failed to decode image");
     }
 
-    public NativeBuffer decodeToBuffer() throws UnsupportedEncodingException {
+    public NativeStorage decodeToBuffer() throws UnsupportedEncodingException {
+        var data = data();
         var args = BufferArgument.packInput(data);
         try (var dstScope = NativeBuffer.allocateWithScope(width * height * 4)) {
             var dst = dstScope.get();
@@ -75,12 +117,12 @@ public record Image(Format format, int width, int height, UniBuffer data) implem
         if (result == 0) {
             throw new UnsupportedEncodingException("Failed to read image");
         }
-        return new Image(result, buffer.acquire());
+        return new Image(result, buffer.share());
     }
 
     @Override
     public void close() {
-        data.close();
+        data = null;
     }
 
     private static class Native {

@@ -1,10 +1,8 @@
 package com.elfmcys.ysm.model.resource.client.audio;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.api.client.audio.AudioBackend;
-import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.NativeBuffer;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.client.sound.instance.AudioHost;
 import com.elfmcys.ysm.client.sound.instance.ICanStopSound;
 import com.elfmcys.ysm.client.sound.instance.PlaybackControl;
@@ -85,7 +83,8 @@ class ClientAudioRuntimeIntegrationTest {
                     var secondStream = host.removeStream();
                     prepared.close();
                     first.close();
-                    try (var bytes = b.acquireFirstChunk()) {
+                    {
+                        var bytes = b.acquireFirstChunk();
                         assertTrue(bytes.size() > 0);
                     }
                     second.close();
@@ -657,15 +656,15 @@ class ClientAudioRuntimeIntegrationTest {
     }
 
     @Test
-    void stopAfterSynchronousChunkCompletionClosesTheUnadoptedChunk() throws Exception {
+    void stopAfterSynchronousChunkCompletionReleasesReservations() throws Exception {
         var content = createContent(builtInAudio("/assets/ysm/builtin/wine_fox/14_momo/sounds/fly_on.ogg"));
-        var references = new AtomicInteger();
+        var capacity = new AudioRuntimeCapacity();
         var owner = new PauseAfterCompletionExecutor();
         var workers = Executors.newSingleThreadExecutor();
-        try (var resources = readySounds(content, new TrackingChunks(content.chunks(), references));
+        try (var resources = readySounds(content, content.chunks());
             var runtime = new ClientAudioRuntime(workers,
                 source -> VerifiedChunkAccess.create(source, content, null, Runnable::run, owner), new FakeHost(), null,
-                new AudioRetentionCache(), new AudioRuntimeCapacity())) {
+                new AudioRetentionCache(), capacity)) {
             var playback = play(runtime, bindTone(content, resources), false);
             assertTrue(owner.awaitCompletion());
 
@@ -678,7 +677,8 @@ class ClientAudioRuntimeIntegrationTest {
             workers.shutdownNow();
             content.representation().close();
         }
-        assertEquals(0, references.get(), "A completed chunk that loses the close race must not retain ownership");
+        assertEquals(0, capacity.snapshot().encodedBytes());
+        assertEquals(0, capacity.snapshot().decodedBytes());
     }
 
     private ManagedContainer createLongContent() throws Exception {
@@ -914,84 +914,6 @@ class ClientAudioRuntimeIntegrationTest {
         }
     }
 
-    private record TrackingChunks(ChunkDataSource delegate, AtomicInteger references) implements ChunkDataSource {
-        @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
-            return new TrackingBuffer(delegate.readPayload(chunk, bufferType), references);
-        }
-
-        @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
-            throws IOException {
-            return new TrackingBuffer(delegate.readStoredVerified(chunk, bufferType), references);
-        }
-    }
-
-    private static final class TrackingBuffer implements UniBuffer {
-        private final UniBuffer delegate;
-        private final AtomicInteger references;
-        private final AtomicBoolean closed = new AtomicBoolean();
-
-        private TrackingBuffer(UniBuffer delegate, AtomicInteger references) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
-            this.references = Objects.requireNonNull(references, "references");
-            references.incrementAndGet();
-        }
-
-        @Override
-        public ByteBuffer nio() {
-            return delegate.nio();
-        }
-
-        @Override
-        public BufferType type() {
-            return delegate.type();
-        }
-
-        @Override
-        public int size() {
-            return delegate.size();
-        }
-
-        @Override
-        public UniBuffer slice(int offset, int size) {
-            return delegate.slice(offset, size);
-        }
-
-        @Override
-        public UniBuffer borrow() {
-            return delegate.borrow();
-        }
-
-        @Override
-        public UniBuffer acquire() {
-            return new TrackingBuffer(delegate.acquire(), references);
-        }
-
-        @Override
-        public UniBuffer copy() {
-            return new TrackingBuffer(delegate.copy(), references);
-        }
-
-        @Override
-        public NativeBuffer acquireNative() {
-            return delegate.acquireNative();
-        }
-
-        @Override
-        public ArrayBuffer acquireArray() {
-            return delegate.acquireArray();
-        }
-
-        @Override
-        public void close() {
-            if (closed.compareAndSet(false, true)) {
-                delegate.close();
-                references.decrementAndGet();
-            }
-        }
-    }
-
     private static final class FakeBackend implements AudioBackend {
         private final AtomicInteger plays = new AtomicInteger();
         private final AtomicBoolean inPlay = new AtomicBoolean();
@@ -1039,14 +961,14 @@ class ClientAudioRuntimeIntegrationTest {
         public ChunkDataSource chunks() {
             return new ChunkDataSource() {
                 @Override
-                public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                     throws IOException {
                     reads.incrementAndGet();
                     return delegate.chunks().readPayload(chunk, bufferType);
                 }
 
                 @Override
-                public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                     throws IOException {
                     return delegate.chunks().readStoredVerified(chunk, bufferType);
                 }

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.container;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -82,7 +83,7 @@ public class AssetContainerWriter implements AutoCloseable {
                 "AlignmentShift must not be greater than " + AssetContainerConstant.MAX_CHUNK_ALIGN_SHIFT);
         }
         byte[] hash = new byte[Blake3.HASH_SIZE];
-        UniBuffer storedBuffer;
+        SharedBuffer storedBuffer;
         if (compressLevel > 0) {
             if (decodeSize != 0) {
                 throw new IllegalArgumentException("Uncompressed chunk data decode size must be 0");
@@ -92,22 +93,17 @@ public class AssetContainerWriter implements AutoCloseable {
             }
             encoding = "zstd";
             decodeSize = buffer.size();
-            storedBuffer = Zstd.compressAndHash(buffer, hash, BufferType.NATIVE, compressLevel);
+            storedBuffer = SharedBuffer.adopt(Zstd.compressAndHash(buffer, hash, BufferType.NATIVE, compressLevel));
         } else {
             Blake3.computeHash(buffer, hash);
-            storedBuffer = buffer.acquire();
+            storedBuffer = buffer.share();
         }
-        try {
-            if (chunkDataSize + storedBuffer.size() > Integer.MAX_VALUE) {
-                throw new IllegalArgumentException("Chunk data too large");
-            }
-            chunkTypes.add(type);
-            chunkList.add(new Chunk(type, encoding, decodeSize, alignmentShift, flags, storedBuffer, hash));
-            chunkDataSize += storedBuffer.size();
-        } catch (Throwable error) {
-            storedBuffer.close();
-            throw error;
+        if (chunkDataSize + storedBuffer.size() > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Chunk data too large");
         }
+        chunkTypes.add(type);
+        chunkList.add(new Chunk(type, encoding, decodeSize, alignmentShift, flags, storedBuffer, hash));
+        chunkDataSize += storedBuffer.size();
     }
 
     /** Adds an already verified stored representation without decoding and recompressing it. */
@@ -125,31 +121,24 @@ public class AssetContainerWriter implements AutoCloseable {
         if (logicalHash == null || logicalHash.length != Blake3.HASH_SIZE) {
             throw new IllegalArgumentException("Stored chunk has no full logical hash");
         }
-        var stored = buffer.acquire();
+        var stored = buffer.share();
+        final long nextDataSize;
         try {
-            final long nextDataSize;
-            try {
-                nextDataSize = Math.addExact(chunkDataSize, stored.size());
-            } catch (ArithmeticException overflow) {
-                throw new IllegalArgumentException("Stored chunk data is outside its bound", overflow);
-            }
-            if (stored.size() <= 0 || nextDataSize > Integer.MAX_VALUE) {
-                throw new IllegalArgumentException("Stored chunk data is outside its bound");
-            }
-            chunkTypes.add(type);
-            chunkList.add(new Chunk(type, encoding, decodeSize, alignmentShift, flags, stored, logicalHash.clone()));
-            chunkDataSize = nextDataSize;
-        } catch (Throwable failure) {
-            stored.close();
-            throw failure;
+            nextDataSize = Math.addExact(chunkDataSize, stored.size());
+        } catch (ArithmeticException overflow) {
+            throw new IllegalArgumentException("Stored chunk data is outside its bound", overflow);
         }
+        if (stored.size() <= 0 || nextDataSize > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Stored chunk data is outside its bound");
+        }
+        chunkTypes.add(type);
+        chunkList.add(new Chunk(type, encoding, decodeSize, alignmentShift, flags, stored, logicalHash.clone()));
+        chunkDataSize = nextDataSize;
     }
 
     @Override
     public void close() {
-        for (var chunk : chunkList) {
-            chunk.buffer.close();
-        }
+        chunkList.clear();
     }
 
     @SuppressWarnings("UnstableApiUsage")
@@ -267,7 +256,7 @@ public class AssetContainerWriter implements AutoCloseable {
         return list;
     }
 
-    public record Chunk(String type, String encoding, int decodeSize, int alignmentShift, int flags, UniBuffer buffer,
-        byte[] hash) {
+    public record Chunk(String type, String encoding, int decodeSize, int alignmentShift, int flags,
+        SharedBuffer buffer, byte[] hash) {
     }
 }

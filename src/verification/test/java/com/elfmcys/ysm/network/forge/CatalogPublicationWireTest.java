@@ -248,7 +248,7 @@ class CatalogPublicationWireTest {
     }
 
     private static byte[] bytes(UniBuffer buffer) {
-        try (var array = buffer.acquireArray()) {
+        try (var array = buffer.copyArray()) {
             return Arrays.copyOfRange(array.array(), array.arrayOffset(), array.arrayOffset() + array.size());
         }
     }

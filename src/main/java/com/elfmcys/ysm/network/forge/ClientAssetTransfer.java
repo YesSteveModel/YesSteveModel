@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
@@ -20,7 +21,6 @@ import com.elfmcys.ysm.proto.network.PreviewUploadAdmissionProto;
 import com.elfmcys.ysm.proto.network.PreviewUploadFragmentProto;
 import com.elfmcys.ysm.proto.network.PreviewRepairResultProto;
 import com.elfmcys.ysm.proto.network.PreviewRepairStatus;
-import com.elfmcys.ysm.model.domain.ModelPath;
 import net.minecraft.network.Connection;
 import com.elfmcys.ysm.network.NetworkHandler;
 import com.elfmcys.ysm.network.ProtocolBuffer;
@@ -109,7 +109,7 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
             @Override
             public int fragment(PreviewUploadFragmentProto fragment, UniBuffer bytes) {
                 return NetworkHandler.sendToServer(connection,
-                    com.elfmcys.ysm.network.NetworkPayload.withRaw(fragment, bytes.acquire()));
+                    com.elfmcys.ysm.network.NetworkPayload.withRaw(fragment, bytes.share()));
             }
         }, session);
     }
@@ -498,7 +498,8 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
                 return;
             }
             if (member.range.complete() && !member.delivered) {
-                try (var bytes = member.range.assemble()) {
+                try {
+                    var bytes = com.elfmcys.ysm.buffer.SharedBuffer.adopt(member.range.assemble());
                     if (kind == PresentationKind.PREVIEW && member.observation == null) {
                         throw content("Preview data has no session observation");
                     }
@@ -548,9 +549,11 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
         }
         if (end > member.expectedSize || member.exactSize && terminal && end != member.expectedSize)
             return false;
-        byte[] payload;
-        try (var source = data.acquireArray()) {
-            payload = Arrays.copyOfRange(source.array(), source.arrayOffset(), source.arrayOffset() + source.size());
+        var payload = new byte[data.size()];
+        try {
+            data.nio().get(payload);
+        } finally {
+            java.lang.ref.Reference.reachabilityFence(data);
         }
         var previous = member.fragments.get(offset);
         var range = new RangeFragment(payload, terminal);
@@ -1080,13 +1083,13 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
     }
 
     private static final class UploadChild extends PendingChild {
-        private UniBuffer bytes;
+        private BufferStorage bytes;
         private int offset;
         private boolean admitted;
         private boolean sentAll;
         private PreviewRepairStatus status;
 
-        private UploadChild(long id, UniBuffer bytes) {
+        private UploadChild(long id, BufferStorage bytes) {
             super(id);
             this.bytes = bytes;
         }
@@ -1213,7 +1216,7 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
             return next == finalEnd;
         }
 
-        final UniBuffer assemble() {
+        final BufferStorage assemble() {
             var output = ArrayBuffer.allocate(Math.toIntExact(finalEnd));
             var target = output.nio();
             fragments.values().forEach(fragment -> target.put(fragment.payload));

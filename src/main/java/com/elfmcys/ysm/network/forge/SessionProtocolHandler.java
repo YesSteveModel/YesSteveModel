@@ -10,7 +10,6 @@ import com.elfmcys.ysm.proto.network.PreviewUploadAdmissionProto;
 import com.elfmcys.ysm.proto.network.PreviewUploadFragmentProto;
 import com.elfmcys.ysm.proto.network.PreviewRepairResultProto;
 import com.elfmcys.ysm.YesSteveModel;
-import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.capability.AuthModelsCapabilityProvider;
 import com.elfmcys.ysm.capability.ModelInfoCapability;
@@ -217,12 +216,10 @@ public final class SessionProtocolHandler {
             payload.close();
             return;
         }
-        var bytes = payload.raw().orElseThrow().acquire();
+        var bytes = payload.raw().orElseThrow().share();
         payload.close();
         context.enqueueWork(() -> {
-            try (bytes) {
-                service.acceptPreviewUploadFragment(sender, connection, owner, message, bytes);
-            }
+            service.acceptPreviewUploadFragment(sender, connection, owner, message, bytes);
         });
     }
 
@@ -355,12 +352,10 @@ public final class SessionProtocolHandler {
         var context = contextSupplier.get();
         var connection = context.getNetworkManager();
         var data = payload.raw().orElseThrow(() -> new IllegalArgumentException("ChunkFragment requires an attachment"))
-            .acquire();
+            .share();
         payload.close();
         context.enqueueWork(() -> {
-            try (data) {
-                ClientSessionRuntime.acceptChunkFragment(connection, message, data);
-            }
+            ClientSessionRuntime.acceptChunkFragment(connection, message, data);
         });
     }
 
@@ -608,12 +603,11 @@ public final class SessionProtocolHandler {
         var message = payload.protobuf();
         var context = contextSupplier.get();
         var connection = context.getNetworkManager();
-        var data = payload.raw().map(UniBuffer::acquire).orElseGet(() -> ArrayBuffer.allocate(0));
+        var data =
+            payload.raw().map(UniBuffer::share).orElseGet(() -> com.elfmcys.ysm.buffer.SharedArrayBuffer.allocate(0));
         payload.close();
         context.enqueueWork(() -> {
-            try (data) {
-                consumer.accept(connection, message, data);
-            }
+            consumer.accept(connection, message, data);
         });
     }
 

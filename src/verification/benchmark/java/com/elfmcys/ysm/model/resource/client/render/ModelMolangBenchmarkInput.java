@@ -35,8 +35,9 @@ public final class ModelMolangBenchmarkInput implements AutoCloseable {
             settings = content.view().getMetadata().getSettings();
             var builtinRoot = Path.of(Objects
                 .requireNonNull(ModelMolangBenchmarkInput.class.getResource("/assets/ysm/builtin/default")).toURI());
-            try (var directory = new Directory(builtinRoot);
-                var memory = ModelParser.parseBuiltinDefaultMemory(directory); var bytes = memory.bytes()) {
+            try (var directory = new Directory(builtinRoot)) {
+                var memory = ModelParser.parseBuiltinDefaultMemory(directory);
+                var bytes = memory.bytes();
                 var builtin = ManagedContainer.openResidentDefault(bytes,
                     new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
                 try (var representation = builtin.representation()) {

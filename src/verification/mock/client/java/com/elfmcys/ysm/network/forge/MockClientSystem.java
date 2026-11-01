@@ -24,7 +24,6 @@ import com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot;
 import com.elfmcys.ysm.network.protocol.MessageDirection;
 import com.elfmcys.ysm.network.session.SessionMode;
 import com.elfmcys.ysm.proto.network.*;
-import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -83,7 +82,8 @@ final class MockClientSystem {
             catalogs.addSource(fixture.asset("local-exact").file(), "local-exact.mxc");
             require(catalogs.reload().join().status() == ReloadStatus.COMMITTED,
                 "Index-only local reload did not commit");
-            try (var prefix = fixture.asset("cache-exact").content().representation().metadataPrefix().orElseThrow()) {
+            {
+                var prefix = fixture.asset("cache-exact").content().representation().metadataPrefix().orElseThrow();
                 store.commitMetadataPrefix(fixture.asset("cache-exact").identity(), prefix).representation().close();
             }
 
@@ -465,7 +465,7 @@ final class MockClientSystem {
             if (decoded.message() instanceof MetadataPrefixFragmentProto value) {
                 connection.transfers.acceptMetadata(value);
             } else if (decoded.message() instanceof ChunkFragmentProto value) {
-                try (var bytes = ArrayBuffer.borrow(decoded.attachment())) {
+                try (var bytes = ArrayBuffer.move(decoded.attachment())) {
                     connection.transfers.acceptChunk(value, bytes);
                 }
             } else if (decoded.message() instanceof ResourceTransferFailureProto value) {
@@ -885,7 +885,7 @@ final class MockClientSystem {
         private synchronized void releaseLate() throws Exception {
             require(receiver != null && bytes != null && networkCompleted.isDone(),
                 "Held source was not ready for late release");
-            try (var input = ArrayBuffer.borrow(bytes)) {
+            try (var input = ArrayBuffer.move(bytes)) {
                 receiver.accept(heldIdentity, input);
             }
             require(held.complete(null), "Held source terminal was already published");

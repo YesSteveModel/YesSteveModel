@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.model.domain;
 
-import com.elfmcys.ysm.buffer.NativeBuffer;
+import com.elfmcys.ysm.buffer.SharedNativeBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.buffer.UniBufferIO;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
@@ -14,8 +14,9 @@ import java.util.Optional;
 /** Owns the encoded metadata prefix associated with one parsed model file. */
 public final class ModelRepresentation implements AutoCloseable {
     private final ModelFileIdentity identity;
-    private final @Nullable NativeBuffer metadataPrefix;
+    private @Nullable SharedNativeBuffer metadataPrefix;
     private final ModelFileView view;
+    private boolean closed;
 
     public ModelRepresentation(ModelFileIdentity identity, @Nullable UniBuffer metadataPrefix, ModelFileView view)
         throws IOException {
@@ -36,11 +37,13 @@ public final class ModelRepresentation implements AutoCloseable {
     }
 
     /** Acquires an independent prefix capability while sharing the immutable parsed view. */
-    public ModelRepresentation acquire() throws IOException {
+    public synchronized ModelRepresentation acquire() throws IOException {
+        requireOpen();
         return new ModelRepresentation(identity, metadataPrefix, view, true);
     }
 
-    public ModelRepresentation reuseView(ModelRepresentation previous) throws IOException {
+    public synchronized ModelRepresentation reuseView(ModelRepresentation previous) throws IOException {
+        requireOpen();
         var normalized = view.reuse(previous.view);
         return normalized == view ? this : new ModelRepresentation(identity, metadataPrefix, normalized, true);
     }
@@ -76,7 +79,7 @@ public final class ModelRepresentation implements AutoCloseable {
                 throw new IOException("Model metadata prefix identity mismatch");
             }
         }
-        this.metadataPrefix = metadataPrefix.acquireNative();
+        this.metadataPrefix = metadataPrefix.shareNative();
     }
 
     private ModelRepresentation(ModelFileIdentity identity, ModelFileView view) {
@@ -98,10 +101,11 @@ public final class ModelRepresentation implements AutoCloseable {
     }
 
     /**
-     * Returns an independent owned reference. Shared metadata bytes must not be modified. The caller must close it.
+     * Returns shared metadata bytes. Consumers must not modify them.
      */
-    public Optional<UniBuffer> metadataPrefix() {
-        return metadataPrefix == null ? Optional.empty() : Optional.of(metadataPrefix.acquire());
+    public synchronized Optional<SharedNativeBuffer> metadataPrefix() {
+        requireOpen();
+        return metadataPrefix == null ? Optional.empty() : Optional.of(metadataPrefix);
     }
 
     public ModelFileView view() {
@@ -112,7 +116,8 @@ public final class ModelRepresentation implements AutoCloseable {
         return metadataPrefix != null;
     }
 
-    public int metadataPrefixSize() {
+    public synchronized int metadataPrefixSize() {
+        requireOpen();
         return metadataPrefix == null ? 0 : metadataPrefix.size();
     }
 
@@ -121,9 +126,14 @@ public final class ModelRepresentation implements AutoCloseable {
     }
 
     @Override
-    public void close() {
-        if (metadataPrefix != null) {
-            metadataPrefix.close();
+    public synchronized void close() {
+        closed = true;
+        metadataPrefix = null;
+    }
+
+    private void requireOpen() {
+        if (closed) {
+            throw new IllegalStateException("Model representation is closed");
         }
     }
 

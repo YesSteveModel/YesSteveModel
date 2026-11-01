@@ -80,19 +80,17 @@ public final class ChunkImageSource implements ImageSource {
         if (format != null) {
             return new Image(format, width, height, data);
         }
-        try (data) {
-            final Image image;
-            try {
-                image = Image.probe(data);
-            } catch (IOException error) {
-                throw AssetLoadException.content("Failed to probe image chunk: " + chunk.type(), error);
-            }
-            if (expectedEncoding != null && !image.format().name().equalsIgnoreCase(expectedEncoding)) {
-                image.close();
-                throw AssetLoadException.content("Image format does not match chunk encoding: " + chunk.type());
-            }
-            return image;
+        final Image image;
+        try {
+            image = Image.probe(data);
+        } catch (IOException error) {
+            throw AssetLoadException.content("Failed to probe image chunk: " + chunk.type(), error);
         }
+        if (expectedEncoding != null && !image.format().name().equalsIgnoreCase(expectedEncoding)) {
+            image.close();
+            throw AssetLoadException.content("Image format does not match chunk encoding: " + chunk.type());
+        }
+        return image;
     }
 
     private void validateEncoding() throws IOException {

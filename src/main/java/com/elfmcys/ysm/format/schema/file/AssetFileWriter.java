@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.schema.file;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -24,7 +25,7 @@ public class AssetFileWriter implements AutoCloseable {
     private String summary = "";
     private final List<ShortReferencePair<String>> properties = new ArrayList<>(4);
 
-    private final List<Triple<String, Integer, UniBuffer>> rawList = new ArrayList<>(4);
+    private final List<Triple<String, Integer, SharedBuffer>> rawList = new ArrayList<>(4);
     private final List<Pair<String, Image>> images = new ArrayList<>(4); // 不包含 texture
     private final List<BlobEntry> blobList = new ArrayList<>(4);
     private final List<StoredEntry> storedList = new ArrayList<>(4);
@@ -36,12 +37,12 @@ public class AssetFileWriter implements AutoCloseable {
         summary = source.summary;
         properties.addAll(source.properties);
         source.rawList
-            .forEach(value -> rawList.add(Triple.of(value.getLeft(), value.getMiddle(), value.getRight().acquire())));
+            .forEach(value -> rawList.add(Triple.of(value.getLeft(), value.getMiddle(), value.getRight().share())));
         source.images.forEach(value -> images.add(Pair.of(value.getLeft(), value.getRight().share())));
-        source.blobList.forEach(value -> blobList.add(
-            new BlobEntry(value.compressLevel(), value.encoding(), value.decodeSize(), value.data().acquire(), false)));
+        source.blobList.forEach(value -> blobList
+            .add(new BlobEntry(value.compressLevel(), value.encoding(), value.decodeSize(), value.data().share())));
         source.storedList.forEach(value -> storedList.add(new StoredEntry(value.type(), value.encoding(),
-            value.decodeSize(), value.alignmentShift(), value.flags(), value.data().acquire(), value.hash().clone())));
+            value.decodeSize(), value.alignmentShift(), value.flags(), value.data().share(), value.hash().clone())));
     }
 
     protected void setSchemaId(String schemaId) {
@@ -51,12 +52,12 @@ public class AssetFileWriter implements AutoCloseable {
     protected void addProtoChunk(String type, ProtoMessage<?> value, int compressLevel) throws IOException {
         try (var bufScope = ArrayBuffer.allocateWithScope(value.getSerializedSize())) {
             value.writeTo(ProtoUtil.sink(bufScope.get()));
-            rawList.add(Triple.of(type, compressLevel, bufScope.release()));
+            rawList.add(Triple.of(type, compressLevel, SharedBuffer.adopt(bufScope.release())));
         }
     }
 
     protected void addRawChunk(String type, UniBuffer value, int compressLevel) {
-        rawList.add(Triple.of(type, compressLevel, value.acquire()));
+        rawList.add(Triple.of(type, compressLevel, value.share()));
     }
 
     public void addStoredChunk(AssetContainerView.ChunkInfo chunk, UniBuffer stored) {
@@ -65,18 +66,19 @@ public class AssetFileWriter implements AutoCloseable {
             throw new IllegalArgumentException("Stored chunk has no logical hash");
         }
         storedList.add(new StoredEntry(chunk.type(), chunk.encoding(), chunk.decodeSize(), chunk.alignmentShift(),
-            chunk.flags(), stored.acquire(), chunk.hash().clone()));
+            chunk.flags(), stored.share(), chunk.hash().clone()));
     }
 
     public int addProtoBlob(ProtoMessage<?> value, int compressLevel) throws IOException {
         try (var bufScope = ArrayBuffer.allocateWithScope(value.getSerializedSize())) {
             value.writeTo(ProtoUtil.sink(bufScope.get()));
-            return addBlob(bufScope.get(), compressLevel);
+            blobList.add(new BlobEntry(compressLevel, "", 0, SharedBuffer.adopt(bufScope.release())));
+            return blobList.size();
         }
     }
 
     public int addBlob(UniBuffer buffer, int compressLevel) {
-        blobList.add(new BlobEntry(compressLevel, "", 0, buffer.acquire(), false));
+        blobList.add(new BlobEntry(compressLevel, "", 0, buffer.share()));
         return blobList.size();
     }
 
@@ -85,7 +87,7 @@ public class AssetFileWriter implements AutoCloseable {
     }
 
     protected int addBorrowedBlob(ByteBuffer buffer) {
-        blobList.add(new BlobEntry(0, "", 0, NativeBuffer.borrow(Objects.requireNonNull(buffer, "buffer")), true));
+        blobList.add(new BlobEntry(0, "", 0, NativeBuffer.borrow(Objects.requireNonNull(buffer, "buffer"))));
         return blobList.size();
     }
 
@@ -94,7 +96,7 @@ public class AssetFileWriter implements AutoCloseable {
         if (image.format() == Image.Format.RGBA) {
             throw new IllegalArgumentException("Image blob must use compressed storage");
         }
-        blobList.add(new BlobEntry(0, image.format().name(), packImageSize(image), image.data().acquire(), false));
+        blobList.add(new BlobEntry(0, image.format().name(), packImageSize(image), image.data()));
         return blobList.size();
     }
 
@@ -143,26 +145,19 @@ public class AssetFileWriter implements AutoCloseable {
 
     @Override
     public void close() {
-        for (var pair : rawList) {
-            pair.getRight().close();
-        }
-        for (var blob : blobList) {
-            if (!blob.borrowed()) {
-                blob.data().close();
-            }
-        }
-        for (var stored : storedList) {
-            stored.data().close();
-        }
+        rawList.clear();
+        blobList.clear();
+        storedList.clear();
         for (var pair : images) {
             pair.getRight().close();
         }
+        images.clear();
     }
 
-    private record BlobEntry(int compressLevel, String encoding, int decodeSize, UniBuffer data, boolean borrowed) {
+    private record BlobEntry(int compressLevel, String encoding, int decodeSize, UniBuffer data) {
     }
 
     private record StoredEntry(String type, String encoding, int decodeSize, int alignmentShift, int flags,
-        UniBuffer data, byte[] hash) {
+        SharedBuffer data, byte[] hash) {
     }
 }

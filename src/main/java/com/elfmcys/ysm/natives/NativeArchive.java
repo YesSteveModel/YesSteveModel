@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.natives;
 
 import com.elfmcys.ysm.buffer.NativeBuffer;
+import com.elfmcys.ysm.buffer.BorrowedNativeBuffer;
 import com.elfmcys.ysm.buffer.annotation.Borrowed;
 import com.elfmcys.ysm.format.vfs.VirtualFileSystem;
 import org.jetbrains.annotations.Nullable;
@@ -75,7 +76,8 @@ public final class NativeArchive extends NativeObject implements VirtualFileSyst
         if (buf == null) {
             return null;
         }
-        return NativeBuffer.borrow((ByteBuffer)buf);
+        var data = (ByteBuffer)buf;
+        return BorrowedNativeBuffer.of(this, data, 0, data.remaining());
     }
 
     private static native long nCreate(String path);

@@ -1,8 +1,8 @@
 package com.elfmcys.ysm.format.schema.file;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.natives.image.Image;
@@ -94,8 +94,8 @@ public class AssetFileView {
         return new PBRImageSources(uv, normal, specular);
     }
 
-    public UniBuffer readPayload(BooleanSupplier cancelled, ChunkDataSource source, String type, BufferType outputType)
-        throws IOException {
+    public SharedBuffer readPayload(BooleanSupplier cancelled, ChunkDataSource source, String type,
+        BufferType outputType) throws IOException {
         var chunkInfo = assetView.getChunkInfo(type);
         if (chunkInfo == null) {
             throw AssetLoadException.content("Chunk " + type + " not found");
@@ -103,23 +103,24 @@ public class AssetFileView {
         return source.readPayload(cancelled, chunkInfo, outputType);
     }
 
-    public UniBuffer readBlobPayload(BooleanSupplier cancelled, ChunkDataSource source, int id, BufferType outputType)
-        throws IOException {
+    public SharedBuffer readBlobPayload(BooleanSupplier cancelled, ChunkDataSource source, int id,
+        BufferType outputType) throws IOException {
         return readPayload(cancelled, source, AssetFileConstant.BLOB_CHUNK_PREFIX + Integer.toUnsignedLong(id),
             outputType);
     }
 
     public <D extends ProtoMessage<D>> D readProtoBlob(BooleanSupplier cancelled, ChunkDataSource source, int blobId,
         ProtoReader<D> reader) throws IOException {
-        try (var buffer = readBlobPayload(cancelled, source, blobId, BufferType.ARRAY)) {
-            if (!(buffer instanceof ArrayBuffer arrayBuffer)) {
-                throw new IllegalStateException("Array chunk read returned a non-array buffer");
-            }
-            try {
-                return reader.readProto(ProtoUtil.source(arrayBuffer));
-            } catch (IOException error) {
-                throw AssetLoadException.content("Failed to decode protobuf blob " + blobId, error);
-            }
+        var buffer = readBlobPayload(cancelled, source, blobId, BufferType.ARRAY);
+        if (!(buffer instanceof ArrayBuffer arrayBuffer)) {
+            throw new IllegalStateException("Array chunk read returned a non-array buffer");
+        }
+        try {
+            return reader.readProto(ProtoUtil.source(arrayBuffer));
+        } catch (IOException error) {
+            throw AssetLoadException.content("Failed to decode protobuf blob " + blobId, error);
+        } finally {
+            java.lang.ref.Reference.reachabilityFence(buffer);
         }
     }
 

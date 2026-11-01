@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.natives;
 
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.buffer.annotation.Owned;
@@ -15,7 +16,7 @@ public final class Zstd {
     private Zstd() {}
 
     @Owned
-    public static UniBuffer compressAndHash(UniBuffer source, byte @Nullable [] hash, BufferType outputType,
+    public static BufferStorage compressAndHash(UniBuffer source, byte @Nullable [] hash, BufferType outputType,
         int level) {
         var args = BufferArgument.packInput(source);
         final Object result;
@@ -31,7 +32,7 @@ public final class Zstd {
     }
 
     @Owned
-    public static UniBuffer decompressAndValidate(UniBuffer source, int outputSize, byte @Nullable [] hash,
+    public static BufferStorage decompressAndValidate(UniBuffer source, int outputSize, byte @Nullable [] hash,
         BufferType outputType) {
         var args = BufferArgument.packInput(source);
         final Object result;

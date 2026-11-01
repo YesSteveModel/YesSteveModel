@@ -266,9 +266,13 @@ class ModelManagementLocalCatalogScenarioTest {
     private static byte[] readManifestBytes(ModelContent content) throws Exception {
         var chunk =
             content.modelFile().getFileView().getAssetView().getChunkInfo(ModelFileConstant.MANIFEST_CHUNK_NAME);
-        try (var prefix = content.representation().metadataPrefix().orElseThrow(); var array = prefix.acquireArray()) {
-            return Arrays.copyOfRange(array.array(), array.arrayOffset() + chunk.offset(),
-                array.arrayOffset() + chunk.offset() + chunk.size());
+        {
+            var prefix = content.representation().metadataPrefix().orElseThrow();
+            try (var array = prefix.copyArray()) {
+                return Arrays.copyOfRange(array.array(), array.arrayOffset() + chunk.offset(),
+                    array.arrayOffset() + chunk.offset() + chunk.size());
+
+            }
         }
     }
 

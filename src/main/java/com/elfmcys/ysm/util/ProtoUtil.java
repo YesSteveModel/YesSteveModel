@@ -1,6 +1,8 @@
 package com.elfmcys.ysm.util;
 
+import com.elfmcys.ysm.buffer.ArrayStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
+import com.elfmcys.ysm.buffer.UniBuffer;
 import us.hebi.quickbuf.ProtoMessage;
 import us.hebi.quickbuf.ProtoSink;
 import us.hebi.quickbuf.ProtoSource;
@@ -12,8 +14,11 @@ public class ProtoUtil {
         return ProtoSink.newInstance(buffer.array(), buffer.arrayOffset(), buffer.size());
     }
 
-    public static ProtoSource source(ArrayBuffer buffer) {
-        return ProtoSource.newInstance(buffer.array(), buffer.arrayOffset(), buffer.size());
+    /** Borrows input; the caller must keep its owner alive until all reads finish. */
+    public static ProtoSource source(UniBuffer buffer) {
+        if (buffer instanceof ArrayBuffer array)
+            return ProtoSource.newInstance(array.array(), array.arrayOffset(), array.size());
+        return ProtoSource.newDirectSource().setInput(buffer.nio());
     }
 
     public static byte[] serializeToArray(ProtoMessage<?> msg) throws IOException {
@@ -23,7 +28,7 @@ public class ProtoUtil {
         return array;
     }
 
-    public static ArrayBuffer serializeToBuffer(ProtoMessage<?> message) throws IOException {
+    public static ArrayStorage serializeToBuffer(ProtoMessage<?> message) throws IOException {
         var result = ArrayBuffer.allocate(message.getSerializedSize());
         try {
             message.writeTo(sink(result));

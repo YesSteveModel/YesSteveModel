@@ -133,7 +133,8 @@ class ModelFileViewTest {
         try {
             Files.write(file, Arrays.copyOf(original, original.length + 1));
             assertContentFailure(() -> {
-                try (var ignored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                {
+                    var ignored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                     // A successful read would retain a buffer that this negative path must close.
                 }
             });
@@ -143,7 +144,8 @@ class ModelFileViewTest {
             changed[chunk.offset()] ^= 1;
             Files.write(file, changed);
             assertContentFailure(() -> {
-                try (var ignored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                {
+                    var ignored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                     // A successful read would retain a buffer that this negative path must close.
                 }
             });
@@ -152,8 +154,9 @@ class ModelFileViewTest {
             var outOfRange = new AssetContainerView.ChunkInfo(chunk.type(), chunk.encoding(), original.length,
                 chunk.size(), chunk.decodeSize(), chunk.flags(), 0, chunk.alignmentShift(), chunk.hash());
             assertContentFailure(() -> {
-                try (var ignored =
-                    new FileChunkDataSource(file, original.length).readStoredVerified(outOfRange, BufferType.ARRAY)) {
+                {
+                    var ignored =
+                        new FileChunkDataSource(file, original.length).readStoredVerified(outOfRange, BufferType.ARRAY);
                     // A successful read would retain a buffer that this negative path must close.
                 }
             });

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.natives.render;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.util.ResourceDiagnostics;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
@@ -362,7 +363,7 @@ public final class NativeBakedModel extends NativeObject {
 
     /** Borrows immutable backing; shared consumers have no physical close authority. */
     @Owned
-    public NativeBuffer serialize() {
+    public NativeStorage serialize() {
         try {
             var output = nSerialize(get());
             if (output == null) {

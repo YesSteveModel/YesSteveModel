@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.storage;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.NativeBuffer;
@@ -118,21 +119,21 @@ public final class ManagedContainer implements ModelContent {
     }
 
     public static ManagedContainer openResidentDefault(byte[] container, CatalogLocation location) throws IOException {
-        try (var buffer = ArrayBuffer.move(Objects.requireNonNull(container, "container").clone())) {
-            return openResidentDefault(buffer, location);
-        }
+        return openResidentDefault(ArrayBuffer.borrow(Objects.requireNonNull(container, "container")), location);
     }
 
     public static ManagedContainer openResidentDefault(UniBuffer container, CatalogLocation location)
         throws IOException {
+        var array = container.shareArray();
         final ModelRepresentation representation;
-        try (var array = container.acquireArray();
-            var channel = new ByteArraySeekableChannel(array.array(), array.arrayOffset(), array.size())) {
+        try (var channel = new ByteArraySeekableChannel(array.array(), array.arrayOffset(), array.size())) {
             representation = readRepresentation(channel, "builtin default memory");
+        } finally {
+            java.lang.ref.Reference.reachabilityFence(array);
         }
         try {
             var source =
-                ResidentChunkDataSource.fromContainer(container, representation.view().getFileView().getAssetView());
+                ResidentChunkDataSource.fromContainer(array, representation.view().getFileView().getAssetView());
             return new ManagedContainer(null, location, representation, source);
         } catch (IOException | RuntimeException | Error failure) {
             representation.close();
@@ -191,14 +192,16 @@ public final class ManagedContainer implements ModelContent {
         if (expectedFileSize(preamble) != acceptedSize) {
             throw AssetLoadException.content("Model file length does not match its chunk table: " + source);
         }
-        try (var prefix = readMetadataPrefix(channel, preamble)) {
+        try (var scope = com.elfmcys.ysm.util.ScopeGuard.create(readMetadataPrefix(channel, preamble))) {
             verifyFileSize(channel, acceptedSize, source);
-            return ModelRepresentation.fromMetadataPrefix(prefix, reusable);
+            return ModelRepresentation
+                .fromMetadataPrefix(com.elfmcys.ysm.buffer.SharedNativeBuffer.adopt(scope.release()), reusable);
         }
     }
 
     private static boolean prefixMatches(SeekableByteChannel channel, ModelRepresentation reusable) throws IOException {
-        try (var prefix = reusable.metadataPrefix().orElseThrow()) {
+        var prefix = reusable.metadataPrefix().orElseThrow();
+        try {
             if (channelSize(channel) < prefix.size()) {
                 return false;
             }
@@ -289,13 +292,11 @@ public final class ManagedContainer implements ModelContent {
             if (chunk.type().equals(AssetContainerConstant.VERIFICATION_CHUNK_TYPE)) {
                 continue;
             }
-            try (var ignored = source.readStoredVerified(chunk, BufferType.ARRAY)) {
-                // Reading is the validation.
-            }
+            source.readStoredVerified(chunk, BufferType.ARRAY);
         }
     }
 
-    private static NativeBuffer readMetadataPrefix(SeekableByteChannel channel, AssetContainerView preamble)
+    private static NativeStorage readMetadataPrefix(SeekableByteChannel channel, AssetContainerView preamble)
         throws IOException {
         var manifest = ModelFileView.requireMetadataLayout(preamble);
         var size = Math.addExact(manifest.offset(), manifest.size());

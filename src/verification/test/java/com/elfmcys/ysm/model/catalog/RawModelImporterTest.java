@@ -30,14 +30,14 @@ class RawModelImporterTest {
         var root = Files.createDirectory(temporary.resolve("raw"));
         var file = Files.write(root.resolve("input"), new byte[] {1, 2, 3});
         var directory = new Directory(root);
-        try (var verified = directory.getFile("input").acquire()) {
+        try (var verified = directory.getFile("input").copy()) {
             Thread.currentThread().interrupt();
             try {
                 assertThrows(UncheckedIOException.class, () -> directory.getFile("input"));
             } finally {
                 Thread.interrupted();
             }
-            try (var next = directory.getFile("input").acquire()) {
+            try (var next = directory.getFile("input").copy()) {
                 org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[] {1, 2, 3},
                     new byte[] {next.nio().get(0), next.nio().get(1), next.nio().get(2)});
             }

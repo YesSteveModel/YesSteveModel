@@ -43,37 +43,32 @@ class NativeLegacyProtocolTest {
     }
 
     @Test
-    void retainedWriterBufferOutlivesThePublicResultGate() {
+    void copiedWriterBufferOutlivesThePublicResultGate() {
         var payloads = minimalPayloads();
         var raw = result(0, "", true, descriptor(payloads, 1, 64), payloads);
         var success = assertInstanceOf(NativeLegacyProtocol.Success.class, NativeLegacyProtocol.accept(raw));
         var publicView = success.payloads().get(2);
-        var writerOwned = publicView.acquire();
-        var alias = writerOwned.slice(0, writerOwned.size());
+        var writerOwned = publicView.copy();
 
         success.close();
         assertThrows(IllegalStateException.class, publicView::nio);
         assertEquals("model", StandardCharsets.UTF_8.decode(writerOwned.nio()).toString());
-        var retainedAgain = writerOwned.acquire();
+        var retainedAgain = writerOwned.copy();
 
         writerOwned.close();
-        writerOwned.close();
-        assertThrows(IllegalStateException.class, alias::nio);
-        assertThrows(IllegalStateException.class, writerOwned::nio);
         assertEquals("model", StandardCharsets.UTF_8.decode(retainedAgain.nio()).toString());
         retainedAgain.close();
     }
 
     @Test
-    void closingBorrowedViewDoesNotCloseItsParent() {
+    void borrowedViewHasNoCloseCapability() {
         var payloads = minimalPayloads();
         var raw = result(0, "", true, descriptor(payloads, 1, 64), payloads);
         var success = assertInstanceOf(NativeLegacyProtocol.Success.class, NativeLegacyProtocol.accept(raw));
         var publicView = success.payloads().get(2);
         var borrowed = publicView.borrow();
 
-        borrowed.close();
-        assertThrows(IllegalStateException.class, borrowed::nio);
+        assertFalse(AutoCloseable.class.isInstance(borrowed));
         assertEquals("model", StandardCharsets.UTF_8.decode(publicView.nio()).toString());
 
         success.close();

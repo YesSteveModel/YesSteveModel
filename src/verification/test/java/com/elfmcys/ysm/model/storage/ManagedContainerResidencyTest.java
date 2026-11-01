@@ -75,7 +75,8 @@ class ManagedContainerResidencyTest {
             assertTrue(image.data().size() > 0);
         }
         for (var chunk : handle.view().getFileView().getAssetView().getChunkTable().values()) {
-            try (var ignored = capturedChunks.readStoredVerified(chunk, BufferType.ARRAY)) {
+            {
+                var ignored = capturedChunks.readStoredVerified(chunk, BufferType.ARRAY);
                 assertTrue(ignored.size() > 0);
             }
         }
@@ -103,9 +104,13 @@ class ManagedContainerResidencyTest {
             representation.view().getFileView().getAssetView().getChunkInfo(ModelFileConstant.MANIFEST_CHUNK_NAME);
         var expected = Arrays.copyOfRange(Files.readAllBytes(file), 0, manifest.offset() + manifest.size());
 
-        try (var prefix = representation.metadataPrefix().orElseThrow(); var actual = prefix.acquireArray()) {
-            assertArrayEquals(expected,
-                Arrays.copyOfRange(actual.array(), actual.arrayOffset(), actual.arrayOffset() + actual.size()));
+        {
+            var prefix = representation.metadataPrefix().orElseThrow();
+            try (var actual = prefix.copyArray()) {
+                assertArrayEquals(expected,
+                    Arrays.copyOfRange(actual.array(), actual.arrayOffset(), actual.arrayOffset() + actual.size()));
+
+            }
         }
     }
 
@@ -113,7 +118,8 @@ class ManagedContainerResidencyTest {
     void representationRejectsMismatchedModelAndContainerIds() throws Exception {
         var handle = openIndexed(copyFixture("identity.mxc"), location("identity"));
         var representation = handle.representation();
-        try (var prefix = representation.metadataPrefix().orElseThrow()) {
+        {
+            var prefix = representation.metadataPrefix().orElseThrow();
             assertThrows(IllegalArgumentException.class,
                 () -> new ModelRepresentation(
                     new ModelFileIdentity(different(representation.modelId()), representation.containerId()), prefix,
@@ -135,7 +141,8 @@ class ManagedContainerResidencyTest {
         assertSame(previous.view().getMetadata(), reloaded.view().getMetadata());
         assertSame(previous.view().getFileView().getAssetView(), reloaded.view().getFileView().getAssetView());
         reloaded.representation().close();
-        try (var retained = previous.representation().metadataPrefix().orElseThrow()) {
+        {
+            var retained = previous.representation().metadataPrefix().orElseThrow();
             assertTrue(retained.size() > 0);
         }
     }
@@ -150,7 +157,8 @@ class ManagedContainerResidencyTest {
             assertSame(previous, outcome.content());
             assertThrows(IllegalStateException.class, () -> rebuilt.representation().metadataPrefix().orElseThrow());
         }
-        try (var retained = previous.representation().metadataPrefix().orElseThrow()) {
+        {
+            var retained = previous.representation().metadataPrefix().orElseThrow();
             assertTrue(retained.size() > 0);
         }
     }
@@ -163,14 +171,16 @@ class ManagedContainerResidencyTest {
             new ResolvedContent(ManagedContainer.openDirect(file, location("ownership"), previous), previous)) {
             assertSame(previous, rejected.content());
         }
-        try (var retained = previous.representation().metadataPrefix().orElseThrow()) {
+        {
+            var retained = previous.representation().metadataPrefix().orElseThrow();
             assertTrue(retained.size() > 0);
         }
         var created = ManagedContainer.openDirect(file, location("created"));
         try (var adopted = new ResolvedContent(created, null)) {
             assertSame(created, adopted.adopt());
         }
-        try (var retained = created.representation().metadataPrefix().orElseThrow()) {
+        {
+            var retained = created.representation().metadataPrefix().orElseThrow();
             assertTrue(retained.size() > 0);
         }
         var rejected = ManagedContainer.openDirect(file, location("rejected"));
@@ -192,7 +202,8 @@ class ManagedContainerResidencyTest {
         assertThrows(AssetLoadException.class, () -> ManagedContainer.openDirect(file, location("corrupt"), previous));
         Files.write(file, Arrays.copyOf(bytes, bytes.length - 1));
         assertThrows(AssetLoadException.class, () -> ManagedContainer.openDirect(file, location("corrupt"), previous));
-        try (var retained = previous.representation().metadataPrefix().orElseThrow()) {
+        {
+            var retained = previous.representation().metadataPrefix().orElseThrow();
             assertTrue(retained.size() > 0);
         }
     }
@@ -214,7 +225,8 @@ class ManagedContainerResidencyTest {
             for (var chunk : asset.getChunkTable().values().stream()
                 .filter(value -> !value.type().equals(AssetContainerConstant.VERIFICATION_CHUNK_TYPE))
                 .sorted(java.util.Comparator.comparingInt(AssetContainerView.ChunkInfo::offset)).toList()) {
-                try (var bytes = original.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                {
+                    var bytes = original.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                     writer.addStoredChunk(chunk.type(), chunk.encoding(), chunk.decodeSize(), chunk.alignmentShift(),
                         chunk.flags(), bytes, chunk.hash());
                 }
@@ -228,10 +240,11 @@ class ManagedContainerResidencyTest {
         assertNotSame(original.view().getMetadata(), changed.view().getMetadata());
         assertNotSame(original.view().getFileView().getAssetView(), changed.view().getFileView().getAssetView());
         assertSame(original.view().getManifest(), changed.view().getManifest());
-        try (var texture = changed.chunks()
-            .readStoredVerified(changed.view().getFileView().getAssetView().getChunkTable().values().stream()
-                .filter(chunk -> chunk.offset() >= changed.representation().metadataPrefixSize()).findFirst()
-                .orElseThrow(), BufferType.ARRAY)) {
+        {
+            var texture = changed.chunks()
+                .readStoredVerified(changed.view().getFileView().getAssetView().getChunkTable().values().stream()
+                    .filter(chunk -> chunk.offset() >= changed.representation().metadataPrefixSize()).findFirst()
+                    .orElseThrow(), BufferType.ARRAY);
             assertTrue(texture.size() > 0);
         }
     }

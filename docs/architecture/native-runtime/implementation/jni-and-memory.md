@@ -6,7 +6,7 @@
 
 `BufferArgument` 与 `BufferInput` 在 JNI 两侧传递并验证有界范围；描述符只用于本次调用，不是持久 handle。Critical array 的地址不能逃出同步窗口；direct input 不复制 backing，原 owner 应覆盖调用期。
 
-`BufferOutput` 将 owning allocation 交给 `NativeHeapBuffer`，释放协议与分配配对。`slice()` 共享原 ownership，`acquire()` 增加独立引用，`copy()` 建立新 bytes；三者不能互换。`Image.probe` 保存 acquired input，像素输出与压缩 backing 独立。
+`BufferOutput` 将 owning allocation 交给 `NativeHeapBuffer` Storage，释放协议与分配配对。接收方显式关闭 Storage，或将整个 Storage 交给 GC wrapper。所有 `slice()` 均只借用；`SharedBuffer.ownedSlice()` 保留共同 GC owner；`copy()` 建立独立 Storage。三者不能互换，具体入口见[Buffer 与所有权](../../../infrastructure.md#buffer-与所有权)。`Image.probe` 保留 GC 管理的输入，像素输出与压缩 backing 独立。
 
 `NativeArchive.getFile()` 借用 archive 缓存，下次 extract 可覆盖。需要跨读取或异步保留时，调用方先复制；这正是[raw capture](../../asset-pipeline/implementation/conversion-and-export.md#raw-capture-与编译)的输入边界。
 
@@ -51,3 +51,5 @@ Typed 容量查询统计固定结构、各 SIMD vector 的 capacity 与骨骼 me
 ## 帧内借用
 
 `NativeModelState` 的 pose、locator 与 Render 不可重入边界由[帧执行](../../rendering/implementation/frame-execution.md)定义，不作为公共文件布局。
+
+`VertexBufferAccessor.ysm$reserve` 返回 `BorrowedNativeBuffer`，只用于本次同步写入。Builder 扩容应先于取得区域地址，native 并行写入应在 JNI 返回前全部结束，成功后才推进顶点数。借用期间不再次 reserve、扩容、重置或释放 backing；推进或放弃写入后，借用窗口结束。Anchor 保活 builder，不延长该窗口。

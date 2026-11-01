@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.benchmark;
 
+import com.elfmcys.ysm.buffer.BorrowedNativeBuffer;
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.accessor.VertexBufferAccessor;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
@@ -185,7 +187,7 @@ public class NativeRenderBenchmark {
 
     static final class Sink implements VertexConsumer, VertexBufferAccessor, AutoCloseable {
         final boolean direct;
-        final NativeBuffer buffer;
+        final NativeStorage buffer;
         long vertices;
         float checksum;
 
@@ -205,10 +207,10 @@ public class NativeRenderBenchmark {
         }
 
         @Override
-        public NativeBuffer ysm$reserve(int count) {
+        public BorrowedNativeBuffer ysm$reserve(int count) {
             if ((long)count * 36 > buffer.size())
                 throw new IllegalStateException("capacity");
-            return buffer;
+            return buffer.borrow();
         }
 
         @Override

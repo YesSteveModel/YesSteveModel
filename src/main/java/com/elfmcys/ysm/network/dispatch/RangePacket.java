@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.dispatch;
 
+import com.elfmcys.ysm.buffer.SharedArrayBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.model.resource.server.ServerResourceRuntime;
 import com.elfmcys.ysm.network.ProtocolBuffer;
@@ -91,7 +92,8 @@ final class RangePacket implements CancellablePacket {
         var relativeOffset = Math.multiplyExact(index, FRAGMENT_BYTES);
         var length = fragmentSize(index);
         var message = fragments.message(relativeOffset, relativeOffset + length == size);
-        try (var attachment = source.read(relativeOffset, length); var protobuf = ProtocolBuffer.serialize(message)) {
+        var attachment = source.read(relativeOffset, length);
+        try (var protobuf = ProtocolBuffer.serialize(message)) {
             var spec = ProtocolMessages.REGISTRY.find(message.getClass())
                 .orElseThrow(() -> new IllegalArgumentException("Unregistered resource fragment message"));
             return FrameCodec.encode(spec.id(), protobuf, attachment);
@@ -154,17 +156,17 @@ final class RangePacket implements CancellablePacket {
     private interface Source extends AutoCloseable {
         int size();
 
-        ArrayBuffer read(int offset, int length);
+        SharedArrayBuffer read(int offset, int length);
 
         @Override
         void close();
     }
 
     private static final class BytesSource implements Source {
-        private ArrayBuffer bytes;
+        private SharedArrayBuffer bytes;
 
         private BytesSource(byte[] bytes) {
-            this.bytes = ArrayBuffer.move(bytes);
+            this.bytes = SharedArrayBuffer.adopt(ArrayBuffer.move(bytes));
         }
 
         @Override
@@ -173,20 +175,16 @@ final class RangePacket implements CancellablePacket {
         }
 
         @Override
-        public ArrayBuffer read(int offset, int length) {
-            return requireOpen().slice(offset, length).acquire();
+        public SharedArrayBuffer read(int offset, int length) {
+            return requireOpen().ownedSlice(offset, length);
         }
 
         @Override
         public void close() {
-            var current = bytes;
             bytes = null;
-            if (current != null) {
-                current.close();
-            }
         }
 
-        private ArrayBuffer requireOpen() {
+        private SharedArrayBuffer requireOpen() {
             if (bytes == null) {
                 throw new IllegalStateException("Byte range source is closed");
             }
@@ -209,15 +207,8 @@ final class RangePacket implements CancellablePacket {
         }
 
         @Override
-        public ArrayBuffer read(int offset, int length) {
-            var attachment = ArrayBuffer.allocate(length);
-            try {
-                requireOpen().copyTo(offset, attachment.nio());
-                return attachment;
-            } catch (RuntimeException failure) {
-                attachment.close();
-                throw failure;
-            }
+        public SharedArrayBuffer read(int offset, int length) {
+            return requireOpen().share(offset, length);
         }
 
         @Override
@@ -256,26 +247,23 @@ final class RangePacket implements CancellablePacket {
         }
 
         @Override
-        public ArrayBuffer read(int offset, int length) {
+        public SharedArrayBuffer read(int offset, int length) {
             var keepAlive = requireOpen();
-            var attachment = ArrayBuffer.allocate(length);
-            try (var channel = Files.newByteChannel(path, StandardOpenOption.READ)) {
-                var target = attachment.nio();
-                var position = Math.addExact(fileOffset, offset);
-                channel.position(position);
-                while (target.hasRemaining()) {
-                    var read = channel.read(target);
-                    if (read < 0) {
-                        throw new EOFException("Accepted asset file was truncated: " + path);
+            try (var scope = ArrayBuffer.allocateWithScope(length)) {
+                try (var channel = Files.newByteChannel(path, StandardOpenOption.READ)) {
+                    var target = scope.get().nio();
+                    var position = Math.addExact(fileOffset, offset);
+                    channel.position(position);
+                    while (target.hasRemaining()) {
+                        var read = channel.read(target);
+                        if (read < 0) {
+                            throw new EOFException("Accepted asset file was truncated: " + path);
+                        }
                     }
                 }
-                return attachment;
+                return SharedArrayBuffer.adopt(scope.release());
             } catch (IOException error) {
-                attachment.close();
                 throw new UncheckedIOException(error);
-            } catch (RuntimeException failure) {
-                attachment.close();
-                throw failure;
             } finally {
                 Reference.reachabilityFence(keepAlive);
             }

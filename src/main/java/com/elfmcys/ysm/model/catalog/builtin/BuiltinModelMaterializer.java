@@ -121,8 +121,11 @@ public final class BuiltinModelMaterializer {
         if (chunk == null) {
             throw new FileNotFoundException("Missing render target definition blob " + blobId);
         }
-        try (var data = chunks.readPayload(chunk, BufferType.ARRAY)) {
+        var data = chunks.readPayload(chunk, BufferType.ARRAY);
+        try {
             return ModelDataProto.parseFrom(ProtoUtil.source((ArrayBuffer)data));
+        } finally {
+            java.lang.ref.Reference.reachabilityFence(data);
         }
     }
 
@@ -198,8 +201,11 @@ public final class BuiltinModelMaterializer {
         if (chunk == null) {
             throw new FileNotFoundException("Missing common strings blob");
         }
-        try (var data = chunks.readPayload(chunk, BufferType.ARRAY)) {
+        var data = chunks.readPayload(chunk, BufferType.ARRAY);
+        try {
             return StringDataProto.parseFrom(ProtoUtil.source((ArrayBuffer)data));
+        } finally {
+            java.lang.ref.Reference.reachabilityFence(data);
         }
     }
 

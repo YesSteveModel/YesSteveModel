@@ -1,9 +1,9 @@
 package com.elfmcys.ysm.model.resource.client.audio;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.NativeBuffer;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.media.SupportedAudioProbe;
 import com.elfmcys.ysm.format.parser.ModelParser;
@@ -116,7 +116,7 @@ final class AudioPlaybackFixture implements AutoCloseable {
             public ChunkDataSource chunks() {
                 return new ChunkDataSource() {
                     @Override
-                    public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type)
+                    public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type)
                         throws IOException {
                         int index = Integer.parseInt(chunk.type().substring("blob-".length())) - 1;
                         reads.add(index);
@@ -124,12 +124,12 @@ final class AudioPlaybackFixture implements AutoCloseable {
                             throw tailFailure;
                         }
                         var bytes = payloads.get(index);
-                        return type == BufferType.NATIVE ? NativeBuffer.copyOf(ByteBuffer.wrap(bytes))
-                            : ArrayBuffer.copyOf(ByteBuffer.wrap(bytes));
+                        return SharedBuffer.adopt(type == BufferType.NATIVE
+                            ? NativeBuffer.copyOf(ByteBuffer.wrap(bytes)) : ArrayBuffer.copyOf(ByteBuffer.wrap(bytes)));
                     }
 
                     @Override
-                    public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
+                    public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
                         throws IOException {
                         return readPayload(chunk, type);
                     }

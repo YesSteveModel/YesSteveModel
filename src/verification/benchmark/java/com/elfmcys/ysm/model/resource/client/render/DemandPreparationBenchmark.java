@@ -95,8 +95,9 @@ public class DemandPreparationBenchmark {
             host = ExpressionHost.create(HostAvailability.none());
             var builtin =
                 Path.of(Objects.requireNonNull(getClass().getResource("/assets/ysm/builtin/default")).toURI());
-            try (var directory = new Directory(builtin); var memory = ModelParser.parseBuiltinDefaultMemory(directory);
-                var bytes = memory.bytes()) {
+            try (var directory = new Directory(builtin)) {
+                var memory = ModelParser.parseBuiltinDefaultMemory(directory);
+                var bytes = memory.bytes();
                 content = ManagedContainer.openResidentDefault(bytes,
                     new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
             }

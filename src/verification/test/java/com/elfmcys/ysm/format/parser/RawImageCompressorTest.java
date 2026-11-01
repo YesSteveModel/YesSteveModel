@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.natives.image.Image;
@@ -77,7 +78,7 @@ class RawImageCompressorTest {
     }
 
     private static Image image(Image.Format format, int size) {
-        return new Image(format, 32, 32, ArrayBuffer.move(new byte[size]));
+        return Image.adopt(format, 32, 32, ArrayBuffer.move(new byte[size]));
     }
 
     private static final class FakeCodec implements RawImageCompressor.Codec {
@@ -91,8 +92,8 @@ class RawImageCompressorTest {
         }
 
         @Override
-        public NativeBuffer decode(Image image) {
-            return NativeBuffer.borrow(ByteBuffer.allocateDirect(image.width() * image.height() * 4));
+        public NativeStorage decode(Image image) {
+            return NativeBuffer.move(ByteBuffer.allocateDirect(image.width() * image.height() * 4));
         }
 
         @Override
@@ -103,7 +104,7 @@ class RawImageCompressorTest {
             if (fail) {
                 throw new IOException("test failure");
             }
-            return new Image(Image.Format.WEBP, width, height, ArrayBuffer.move(new byte[encodedSize]));
+            return Image.adopt(Image.Format.WEBP, width, height, ArrayBuffer.move(new byte[encodedSize]));
         }
     }
 }

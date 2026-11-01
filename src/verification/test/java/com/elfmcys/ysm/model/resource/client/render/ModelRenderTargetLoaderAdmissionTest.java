@@ -1,12 +1,12 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.model.storage.ModelStorageInfra;
 import com.elfmcys.ysm.model.storage.ContentStorageBinding;
 
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.expression.aot.ExpressionArtifactStore;
 import com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics;
 import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory;
@@ -224,8 +224,9 @@ class ModelRenderTargetLoaderAdmissionTest {
         var root = Path.of(Objects
             .requireNonNull(ModelRenderTargetLoaderAdmissionTest.class.getResource("/assets/ysm/builtin/default"))
             .toURI());
-        try (var directory = new Directory(root); var memory = ModelParser.parseBuiltinDefaultMemory(directory);
-            var bytes = memory.bytes()) {
+        try (var directory = new Directory(root)) {
+            var memory = ModelParser.parseBuiltinDefaultMemory(directory);
+            var bytes = memory.bytes();
             return ManagedContainer.openResidentDefault(bytes,
                 new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
         }
@@ -300,13 +301,13 @@ class ModelRenderTargetLoaderAdmissionTest {
         }
 
         @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
+        public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
             beforeRead();
             return delegate.readPayload(chunk, type);
         }
 
         @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
+        public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
             beforeRead();
             return delegate.readStoredVerified(chunk, type);
         }

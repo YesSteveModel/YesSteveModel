@@ -21,6 +21,7 @@ import com.elfmcys.ysm.util.ProtoUtil;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.lang.ref.Reference;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -152,26 +153,32 @@ public final class LegacyModelImporter {
     }
 
     private static ManifestProto parseManifest(LegacyPayloadBuffer payload) {
-        try (var array = payload.acquireArray()) {
-            return ManifestProto.parseFrom(ProtoUtil.source(array));
+        try {
+            return ManifestProto.parseFrom(ProtoUtil.source(payload));
         } catch (IOException failure) {
             throw new NativeLegacyProtocol.ProtocolException("Legacy manifest payload is invalid", failure);
+        } finally {
+            Reference.reachabilityFence(payload);
         }
     }
 
     private static StringDataProto parseStringData(LegacyPayloadBuffer payload) {
-        try (var array = payload.acquireArray()) {
-            return StringDataProto.parseFrom(ProtoUtil.source(array));
+        try {
+            return StringDataProto.parseFrom(ProtoUtil.source(payload));
         } catch (IOException failure) {
             throw new NativeLegacyProtocol.ProtocolException("Legacy StringData payload is invalid", failure);
+        } finally {
+            Reference.reachabilityFence(payload);
         }
     }
 
     private static ModelDataProto parseModelData(LegacyPayloadBuffer payload) {
-        try (var array = payload.acquireArray()) {
-            return ModelDataProto.parseFrom(ProtoUtil.source(array));
+        try {
+            return ModelDataProto.parseFrom(ProtoUtil.source(payload));
         } catch (IOException failure) {
             throw new NativeLegacyProtocol.ProtocolException("Legacy ModelData payload is invalid", failure);
+        } finally {
+            Reference.reachabilityFence(payload);
         }
     }
 
@@ -192,7 +199,7 @@ public final class LegacyModelImporter {
             case ZTX -> Image.Format.ZTX;
             default -> throw new NativeLegacyProtocol.ProtocolException("Legacy image uses a non-image encoding");
         };
-        try (var bytes = payload.acquire(); var probed = Image.probe(bytes)) {
+        try (var probed = Image.probe(payload)) {
             if (probed.format() != expected || probed.width() != record.meta0() || probed.height() != record.meta1()) {
                 throw new NativeLegacyProtocol.ProtocolException("Legacy image descriptor does not match its bytes");
             }

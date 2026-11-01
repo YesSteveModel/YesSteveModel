@@ -151,7 +151,8 @@ public final class MockScenarioFixture implements AutoCloseable {
                     || chunk.type().equals(ModelFileConstant.THUMB_BUTTON_CHUNK_NAME)) {
                     continue;
                 }
-                try (var stored = asset.content().chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                {
+                    var stored = asset.content().chunks().readStoredVerified(chunk, BufferType.ARRAY);
                     writer.addStoredChunk(chunk, stored);
                 }
             }
@@ -188,7 +189,7 @@ public final class MockScenarioFixture implements AutoCloseable {
         }
         var verification = view.getChunkInfo(AssetContainerConstant.VERIFICATION_CHUNK_TYPE);
         final byte[] containerHash;
-        try (var hashInput = ArrayBuffer.borrow(bytes, 0, verification.offset())) {
+        try (var hashInput = ArrayBuffer.move(bytes, 0, verification.offset())) {
             containerHash = Blake3.computeHash(hashInput);
         }
         System.arraycopy(containerHash, 0, bytes, verification.offset(), containerHash.length);

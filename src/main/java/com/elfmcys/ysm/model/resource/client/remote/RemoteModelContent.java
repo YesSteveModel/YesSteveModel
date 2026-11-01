@@ -4,6 +4,7 @@ import com.elfmcys.ysm.model.storage.ContentStorageBinding;
 
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.container.ChunkDecoding;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
@@ -61,7 +62,7 @@ public final class RemoteModelContent implements ModelContent {
         return store.loadRenderTarget(this, targetId, textureName, cancelled, fetcher, workers, load);
     }
 
-    public CompletableFuture<UniBuffer> requestSoundChunk(SoundMedia sound, int index, RemoteChunkFetcher fetcher,
+    public CompletableFuture<SharedBuffer> requestSoundChunk(SoundMedia sound, int index, RemoteChunkFetcher fetcher,
         Executor workers) {
         Objects.requireNonNull(sound, "sound");
         var chunks = sound.chunkInfos();
@@ -88,10 +89,9 @@ public final class RemoteModelContent implements ModelContent {
 
         try {
             for (var chunk : lazyChunks) {
-                try (var ignored = cachedChunks.readStoredVerified(chunk, BufferType.ARRAY)) {
-                    if (cancelled.getAsBoolean()) {
-                        throw new CancellationException("Cached model verification was cancelled");
-                    }
+                cachedChunks.readStoredVerified(chunk, BufferType.ARRAY);
+                if (cancelled.getAsBoolean()) {
+                    throw new CancellationException("Cached model verification was cancelled");
                 }
             }
             return cancelled.getAsBoolean() ? Optional.empty()
@@ -117,7 +117,7 @@ public final class RemoteModelContent implements ModelContent {
         }
     }
 
-    /** Gives preparation its own lexical buffer ownership, independent of the requesting consumer. */
+    /** Retains preparation bytes independently of the requesting consumer. */
     public RemoteModelContent retainPreparationInputs() {
         if (chunks instanceof ReceivedChunkDataSource received) {
             return new RemoteModelContent(representation, received.retain(), cachedChunks, store);
@@ -176,18 +176,13 @@ public final class RemoteModelContent implements ModelContent {
 
     private static final class ReceivedChunkDataSource implements ChunkDataSource, AutoCloseable {
         private final ChunkDataSource fallback;
-        private Map<String, UniBuffer> received;
+        private Map<String, SharedBuffer> received;
 
         private ReceivedChunkDataSource(ChunkDataSource fallback, Map<String, ? extends UniBuffer> received) {
             this.fallback = Objects.requireNonNull(fallback, "fallback");
-            var copies = new LinkedHashMap<String, UniBuffer>();
-            try {
-                received.forEach((type, bytes) -> copies.put(type, bytes.acquire()));
-                this.received = Map.copyOf(copies);
-            } catch (RuntimeException | Error failure) {
-                copies.values().forEach(UniBuffer::close);
-                throw failure;
-            }
+            var retained = new LinkedHashMap<String, SharedBuffer>();
+            received.forEach((type, bytes) -> retained.put(type, bytes.share()));
+            this.received = Map.copyOf(retained);
         }
 
         private synchronized ReceivedChunkDataSource retain() {
@@ -195,7 +190,7 @@ public final class RemoteModelContent implements ModelContent {
         }
 
         @Override
-        public Map<String, UniBuffer> readPayloads(BooleanSupplier cancelled,
+        public Map<String, SharedBuffer> readPayloads(BooleanSupplier cancelled,
             java.util.Collection<AssetContainerView.ChunkInfo> chunks, BufferType bufferType) throws IOException {
             try (var retained = retain()) {
                 return ChunkDataSource.collectPayloads(cancelled, chunks,
@@ -204,40 +199,41 @@ public final class RemoteModelContent implements ModelContent {
         }
 
         @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
-            if (!ChunkDecoding.isZstd(chunk)) {
-                return readStoredVerified(chunk, bufferType);
+        public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+            var bytes = receivedChunk(chunk);
+            if (bytes == null) {
+                return fallback.readPayload(chunk, bufferType);
             }
-            try (var stored = readStoredVerified(chunk, BufferType.NATIVE)) {
-                return ChunkDecoding.decodeZstd(stored, chunk, bufferType);
+            if (ChunkDecoding.isZstd(chunk)) {
+                return SharedBuffer.adopt(ChunkDecoding.decodeZstd(bytes, chunk, bufferType));
             }
+            return bufferType == BufferType.NATIVE ? bytes.shareNative() : bytes.shareArray();
         }
 
         @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
             throws IOException {
-            final UniBuffer bytes;
-            synchronized (this) {
-                var current = received.get(chunk.type());
-                bytes = current == null ? null : current.acquire();
-            }
+            var bytes = receivedChunk(chunk);
             if (bytes == null) {
                 return fallback.readStoredVerified(chunk, bufferType);
             }
-            try (bytes; var array = bytes.copy()) {
-                ChunkDecoding.validateStored(array, chunk);
-                return bufferType == BufferType.NATIVE ? array.acquireNative() : array.acquireArray();
+            return bufferType == BufferType.NATIVE ? bytes.shareNative() : bytes.shareArray();
+        }
+
+        private SharedBuffer receivedChunk(AssetContainerView.ChunkInfo chunk) throws IOException {
+            final SharedBuffer bytes;
+            synchronized (this) {
+                bytes = received.get(chunk.type());
             }
+            if (bytes != null) {
+                ChunkDecoding.validateStored(bytes, chunk);
+            }
+            return bytes;
         }
 
         @Override
-        public void close() {
-            final Map<String, UniBuffer> released;
-            synchronized (this) {
-                released = received;
-                received = Map.of();
-            }
-            released.values().forEach(UniBuffer::close);
+        public synchronized void close() {
+            received = Map.of();
         }
     }
 

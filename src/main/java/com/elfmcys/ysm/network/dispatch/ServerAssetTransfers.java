@@ -2,6 +2,8 @@ package com.elfmcys.ysm.network.dispatch;
 
 import com.elfmcys.ysm.model.storage.PreviewStorage;
 import com.elfmcys.ysm.YesSteveModel;
+import com.elfmcys.ysm.buffer.ArrayStorage;
+import com.elfmcys.ysm.buffer.SharedArrayBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
@@ -11,7 +13,6 @@ import com.elfmcys.ysm.format.schema.model.ModelFileConstant;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
 import com.elfmcys.ysm.model.catalog.content.AssetRef;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogRecord;
-import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.catalog.source.CatalogRoot;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.ModelCatalogSources;
@@ -203,11 +204,9 @@ public final class ServerAssetTransfers implements AutoCloseable {
             return true;
         }
         var sources = new ArrayList<MetadataPrefixPacket.Source>(plans.size());
-        var owned = new ArrayList<UniBuffer>(plans.size());
         try {
             for (var plan : plans) {
                 var prefix = plan.representation.metadataPrefix().orElseThrow();
-                owned.add(prefix);
                 sources.add(new MetadataPrefixPacket.Source(plan.containerId.bytes(), prefix));
             }
             var packet =
@@ -221,8 +220,6 @@ public final class ServerAssetTransfers implements AutoCloseable {
                 fail(decoded.transferId, unavailable());
             }
             return true;
-        } finally {
-            closeBuffers(owned);
         }
     }
 
@@ -629,8 +626,9 @@ public final class ServerAssetTransfers implements AutoCloseable {
         }
         var previous = upload.fragments.get(offset);
         if (previous != null) {
+            var received = upload.started ? upload.completedBytes : upload.assembly;
             if (previous != bytes.size()
-                || !UniBufferIO.equals(upload.assembly, Math.toIntExact(offset), bytes, 0, bytes.size())) {
+                || !UniBufferIO.equals(received, Math.toIntExact(offset), bytes, 0, bytes.size())) {
                 managementFailure(lease, invalidRequest());
             }
             return true;
@@ -645,12 +643,15 @@ public final class ServerAssetTransfers implements AutoCloseable {
         upload.received = end;
         if (fragment.finalFragment()) {
             upload.started = true;
-            var held = upload.assembly.acquire();
+            var assembly = upload.assembly;
+            upload.assembly = null;
+            var held = SharedArrayBuffer.adopt(assembly);
+            upload.completedBytes = held;
             try {
                 upload.budget.execute(() -> {
                     PreviewRepairStatus status = null;
                     Throwable failure = null;
-                    try (held) {
+                    try {
                         previews.forContent(upload.record.binding().content()).commit(upload.identity.containerId(),
                             held, upload.effect);
                         status = PreviewRepairStatus.COMMITTED;
@@ -670,7 +671,6 @@ public final class ServerAssetTransfers implements AutoCloseable {
                     enqueueOwnerEvent(new UploadFinished(lease, status, failure));
                 });
             } catch (RuntimeException rejected) {
-                held.close();
                 managementFailure(lease, busy());
             }
         }
@@ -742,6 +742,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
             request.assembly.close();
             request.assembly = null;
         }
+        request.completedBytes = null;
         request.budget.close();
     }
 
@@ -757,7 +758,8 @@ public final class ServerAssetTransfers implements AutoCloseable {
         private final ServerModelSession.Effect effect;
         private final ServerPreviewWork.Lease budget;
         private ModelRequest chunks;
-        private ArrayBuffer assembly;
+        private ArrayStorage assembly;
+        private SharedArrayBuffer completedBytes;
         private final Map<Long, Integer> fragments = new LinkedHashMap<>();
         private long received;
         private boolean admitted;
@@ -1659,16 +1661,6 @@ public final class ServerAssetTransfers implements AutoCloseable {
         return ModelCatalogSources.sources().stream().filter(source -> source.publicRoot() == rootKind)
             .map(source -> source.path().toAbsolutePath().normalize()).findFirst()
             .orElseThrow(() -> new IllegalArgumentException("No catalog root for " + rootKind));
-    }
-
-    private static void closeBuffers(List<? extends UniBuffer> buffers) {
-        for (var buffer : buffers) {
-            try {
-                buffer.close();
-            } catch (RuntimeException failure) {
-                YesSteveModel.LOGGER.error("Failed to close metadata source", failure);
-            }
-        }
     }
 
     private static void closeBytesLeases(List<? extends ServerResourceRuntime.BytesLease> leases) {

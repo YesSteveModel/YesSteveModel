@@ -183,8 +183,9 @@ public final class DemandDiskReadVerification {
             localRoot = Files.createDirectories(root.resolve("local-models"));
             remoteRoot = Files.createDirectories(root.resolve("remote-cache"));
             store = new RemoteModelStore(remoteRoot);
-            try (var directory = resourceDirectory("/assets/ysm/builtin/default");
-                var memory = ModelParser.parseBuiltinDefaultMemory(directory); var bytes = memory.bytes()) {
+            try (var directory = resourceDirectory("/assets/ysm/builtin/default")) {
+                var memory = ModelParser.parseBuiltinDefaultMemory(directory);
+                var bytes = memory.bytes();
                 builtin = ManagedContainer.openResidentDefault(bytes,
                     new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
             }
@@ -200,7 +201,8 @@ public final class DemandDiskReadVerification {
                 var texture = content.modelFile().requireRenderTarget("player").getTextureNames().stream().sorted()
                     .findFirst().orElseThrow();
                 targets.add(new ClientDemandCoordinator.Target(content.modelId(), texture));
-                try (var prefix = content.representation().metadataPrefix().orElseThrow()) {
+                {
+                    var prefix = content.representation().metadataPrefix().orElseThrow();
                     var published = store.commitMetadataPrefix(content.representation().identity(), prefix);
                     published.representation().close();
                 }
@@ -210,7 +212,8 @@ public final class DemandDiskReadVerification {
                 for (var chunk : asset.getChunkTable().values()) {
                     if (chunk.offset() < end)
                         continue;
-                    try (var bytes = content.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                    {
+                        var bytes = content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                         store.publishChunk(content.modelId(), chunk, bytes);
                     }
                 }

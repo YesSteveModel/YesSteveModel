@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.natives.render;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.accessor.VertexBufferAccessor;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
@@ -457,7 +458,7 @@ class FirstPersonLocalResultIntegrationTest {
     }
 
     private static final class Probe implements AutoCloseable {
-        final NativeBuffer region;
+        final NativeStorage region;
         final VertexConsumer consumer;
         final List<float[]> vertices = new ArrayList<>();
         int advanced;
@@ -475,7 +476,7 @@ class FirstPersonLocalResultIntegrationTest {
                         case "ysm$vertexFormat" -> DefaultVertexFormat.NEW_ENTITY;
                         case "ysm$reserve" -> {
                             reserved++;
-                            yield region;
+                            yield region.borrow();
                         }
                         case "ysm$advance" -> {
                             advanced += (int)args[0];

@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.natives.render;
 
+import com.elfmcys.ysm.buffer.BorrowedNativeBuffer;
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.accessor.VertexBufferAccessor;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.annotation.Aligned;
@@ -135,10 +137,10 @@ public class NativeRenderer {
         int vertexCount, long lightAndOverlay, int color, long flags, long irisEntityId);
 
     private static final class MatBufferHolder {
-        private static final NativeBuffer BUFFER = NativeBuffer.allocate(256, 64);
+        private static final NativeStorage BUFFER = NativeBuffer.allocate(256, 64);
     }
 
     private record VertexBuffer(@Nullable VertexBufferAccessor accessor, VertexFormatType type,
-        @Nullable NativeBuffer region) {
+        @Nullable BorrowedNativeBuffer region) {
     }
 }

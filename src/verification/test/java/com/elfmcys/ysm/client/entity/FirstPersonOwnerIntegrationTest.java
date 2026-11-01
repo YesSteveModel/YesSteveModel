@@ -267,7 +267,8 @@ class FirstPersonOwnerIntegrationTest {
                                 .blake3(java.nio.ByteBuffer.wrap(new byte[] {value})).bytes();
                             var descriptor = new com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo(name, "",
                                 offset, 1, 0, 0, 0, 0, hash);
-                            try (var bytes = source.readPayload(descriptor, com.elfmcys.ysm.buffer.BufferType.ARRAY)) {
+                            {
+                                var bytes = source.readPayload(descriptor, com.elfmcys.ysm.buffer.BufferType.ARRAY);
                                 assertEquals(value, bytes.nio().get());
                             }
                             return new Animation(name, 1, com.elfmcys.ysm.geckolib3.core.builder.LoopType.PLAY_ONCE,

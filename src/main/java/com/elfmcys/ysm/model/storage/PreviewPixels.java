@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.storage;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 
 import java.nio.ByteBuffer;
@@ -46,7 +47,8 @@ public final class PreviewPixels implements AutoCloseable {
             }
         }
         try {
-            consumer.accept(backing.pixels.nio().asReadOnlyBuffer());
+            var data = backing.pixels.nio();
+            consumer.accept(data.asReadOnlyBuffer().order(data.order()));
         } finally {
             synchronized (backing) {
                 backing.borrows--;
@@ -73,7 +75,7 @@ public final class PreviewPixels implements AutoCloseable {
         private volatile boolean closed;
 
         /** A rejected adoption leaves buffer ownership with the caller. */
-        public synchronized PreviewPixels adopt(NativeBuffer pixels, int width, int height) {
+        public synchronized PreviewPixels adopt(NativeStorage pixels, int width, int height) {
             if (closed)
                 throw new IllegalStateException("Preview pixel owner is closed");
             if (width <= 0 || height <= 0 || pixels.size() != (long)width * height * 4)
@@ -127,7 +129,7 @@ public final class PreviewPixels implements AutoCloseable {
     }
 
     private static final class Backing {
-        private final NativeBuffer pixels;
+        private final NativeStorage pixels;
         private final int width;
         private final int height;
         private final Owner owner;
@@ -136,7 +138,7 @@ public final class PreviewPixels implements AutoCloseable {
         private boolean retired;
         private boolean released;
 
-        private Backing(NativeBuffer pixels, int width, int height, Owner owner) {
+        private Backing(NativeStorage pixels, int width, int height, Owner owner) {
             this.pixels = pixels;
             this.width = width;
             this.height = height;

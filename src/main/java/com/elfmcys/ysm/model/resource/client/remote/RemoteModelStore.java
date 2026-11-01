@@ -1,5 +1,8 @@
 package com.elfmcys.ysm.model.resource.client.remote;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
+import com.elfmcys.ysm.buffer.BufferStorage;
+import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.model.storage.ModelStorageInfra;
 import com.elfmcys.ysm.model.storage.CacheDirectoryGuard;
 import com.elfmcys.ysm.model.storage.CacheRegion;
@@ -7,7 +10,6 @@ import com.elfmcys.ysm.model.storage.ContentStorageBinding;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
 import com.elfmcys.ysm.format.container.AssetContainerView;
@@ -213,7 +215,7 @@ public final class RemoteModelStore implements AutoCloseable {
             }
             var expected = new LinkedHashMap<String, AssetContainerView.ChunkInfo>();
             outcome.missing.forEach(chunk -> expected.put(chunk.type(), chunk));
-            var received = new ConcurrentHashMap<String, UniBuffer>();
+            var received = new ConcurrentHashMap<String, SharedBuffer>();
             final CompletableFuture<Void> fetching;
             try {
                 fetching = Objects.requireNonNull(
@@ -221,12 +223,12 @@ public final class RemoteModelStore implements AutoCloseable {
                         (chunk, bytes) -> receiveChunk(expected, received, chunk, bytes)),
                     "Remote chunk fetcher returned a null future");
             } catch (RuntimeException failure) {
-                closeAll(received);
+                received.clear();
                 return CompletableFuture.failedFuture(failure);
             }
             fetching.whenComplete((ignored, failure) -> {
                 if (failure != null) {
-                    closeAll(received);
+                    received.clear();
                 }
             });
             transfer.set(fetching);
@@ -238,7 +240,7 @@ public final class RemoteModelStore implements AutoCloseable {
                     workers.execute(action);
                 } catch (RejectedExecutionException rejected) {
                     // No worker owns these inputs when the continuation was never accepted.
-                    closeAll(received);
+                    received.clear();
                     throw rejected;
                 }
             };
@@ -275,7 +277,8 @@ public final class RemoteModelStore implements AutoCloseable {
             if (cancelled.getAsBoolean()) {
                 throw new CancellationException("Model activation was cancelled");
             }
-            try (var ignored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+            try {
+                content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                 // A verified hit remains subject to the load's own exact read validation.
             } catch (IOException unavailable) {
                 missing.add(chunk);
@@ -286,24 +289,24 @@ public final class RemoteModelStore implements AutoCloseable {
     }
 
     private static void receiveChunk(Map<String, AssetContainerView.ChunkInfo> expected,
-        Map<String, UniBuffer> received, AssetContainerView.ChunkInfo chunk, UniBuffer bytes) throws IOException {
+        Map<String, SharedBuffer> received, AssetContainerView.ChunkInfo chunk, UniBuffer bytes) throws IOException {
         Objects.requireNonNull(chunk, "chunk");
         Objects.requireNonNull(bytes, "bytes");
         var descriptor = expected.get(chunk.type());
         if (!sameChunk(descriptor, chunk)) {
             throw AssetLoadException.content("Remote transfer returned an unexpected chunk");
         }
-        var copy = bytes.acquire();
-        if (received.putIfAbsent(chunk.type(), copy) != null) {
-            copy.close();
+        var shared = bytes.share();
+        if (received.putIfAbsent(chunk.type(), shared) != null) {
             throw AssetLoadException.content("Remote transfer returned a chunk more than once: " + chunk.type());
         }
     }
 
     private <T> T persistAndLoad(RemoteModelContent content, List<AssetContainerView.ChunkInfo> missing,
-        Map<String, UniBuffer> received, BooleanSupplier cancelled, Function<ModelContent, T> load) throws IOException {
+        Map<String, SharedBuffer> received, BooleanSupplier cancelled, Function<ModelContent, T> load)
+        throws IOException {
         try {
-            var complete = new LinkedHashMap<String, UniBuffer>();
+            var complete = new LinkedHashMap<String, SharedBuffer>();
             for (var chunk : missing) {
                 if (cancelled.getAsBoolean()) {
                     throw new CancellationException("Model activation was cancelled");
@@ -334,13 +337,8 @@ public final class RemoteModelStore implements AutoCloseable {
                 prepared.closeReceived();
             }
         } finally {
-            closeAll(received);
+            received.clear();
         }
-    }
-
-    private static void closeAll(Map<String, UniBuffer> buffers) {
-        buffers.values().forEach(UniBuffer::close);
-        buffers.clear();
     }
 
     private static boolean sameChunk(AssetContainerView.ChunkInfo expected, AssetContainerView.ChunkInfo actual) {
@@ -349,12 +347,12 @@ public final class RemoteModelStore implements AutoCloseable {
             && expected.encoding().equals(actual.encoding()) && Arrays.equals(expected.hash(), actual.hash());
     }
 
-    CompletableFuture<UniBuffer> requestChunk(RemoteModelContent content, AssetContainerView.ChunkInfo chunk,
+    CompletableFuture<SharedBuffer> requestChunk(RemoteModelContent content, AssetContainerView.ChunkInfo chunk,
         RemoteChunkFetcher fetcher, Executor workers) {
         Objects.requireNonNull(content, "content");
         Objects.requireNonNull(chunk, "chunk");
         Objects.requireNonNull(workers, "workers");
-        var result = new CompletableFuture<UniBuffer>();
+        var result = new CompletableFuture<SharedBuffer>();
         var flight = new AtomicReference<ChunkFlight>();
         var probe = CompletableFuture.supplyAsync(() -> {
             try {
@@ -379,13 +377,10 @@ public final class RemoteModelStore implements AutoCloseable {
                 return;
             }
             if (result.isDone()) {
-                close(cached);
                 return;
             }
             if (cached != null) {
-                if (!result.complete(cached)) {
-                    cached.close();
-                }
+                result.complete(cached);
                 return;
             }
             if (fetcher == null) {
@@ -537,44 +532,44 @@ public final class RemoteModelStore implements AutoCloseable {
         }
 
         @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+        public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
             return decodePayload(chunk, bufferType);
         }
 
         @Override
-        public UniBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
+        public SharedBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
             BufferType bufferType) throws IOException {
             if (cancelled.getAsBoolean()) {
                 throw new CancellationException("Remote chunk read was cancelled");
             }
             var result = decodePayload(chunk, bufferType);
             if (cancelled.getAsBoolean()) {
-                result.close();
                 throw new CancellationException("Remote chunk read was cancelled");
             }
             return result;
         }
 
-        private UniBuffer decodePayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
-            try (var stored = readStoredVerifiedNow(chunk, BufferType.ARRAY)) {
-                if (!ChunkDecoding.isZstd(chunk)) {
-                    return bufferType == BufferType.ARRAY ? stored.acquireArray() : stored.acquireNative();
-                }
-                try {
-                    return Zstd.decompressAndValidate(stored, chunk.decodeSize(), chunk.hash(), bufferType);
-                } catch (RuntimeException invalid) {
-                    throw AssetLoadException.content("Invalid cached zstd chunk: " + chunk.type(), invalid);
-                }
+        private SharedBuffer decodePayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            throws IOException {
+            var stored = readStoredVerifiedNow(chunk, bufferType);
+            if (!ChunkDecoding.isZstd(chunk)) {
+                return stored;
+            }
+            try {
+                return SharedBuffer
+                    .adopt(Zstd.decompressAndValidate(stored, chunk.decodeSize(), chunk.hash(), bufferType));
+            } catch (RuntimeException invalid) {
+                throw AssetLoadException.content("Invalid cached zstd chunk: " + chunk.type(), invalid);
             }
         }
 
         @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
             throws IOException {
             return readStoredVerifiedNow(chunk, bufferType);
         }
 
-        private UniBuffer readStoredVerifiedNow(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        private SharedBuffer readStoredVerifiedNow(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
             throws IOException {
             synchronized (RemoteModelStore.this) {
                 requireOpen();
@@ -582,7 +577,7 @@ public final class RemoteModelStore implements AutoCloseable {
             }
         }
 
-        private UniBuffer readStoredVerifiedLocked(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        private SharedBuffer readStoredVerifiedLocked(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
             throws IOException {
             if (ModelFileConstant.MANIFEST_CHUNK_NAME.equals(chunk.type())) {
                 throw AssetLoadException.content("Manifest is included in the metadata prefix");
@@ -592,9 +587,9 @@ public final class RemoteModelStore implements AutoCloseable {
             }
             var path = chunkPath(identity.modelId(), new Hash256(chunk.hash()), chunk.encoding());
             AssetLoadException cachedFailure;
-            try (var stored = read(path, bufferType)) {
-                validateCached(stored, chunk);
-                return stored.acquire();
+            try (var scope = com.elfmcys.ysm.util.ScopeGuard.create(read(path, bufferType))) {
+                validateCached(scope.get(), chunk);
+                return SharedBuffer.adopt(scope.release());
             } catch (NoSuchFileException missing) {
                 cachedFailure = AssetLoadException.access("Remote chunk is not cached: " + chunk.type(), missing);
             } catch (AssetLoadException failure) {
@@ -622,7 +617,7 @@ public final class RemoteModelStore implements AutoCloseable {
         }
     }
 
-    private UniBuffer read(Path path, BufferType type) throws IOException {
+    private BufferStorage read(Path path, BufferType type) throws IOException {
         final FileChannel opened;
         try {
             opened = guard.observe(path, false).open(java.util.Set.of(StandardOpenOption.READ));
@@ -631,7 +626,7 @@ public final class RemoteModelStore implements AutoCloseable {
         } catch (IOException | SecurityException error) {
             throw AssetLoadException.access("Failed to open cached remote chunk", error);
         }
-        UniBuffer result = null;
+        BufferStorage result = null;
         try (var channel = opened) {
             var size = channel.size();
             if (size > AssetContainerConstant.MAX_FILE_SIZE) {
@@ -671,7 +666,7 @@ public final class RemoteModelStore implements AutoCloseable {
         }
     }
 
-    private UniBuffer read(com.elfmcys.ysm.model.storage.CacheFile file, BufferType type) throws IOException {
+    private BufferStorage read(com.elfmcys.ysm.model.storage.CacheFile file, BufferType type) throws IOException {
         var size = file.size();
         if (size > AssetContainerConstant.MAX_FILE_SIZE)
             throw AssetLoadException.content("Cached data is too large: " + size);
@@ -689,7 +684,7 @@ public final class RemoteModelStore implements AutoCloseable {
         }
     }
 
-    private static void close(UniBuffer buffer) {
+    private static void close(BufferStorage buffer) {
         if (buffer != null) {
             buffer.close();
         }
@@ -709,10 +704,10 @@ public final class RemoteModelStore implements AutoCloseable {
         private final AssetContainerView.ChunkInfo chunk;
         private final RemoteChunkFetcher fetcher;
         private final Executor workers;
-        private final java.util.Set<CompletableFuture<UniBuffer>> interests =
+        private final java.util.Set<CompletableFuture<SharedBuffer>> interests =
             Collections.newSetFromMap(new IdentityHashMap<>());
         private CompletableFuture<Void> transfer;
-        private UniBuffer received;
+        private SharedBuffer received;
         private boolean done;
 
         private ChunkFlight(ChunkFlightKey key, RemoteModelContent content, AssetContainerView.ChunkInfo chunk,
@@ -724,7 +719,7 @@ public final class RemoteModelStore implements AutoCloseable {
             this.workers = workers;
         }
 
-        private synchronized void add(CompletableFuture<UniBuffer> interest) {
+        private synchronized void add(CompletableFuture<SharedBuffer> interest) {
             if (!done && !interest.isDone()) {
                 interests.add(interest);
             }
@@ -773,7 +768,7 @@ public final class RemoteModelStore implements AutoCloseable {
             if (received != null) {
                 throw AssetLoadException.content("Remote transfer returned a sound chunk more than once");
             }
-            received = bytes.acquire();
+            received = bytes.share();
         }
 
         private void completeTransfer(Void ignored, Throwable failure) {
@@ -781,7 +776,7 @@ public final class RemoteModelStore implements AutoCloseable {
                 finish(null, unwrap(failure));
                 return;
             }
-            final UniBuffer stored;
+            final SharedBuffer stored;
             synchronized (this) {
                 stored = received;
                 received = null;
@@ -790,7 +785,7 @@ public final class RemoteModelStore implements AutoCloseable {
                 finish(null, AssetLoadException.content("Remote transfer completed without the sound chunk"));
                 return;
             }
-            try (stored) {
+            try {
                 ChunkDecoding.validateStored(stored, chunk);
                 try {
                     publishChunk(content.representation().modelId(), chunk, stored);
@@ -798,11 +793,11 @@ public final class RemoteModelStore implements AutoCloseable {
                     YesSteveModel.LOGGER.warn("Failed to persist verified remote sound chunk model={} chunk={}",
                         content.representation().modelId(), chunk.type(), cacheFailure);
                 }
-                final UniBuffer payload;
+                final SharedBuffer payload;
                 if (ChunkDecoding.isZstd(chunk)) {
-                    payload = ChunkDecoding.decodeZstd(stored, chunk, BufferType.NATIVE);
+                    payload = SharedBuffer.adopt(ChunkDecoding.decodeZstd(stored, chunk, BufferType.NATIVE));
                 } else {
-                    payload = stored.acquireNative();
+                    payload = stored.shareNative();
                 }
                 finish(payload, null);
             } catch (IOException | RuntimeException error) {
@@ -810,7 +805,7 @@ public final class RemoteModelStore implements AutoCloseable {
             }
         }
 
-        private void cancel(CompletableFuture<UniBuffer> interest) {
+        private void cancel(CompletableFuture<SharedBuffer> interest) {
             CompletableFuture<Void> accepted = null;
             synchronized (this) {
                 interests.remove(interest);
@@ -834,15 +829,13 @@ public final class RemoteModelStore implements AutoCloseable {
 
         private void ownerClosed(Throwable failure) {
             CompletableFuture<Void> accepted;
-            UniBuffer pending;
-            List<CompletableFuture<UniBuffer>> waiting;
+            List<CompletableFuture<SharedBuffer>> waiting;
             synchronized (this) {
                 if (done) {
                     return;
                 }
                 done = true;
                 accepted = transfer;
-                pending = received;
                 received = null;
                 waiting = List.copyOf(interests);
                 interests.clear();
@@ -850,40 +843,29 @@ public final class RemoteModelStore implements AutoCloseable {
             if (accepted != null) {
                 accepted.cancel(false);
             }
-            close(pending);
             waiting.forEach(value -> value.completeExceptionally(failure));
         }
 
-        private void finish(UniBuffer payload, Throwable failure) {
-            List<CompletableFuture<UniBuffer>> waiting;
-            UniBuffer pending;
+        private void finish(SharedBuffer payload, Throwable failure) {
+            List<CompletableFuture<SharedBuffer>> waiting;
             synchronized (this) {
                 if (done) {
-                    close(payload);
                     return;
                 }
                 done = true;
-                pending = received;
                 received = null;
                 waiting = List.copyOf(interests);
                 interests.clear();
             }
-            close(pending);
             synchronized (RemoteModelStore.this) {
                 chunkFlights.remove(key, this);
             }
             if (failure != null) {
                 waiting.forEach(value -> value.completeExceptionally(failure));
-                close(payload);
                 return;
             }
-            try (payload) {
-                for (var interest : waiting) {
-                    var acquired = payload.acquire();
-                    if (!interest.complete(acquired)) {
-                        acquired.close();
-                    }
-                }
+            for (var interest : waiting) {
+                interest.complete(payload);
             }
         }
     }

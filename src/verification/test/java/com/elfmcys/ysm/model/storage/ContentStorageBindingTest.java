@@ -91,8 +91,8 @@ class ContentStorageBindingTest {
                     assertArrayEquals(PNG, Files
                         .readAllBytes(region.root().resolve("previews").resolve(identity.containerId() + ".image")));
                 }
-                try (var remote = RemoteModelStore.create(storage);
-                    var prefix = bound.get(0).representation().metadataPrefix().orElseThrow()) {
+                try (var remote = RemoteModelStore.create(storage)) {
+                    var prefix = bound.get(0).representation().metadataPrefix().orElseThrow();
                     remote.commitMetadataPrefix(identity, prefix);
                     var content = remote.probeMetadata(identity).orElseThrow();
                     try (var representation = content.representation()) {

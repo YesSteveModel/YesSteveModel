@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.model.resource.server;
 
+import com.elfmcys.ysm.buffer.SharedArrayBuffer;
 import com.elfmcys.ysm.model.storage.PreviewStorage;
-import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
@@ -67,7 +67,8 @@ public final class ServerResourceRuntime implements AutoCloseable {
         this(previewStore, corruptionReporter, System::nanoTime, MAX_CACHED_BYTES);
     }
 
-    ServerResourceRuntime(PreviewStorage previewStore, Consumer<IOException> corruptionReporter, LongSupplier nanoTime) {
+    ServerResourceRuntime(PreviewStorage previewStore, Consumer<IOException> corruptionReporter,
+        LongSupplier nanoTime) {
         this(previewStore, corruptionReporter, nanoTime, MAX_CACHED_BYTES);
     }
 
@@ -110,13 +111,15 @@ public final class ServerResourceRuntime implements AutoCloseable {
     }
 
     private PreviewStore fixedPreviewStore() {
-        if (previewStore instanceof PreviewStore fixed) return fixed;
+        if (previewStore instanceof PreviewStore fixed)
+            return fixed;
         throw new IllegalStateException("A regional preview request requires content provenance");
     }
 
     public CompletableFuture<Optional<BytesLease>> acquirePreview(Hash256 containerId) {
         var result = new CompletableFuture<Optional<BytesLease>>();
-        enqueue(new PreviewRequest(new PreviewKey(fixedPreviewStore(), Objects.requireNonNull(containerId, "containerId")), result));
+        enqueue(new PreviewRequest(
+            new PreviewKey(fixedPreviewStore(), Objects.requireNonNull(containerId, "containerId")), result));
         return result;
     }
 
@@ -276,21 +279,18 @@ public final class ServerResourceRuntime implements AutoCloseable {
     }
 
     private void load(Flight flight) {
-        ArrayBuffer bytes = null;
+        SharedArrayBuffer bytes = null;
         Throwable failure = null;
         try {
             if (flight.source instanceof ChunkRequest chunk) {
-                try (var stored =
-                    contentStore.exact(chunk.content).chunks().readStoredVerified(chunk.chunk, BufferType.ARRAY)) {
-                    bytes = stored.acquireArray();
-                }
+                bytes = contentStore.exact(chunk.content).chunks().readStoredVerified(chunk.chunk, BufferType.ARRAY)
+                    .shareArray();
             } else {
                 var preview = (PreviewRequest)flight.source;
-                bytes = preview.key.store.readEncoded(preview.key.containerId).orElse(null);
+                bytes =
+                    preview.key.store.readEncoded(preview.key.containerId).map(SharedArrayBuffer::adopt).orElse(null);
             }
         } catch (Throwable loadingFailure) {
-            if (bytes != null)
-                bytes.close();
             bytes = null;
             failure = loadingFailure;
         }
@@ -305,8 +305,6 @@ public final class ServerResourceRuntime implements AutoCloseable {
                 return;
             }
         }
-        if (completion.bytes != null)
-            completion.bytes.close();
     }
 
     private void accept(Completion completion) {
@@ -315,8 +313,6 @@ public final class ServerResourceRuntime implements AutoCloseable {
         synchronized (lock) {
             var flight = completion.flight;
             if (!activeFlights.remove(flight)) {
-                if (completion.bytes != null)
-                    completion.bytes.close();
                 return;
             }
             if (pending.get(flight.flightKey) == flight)
@@ -332,8 +328,6 @@ public final class ServerResourceRuntime implements AutoCloseable {
                         ready.put(entry.key, entry);
                         cachedBytes += entry.bytes.size();
                     }
-                } else {
-                    completion.bytes.close();
                 }
             }
         }
@@ -399,10 +393,7 @@ public final class ServerResourceRuntime implements AutoCloseable {
         }
         failures.forEach(
             result -> result.completeExceptionally(new IllegalStateException("Server resource runtime is closed")));
-        for (Completion completion; (completion = completions.poll()) != null;) {
-            if (completion.bytes != null)
-                completion.bytes.close();
-        }
+        completions.clear();
         workers.shutdownNow();
         var interrupted = false;
         while (!workers.isTerminated()) {
@@ -431,6 +422,10 @@ public final class ServerResourceRuntime implements AutoCloseable {
 
         public int size() {
             return requireOpen().bytes.size();
+        }
+
+        public SharedArrayBuffer share(int offset, int length) {
+            return requireOpen().bytes.ownedSlice(offset, length);
         }
 
         public void copyTo(int offset, ByteBuffer target) {
@@ -508,17 +503,17 @@ public final class ServerResourceRuntime implements AutoCloseable {
 
     private static final class Entry {
         private final Key key;
-        private final ArrayBuffer bytes;
+        private final SharedArrayBuffer bytes;
         private long lastAcquire;
 
-        private Entry(Key key, ArrayBuffer bytes, long lastAcquire) {
+        private Entry(Key key, SharedArrayBuffer bytes, long lastAcquire) {
             this.key = key;
             this.bytes = bytes;
             this.lastAcquire = lastAcquire;
         }
     }
 
-    private record Completion(Flight flight, ArrayBuffer bytes, Throwable failure) {
+    private record Completion(Flight flight, SharedArrayBuffer bytes, Throwable failure) {
     }
 
     private sealed interface Key permits ChunkKey, PreviewKey {}

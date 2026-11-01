@@ -1,12 +1,11 @@
 package com.elfmcys.ysm.model.resource;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
-import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
@@ -56,8 +55,9 @@ class RuntimeContentStoreTest {
         var store = new RuntimeContentStore(ignored -> reports.incrementAndGet());
         var exact = store.exact(managed(identity(3, 13), source));
         try (var phase = exact.chunks().openReadPhase()) {
-            try (var first = phase.readPayload(descriptor, BufferType.ARRAY);
-                var second = phase.readStoredVerified(descriptor, BufferType.ARRAY)) {
+            {
+                var first = phase.readPayload(descriptor, BufferType.ARRAY);
+                var second = phase.readStoredVerified(descriptor, BufferType.ARRAY);
                 assertEquals(3, first.size());
                 assertEquals(3, second.size());
                 assertEquals(1, opens.get());
@@ -66,7 +66,7 @@ class RuntimeContentStoreTest {
         }
         assertEquals(1, closes.get());
         var batch = exact.chunks().readPayloads(() -> false, java.util.List.of(descriptor), BufferType.ARRAY);
-        batch.values().forEach(UniBuffer::close);
+        batch.clear();
         assertEquals(2, opens.get());
         assertEquals(2, closes.get());
         store.tick();
@@ -82,13 +82,13 @@ class RuntimeContentStoreTest {
         var chunk = chunk();
         ChunkDataSource chunks = new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo ignored, BufferType bufferType)
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo ignored, BufferType bufferType)
                 throws IOException {
                 return readStoredVerified(ignored, bufferType);
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo ignored, BufferType bufferType)
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo ignored, BufferType bufferType)
                 throws IOException {
                 var call = sourceReads.incrementAndGet();
                 if (call == 1) {
@@ -99,7 +99,7 @@ class RuntimeContentStoreTest {
                         Thread.currentThread().interrupt();
                         throw new IOException(failure);
                     }
-                    return ArrayBuffer.move(new byte[] {1, 2, 3});
+                    return SharedBuffer.adopt(ArrayBuffer.move(new byte[] {1, 2, 3}));
                 }
                 throw AssetLoadException.content("controlled corruption");
             }
@@ -109,7 +109,8 @@ class RuntimeContentStoreTest {
         var exact = store.exact(original);
 
         var admitted = CompletableFuture.supplyAsync(() -> {
-            try (var value = exact.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+            try {
+                var value = exact.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                 var bytes = new byte[value.size()];
                 value.nio().get(bytes);
                 return bytes;
@@ -142,7 +143,8 @@ class RuntimeContentStoreTest {
 
         var healthy = managed(identity, constantChunks(new byte[] {4, 5}));
         var newExact = store.exact(healthy);
-        try (var bytes = newExact.chunks().readStoredVerified(chunk(), BufferType.ARRAY)) {
+        {
+            var bytes = newExact.chunks().readStoredVerified(chunk(), BufferType.ARRAY);
             assertEquals(2, bytes.size());
         }
         assertSame(newExact, store.exact(healthy));
@@ -171,12 +173,13 @@ class RuntimeContentStoreTest {
     private static ChunkDataSource failingChunks() {
         return new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                throws IOException {
                 throw AssetLoadException.content("controlled corruption");
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                 throws IOException {
                 throw AssetLoadException.content("controlled corruption");
             }
@@ -186,13 +189,13 @@ class RuntimeContentStoreTest {
     private static ChunkDataSource constantChunks(byte[] bytes) {
         return new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
-                return ArrayBuffer.move(bytes.clone());
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+                return SharedBuffer.adopt(ArrayBuffer.move(bytes.clone()));
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
-                return ArrayBuffer.move(bytes.clone());
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+                return SharedBuffer.adopt(ArrayBuffer.move(bytes.clone()));
             }
         };
     }

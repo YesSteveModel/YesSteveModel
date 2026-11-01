@@ -37,32 +37,66 @@
 
 创建 buffer 时，Java 连续执行小块读写的场景倾向使用 `ArrayBuffer`，例如 Protobuf；大块读写或主要由 native 读写的场景倾向使用 `NativeBuffer`。这只是创建时的存储选择：已有 `UniBuffer` 如果满足消费方契约，应直接使用，不为符合倾向而额外复制和转换类型。
 
-`UniBuffer` 最大容量为 256 MiB。存储类型不表示所有权；所有权由创建方式和 ownership token 决定。
+`UniBuffer` 最大容量为 256 MiB，只表达访问与范围，不提供关闭权。`NativeBuffer` 与 `ArrayBuffer` 区分访问表示；`BufferStorage`、`SharedBuffer` 与借用切片区分生命周期。
+
+`BufferStorage` 由固定 owner 显式关闭，不注册 Cleaner，不维护引用计数或关闭状态。`SharedBuffer` 是封装 Cleaner 生命周期的抽象类。`SharedNativeBuffer` 与 `SharedArrayBuffer` 继承该类，只负责各自的访问表示和切片。来自同一 allocation 的共享视图持有共同的内部 owner；该 owner 注册一次 Cleaner，消费者只保留或撤销强引用。GC buffer 不提供 `close()` 或 `clean()`。选择 GC buffer 可避免跨消费者协调关闭；代价是物理回收可以滞后。
+
+```mermaid
+classDiagram
+    UniBuffer <|-- BufferStorage
+    UniBuffer <|.. SharedBuffer
+    UniBuffer <|.. BorrowedNativeBuffer
+    UniBuffer <|.. BorrowedArrayBuffer
+    SharedBuffer <|-- SharedNativeBuffer
+    SharedBuffer <|-- SharedArrayBuffer
+    SharedBuffer *-- BufferStorage : internal owner
+    class UniBuffer {
+        slice(offset, size) UniBuffer
+    }
+    class BufferStorage {
+        close() void
+    }
+    class SharedBuffer {
+        <<abstract>>
+        ownedSlice(offset, size) SharedBuffer
+    }
+```
 
 | 入口 | 契约 |
 |---|---|
-| `ArrayBuffer.allocate` / `NativeBuffer.allocate` | 创建由 Cleaner 管理的 owning buffer；仅在最终 owner 固定时允许手动关闭 |
-| `NativeBuffer.mapFile` | 创建只读映射和 owning token；最后一份 owning reference 被 Cleaner 或固定 owner 关闭后解除映射 |
+| `ArrayBuffer.allocate` / `NativeBuffer.allocate` | 创建 `ArrayStorage` / `NativeStorage`，固定 owner 负责显式关闭 |
+| `NativeBuffer.mapFile` | 创建只读映射 Storage，固定 owner 关闭时解除映射 |
 | `move` | 接管传入 backing；调用方移交后不得继续承担释放责任 |
-| `borrow` | 创建 non-owning view；不得关闭，且原 owner 必须覆盖全部使用期 |
-| `slice(offset, size)` | 创建共享同一个 token 的 alias，不产生独立 ownership；不得与原 view 分别关闭 |
-| `acquire()` | 取得独立 owning reference；跨作用域或异步保留使用此入口。对 borrowed input 会复制 bytes |
-| `copy()` | 复制为独立 owning buffer；用于隔离可变 backing 或生命周期 |
-| `acquireArray()` / `acquireNative()` | 保持存储类型时取得独立引用，否则复制到目标存储类型 |
+| `borrow` / `slice(offset, size)` | 始终返回借用视图；没有关闭权，不延长来源规定的使用窗口 |
+| `SharedBuffer.ownedSlice(offset, size)` | 返回保留共同 GC owner 的切片；不复制 bytes，不新增 Cleaner |
+| `SharedNativeBuffer.adopt` / `SharedArrayBuffer.adopt` | 消费整个 Storage 的所有权；失败也负责回收，原 owner 不得再关闭或使用 Storage |
+| `SharedNativeBuffer.allocate` / `SharedArrayBuffer.allocate` | 创建由 Cleaner 回收的 GC buffer |
+| `SharedNativeBuffer.copyOf` / `SharedArrayBuffer.copyOf` | 将输入复制为独立 GC buffer；用于借用跨窗、表示转换或可变输入隔离 |
+| `SharedBuffer.copyOf` | 保持输入存储表示，复制为独立 GC buffer |
+| `share()` / `shareNative()` / `shareArray()` | 输入是匹配存储表示的 SharedBuffer 时返回自身；其他情况复制当前范围为 GC buffer。`share()` 保持原表示，不转移 Storage 关闭权，也不保证内容隔离 |
+| `copy()` | 复制为独立 Storage，由接收方显式关闭或交给 GC wrapper 接管 |
+| `copy(offset, size)` | 复制指定范围为独立 Storage，并在复制结束后 fence 原 owner |
+| `copyNative()` / `copyArray()` | 复制为指定存储表示的独立 Storage |
 | `nio()` / `array()` / `ptr()` | 只派生访问视图或地址，不延长 owner 生命周期 |
 | `UniBufferIO.copy` / `equals` | 统一 array/native 组合并校验 range；不要在业务代码重复写分支和裸地址访问 |
 
-Owning `UniBuffer` 的 backing 均纳入 Cleaner 生命周期；borrowed view 不拥有 backing，slice 复用原 ownership token，二者不独立清理。默认由 Cleaner 在 owning reference 不可达后回收。只有唯一 terminal owner 固定、不会与其他使用者并发，并且该点确实代表资源终结时，才允许手动 `close()`；无法证明该条件时一律禁止手动关闭。borrowed view 和 slice 始终不得单独关闭。
+`BorrowedNativeBuffer` 保存有界地址与 anchor；`BorrowedArrayBuffer` 保存数组范围与 anchor。Anchor 保留来源的存储或宿主引用，但不能阻止显式关闭、扩容、池归还或内容复用。从 GC buffer 借用时，anchor 只指向 Storage，不保留 GC owner；调用方应另行保活原 GC buffer。借用池化数组时，只保留数组不足以阻止归还池。借用切片复用同一个 anchor，不形成父切片链。
 
-`@Owned`、`@Borrowed` 和 `@Aligned` 只表达审查契约，没有运行时 enforcement。接收 `@Owned` 结果不等于必须立即建立显式 close；调用方应保留 owning reference，并按上段规则选择 Cleaner 或固定 terminal owner。返回 borrowed view 的 owner 必须由 API 或上层对象保活。
+`slice()` 对 GC buffer 也只表达借用。需要在其他作用域保留时，已知 GC 来源可使用 `ownedSlice()`；其他来源应复制，或由固定 owner 覆盖整个使用期。Storage 的关闭是一次性契约；重复关闭、关闭后访问和并发 close/use 均由调用方避免，访问方法不检查关闭状态。
+
+`@Owned`、`@Borrowed` 和 `@Aligned` 只表达审查契约，没有运行时 enforcement。接收 owning Storage 后，应明确固定 owner，或将整个 Storage 交给 GC wrapper；不向多个消费者分发关闭权。
 
 从 owner 提取 `ByteBuffer`、array 或 raw pointer 后进入 JNI/Unsafe 时，必须在 `finally` 中对原 owner 调用 `Reference.reachabilityFence`。Fence 只保证同步调用期间可达，不解决并发 close/use。完整跨语言约束见 [JNI 与内存](architecture/native-runtime/implementation/jni-and-memory.md)。
+
+完成且只读使用的 bytes 跨消费者交付时，优先返回 `SharedBuffer`。生产方将最终 Storage 直接交给 `adopt`，消费者保留同一 buffer；需要修改时先复制。领域对象的 `close()` 仍撤销资格、归还预算并清除自身引用，不撤销已交付的 bytes。可变构造与固定作用域 I/O 继续使用 Storage。
+
+`Image.adopt` 接管 Storage，`Image.data()` 返回 GC buffer，`Image.share()` 共享同一 backing。`Image.close()` 只撤销当前 Image 的引用；其他共享 Image 和已交付的 GC buffer 继续有效。
 
 ## 生命周期与构造回滚
 
 资源管理默认使用 Cleaner。GC 能根据 Java heap 占用和操作系统可用内存调整回收频率；后者覆盖 native allocation，因此 native memory 不因位于 Java heap 之外就要求手动关闭。当资源压力能由这些信号反映，且释放延迟不影响正确性时，允许物理释放自然滞后。
 
-只有 GC 无法感知资源容量，或正确性要求及时终结时才使用手动 `close()`，并且仍须先证明唯一 terminal owner。典型例外包括锁、文件句柄、profiler scope、GPU 等不由操作系统可用内存表示的资源，以及会影响 asset 传输会话取消的 lease。若需要及时释放却无法证明固定 owner，应先修正 ownership 设计，不能把 close 权分散给多个引用持有者。
+固定作用域的 buffer 使用前节的 Storage 契约。其他资源只有在 GC 无法感知资源容量，或正确性要求及时终结时才使用手动 `close()`，并且仍须先证明唯一 terminal owner。典型例外包括锁、文件句柄、profiler scope、GPU 等不由操作系统可用内存表示的资源，以及会影响 asset 传输会话取消的 lease。若需要及时释放却无法证明固定 owner，应先修正 ownership 设计，不能把 close 权分散给多个引用持有者。
 
 | 入口 | 契约 |
 |---|---|
@@ -75,7 +109,7 @@ Owning `UniBuffer` 的 backing 均纳入 Cleaner 生命周期；borrowed view �
 
 新交付的 raw opaque handle 使用 `NativeObject.adopt` 与接受其一次释放状态的 wrapper factory；factory 必须在取得 handle 前可用，完成构造前不暴露 owner。adoption 失败包含 wrapper 分配、构造和 Cleaner 注册，均回收到同一个 destroy 状态；后续载体构造失败使用已建立的 wrapper 关闭。直接调用接收 raw handle 的构造器不覆盖构造器执行前的对象分配失败。
 
-Owning direct 输出使用 `NativeHeapBuffer.adopt`，只接收与 native allocator 配套的 base view，成功返回后由 ownership token 接管；backing/state/view/wrapper 分配或 Cleaner 注册失败均释放尚未交付的 allocation。不能用该入口采用任意 direct slice 或其他 allocator 的地址。
+Owning direct 输出使用 `NativeHeapBuffer.adopt`，只接收与 native allocator 配套的 base view，成功后交付 Storage；采用失败释放尚未交付的 allocation。不能用该入口采用任意 direct slice 或其他 allocator 的地址。需要 GC 生命周期时，再由 `SharedNativeBuffer.adopt` 消费 Storage；GC owner 构造或 Cleaner 注册失败也应回收。
 
 `ResourceTransaction` 的 rollback 会抑制各资源的关闭异常，因此只适合“清理失败不能替代原始构造失败”的路径。关闭失败本身需要进入领域结果或诊断时，应由具体 owner 显式处理。
 
@@ -99,7 +133,7 @@ try (var resources = new ResourceTransaction()) {
 
 配置默认通过 `NativeRuntime.deviceQuality()` 消费一次设备分档。两个配置共享结果；native 不可用、入口缺失或未知返回均采用保守默认，不重新探测。跨语言编码与责任见[设备配置默认](architecture/native-runtime/implementation/runtime-capabilities.md#设备配置默认)。
 
-`BufferArgument.packInput()` 把 `UniBuffer` 转成一次同步 JNI 调用使用的对象与 flags；它不创建持久 handle，也不延长 backing 生命周期。`unpackOutput()` 返回由 Cleaner 管理的 owning `UniBuffer`；只有固定 terminal owner 才允许手动关闭。普通业务代码优先调用 typed native 门面，不直接操作 `BufferArgument`：
+`BufferArgument.packInput()` 把 `UniBuffer` 转成一次同步 JNI 调用使用的对象与 flags；它不创建持久 handle，也不延长 backing 生命周期。`unpackOutput()` 返回 owning Storage；接收方负责显式关闭或移交 GC wrapper。普通业务代码优先调用 typed native 门面，不直接操作 `BufferArgument`：
 
 | 能力 | Java 门面 |
 |---|---|
@@ -119,9 +153,9 @@ Java 内部共享 immutable generated message；跨 JNI、文件或自定义 fra
 | 入口 | 契约 |
 |---|---|
 | `ProtoUtil.sink(ArrayBuffer)` | 在现有 array range 上建立 QuickBuffers sink；buffer 必须覆盖写入期且容量由调用方保证 |
-| `ProtoUtil.source(ArrayBuffer)` | 在现有 array range 上建立 QuickBuffers source；不取得 buffer 所有权 |
+| `ProtoUtil.source(UniBuffer)` | 直接借用 array/native range 建立 QuickBuffers source，不转换存储表示；调用方保持 owner 存活，并在解析结束的 `finally` 中对 owner 调用 `Reference.reachabilityFence` |
 | `ProtoUtil.serializeToArray(message)` | 按精确 serialized size 创建独立 `byte[]` |
-| `ProtoUtil.serializeToBuffer(message)` | 返回由 Cleaner 管理的 owning `ArrayBuffer`；写入失败会关闭构造中的固定 owner |
+| `ProtoUtil.serializeToBuffer(message)` | 返回 owning `ArrayStorage`；写入失败会关闭构造中的固定 owner |
 | `ProtoBytes.copy(ByteBuffer)` | 从当前 remaining range 复制，不推进原 buffer cursor |
 | `ProtoBytes.equals(...)` | 比较当前 remaining range，不推进原 buffer cursor |
 

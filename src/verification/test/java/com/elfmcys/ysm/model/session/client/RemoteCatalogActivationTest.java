@@ -9,7 +9,7 @@ import com.elfmcys.ysm.model.storage.ContentStorageBinding;
 
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
@@ -354,7 +354,7 @@ class RemoteCatalogActivationTest {
     void closeDuringMetadataFetchCannotPublishIntoThePersistentStore() throws Exception {
         var root = temp.resolve("close-during-fetch");
         var store = new RemoteModelStore(root);
-        var fetched = new CompletableFuture<UniBuffer>();
+        var fetched = new CompletableFuture<BufferStorage>();
         var owner = new RemoteCatalogActivation(CatalogIndexSnapshot::empty, CatalogSnapshot.empty(), store,
             metadata(requestedIdentity -> fetched), Runnable::run);
         var result = owner.activate(publication(identity.modelId(), identity.containerId(), "stale"));
@@ -375,7 +375,7 @@ class RemoteCatalogActivationTest {
     @Test
     void networkTerminalPrecedesTheSingleDependentWorkerAdmission() throws Exception {
         var workers = new ArrayDeque<Runnable>();
-        var metadata = new CompletableFuture<UniBuffer>();
+        var metadata = new CompletableFuture<BufferStorage>();
         var owner = new RemoteCatalogActivation(CatalogIndexSnapshot::empty, CatalogSnapshot.empty(),
             new RemoteModelStore(temp.resolve("terminal-before-admission")), metadata(ignored -> metadata),
             workers::add);
@@ -403,12 +403,12 @@ class RemoteCatalogActivationTest {
             new HierarchyPath("local:custom/second"), CatalogAccess.PUBLIC, true);
         var publication = new RemotePublicationSnapshot(List.of(first, second), Set.of(), List.of(), Map.of());
         var entered = new CountDownLatch(1);
-        var transfers = new ConcurrentHashMap<ModelFileIdentity, CompletableFuture<UniBuffer>>();
+        var transfers = new ConcurrentHashMap<ModelFileIdentity, CompletableFuture<BufferStorage>>();
         var workers = Executors.newFixedThreadPool(2);
         try {
             var result = new RemoteCatalogActivation(CatalogIndexSnapshot::empty, CatalogSnapshot.empty(),
                 new RemoteModelStore(temp.resolve("failed")), metadata(requestedIdentity -> {
-                    var transfer = new CompletableFuture<UniBuffer>();
+                    var transfer = new CompletableFuture<BufferStorage>();
                     transfers.put(requestedIdentity, transfer);
                     entered.countDown();
                     return transfer;
@@ -512,18 +512,19 @@ class RemoteCatalogActivationTest {
         owner.close();
     }
 
-    private static UniBuffer prefix() {
+    private static BufferStorage prefix() {
         return prefix(content);
     }
 
-    private static UniBuffer prefix(ManagedContainer source) {
-        return source.representation().metadataPrefix().orElseThrow();
+    private static BufferStorage prefix(ManagedContainer source) {
+        return source.representation().metadataPrefix().orElseThrow().copy();
     }
 
-    private static RemoteMetadataFetcher metadata(Function<ModelFileIdentity, CompletableFuture<UniBuffer>> fetcher) {
+    private static RemoteMetadataFetcher
+        metadata(Function<ModelFileIdentity, CompletableFuture<BufferStorage>> fetcher) {
         return (identities, receiver) -> {
             var result = new CompletableFuture<Void>();
-            var current = new AtomicReference<CompletableFuture<UniBuffer>>();
+            var current = new AtomicReference<CompletableFuture<BufferStorage>>();
             class Sequence {
                 private int next;
 
@@ -568,7 +569,8 @@ class RemoteCatalogActivationTest {
             fetches.incrementAndGet();
             try {
                 for (var chunk : chunks) {
-                    try (var bytes = source.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                    {
+                        var bytes = source.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                         receiver.accept(chunk, bytes);
                     }
                 }

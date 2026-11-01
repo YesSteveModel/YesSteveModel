@@ -56,7 +56,8 @@ public final class ExportTestFixture {
                     || chunk.type().equals(ModelFileConstant.MANIFEST_CHUNK_NAME)
                     || chunk.type().equals(ModelFileConstant.THUMB_BUTTON_CHUNK_NAME))
                     continue;
-                try (var stored = source.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                {
+                    var stored = source.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                     writer.addStoredChunk(chunk, stored);
                 }
             }

@@ -1,8 +1,8 @@
 package com.elfmcys.ysm.model.resource.server;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
@@ -33,7 +33,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.UnaryOperator;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -596,19 +595,18 @@ class ServerResourceRuntimeTest {
     }
 
     @Test
-    void flightCapacityAndResultRemainPendingUntilTheSourceOwnerFinishesClosing() throws Exception {
+    void flightCapacityAndResultRemainPendingUntilTheChunkReadCompletes() throws Exception {
         var closing = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         var source = source(identity(35, 45), bytes(1), () -> {
-        }, backing -> new ClosingBuffer(backing, () -> {
             closing.countDown();
             try {
                 if (!release.await(5, TimeUnit.SECONDS))
-                    throw new AssertionError("Source close was not released");
+                    throw new AssertionError("Source read was not released");
             } catch (InterruptedException interrupted) {
                 throw new AssertionError(interrupted);
             }
-        }));
+        });
         try (var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
         })) {
             var acquired = runtime.acquireChunk(source.content(), source.chunk());
@@ -629,13 +627,12 @@ class ServerResourceRuntimeTest {
     }
 
     @Test
-    void sourceCloseFailureProducesOneFailureWithoutPublishingCandidateBytes() throws Exception {
+    void sourceReadFailureProducesOneFailureWithoutPublishingCandidateBytes() throws Exception {
         var workers = new ControlledWorkers();
-        var expected = new IllegalStateException("Source close failed");
+        var expected = new IllegalStateException("Source read failed");
         var source = source(identity(36, 46), bytes(1), () -> {
-        }, backing -> new ClosingBuffer(backing, () -> {
             throw expected;
-        }));
+        });
         try (var runtime = runtime(workers, new AtomicLong(), 16)) {
             var acquired = runtime.acquireChunk(source.content(), source.chunk());
             runtime.tick();
@@ -647,47 +644,6 @@ class ServerResourceRuntimeTest {
             assertEquals(0, runtime.cachedCount());
             runtime.tick();
             assertEquals(0, runtime.cachedBytes());
-        }
-    }
-
-    private record ClosingBuffer(ArrayBuffer backing, Runnable closing) implements ArrayBuffer {
-        @Override
-        public byte[] array() {
-            return backing.array();
-        }
-
-        @Override
-        public int arrayOffset() {
-            return backing.arrayOffset();
-        }
-
-        @Override
-        public ArrayBuffer slice(int offset, int size) {
-            return backing.slice(offset, size);
-        }
-
-        @Override
-        public ArrayBuffer acquire() {
-            return backing.acquire();
-        }
-
-        @Override
-        public ByteBuffer nio() {
-            return backing.nio();
-        }
-
-        @Override
-        public int size() {
-            return backing.size();
-        }
-
-        @Override
-        public void close() {
-            try {
-                closing.run();
-            } finally {
-                backing.close();
-            }
         }
     }
 
@@ -764,7 +720,8 @@ class ServerResourceRuntimeTest {
         }
         var localContent = regional(id, local);
         var globalContent = regional(id, global);
-        try (var runtime = new ServerResourceRuntime(com.elfmcys.ysm.model.storage.PreviewStorage.routed(), ignored -> {})) {
+        try (var runtime = new ServerResourceRuntime(com.elfmcys.ysm.model.storage.PreviewStorage.routed(), ignored -> {
+        })) {
             local.previews().storedObserver(key -> runtime.invalidatePreview(local.previews(), key));
             global.previews().storedObserver(key -> runtime.invalidatePreview(global.previews(), key));
             try (var old = finish(runtime, runtime.acquirePreview(localContent)).orElseThrow();
@@ -791,9 +748,20 @@ class ServerResourceRuntimeTest {
         var representation = representation(id);
         var binding = com.elfmcys.ysm.model.storage.ContentStorageBinding.remote(region);
         return new ModelContent() {
-            @Override public ModelRepresentation representation() { return representation; }
-            @Override public ChunkDataSource chunks() { return null; }
-            @Override public com.elfmcys.ysm.model.storage.ContentStorageBinding storageBinding() { return binding; }
+            @Override
+            public ModelRepresentation representation() {
+                return representation;
+            }
+
+            @Override
+            public ChunkDataSource chunks() {
+                return null;
+            }
+
+            @Override
+            public com.elfmcys.ysm.model.storage.ContentStorageBinding storageBinding() {
+                return binding;
+            }
         };
     }
 
@@ -818,25 +786,20 @@ class ServerResourceRuntimeTest {
     }
 
     private static Source source(ModelFileIdentity identity, byte[] bytes, Runnable beforeRead) {
-        return source(identity, bytes, beforeRead, UnaryOperator.identity());
-    }
-
-    private static Source source(ModelFileIdentity identity, byte[] bytes, Runnable beforeRead,
-        UnaryOperator<ArrayBuffer> stored) {
         var reads = new AtomicInteger();
         var chunk = new AssetContainerView.ChunkInfo("test", "raw", 0, bytes.length, bytes.length, 0, bytes.length, 0,
             hash(bytes[0]).bytes());
         ChunkDataSource chunks = new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo ignored, BufferType bufferType) {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo ignored, BufferType bufferType) {
                 throw new AssertionError("Stored-byte cache must not request decoded payload");
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo ignored, BufferType bufferType) {
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo ignored, BufferType bufferType) {
                 reads.incrementAndGet();
                 beforeRead.run();
-                return stored.apply(ArrayBuffer.move(Arrays.copyOf(bytes, bytes.length)));
+                return SharedBuffer.adopt(ArrayBuffer.move(Arrays.copyOf(bytes, bytes.length)));
             }
         };
         var representation = representation(identity);

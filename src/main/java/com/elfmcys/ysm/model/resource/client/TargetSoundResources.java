@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.model.resource.client;
 
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
@@ -11,7 +11,6 @@ import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -23,11 +22,11 @@ import java.util.function.BooleanSupplier;
 /** Owns one preparation or consumer's references to validated first chunks. */
 public final class TargetSoundResources implements AutoCloseable {
     private final ModelFileIdentity representation;
-    private final Map<String, UniBuffer> firstChunks;
+    private Map<String, SharedBuffer> firstChunks;
     private final Set<Hash256> validatedMedia;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    private TargetSoundResources(ModelFileIdentity representation, Map<String, UniBuffer> firstChunks,
+    private TargetSoundResources(ModelFileIdentity representation, Map<String, SharedBuffer> firstChunks,
         Set<Hash256> validatedMedia) {
         this.representation = representation;
         this.firstChunks = Map.copyOf(firstChunks);
@@ -47,33 +46,21 @@ public final class TargetSoundResources implements AutoCloseable {
         var firstChunks = source.readPayloads(cancelled,
             sounds.values().stream().map(sound -> sound.chunkInfos().get(0)).toList(), BufferType.NATIVE);
         var validated = new HashSet<Hash256>();
-        try {
-            for (var sound : sounds.values()) {
-                var first = sound.chunkInfos().get(0);
-                var retained = firstChunks.get(first.type());
-                if (validated.add(sound.mediaIdentity())) {
-                    sound.validatePrefix(cancelled, new RetainedFirstChunk(first, retained));
-                }
+        for (var sound : sounds.values()) {
+            var first = sound.chunkInfos().get(0);
+            var retained = firstChunks.get(first.type());
+            if (validated.add(sound.mediaIdentity())) {
+                sound.validatePrefix(cancelled, new RetainedFirstChunk(first, retained));
             }
-            if (cancelled.getAsBoolean())
-                throw new CancellationException("Sound preparation was cancelled");
-            return new TargetSoundResources(representation, firstChunks, validated);
-        } catch (IOException | RuntimeException | Error failure) {
-            firstChunks.values().forEach(UniBuffer::close);
-            throw failure;
         }
+        if (cancelled.getAsBoolean())
+            throw new CancellationException("Sound preparation was cancelled");
+        return new TargetSoundResources(representation, firstChunks, validated);
     }
 
     public synchronized TargetSoundResources acquire() {
         requireOpen();
-        var retained = new LinkedHashMap<String, UniBuffer>();
-        try {
-            firstChunks.forEach((type, bytes) -> retained.put(type, bytes.acquire()));
-            return new TargetSoundResources(representation, retained, validatedMedia);
-        } catch (RuntimeException | Error failure) {
-            retained.values().forEach(UniBuffer::close);
-            throw failure;
-        }
+        return new TargetSoundResources(representation, firstChunks, validatedMedia);
     }
 
     public SoundSource bind(SoundMedia media) {
@@ -86,13 +73,14 @@ public final class TargetSoundResources implements AutoCloseable {
         return new SoundSource(representation, media, this);
     }
 
-    synchronized UniBuffer acquireFirstChunk(ModelFileIdentity expected, SoundMedia media) throws AssetLoadException {
+    synchronized SharedBuffer acquireFirstChunk(ModelFileIdentity expected, SoundMedia media)
+        throws AssetLoadException {
         requireAvailable(expected);
         var chunk = firstChunks.get(media.chunkInfos().get(0).type());
         if (chunk == null) {
             throw AssetLoadException.content("Ready target no longer owns the sound first chunk");
         }
-        return chunk.acquire();
+        return chunk;
     }
 
     private void requireAvailable(ModelFileIdentity expected) throws AssetLoadException {
@@ -105,7 +93,7 @@ public final class TargetSoundResources implements AutoCloseable {
     }
 
     public synchronized int retainedBytes() {
-        return closed.get() ? 0 : firstChunks.values().stream().mapToInt(UniBuffer::size).sum();
+        return closed.get() ? 0 : firstChunks.values().stream().mapToInt(SharedBuffer::size).sum();
     }
 
     @Override
@@ -113,7 +101,7 @@ public final class TargetSoundResources implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        firstChunks.values().forEach(UniBuffer::close);
+        firstChunks = Map.of();
     }
 
     private void requireOpen() {
@@ -123,19 +111,19 @@ public final class TargetSoundResources implements AutoCloseable {
     }
 
     private record RetainedFirstChunk(AssetContainerView.ChunkInfo expected,
-        UniBuffer bytes) implements ChunkDataSource {
+        SharedBuffer bytes) implements ChunkDataSource {
         @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+        public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
             return readStoredVerified(chunk, bufferType);
         }
 
         @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
             throws IOException {
             if (!sameChunk(expected, chunk)) {
                 throw AssetLoadException.content("Prefix validation requested an undeclared sound chunk");
             }
-            return bufferType == BufferType.NATIVE ? bytes.acquireNative() : bytes.acquireArray();
+            return bufferType == BufferType.NATIVE ? bytes.shareNative() : bytes.shareArray();
         }
 
         private static boolean sameChunk(AssetContainerView.ChunkInfo expected, AssetContainerView.ChunkInfo actual) {

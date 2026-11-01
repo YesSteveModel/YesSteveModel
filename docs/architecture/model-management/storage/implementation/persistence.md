@@ -30,7 +30,7 @@ Commit、取消和 shutdown 共用 effect gate。替换成功即固定成功终�
 
 `ChunkDataSource.openReadPhase` 为实际准备提供局部视图。File source 用同一 channel 取得 definition、common strings 和声音首块；读取结束后关闭，再编译表达式。Runtime 的精确来源 wrapper 转发该阶段与原 batch，不把批次退化为逐 chunk 打开；读取失败仍回报原精确实例。
 
-`readPayloads` 去重相同 descriptor，返回完整集合或释放未发布引用。File source 在读取前后核对接纳长度，各 payload 仍验证内容。Remote preparation 固定 received 输入引用，先结束 transfer，再消费本地 bytes；独立 chunk 文件各自读取并关闭。媒体前缀资格归[声音准备](../../audio/overview.md#运行作用域与所有权)，不由源 chunk 完整性替代。
+`readPayloads` 去重相同 descriptor，返回完整 `SharedBuffer` 集合；失败不发布部分结果。读取阶段只关闭 channel，不撤销已交付的 bytes。File source 在读取前后核对接纳长度，各 payload 仍验证内容。Remote preparation 固定 received 输入引用，先结束 transfer，再消费本地 bytes；独立 chunk 文件各自读取并关闭。媒体前缀资格归[声音准备](../../audio/overview.md#运行作用域与所有权)，不由源 chunk 完整性替代。
 
 `ConvertedSourceIndexStore.replaceScopes` 在 scope 事务锁内重读并合并类别。`ConvertedCacheCoordinator` 在 gate 内登记实际 consumer 锁，再由 Catalog 复核 active/closed；扫描准入不能先于登记。`ModelStorageInfra.prune` 只把本次保留对象分派到各 scope，路径分派不授予删除许可。进程 owner 在 Catalog 与 runtime 停止后关闭登记。
 

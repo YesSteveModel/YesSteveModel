@@ -68,9 +68,7 @@ public final class ModelExporter {
                 .filter(chunk -> preserveThumbnail || !chunk.type().equals(ModelFileConstant.THUMB_BUTTON_CHUNK_NAME))
                 .sorted(Comparator.comparingInt(AssetContainerView.ChunkInfo::offset)).toList();
             for (var chunk : chunks) {
-                try (var stored = source.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
-                    writer.addStoredChunk(chunk, stored);
-                }
+                writer.addStoredChunk(chunk, source.chunks().readStoredVerified(chunk, BufferType.ARRAY));
             }
             if (!preserveThumbnail) {
                 try (var image = preview.open()) {

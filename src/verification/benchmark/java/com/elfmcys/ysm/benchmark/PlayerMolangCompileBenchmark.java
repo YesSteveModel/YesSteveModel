@@ -82,8 +82,9 @@ public class PlayerMolangCompileBenchmark {
                 throw new IllegalArgumentException("builtin input supports FULL MAIN only");
             var builtin =
                 Path.of(Objects.requireNonNull(Workload.class.getResource("/assets/ysm/builtin/default")).toURI());
-            try (var directory = new Directory(builtin); var memory = ModelParser.parseBuiltinDefaultMemory(directory);
-                var bytes = memory.bytes()) {
+            try (var directory = new Directory(builtin)) {
+                var memory = ModelParser.parseBuiltinDefaultMemory(directory);
+                var bytes = memory.bytes();
                 var handle = ManagedContainer.openResidentDefault(bytes,
                     new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
                 try {

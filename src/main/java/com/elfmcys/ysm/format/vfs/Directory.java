@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.vfs;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.util.Closeable;
 import org.jetbrains.annotations.NotNull;
@@ -31,7 +32,7 @@ public class Directory implements VirtualFileSystem, Closeable {
     private final Path dir;
     private final Path root;
     private final Map<Path, DirectoryIdentity> directories;
-    private NativeBuffer buffer;
+    private NativeStorage buffer;
     private boolean closed;
 
     public Directory(Path dir) {
@@ -112,7 +113,7 @@ public class Directory implements VirtualFileSystem, Closeable {
         } else {
             buffer = NativeBuffer.allocate(Math.max(32 * 1024, size));
         }
-        return buffer.slice(0, size).borrow();
+        return buffer.slice(0, size);
     }
 
     @Override
@@ -266,5 +267,6 @@ public class Directory implements VirtualFileSystem, Closeable {
         }
     }
 
-    private record DirectoryIdentity(Object fileKey, FileTime creationTime) {}
+    private record DirectoryIdentity(Object fileKey, FileTime creationTime) {
+    }
 }

@@ -1,10 +1,9 @@
 package com.elfmcys.ysm.buffer;
 
 import com.elfmcys.ysm.util.ScopeGuard;
-
 import java.nio.ByteBuffer;
 
-public interface UniBuffer extends AutoCloseable {
+public interface UniBuffer {
     int MAX_SIZE = 256 * 1024 * 1024;
 
     ByteBuffer nio();
@@ -13,56 +12,61 @@ public interface UniBuffer extends AutoCloseable {
 
     int size();
 
-    // 不应该暴露
-    // boolean owning();
-
-    /** Non-owning alias that shares the source ownership token; never close it separately. */
+    /** Borrows a range; the original owner must cover every access. */
     UniBuffer slice(int offset, int size);
 
-    /** Non-owning view; callers must not close it. */
-    UniBuffer borrow();
+    default UniBuffer borrow() {
+        return slice(0, size());
+    }
 
-    /** Independent owning reference; close only when its terminal owner is fixed. */
-    UniBuffer acquire();
+    /** Retains a shared view, or copies this range into GC-owned storage. Does not isolate shared content. */
+    default SharedBuffer share() {
+        return this instanceof SharedBuffer shared ? shared : SharedBuffer.copyOf(this);
+    }
 
-    UniBuffer copy();
+    /** Retains a shared native view, or copies this range into GC-owned native storage. */
+    default SharedNativeBuffer shareNative() {
+        return this instanceof SharedNativeBuffer shared ? shared : SharedNativeBuffer.copyOf(this);
+    }
 
-    NativeBuffer acquireNative();
+    /** Retains a shared array view, or copies this range into GC-owned array storage. */
+    default SharedArrayBuffer shareArray() {
+        return this instanceof SharedArrayBuffer shared ? shared : SharedArrayBuffer.copyOf(this);
+    }
 
-    ArrayBuffer acquireArray();
+    default BufferStorage copy() {
+        return type() == BufferType.NATIVE ? copyNative() : copyArray();
+    }
 
-    @Override
-    void close();
-
-    static UniBuffer move(ByteBuffer buffer) {
-        if (buffer.isDirect()) {
-            return NativeBuffer.move(buffer);
-        } else if (buffer.hasArray()) {
-            return ArrayBuffer.move(buffer);
-        } else {
-            throw new IllegalArgumentException();
+    default BufferStorage copy(int offset, int size) {
+        try {
+            return slice(offset, size).copy();
+        } finally {
+            java.lang.ref.Reference.reachabilityFence(this);
         }
     }
 
-    static UniBuffer borrow(ByteBuffer buffer) {
-        if (buffer.isDirect()) {
-            return NativeBuffer.borrow(buffer);
-        } else if (buffer.hasArray()) {
-            return ArrayBuffer.borrow(buffer);
-        } else {
-            throw new IllegalArgumentException();
-        }
+    default NativeStorage copyNative() {
+        return NativeBuffer.copyOf(this);
     }
 
-    static UniBuffer allocate(int size, BufferType type) {
-        if (type == BufferType.NATIVE) {
-            return NativeBuffer.allocate(size);
-        } else {
-            return ArrayBuffer.allocate(size);
-        }
+    default ArrayStorage copyArray() {
+        return ArrayBuffer.copyOf(this);
     }
 
-    static ScopeGuard<UniBuffer> allocateWithScope(int size, BufferType type) {
+    static BufferStorage move(ByteBuffer data) {
+        return data.isDirect() ? NativeBuffer.move(data) : ArrayBuffer.move(data);
+    }
+
+    static UniBuffer borrow(ByteBuffer data) {
+        return data.isDirect() ? NativeBuffer.borrow(data) : ArrayBuffer.borrow(data);
+    }
+
+    static BufferStorage allocate(int size, BufferType type) {
+        return type == BufferType.NATIVE ? NativeBuffer.allocate(size) : ArrayBuffer.allocate(size);
+    }
+
+    static ScopeGuard<BufferStorage> allocateWithScope(int size, BufferType type) {
         return ScopeGuard.create(allocate(size, type));
     }
 }

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.compatibility.AbiVersion;
 
 import com.elfmcys.ysm.util.ResourceDiagnostics;
@@ -62,8 +63,8 @@ public final class BakedModelCache {
             delivered = true;
             var backing = candidate.bakedModel();
             var workCache = cache;
-            workCache.derivedWork().submit(
-                gate -> workCache.replaceValidated("baked", containerId + "/" + bakeHash, target,
+            workCache.derivedWork()
+                .submit(gate -> workCache.replaceValidated("baked", containerId + "/" + bakeHash, target,
                     file -> validate(file, bakeHash), destination -> write(destination, bakeHash, source, backing),
                     gate));
             return model;
@@ -113,7 +114,7 @@ public final class BakedModelCache {
 
     private static void write(com.elfmcys.ysm.model.storage.CacheFile destination, Hash256 bakeHash,
         GeoModelProto source, NativeBakedModel baked) throws IOException {
-        final NativeBuffer serialized;
+        final NativeStorage serialized;
         try {
             serialized = baked.serialize();
         } catch (RuntimeException error) {

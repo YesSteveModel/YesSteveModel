@@ -8,7 +8,7 @@
 
 Client runtime 创建前冻结进程唯一音频后端。每次 playback 拥有私有 cursor、按需创建的 decoder、宿主 handle 与终态。共享 entry 只保存不可变 PCM/checkpoint，不保存播放位置或活动 decoder。
 
-共享准备保留 Common 全部声音的已验证首块。同一准备寿命内，纹理消费者复用首块读取与媒体前缀验证；每个 target 取得独立 buffer 引用。准备身份由已验证 container、非纹理状态和存储区域决定，包含声音描述、chunk 表及用途，GUI/FULL 保持隔离。不同媒体约束分别验证，即使共用同一首块。
+共享准备保留 Common 全部声音的已验证首块。同一准备寿命内，纹理消费者复用首块读取与媒体前缀验证；每个 target 独立持有同一 `SharedBuffer`，不复制首块。准备身份由已验证 container、非纹理状态和存储区域决定，包含声音描述、chunk 表及用途，GUI/FULL 保持隔离。不同媒体约束分别验证，即使共用同一首块。
 
 普通准备不预取尾块、不预热 PCM。最后 pin 结束共享准备保留；target 退休只释放自身引用。播放接纳时复核当前权限并取得独立读取 capability，不依赖准备输入或 fetcher 继续存活。Intrinsic default 另遵守[全部声音驻留](../client-resources/default-model.md#驻留与缓存)。
 
@@ -65,7 +65,7 @@ Disconnect 停止活动播放，保留音频 cache；runtime close 同时终结�
 
 Retention 与活动工作集分别计价。活动账本覆盖 ready PCM、候选及播放持有的 PCM/checkpoint；热命中也从接纳时计价。候选发布转移 backing，不要求复制完整 PCM。
 
-终态同步归还相应活动预算，不依赖 Cleaner；worker 持有的资源与容量仍等借用结束才释放。活动槽可先归还，因此槽位上限不是物理峰值保证。共享 backing 最后引用消失后回收，逻辑归还不承诺进程内存立刻下降。
+终态同步归还相应活动预算，不依赖 Cleaner；worker 持有的资源与容量仍等借用结束才释放。活动槽可先归还，因此槽位上限不是物理峰值保证。编码 chunk 的多个消费者可保留同一 `SharedBuffer`；关闭 chunk 只归还读取窗口与领域引用。共享 backing 最后引用消失后由 Cleaner 回收，逻辑归还不承诺进程内存立刻下降。
 
 ## 关键契约与设计取舍
 

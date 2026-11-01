@@ -1,186 +1,76 @@
 package com.elfmcys.ysm.natives.buffer;
 
-import com.elfmcys.ysm.buffer.NativeBuffer;
-import com.elfmcys.ysm.util.CleanerUtil;
+import com.elfmcys.ysm.buffer.NativeStorage;
 import io.netty.util.internal.PlatformDependent;
-
-import java.lang.ref.Cleaner;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
-public class NativeHeapBuffer implements NativeBuffer {
-    private final long headPtr;
+public final class NativeHeapBuffer implements NativeStorage {
+    private final long base;
     private final ByteBuffer data;
-    private final Ownership ownership;
 
     public NativeHeapBuffer(int size) {
         this(size, 0);
     }
 
     public NativeHeapBuffer(int size, int alignment) {
-        if (size > MAX_SIZE) {
-            throw new IllegalArgumentException("Size too large");
-        }
+        if (size < 0 || size > MAX_SIZE)
+            throw new IllegalArgumentException("Invalid size");
         var allocated = nAlloc(size, alignment);
-        if (allocated == null) {
+        if (allocated == null)
             throw new OutOfMemoryError();
-        }
-        var adopted = adopt(allocated);
-        headPtr = adopted.headPtr;
-        data = adopted.data;
-        ownership = adopted.ownership;
-    }
-
-    /**
-     * mimalloc cannot identify an arbitrary pointer's heap region; callers must pass its owning base view.
-     */
-    public NativeHeapBuffer(ByteBuffer ownedMem) {
-        var adopted = adopt(ownedMem);
-        headPtr = adopted.headPtr;
-        data = adopted.data;
-        ownership = adopted.ownership;
-    }
-
-    /** Consumes an owning base view, including when wrapper or Cleaner registration fails. */
-    public static NativeHeapBuffer adopt(ByteBuffer ownedMem) {
-        if (!ownedMem.isDirect()) {
-            throw new IllegalArgumentException("Buffer is not direct");
-        }
-        var base = PlatformDependent.directBufferAddress(ownedMem);
-        Backing backing = null;
-        State state = null;
+        base = PlatformDependent.directBufferAddress(allocated);
         try {
-            backing = new Backing(base);
-            state = new State(backing);
-            var ownership = new Ownership(backing, state);
-            return new NativeHeapBuffer(base + ownedMem.position(), ownedMem.slice().order(ByteOrder.nativeOrder()),
-                ownership);
+            data = allocated.slice().order(ByteOrder.nativeOrder());
         } catch (RuntimeException | Error failure) {
-            if (state != null) {
-                state.clean();
-            } else if (backing != null) {
-                backing.release();
-            } else {
-                nFree(base);
-            }
+            nFree(base);
             throw failure;
         }
     }
 
-    private NativeHeapBuffer(long headPtr, ByteBuffer data, Ownership ownership) {
-        this.headPtr = headPtr;
+    /** Consumes the allocator's owning base view, including when wrapper allocation fails. */
+    public static NativeHeapBuffer adopt(ByteBuffer ownedMem) {
+        if (!ownedMem.isDirect())
+            throw new IllegalArgumentException("Buffer is not direct");
+        var base = PlatformDependent.directBufferAddress(ownedMem);
+        ByteBuffer view;
+        try {
+            view = ownedMem.slice().order(ByteOrder.nativeOrder());
+        } catch (RuntimeException | Error failure) {
+            nFree(base);
+            throw failure;
+        }
+        try {
+            return new NativeHeapBuffer(base, view);
+        } catch (RuntimeException | Error failure) {
+            nFree(base);
+            throw failure;
+        }
+    }
+
+    private NativeHeapBuffer(long base, ByteBuffer data) {
+        this.base = base;
         this.data = data;
-        this.ownership = ownership;
-    }
-
-    private void checkOpen() {
-        if (!ownership.open()) {
-            throw new IllegalStateException("Buffer has been closed");
-        }
-    }
-
-    @Override
-    public NativeBuffer acquire() {
-        checkOpen();
-        return new NativeHeapBuffer(headPtr, data.duplicate(), ownership.acquire());
-    }
-
-    @Override
-    public NativeHeapBuffer slice(int offset, int size) {
-        checkOpen();
-        if (offset < 0 || size < 0 || offset > data.remaining() - size) {
-            throw new IndexOutOfBoundsException();
-        }
-        return new NativeHeapBuffer(headPtr + offset, data.slice(offset, size).order(ByteOrder.nativeOrder()),
-            ownership);
-    }
-
-    @Override
-    public ByteBuffer nio() {
-        checkOpen();
-        return data.duplicate();
     }
 
     @Override
     public long ptr() {
-        checkOpen();
-        return headPtr;
+        return PlatformDependent.directBufferAddress(data);
     }
 
     @Override
     public int size() {
-        checkOpen();
-        return data.remaining();
+        return data.capacity();
+    }
+
+    @Override
+    public ByteBuffer nio() {
+        return data.duplicate().order(data.order());
     }
 
     @Override
     public void close() {
-        ownership.close();
-    }
-
-    private static final class Backing {
-        private final long ptr;
-        private final AtomicInteger references = new AtomicInteger(1);
-
-        private Backing(long ptr) {
-            this.ptr = ptr;
-        }
-
-        private void retain() {
-            references.incrementAndGet();
-        }
-
-        private void release() {
-            if (references.decrementAndGet() == 0) {
-                nFree(ptr);
-            }
-        }
-    }
-
-    private static final class Ownership {
-        private final Backing backing;
-        private final State state;
-        private final Cleaner.Cleanable cleanable;
-
-        private Ownership(Backing backing) {
-            this(backing, new State(backing));
-        }
-
-        private Ownership(Backing backing, State state) {
-            this.backing = backing;
-            this.state = state;
-            cleanable = CleanerUtil.ref(this, state, State::clean);
-        }
-
-        private boolean open() {
-            return state.open.get();
-        }
-
-        private Ownership acquire() {
-            backing.retain();
-            return new Ownership(backing);
-        }
-
-        private void close() {
-            cleanable.clean();
-        }
-    }
-
-    private static final class State {
-        private final Backing backing;
-        private final AtomicBoolean open = new AtomicBoolean(true);
-
-        private State(Backing backing) {
-            this.backing = backing;
-        }
-
-        private void clean() {
-            if (open.compareAndSet(true, false)) {
-                backing.release();
-            }
-        }
+        nFree(base);
     }
 
     private static native ByteBuffer nAlloc(int size, int alignment);

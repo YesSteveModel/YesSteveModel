@@ -15,7 +15,7 @@ class ForgeUniBufferIOTest {
         source.addComponents(true, Unpooled.wrappedBuffer(new byte[] {1, 2}),
             Unpooled.wrappedBuffer(new byte[] {3, 4}));
         try {
-            var target = NativeBuffer.borrow(ByteBuffer.allocateDirect(6));
+            var target = NativeBuffer.move(ByteBuffer.allocateDirect(6));
             ForgeUniBufferIO.copyFromNetty(source, 1, target, 2, 3);
 
             var actual = new byte[6];

@@ -1,14 +1,15 @@
 package com.elfmcys.ysm.network.frame;
 
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.UniBuffer;
 
 import java.util.Objects;
 
 /** Owns one encoded frame until the synchronous transport call returns. */
 public final class OutboundFrame implements AutoCloseable {
-    private final UniBuffer data;
+    private final BufferStorage data;
 
-    public OutboundFrame(UniBuffer data) {
+    public OutboundFrame(BufferStorage data) {
         this.data = Objects.requireNonNull(data, "data");
     }
 
@@ -21,11 +22,9 @@ public final class OutboundFrame implements AutoCloseable {
     }
 
     public byte[] bytes() {
-        try (var array = data.acquireArray()) {
-            var result = new byte[array.size()];
-            System.arraycopy(array.array(), array.arrayOffset(), result, 0, result.length);
-            return result;
-        }
+        var result = new byte[data.size()];
+        data.nio().get(result);
+        return result;
     }
 
     public boolean contentEquals(OutboundFrame other) {

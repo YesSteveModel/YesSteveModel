@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.natives;
 
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import org.junit.jupiter.api.Test;
@@ -99,7 +100,7 @@ class ZstdTest {
         }
     }
 
-    private static UniBuffer compressTemporaryNative(byte[] payload, byte[] hash) {
+    private static BufferStorage compressTemporaryNative(byte[] payload, byte[] hash) {
         return Zstd.compressAndHash(buffer(payload, BufferType.NATIVE), hash, BufferType.NATIVE, 16);
     }
 
@@ -116,7 +117,7 @@ class ZstdTest {
         }
     }
 
-    private static UniBuffer buffer(byte[] value, BufferType type) {
+    private static BufferStorage buffer(byte[] value, BufferType type) {
         var result = UniBuffer.allocate(value.length, type);
         result.nio().put(value);
         return result;

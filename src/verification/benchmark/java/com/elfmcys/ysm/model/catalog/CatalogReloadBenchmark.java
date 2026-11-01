@@ -189,7 +189,8 @@ public class CatalogReloadBenchmark {
                             && !value.type().equals(ModelFileConstant.MANIFEST_CHUNK_NAME)
                             && !value.type().equals(ModelFileConstant.THUMB_BUTTON_CHUNK_NAME))
                         .sorted(Comparator.comparingInt(AssetContainerView.ChunkInfo::offset)).toList()) {
-                        try (var bytes = source.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                        {
+                            var bytes = source.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                             writer.addStoredChunk(chunk, bytes);
                         }
                     }

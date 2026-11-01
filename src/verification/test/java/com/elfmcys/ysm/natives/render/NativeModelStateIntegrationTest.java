@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.natives.render;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.client.gui.GuiModelFraming;
@@ -159,7 +160,7 @@ class NativeModelStateIntegrationTest {
             texture.nio().putLong(0, -1L).putLong(8, -1L);
             baked = NativeBakedModel.bake(modelData, 1, texture, 2, 2, 29, false);
         }
-        NativeBuffer bytes;
+        NativeStorage bytes;
         try (var direct = baked.bakedModel()) {
             assertEquals(1, direct.getInfo().boneCount());
             assertEquals(new Vector2f(0.5f, 0.5f), direct.getCubeData(0, 1, 0, 1)[0].quads()[0].uv()[2]);

@@ -56,11 +56,11 @@ class PreviewHostArtifactTest {
                     var copied = artifactView.getChunkInfo(chunk.type());
                     assertNotNull(copied, chunk.type());
                     assertArrayEquals(chunk.hash(), copied.hash(), chunk.type());
-                    try (
+                    {
                         var original =
                             source.chunks().readStoredVerified(chunk, com.elfmcys.ysm.buffer.BufferType.ARRAY);
                         var exported =
-                            artifact.chunks().readStoredVerified(copied, com.elfmcys.ysm.buffer.BufferType.ARRAY)) {
+                            artifact.chunks().readStoredVerified(copied, com.elfmcys.ysm.buffer.BufferType.ARRAY);
                         assertEquals(original.nio(), exported.nio(), chunk.type());
                     }
                 }

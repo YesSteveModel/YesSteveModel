@@ -1,8 +1,8 @@
 package com.elfmcys.ysm.format.schema.file;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
 import com.elfmcys.ysm.format.container.AssetContainerView;
@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -62,12 +61,12 @@ class ChunkImageSourceTest {
         var reads = new AtomicInteger();
         var chunks = new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
-                return ArrayBuffer.move(new byte[] {1, 2, 3, 4});
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+                return SharedBuffer.adopt(ArrayBuffer.move(new byte[] {1, 2, 3, 4}));
             }
 
             @Override
-            public UniBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
+            public SharedBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
                 BufferType bufferType) {
                 seen.add(cancelled);
                 reads.incrementAndGet();
@@ -75,7 +74,7 @@ class ChunkImageSourceTest {
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
                 return readPayload(chunk, bufferType);
             }
         };
@@ -108,19 +107,20 @@ class ChunkImageSourceTest {
         var seen = new ArrayList<BooleanSupplier>();
         var chunks = new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                throws IOException {
                 return delegate.readPayload(chunk, bufferType);
             }
 
             @Override
-            public UniBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
+            public SharedBuffer readPayload(BooleanSupplier cancelled, AssetContainerView.ChunkInfo chunk,
                 BufferType bufferType) throws IOException {
                 seen.add(cancelled);
                 return delegate.readPayload(chunk, bufferType);
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                 throws IOException {
                 return delegate.readStoredVerified(chunk, bufferType);
             }
@@ -141,13 +141,13 @@ class ChunkImageSourceTest {
         var reads = new AtomicInteger();
         var chunks = new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
                 reads.incrementAndGet();
-                return ArrayBuffer.move(new byte[] {1, 2, 3, 4});
+                return SharedBuffer.adopt(ArrayBuffer.move(new byte[] {1, 2, 3, 4}));
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
                 return readPayload(chunk, bufferType);
             }
         };
@@ -160,27 +160,25 @@ class ChunkImageSourceTest {
     }
 
     @Test
-    void cancellationAfterSynchronousReadClosesTheReturnedBuffer() {
+    void cancellationAfterSynchronousReadKeepsSharedBytesValid() {
         var cancelled = new AtomicBoolean();
-        var returned = new AtomicReference<UniBuffer>();
+        var returned = com.elfmcys.ysm.buffer.SharedArrayBuffer.copyOf(ArrayBuffer.borrow(new byte[] {1, 2, 3, 4}));
         var chunks = new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
-                var buffer = ArrayBuffer.move(new byte[] {1, 2, 3, 4});
-                returned.set(buffer);
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
                 cancelled.set(true);
-                return buffer;
+                return returned;
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
                 throw new AssertionError("unused");
             }
         };
         var chunk = new AssetContainerView.ChunkInfo("blob.1", "", 0, 4, 4, 0, 0, 0, null);
 
         assertThrows(CancellationException.class, () -> chunks.readPayload(cancelled::get, chunk, BufferType.ARRAY));
-        assertThrows(IllegalStateException.class, () -> returned.get().nio());
+        assertArrayEquals(new byte[] {1, 2, 3, 4}, returned.array());
     }
 
     @Test
@@ -256,7 +254,7 @@ class ChunkImageSourceTest {
         var file = tempDir.resolve("named.mxc");
         var bytes = new byte[] {1, 2, 3, 4};
         try (var writer = new TestAssetFileWriter();
-            var image = new Image(Image.Format.RGBA, 1, 1, ArrayBuffer.move(bytes.clone()))) {
+            var image = Image.adopt(Image.Format.RGBA, 1, 1, ArrayBuffer.move(bytes.clone()))) {
             writer.addNamedImage("named-image", image);
             write(writer, file);
         }
@@ -330,13 +328,13 @@ class ChunkImageSourceTest {
     private static ChunkDataSource dataSource(byte[] bytes) {
         return new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
-                return ArrayBuffer.move(bytes.clone());
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+                return SharedBuffer.adopt(ArrayBuffer.move(bytes.clone()));
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
-                return ArrayBuffer.move(bytes.clone());
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+                return SharedBuffer.adopt(ArrayBuffer.move(bytes.clone()));
             }
         };
     }
@@ -344,12 +342,13 @@ class ChunkImageSourceTest {
     private static ChunkDataSource failingDataSource() {
         return new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                throws IOException {
                 throw new IOException("read failed");
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                 throws IOException {
                 throw new IOException("read failed");
             }

@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.natives.image;
 
 import com.elfmcys.ysm.buffer.NativeBuffer;
+import com.elfmcys.ysm.buffer.SharedNativeBuffer;
 import com.elfmcys.ysm.mixin.client.NativeImageAccessor;
 import com.mojang.blaze3d.platform.NativeImage;
 
@@ -56,7 +57,8 @@ public class ImageEncoder {
             height = (int)((result >>> 32) & 0xFFFFL);
             var format = (int)((result >>> 28) & 0xFL);
             var size = (int)(result & 0x0FFFFFFFL);
-            return new Image(Image.Format.VALUES.get(format), width, height, dstScope.release().slice(0, size));
+            return new Image(Image.Format.VALUES.get(format), width, height,
+                SharedNativeBuffer.adopt(dstScope.release()).ownedSlice(0, size));
         }
     }
 

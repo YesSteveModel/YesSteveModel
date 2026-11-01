@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.audio;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.client.sound.stream.CustomAudioStream;
 import com.elfmcys.ysm.format.AssetLoadException;
@@ -49,8 +50,8 @@ final class PlaybackAudioStream implements CustomAudioStream {
 
     private VerifiedChunkAccess access;
     private OpusDecoder decoder;
-    private NativeBuffer scratch;
-    private NativeBuffer header;
+    private NativeStorage scratch;
+    private NativeStorage header;
     private ByteBuffer input;
     private VerifiedChunkAccess.Chunk inputChunk;
     private long inputReservation;

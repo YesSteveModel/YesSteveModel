@@ -1,8 +1,8 @@
 package com.elfmcys.ysm.model.resource.client.asset;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.mock.evidence.EvidenceJson;
@@ -240,8 +240,9 @@ class ModelManagementPresentationLifecycleScenarioTest {
             require(terminals.get() == 6, "Every complete-page interest must reach one item terminal");
             var previewChunk = action.members.stream().filter(RemotePresentationFetcher.Icon.class::isInstance)
                 .findFirst().map(ModelManagementPresentationLifecycleScenarioTest::modelChunk).orElseThrow();
-            try (var ignored = store.openContent(fixture.asset("presentation-rich").identity()).chunks()
-                .readStoredVerified(previewChunk, BufferType.ARRAY)) {
+            {
+                var ignored = store.openContent(fixture.asset("presentation-rich").identity()).chunks()
+                    .readStoredVerified(previewChunk, BufferType.ARRAY);
                 // Cache visibility is independently observed through the store Interface.
             }
             record(evidence, "complete-page", action.id, "page-terminal",
@@ -323,8 +324,9 @@ class ModelManagementPresentationLifecycleScenarioTest {
         action.deliverLate();
         require(late.isCancelled(), "Late data must not revive the removed page");
         var lateChunk = modelChunk(action.members.get(0));
-        try (var ignored = store.openContent(fixture.asset("online-add").identity()).chunks()
-            .readStoredVerified(lateChunk, BufferType.ARRAY)) {
+        {
+            var ignored = store.openContent(fixture.asset("online-add").identity()).chunks()
+                .readStoredVerified(lateChunk, BufferType.ARRAY);
             // Valid late cache publication remains owned by the exact cache, not by the page.
         }
 
@@ -368,13 +370,13 @@ class ModelManagementPresentationLifecycleScenarioTest {
         return new ModelContent() {
             private final ChunkDataSource chunks = new ChunkDataSource() {
                 @Override
-                public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                     throws IOException {
                     throw failure;
                 }
 
                 @Override
-                public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                     throws IOException {
                     throw failure;
                 }
@@ -491,10 +493,10 @@ class ModelManagementPresentationLifecycleScenarioTest {
             return actions.stream().mapToInt(action -> action.terminalCount.get()).sum();
         }
 
-        private UniBuffer bytes(Member member) throws IOException {
+        private SharedBuffer bytes(Member member) throws IOException {
             if (member instanceof PackCover cover) {
                 require(pack.equals(cover.pack()), "Unexpected pack-cover identity");
-                return ArrayBuffer.move(coverBytes.clone());
+                return SharedBuffer.adopt(ArrayBuffer.move(coverBytes.clone()));
             }
             var identity = member instanceof Preview preview ? preview.identity() : ((Icon)member).identity();
             var asset = assets.get(identity);
@@ -559,9 +561,8 @@ class ModelManagementPresentationLifecycleScenarioTest {
                     receiver.accept(member, RemotePresentationFetcher.Unavailable.INSTANCE);
                     continue;
                 }
-                try (var bytes = source.bytes(member)) {
-                    receiver.accept(member, new RemotePresentationFetcher.Data(bytes, observations.get(member)));
-                }
+                var bytes = source.bytes(member);
+                receiver.accept(member, new RemotePresentationFetcher.Data(bytes, observations.get(member)));
             }
         }
 

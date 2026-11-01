@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.remote;
 
-import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
@@ -32,8 +32,8 @@ public interface RemotePresentationFetcher {
 
     sealed interface Outcome permits Data, Absent, Unavailable {}
 
-    record Data(UniBuffer bytes, ClientModelSession.PreviewObservation observation) implements Outcome {
-        public Data(UniBuffer bytes) {
+    record Data(SharedBuffer bytes, ClientModelSession.PreviewObservation observation) implements Outcome {
+        public Data(SharedBuffer bytes) {
             this(bytes, null);
         }
 

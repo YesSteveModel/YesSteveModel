@@ -36,7 +36,7 @@ final class ProtocolInbound {
         spec.attachmentPolicy().validate(attachment.size());
         var message = ProtocolBuffer.parse(protobuf, spec.parser());
         NetworkPayload<T> payload = attachment.size() == 0 ? NetworkPayload.protobuf(message)
-            : NetworkPayload.withRaw(message, attachment.acquire());
+            : NetworkPayload.withRaw(message, attachment.share());
         try {
             spec.handler().handle(payload, context);
         } catch (Throwable error) {

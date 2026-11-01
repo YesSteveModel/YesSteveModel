@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.network.frame;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -7,6 +9,8 @@ import com.elfmcys.ysm.buffer.UniBufferIO;
 import com.elfmcys.ysm.natives.Zstd;
 
 import java.util.Objects;
+import java.nio.ByteBuffer;
+import java.lang.ref.Reference;
 import java.util.function.IntPredicate;
 
 /** Pure codec for the single current YSM wire format. */
@@ -41,8 +45,8 @@ public final class FrameCodec {
             return new OutboundFrame(target);
         }
 
-        UniBuffer stored = protobuf.borrow();
-        UniBuffer compressed = null;
+        UniBuffer stored = protobuf;
+        BufferStorage compressed = null;
         var flags = 0;
         try {
             if (protobuf.size() > COMPRESSION_THRESHOLD) {
@@ -77,9 +81,7 @@ public final class FrameCodec {
     }
 
     public static DecodedFrame decode(byte[] frame, IntPredicate registeredMessage) {
-        try (var input = ArrayBuffer.move(frame)) {
-            return decode(input, registeredMessage);
-        }
+        return decode(ArrayBuffer.borrow(frame), registeredMessage);
     }
 
     public static DecodedFrame decode(UniBuffer frame, IntPredicate registeredMessage) {
@@ -88,10 +90,11 @@ public final class FrameCodec {
         if (frame.size() == 0) {
             throw malformed("Missing message tag");
         }
-        try (var array = frame.acquireArray()) {
-            var bytes = array.array();
-            var base = array.arrayOffset();
-            var tag = Byte.toUnsignedInt(bytes[base]);
+        var shared = frame.share();
+        try {
+            var bytes = shared.nio();
+            var base = 0;
+            var tag = Byte.toUnsignedInt(bytes.get(base));
             var messageId = tag >>> 1;
             validateMessageId(messageId);
             if (!registeredMessage.test(messageId)) {
@@ -102,12 +105,12 @@ public final class FrameCodec {
                 if (size >= MAX_BODY_BYTES) {
                     throw malformed("Simple frame body must be smaller than 30 KiB");
                 }
-                return new DecodedFrame(messageId, frame.slice(1, size).acquire(), ArrayBuffer.allocate(0), false);
+                return new DecodedFrame(messageId, shared.ownedSlice(1, size), shared.ownedSlice(0, 0), false);
             }
             if (frame.size() < FULL_HEADER_BYTES) {
                 throw malformed("Truncated full-frame header");
             }
-            var flags = Byte.toUnsignedInt(bytes[base + 1]);
+            var flags = Byte.toUnsignedInt(bytes.get(base + 1));
             if ((flags & ~FLAG_PROTOBUF_ZSTD) != 0) {
                 throw malformed("Unknown full-frame flags: " + flags);
             }
@@ -122,31 +125,28 @@ public final class FrameCodec {
                 throw malformed("Full-frame sizes do not match the remaining bytes");
             }
             var compressed = (flags & FLAG_PROTOBUF_ZSTD) != 0;
-            UniBuffer protobuf = null;
-            UniBuffer attachment = null;
+            final SharedBuffer protobuf;
             try {
                 if (compressed) {
                     if (storedSize == 0 || decodedSize <= COMPRESSION_THRESHOLD || storedSize >= decodedSize) {
                         throw malformed("Invalid zstd protobuf representation");
                     }
-                    try (var stored = frame.slice(FULL_HEADER_BYTES, storedSize).acquire()) {
-                        protobuf = Zstd.decompressAndValidate(stored, decodedSize, null, BufferType.ARRAY);
-                    }
+                    var stored = shared.ownedSlice(FULL_HEADER_BYTES, storedSize);
+                    protobuf =
+                        SharedBuffer.adopt(Zstd.decompressAndValidate(stored, decodedSize, null, BufferType.ARRAY));
                 } else {
                     if (decodedSize != storedSize) {
                         throw malformed("Raw protobuf sizes do not match");
                     }
-                    protobuf = frame.slice(FULL_HEADER_BYTES, storedSize).acquire();
+                    protobuf = shared.ownedSlice(FULL_HEADER_BYTES, storedSize);
                 }
-                attachment = frame.slice(FULL_HEADER_BYTES + storedSize, attachmentSize).acquire();
+                var attachment = shared.ownedSlice(FULL_HEADER_BYTES + storedSize, attachmentSize);
                 return new DecodedFrame(messageId, protobuf, attachment, compressed);
             } catch (RuntimeException error) {
-                if (protobuf != null)
-                    protobuf.close();
-                if (attachment != null)
-                    attachment.close();
                 throw malformed("Invalid full frame", error);
             }
+        } finally {
+            Reference.reachabilityFence(shared);
         }
     }
 
@@ -169,9 +169,9 @@ public final class FrameCodec {
         target[offset + 3] = (byte)(value >>> 24);
     }
 
-    private static int readInt(byte[] source, int offset) {
-        return source[offset] & 0xff | (source[offset + 1] & 0xff) << 8 | (source[offset + 2] & 0xff) << 16
-            | source[offset + 3] << 24;
+    private static int readInt(ByteBuffer source, int offset) {
+        return source.get(offset) & 0xff | (source.get(offset + 1) & 0xff) << 8 | (source.get(offset + 2) & 0xff) << 16
+            | source.get(offset + 3) << 24;
     }
 
     private static IllegalArgumentException malformed(String message) {
@@ -184,11 +184,11 @@ public final class FrameCodec {
 
     public static final class DecodedFrame implements AutoCloseable {
         private final int messageId;
-        private final UniBuffer protobuf;
-        private final UniBuffer attachment;
+        private SharedBuffer protobuf;
+        private SharedBuffer attachment;
         private final boolean compressed;
 
-        private DecodedFrame(int messageId, UniBuffer protobuf, UniBuffer attachment, boolean compressed) {
+        private DecodedFrame(int messageId, SharedBuffer protobuf, SharedBuffer attachment, boolean compressed) {
             this.messageId = messageId;
             this.protobuf = protobuf;
             this.attachment = attachment;
@@ -199,12 +199,12 @@ public final class FrameCodec {
             return messageId;
         }
 
-        public UniBuffer protobuf() {
-            return protobuf.borrow();
+        public SharedBuffer protobuf() {
+            return Objects.requireNonNull(protobuf, "Frame is closed");
         }
 
-        public UniBuffer attachment() {
-            return attachment.borrow();
+        public SharedBuffer attachment() {
+            return Objects.requireNonNull(attachment, "Frame is closed");
         }
 
         public boolean compressed() {
@@ -213,8 +213,8 @@ public final class FrameCodec {
 
         @Override
         public void close() {
-            protobuf.close();
-            attachment.close();
+            protobuf = null;
+            attachment = null;
         }
     }
 }

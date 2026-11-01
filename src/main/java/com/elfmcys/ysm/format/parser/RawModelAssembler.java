@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.format.schema.model.ModelOriginVersion;
 import com.elfmcys.ysm.format.parser.pojo.animation.AnimationFile;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
@@ -462,7 +463,7 @@ final class RawModelAssembler implements Closeable {
                 var identity = ModelHashing.blake3(data);
                 var group = sounds.get(identity);
                 if (group == null) {
-                    group = resources.own(new RawSoundGroup(identity, data.acquire(), new ArrayList<>()));
+                    group = resources.own(new RawSoundGroup(identity, data.copy(), new ArrayList<>()));
                     sounds.put(identity, group);
                 }
                 group.names().add(name);
@@ -520,7 +521,7 @@ final class RawModelAssembler implements Closeable {
         }
     }
 
-    private record RawSoundGroup(Hash256 identity, NativeBuffer source, List<String> names) implements Closeable {
+    private record RawSoundGroup(Hash256 identity, NativeStorage source, List<String> names) implements Closeable {
         @Override
         public void close() {
             source.close();

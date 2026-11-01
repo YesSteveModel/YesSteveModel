@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.audio;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
@@ -40,6 +41,7 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -50,7 +52,7 @@ class SoundResourceAccessIntegrationTest {
     Path temp;
 
     @Test
-    void targetRetainsOnlyValidatedFirstChunksAndRevokesThemOnClose() throws Exception {
+    void targetCloseRevokesAccessButKeepsSharedFirstChunksValid() throws Exception {
         try (var fixture = createFixture("target")) {
             var reads = new java.util.concurrent.ConcurrentHashMap<String, AtomicInteger>();
             var counted = counting(fixture.content, reads);
@@ -66,13 +68,14 @@ class SoundResourceAccessIntegrationTest {
             for (var tail : fixture.sound.chunkInfos().subList(1, fixture.sound.chunkInfos().size())) {
                 assertEquals(0, count(reads, tail.type()));
             }
-            try (var retained = source.acquireFirstChunk();
-                var expected = fixture.content.chunks().readPayload(first, BufferType.NATIVE)) {
-                assertArrayEquals(bytes(expected), bytes(retained));
+            var retained = source.acquireFirstChunk();
+            var expected = fixture.content.chunks().readPayload(first, BufferType.NATIVE);
+            try (var acquired = resources.acquire()) {
+                assertSame(retained, acquired.bind(fixture.sound).acquireFirstChunk());
             }
-
             resources.close();
             assertThrows(AssetLoadException.class, source::acquireFirstChunk);
+            assertArrayEquals(bytes(expected), bytes(retained));
         }
     }
 
@@ -236,13 +239,15 @@ class SoundResourceAccessIntegrationTest {
                 }).get(10, TimeUnit.SECONDS);
                 assertEquals(1, fetches.get());
 
-                try (var stored = fixture.content.chunks().readStoredVerified(requested.get(), BufferType.NATIVE)) {
+                {
+                    var stored = fixture.content.chunks().readStoredVerified(requested.get(), BufferType.NATIVE);
                     receiver.get().accept(requested.get(), stored);
                 }
                 accepted.complete(null);
                 try (var firstChunk = firstTail.join(); var secondChunk = secondTail.join()) {
                     assertEquals(1, firstChunk.index());
                     assertEquals(1, secondChunk.index());
+                    assertSame(firstChunk.acquireBuffer(), secondChunk.acquireBuffer());
                 }
 
                 try (var cached = access(resources, remote, (identity, chunks, sink) -> {
@@ -294,14 +299,16 @@ class SoundResourceAccessIntegrationTest {
                 assertTrue(oldReceiver.get() != null);
                 assertTrue(newReceiver.get() != null);
 
-                try (var stored = fixture.content.chunks().readStoredVerified(requested.get(), BufferType.NATIVE)) {
+                {
+                    var stored = fixture.content.chunks().readStoredVerified(requested.get(), BufferType.NATIVE);
                     oldReceiver.get().accept(requested.get(), stored);
                 }
                 oldAccepted.complete(null);
                 close(oldTail.join());
                 assertFalse(newTail.isDone());
 
-                try (var stored = fixture.content.chunks().readStoredVerified(requested.get(), BufferType.NATIVE)) {
+                {
+                    var stored = fixture.content.chunks().readStoredVerified(requested.get(), BufferType.NATIVE);
                     newReceiver.get().accept(requested.get(), stored);
                 }
                 newAccepted.complete(null);
@@ -379,7 +386,8 @@ class SoundResourceAccessIntegrationTest {
 
     private static RemoteModelContent commitMetadata(RemoteModelStore store, ManagedContainer content)
         throws Exception {
-        try (var prefix = content.representation().metadataPrefix().orElseThrow()) {
+        {
+            var prefix = content.representation().metadataPrefix().orElseThrow();
             return store.commitMetadataPrefix(content.representation().identity(), prefix);
         }
     }
@@ -390,7 +398,8 @@ class SoundResourceAccessIntegrationTest {
             requested.set(List.copyOf(chunks));
             try {
                 for (var chunk : chunks) {
-                    try (var stored = source.chunks().readStoredVerified(chunk, BufferType.NATIVE)) {
+                    {
+                        var stored = source.chunks().readStoredVerified(chunk, BufferType.NATIVE);
                         receiver.accept(chunk, stored);
                     }
                 }
@@ -424,14 +433,14 @@ class SoundResourceAccessIntegrationTest {
             public ChunkDataSource chunks() {
                 return new ChunkDataSource() {
                     @Override
-                    public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                    public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                         throws IOException {
                         reads.computeIfAbsent(chunk.type(), ignored -> new AtomicInteger()).incrementAndGet();
                         return source.chunks().readPayload(chunk, bufferType);
                     }
 
                     @Override
-                    public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+                    public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
                         throws IOException {
                         return source.chunks().readStoredVerified(chunk, bufferType);
                     }

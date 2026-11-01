@@ -3,7 +3,10 @@ package com.elfmcys.ysm.model.storage;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.buffer.NativeBuffer;
+import com.elfmcys.ysm.buffer.ArrayBuffer;
+import com.elfmcys.ysm.buffer.SharedArrayBuffer;
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.natives.image.Image;
 import com.elfmcys.ysm.natives.image.ImageSource;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -50,6 +53,60 @@ class PreviewStoreTest {
             assertArrayEquals(PNG, Files.readAllBytes(preview(temp.resolve("sealed"), hash(20))));
             assertTrue(java.util.Arrays.stream(PreviewStore.EncodedPreview.class.getDeclaredConstructors())
                 .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(constructor.getModifiers())));
+        }
+    }
+
+    @Test
+    void openedImageIsTransferredUntilPendingClosesAndQualifiedContentOutlivesIt() throws Exception {
+        var bytes = SharedArrayBuffer.copyOf(ArrayBuffer.borrow(PNG));
+        var image = Image.probe(bytes);
+        final PreviewStore.EncodedPreview qualified;
+        try (var pending = PreviewStore.pending(() -> image, PNG.length)) {
+            assertSame(bytes, image.data());
+            qualified = pending.verify(null, false);
+            assertSame(bytes, image.data());
+        }
+
+        assertThrows(IllegalStateException.class, image::data);
+        try (qualified) {
+            assertArrayEquals(PNG, qualified.bytes());
+        }
+    }
+
+    @Test
+    void mutableBytesAreSnapshottedBeforeDeferredVerification() throws Exception {
+        var input = PNG.clone();
+        try (var pending = PreviewStore.pending(ArrayBuffer.borrow(input))) {
+            Arrays.fill(input, (byte)0);
+            try (var qualified = pending.verify(null, false)) {
+                assertArrayEquals(PNG, qualified.bytes());
+            }
+        }
+    }
+
+    @Test
+    void rejectedImageIsClosedBeforeTheFailureEscapes() {
+        var image = new Image(Image.Format.PNG, PreviewStore.MAX_DIMENSION + 1, 1,
+            SharedArrayBuffer.copyOf(ArrayBuffer.borrow(PNG)));
+
+        assertThrows(IOException.class, () -> PreviewStore.pending(image));
+        assertThrows(IllegalStateException.class, image::data);
+    }
+
+    @Test
+    void rgbaImageIsConsumedAndLosslesslyEncodedBeforeQualification() throws Exception {
+        var expected = new byte[16 * 16 * 4];
+        var raw = ByteBuffer.wrap(expected);
+        while (raw.hasRemaining())
+            raw.putInt(0x204060FF);
+        var image = new Image(Image.Format.RGBA, 16, 16, SharedArrayBuffer.copyOf(ArrayBuffer.borrow(expected)));
+        try (var pending = PreviewStore.pending(image)) {
+            assertThrows(IllegalStateException.class, image::data);
+            try (var qualified = pending.verify(null, false); var opened = qualified.open();
+                var pixels = opened.decodeToBuffer()) {
+                assertNotEquals(Image.Format.RGBA, qualified.format());
+                assertEquals(ByteBuffer.wrap(expected), pixels.nio());
+            }
         }
     }
 
@@ -187,16 +244,14 @@ class PreviewStoreTest {
 
     @Test
     void decodingPreservesAnExistingNativeBufferWithoutAnArrayRoundTrip() throws Exception {
+        final PreviewStore.EncodedPreview preview;
         try (var source = NativeBuffer.allocate(PNG.length)) {
             source.nio().put(PNG);
-
-            var preview = PreviewStore.decode(source);
-            source.close();
-
-            try (var image = preview.open()) {
-                assertEquals(BufferType.NATIVE, image.data().type());
-                assertArrayEquals(PNG, preview.bytes());
-            }
+            preview = PreviewStore.decode(source);
+        }
+        try (preview; var image = preview.open()) {
+            assertEquals(BufferType.NATIVE, image.data().type());
+            assertArrayEquals(PNG, preview.bytes());
         }
     }
 

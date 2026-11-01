@@ -2,6 +2,7 @@ package com.elfmcys.ysm.network.frame;
 
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.SharedArrayBuffer;
 import java.util.Arrays;
 import java.util.Random;
 import org.junit.jupiter.api.Test;
@@ -65,8 +66,32 @@ class FrameContractTest {
             () -> FrameCodec.encode(0, new byte[FrameCodec.MAX_DECODED_PROTO_BYTES + 1], new byte[0]));
     }
 
+    @Test
+    void sharedInputSlicesSurviveFrameCloseWithoutCopying() {
+        try (var encoded = FrameCodec.encode(3, new byte[] {5, 6, 7}, new byte[] {8, 9})) {
+            var input = SharedArrayBuffer.adopt(ArrayBuffer.move(encoded.bytes()));
+            var decoded = FrameCodec.decode(input, id -> id == 3);
+            var protobuf = (SharedArrayBuffer)decoded.protobuf();
+            var attachment = (SharedArrayBuffer)decoded.attachment();
+            assertSame(input.array(), protobuf.array());
+            assertSame(input.array(), attachment.array());
+            decoded.close();
+            assertArrayEquals(new byte[] {5, 6, 7}, bytes(protobuf));
+            assertArrayEquals(new byte[] {8, 9}, bytes(attachment));
+        }
+    }
+
+    @Test
+    void borrowedInputIsIsolatedBeforeReturningDecodedSlices() {
+        var input = new byte[] {14, 1, 2, 3};
+        try (var decoded = FrameCodec.decode(input, id -> id == 7)) {
+            Arrays.fill(input, (byte)0);
+            assertArrayEquals(new byte[] {1, 2, 3}, bytes(decoded.protobuf()));
+        }
+    }
+
     private static byte[] bytes(UniBuffer buffer) {
-        try (var array = buffer.acquireArray()) {
+        try (var array = buffer.copyArray()) {
             return Arrays.copyOfRange(array.array(), array.arrayOffset(), array.arrayOffset() + array.size());
         }
     }

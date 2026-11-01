@@ -25,7 +25,7 @@ public final class ProductionWire {
             () -> new IllegalArgumentException("Unregistered production message: " + message.getClass().getName()));
         var rawAttachment = attachment == null ? new byte[0] : attachment;
         spec.attachmentPolicy().validate(rawAttachment.length);
-        try (var protobuf = ProtocolBuffer.serialize(message); var attached = ArrayBuffer.borrow(rawAttachment);
+        try (var protobuf = ProtocolBuffer.serialize(message); var attached = ArrayBuffer.move(rawAttachment);
             var frame = FrameCodec.encode(spec.id(), protobuf, attached)) {
             var bytes = frame.bytes();
             return new Encoded(bytes, spec.id(), spec.direction(), message.getClass().getName(), rawAttachment.length);
@@ -43,8 +43,8 @@ public final class ProductionWire {
         if (spec.direction() != direction) {
             throw new IllegalArgumentException("Message direction mismatch for " + type.getName());
         }
-        try (var frame = FrameCodec.decode(bytes, id -> id == spec.id()); var protobuf = frame.protobuf();
-            var attachment = frame.attachment(); var array = attachment.acquireArray()) {
+        try (var frame = FrameCodec.decode(bytes, id -> id == spec.id()); var array = frame.attachment().copyArray()) {
+            var protobuf = frame.protobuf();
             spec.attachmentPolicy().validate(array.size());
             var payload = ProtocolBuffer.parse(protobuf, spec.parser());
             var copy = Arrays.copyOfRange(array.array(), array.arrayOffset(), array.arrayOffset() + array.size());
@@ -58,8 +58,8 @@ public final class ProductionWire {
         try (var frame = FrameCodec.decode(bytes,
             id -> ProtocolMessages.REGISTRY.find(id).filter(spec -> spec.direction() == direction).isPresent())) {
             var spec = ProtocolMessages.REGISTRY.find(frame.messageId()).orElseThrow();
-            try (var protobuf = frame.protobuf(); var attachment = frame.attachment();
-                var array = attachment.acquireArray()) {
+            try (var array = frame.attachment().copyArray()) {
+                var protobuf = frame.protobuf();
                 spec.attachmentPolicy().validate(array.size());
                 var payload = ProtocolBuffer.parse(protobuf, spec.parser());
                 var copy = Arrays.copyOfRange(array.array(), array.arrayOffset(), array.arrayOffset() + array.size());

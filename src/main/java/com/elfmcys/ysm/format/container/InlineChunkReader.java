@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.container;
 
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
@@ -12,7 +13,7 @@ import java.nio.channels.SeekableByteChannel;
 public final class InlineChunkReader {
     private InlineChunkReader() {}
 
-    public static UniBuffer readPayload(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
+    public static BufferStorage readPayload(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
         BufferType bufferType) throws IOException {
         if (!ChunkDecoding.isZstd(chunk)) {
             return readStoredVerified(channel, chunk, bufferType);
@@ -29,12 +30,15 @@ public final class InlineChunkReader {
         }
     }
 
-    public static UniBuffer readStoredVerified(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
+    public static BufferStorage readStoredVerified(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
         BufferType bufferType) throws IOException {
         var readType = ChunkDecoding.isZstd(chunk) ? BufferType.NATIVE : bufferType;
-        try (var stored = readStored(channel, chunk, readType)) {
+        try (var scope = com.elfmcys.ysm.util.ScopeGuard.create(readStored(channel, chunk, readType))) {
+            var stored = scope.get();
             ChunkDecoding.validateStored(stored, chunk);
-            return bufferType == BufferType.NATIVE ? stored.acquireNative() : stored.acquireArray();
+            if (stored.type() == bufferType)
+                return scope.release();
+            return bufferType == BufferType.NATIVE ? stored.copyNative() : stored.copyArray();
         }
     }
 
@@ -45,7 +49,7 @@ public final class InlineChunkReader {
         }
     }
 
-    private static UniBuffer readStored(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
+    private static BufferStorage readStored(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk,
         BufferType bufferType) throws IOException {
         validate(channel, chunk);
         try (var scope = UniBuffer.allocateWithScope(chunk.size(), bufferType)) {

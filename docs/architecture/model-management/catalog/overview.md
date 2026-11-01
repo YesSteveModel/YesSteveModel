@@ -69,6 +69,6 @@ Worker outcome 逐项消费；完整 candidate 只保留最新一份。后续 ca
 
 ## 实现与验证入口
 
-`ReloadableModelCatalog` 持有唯一 current；`ActiveScan` 的协调者归并验证 outcome，经完整 candidate 槽位交接给 tick。`CatalogIndexSnapshot` 记录候选身份与来源证明，`CatalogSnapshot` 只含已验证内容。`ResolvedContent` 接纳进构建图后撤销独占 close 权；共享 prefix 使用独立 ownership token。
+`ReloadableModelCatalog` 持有唯一 current；`ActiveScan` 的协调者归并验证 outcome，经完整 candidate 槽位交接给 tick。`CatalogIndexSnapshot` 记录候选身份与来源证明，`CatalogSnapshot` 只含已验证内容。`ResolvedContent` 接纳进构建图后撤销独占 close 权；共享 prefix 通过 GC owner 保活，不分发关闭权。
 
 `ModelSourceDiscovery` 与 `ModelSourceResolver` 负责来源发现和接纳。来源创建遵循启动冻结布局；客户端进程不自动创建实例 auth，缺席视为空来源，已有目录仍参与扫描。验证与证据边界见[模型管理验证](../../../verification/model-management.md)。

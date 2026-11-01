@@ -176,15 +176,18 @@ class ModelExporterTest {
             assertEquals(chunk.flags(), copied.flags(), chunk.type());
             assertEquals(chunk.alignmentShift(), copied.alignmentShift(), chunk.type());
             assertArrayEquals(chunk.hash(), copied.hash(), chunk.type());
-            try (var left = expected.chunks().readStoredVerified(chunk, BufferType.ARRAY);
+            {
+                var left = expected.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                 var right = actual.chunks().readStoredVerified(copied, BufferType.ARRAY);
-                var leftBytes = left.acquireArray(); var rightBytes = right.acquireArray()) {
-                assertArrayEquals(
-                    Arrays.copyOfRange(leftBytes.array(), leftBytes.arrayOffset(),
-                        leftBytes.arrayOffset() + leftBytes.size()),
-                    Arrays.copyOfRange(rightBytes.array(), rightBytes.arrayOffset(),
-                        rightBytes.arrayOffset() + rightBytes.size()),
-                    chunk.type());
+                try (var leftBytes = left.copyArray(); var rightBytes = right.copyArray()) {
+                    assertArrayEquals(
+                        Arrays.copyOfRange(leftBytes.array(), leftBytes.arrayOffset(),
+                            leftBytes.arrayOffset() + leftBytes.size()),
+                        Arrays.copyOfRange(rightBytes.array(), rightBytes.arrayOffset(),
+                            rightBytes.arrayOffset() + rightBytes.size()),
+                        chunk.type());
+
+                }
             }
         }
     }

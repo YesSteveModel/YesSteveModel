@@ -50,6 +50,6 @@
 | `CapturedModel` / source capture | 一次 raw 解析实际消费的文件 bytes、目录观察、模型身份和 diagnostics 的冻结输入；编译仅从该 capture 读取。 |
 | `RawCompileResult` | Java 转换产生的 staging 容器、模型身份与 diagnostics；尚不代表 storage 或 catalog 已发布。 |
 | `ModelFileView` / `ModelInfoView` / `ChunkDataSource` | 模型 Manifest 与引用的唯一解析视图 / 共享 immutable Info 与 player target、只增加可重建 metadata lookup 的视图 / 按 descriptor 取得 payload 的内容来源；metadata 成功不证明全部资源已取得。 |
-| `UniBuffer` / ownership token | 统一 array/native bytes 的 Java 视图 / 决定该 owning 引用是否已关闭的所有权凭据；slice 共享 token，acquire 建立独立引用。 |
+| `UniBuffer` / `BufferStorage` / `SharedBuffer` | Array/native bytes 访问视图 / 固定 owner 显式关闭的存储 / 共同 GC owner 保活的共享视图。所有 `slice()` 均借用；`ownedSlice()` 保留共同 GC owner。 |
 | `ClientAssetBatch` | 页面显式收集并提交的 preview、pack cover 与 presentation 需求集合，不是通用 wire batch 或 model body 下载 owner。 |
 | `@YsmExtension` / `@YsmEventHandler` | 扩展兼容检查入口声明 / 可自动发现、通过生成 checker 后再实例化注册的 handler 声明；不构成稳定公共 API 承诺。 |

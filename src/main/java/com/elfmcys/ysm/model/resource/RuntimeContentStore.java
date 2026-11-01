@@ -3,7 +3,7 @@ package com.elfmcys.ysm.model.resource;
 import com.elfmcys.ysm.model.storage.ContentStorageBinding;
 
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
@@ -123,7 +123,7 @@ public final class RuntimeContentStore {
         }
 
         @Override
-        public java.util.Map<String, UniBuffer> readPayloads(java.util.function.BooleanSupplier cancelled,
+        public java.util.Map<String, SharedBuffer> readPayloads(java.util.function.BooleanSupplier cancelled,
             java.util.Collection<AssetContainerView.ChunkInfo> chunks, BufferType type) throws IOException {
             content.beginRead();
             try {
@@ -135,7 +135,7 @@ public final class RuntimeContentStore {
         }
 
         @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+        public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
             content.beginRead();
             try {
                 return source.readPayload(chunk, bufferType);
@@ -146,7 +146,7 @@ public final class RuntimeContentStore {
         }
 
         @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
             throws IOException {
             content.beginRead();
             try {

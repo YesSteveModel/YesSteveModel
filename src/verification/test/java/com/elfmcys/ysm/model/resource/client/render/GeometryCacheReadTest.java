@@ -36,8 +36,9 @@ class GeometryCacheReadTest {
         throws Exception {
         var source = Path
             .of(Objects.requireNonNull(GeometryCacheReadTest.class.getResource("/assets/ysm/builtin/default")).toURI());
-        try (var directory = new Directory(source); var parsed = ModelParser.parseBuiltinDefaultMemory(directory);
-            var bytes = parsed.bytes()) {
+        try (var directory = new Directory(source)) {
+            var parsed = ModelParser.parseBuiltinDefaultMemory(directory);
+            var bytes = parsed.bytes();
             var content = ManagedContainer.openResidentDefault(bytes,
                 new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
             try (var representation = content.representation()) {

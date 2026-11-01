@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.container;
 
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
@@ -12,7 +13,7 @@ import java.io.IOException;
 public final class ChunkDecoding {
     private ChunkDecoding() {}
 
-    public static UniBuffer decodeZstd(UniBuffer source, AssetContainerView.ChunkInfo chunk, BufferType outputType)
+    public static BufferStorage decodeZstd(UniBuffer source, AssetContainerView.ChunkInfo chunk, BufferType outputType)
         throws IOException {
         validateStoredSize(source, chunk);
         try {

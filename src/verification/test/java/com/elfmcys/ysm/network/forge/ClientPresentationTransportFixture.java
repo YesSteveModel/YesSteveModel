@@ -38,14 +38,14 @@ public final class ClientPresentationTransportFixture {
     }
 
     public void preview(int slot, long offset, boolean terminal, PresentationDelivery delivery, byte[] payload) {
-        try (var bytes = ArrayBuffer.borrow(payload)) {
+        try (var bytes = ArrayBuffer.move(payload)) {
             transfers.acceptPreview(PreviewFragmentProto.newBuilder().setDataTransferId(transferId).setSlot(slot)
                 .setOffset(offset).setFinalFragment(terminal).setDelivery(delivery).build(), bytes);
         }
     }
 
     public void icon(int slot, byte[] payload) {
-        try (var bytes = ArrayBuffer.borrow(payload)) {
+        try (var bytes = ArrayBuffer.move(payload)) {
             transfers.acceptIcon(IconFragmentProto.newBuilder().setDataTransferId(transferId).setSlot(slot).setOffset(0)
                 .setFinalFragment(true).setDelivery(PresentationDelivery.DATA).build(), bytes);
         }

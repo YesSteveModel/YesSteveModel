@@ -265,7 +265,8 @@ class ClientPreviewGeneratorTest {
         try (
             var remoteStore =
                 new com.elfmcys.ysm.model.resource.client.remote.RemoteModelStore(temporary.resolve("remote"));
-            var expected = TestPreviews.blank(); var prefix = local.representation().metadataPrefix().orElseThrow()) {
+            var expected = TestPreviews.blank()) {
+            var prefix = local.representation().metadataPrefix().orElseThrow();
             var content = remoteStore.commitMetadataPrefix(local.representation().identity(), prefix);
             try {
                 store.accept(content.representation().containerId(), expected.bytes());
@@ -449,8 +450,7 @@ class ClientPreviewGeneratorTest {
             assertEquals(1, lease.closes.get());
             if (Boolean.getBoolean("ysm.previewDecodeProbe")) {
                 assertEquals(1, com.elfmcys.ysm.model.storage.PreviewDecodeProbe.count());
-                System.out.println(
-                    "PREVIEW_EXPORT decode=1 stagingMediaDecodes=0");
+                System.out.println("PREVIEW_EXPORT decode=1 stagingMediaDecodes=0");
             }
             var cached = store.load(source.representation().containerId());
             assertTrue(cached.isPresent(),
@@ -628,7 +628,8 @@ class ClientPreviewGeneratorTest {
     @Test
     void heldPixelsDoNotDelayAnotherDecodeAndCancellationReleasesQueuedInput() throws Exception {
         var workers = new QueueExecutor();
-        try (var generator = pixelGenerator(workers); var input = TestPreviews.blank(); var bytes = input.acquireBytes()) {
+        try (var generator = pixelGenerator(workers); var input = TestPreviews.blank();
+            var bytes = input.acquireBytes()) {
             var first = generator.resolveRaw(content(), bytes);
             var second = generator.resolveRaw(content(), bytes);
             var cancelled = generator.resolveRaw(content(), bytes);

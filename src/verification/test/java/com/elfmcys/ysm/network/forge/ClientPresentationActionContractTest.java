@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.buffer.ArrayStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
@@ -318,11 +319,11 @@ class ClientPresentationActionContractTest {
         }
     }
 
-    private static ArrayBuffer buffer(int... values) {
+    private static ArrayStorage buffer(int... values) {
         var bytes = new byte[values.length];
         for (var index = 0; index < values.length; index++)
             bytes[index] = (byte)values[index];
-        return ArrayBuffer.borrow(bytes);
+        return ArrayBuffer.move(bytes);
     }
 
     private static AssetContainerView.ChunkInfo chunk(String name, int size) {

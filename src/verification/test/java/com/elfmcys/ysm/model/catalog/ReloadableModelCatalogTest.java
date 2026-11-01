@@ -1638,8 +1638,9 @@ class ReloadableModelCatalogTest {
                             if (chunk.type().equals(
                                 com.elfmcys.ysm.format.container.AssetContainerConstant.VERIFICATION_CHUNK_TYPE))
                                 continue;
-                            try (var bytes =
-                                content.chunks().readStoredVerified(chunk, com.elfmcys.ysm.buffer.BufferType.ARRAY)) {
+                            {
+                                var bytes =
+                                    content.chunks().readStoredVerified(chunk, com.elfmcys.ysm.buffer.BufferType.ARRAY);
                                 count += bytes.size();
                             }
                         }
@@ -1732,7 +1733,8 @@ class ReloadableModelCatalogTest {
             var chunk = content.modelFile().getFileView().getAssetView()
                 .getChunkInfo(com.elfmcys.ysm.format.schema.model.ModelFileConstant.THUMB_BUTTON_CHUNK_NAME);
             var first = content.chunks().readStoredVerified(chunk, com.elfmcys.ysm.buffer.BufferType.ARRAY);
-            try (var second = first.acquire()) {
+            var second = first.share();
+            {
                 var expected = new byte[second.size()];
                 second.nio().get(expected);
                 Files.delete(target);
@@ -1740,12 +1742,10 @@ class ReloadableModelCatalogTest {
                 var actual = new byte[second.size()];
                 second.nio().get(actual);
                 org.junit.jupiter.api.Assertions.assertArrayEquals(expected, actual);
-                first.close();
+                first = null;
                 second.nio().get(actual);
                 org.junit.jupiter.api.Assertions.assertArrayEquals(expected, actual);
                 assertTrue(Files.isSymbolicLink(root.resolve("alias.mxc")));
-            } finally {
-                first.close();
             }
         }
     }
@@ -1791,8 +1791,8 @@ class ReloadableModelCatalogTest {
                         .equals(com.elfmcys.ysm.format.container.AssetContainerConstant.VERIFICATION_CHUNK_TYPE)) {
                         continue;
                     }
-                    try (var bytes =
-                        content.chunks().readStoredVerified(chunk, com.elfmcys.ysm.buffer.BufferType.ARRAY)) {
+                    {
+                        var bytes = content.chunks().readStoredVerified(chunk, com.elfmcys.ysm.buffer.BufferType.ARRAY);
                         verifiedBytes += bytes.size();
                     }
                 }

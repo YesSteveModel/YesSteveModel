@@ -8,7 +8,7 @@
 
 `PreparedTargetCache` 保存 loader 内的依赖登记。独立 interest 成功后转成 target pin；短期提权连接只传播优先级，不传播取消权。`Production` 单独仲裁输入交接，调度节点已领取不代表 producer 已接管输入。迟到 producer 只处置自己的输入和候选。
 
-`PreparedTarget` 同时拥有全部声音首块与媒体前缀资格。Producer 在准备输入的借用期内完成批量读取与验证，失败不发布部分集合。每个 target 从准备值取得独立 buffer 引用，关闭时归还自身引用与 pin；最后 pin 关闭共享值。已接纳 playback 自持读取能力，不随任一 pin 取消。
+`PreparedTarget` 同时拥有全部声音首块与媒体前缀资格。Producer 在准备输入的借用期内完成批量读取与验证，失败不发布部分集合。每个 target 从准备值保留同一 `SharedBuffer`，关闭时撤销自身引用与 pin；最后 pin 关闭共享准备。已交付的 bytes 继续有效。已接纳 playback 自持读取能力，不随任一 pin 取消。
 
 `ModelRenderTargetLoader` 按实际内容绑定选区；prepared dependency 与 pending key 包含区域，避免同表示换来源后加入旧区持久生产。静态声明身份贯通 request、准备与 artifact，实体安装使用同代 SubjectBinding。
 

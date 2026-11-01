@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.dispatch;
 
+import com.elfmcys.ysm.buffer.ArrayStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.network.ProtocolBuffer;
@@ -85,7 +86,7 @@ public final class SessionPublicationPacket implements LogicalPacket {
         return parts.get(index);
     }
 
-    private record Part(int messageId, UniBuffer protobuf) {
+    private record Part(int messageId, ArrayStorage protobuf) {
         private void close() {
             protobuf.close();
         }

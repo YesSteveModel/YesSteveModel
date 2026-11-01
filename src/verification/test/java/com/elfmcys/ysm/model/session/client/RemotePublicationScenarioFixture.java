@@ -106,7 +106,8 @@ public final class RemotePublicationScenarioFixture {
 
     public void seed(RemoteModelStore store, String assetName) throws Exception {
         var asset = asset(assetName);
-        try (var prefix = asset.content().representation().metadataPrefix().orElseThrow()) {
+        {
+            var prefix = asset.content().representation().metadataPrefix().orElseThrow();
             store.commitMetadataPrefix(asset.identity(), prefix);
         }
     }
@@ -278,7 +279,8 @@ public final class RemotePublicationScenarioFixture {
 
         private static void publish(MetadataReceiver receiver, ModelFileIdentity identity, Asset asset)
             throws IOException {
-            try (var prefix = asset.content().representation().metadataPrefix().orElseThrow()) {
+            {
+                var prefix = asset.content().representation().metadataPrefix().orElseThrow();
                 receiver.accept(identity, prefix);
             }
         }

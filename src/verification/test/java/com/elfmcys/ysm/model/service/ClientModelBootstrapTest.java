@@ -1,9 +1,9 @@
 package com.elfmcys.ysm.model.service;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics;
 import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory;
@@ -815,12 +815,12 @@ class ClientModelBootstrapTest {
 
     private record FailingChunks(AssetLoadException cause) implements ChunkDataSource {
         @Override
-        public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+        public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
             throw cause;
         }
 
         @Override
-        public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
             throws IOException {
             throw cause;
         }

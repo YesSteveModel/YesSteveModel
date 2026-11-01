@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.model.resource.client;
 
-import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.schema.model.views.SoundMedia;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
@@ -27,7 +27,7 @@ public final class SoundSource {
         return media;
     }
 
-    public UniBuffer acquireFirstChunk() throws AssetLoadException {
+    public SharedBuffer acquireFirstChunk() throws AssetLoadException {
         return targetResources.acquireFirstChunk(representation, media);
     }
 }

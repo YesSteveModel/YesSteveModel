@@ -244,7 +244,7 @@ class RangePacketTest {
 
     private static byte[] attachment(OutboundFrame frame) {
         try (frame; var decoded = FrameCodec.decode(frame.bytes(), id -> id == ProtocolMessages.CHUNK_FRAGMENT_ID);
-            var attachment = decoded.attachment().acquireArray()) {
+            var attachment = decoded.attachment().copyArray()) {
             var copy = new byte[attachment.size()];
             System.arraycopy(attachment.array(), attachment.arrayOffset(), copy, 0, copy.length);
             return copy;
@@ -284,7 +284,7 @@ class RangePacketTest {
         @Override
         public SendResult trySend(OutboundFrame frame) {
             try (var decoded = FrameCodec.decode(frame.bytes(), id -> id == ProtocolMessages.CHUNK_FRAGMENT_ID);
-                var attachment = decoded.attachment().acquireArray()) {
+                var attachment = decoded.attachment().copyArray()) {
                 var copy = new byte[attachment.size()];
                 System.arraycopy(attachment.array(), attachment.arrayOffset(), copy, 0, copy.length);
                 attempts.add(copy);

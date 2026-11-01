@@ -71,7 +71,8 @@ class AnimationStoreTest {
             public AnimationStore.AnimationLoader inReadPhase(ReadPhaseSet phases) throws IOException {
                 var phase = phases.acquire(chunks, chunks::openReadPhase);
                 return name -> {
-                    try (var ignored = phase.readPayload(descriptor, BufferType.ARRAY)) {
+                    {
+                        var ignored = phase.readPayload(descriptor, BufferType.ARRAY);
                         return animation(name);
                     }
                 };

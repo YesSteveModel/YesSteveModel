@@ -65,8 +65,9 @@ class AutomaticPreviewScopeTest {
     @CsvSource({"cold,page", "cold,generation", "fullDisk,page", "fullDisk,generation"})
     void automaticBuildsOnlyTheDefaultBodyRegardlessOfFullDiskCache(String temperature, String use) throws Exception {
         var source = Path.of(Objects.requireNonNull(getClass().getResource("/assets/ysm/builtin/default")).toURI());
-        try (var directory = new Directory(source); var memory = ModelParser.parseBuiltinDefaultMemory(directory);
-            var bytes = memory.bytes()) {
+        try (var directory = new Directory(source)) {
+            var memory = ModelParser.parseBuiltinDefaultMemory(directory);
+            var bytes = memory.bytes();
             var content = ManagedContainer.openResidentDefault(bytes,
                 new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("fixture")));
             try (var representation = content.representation()) {
@@ -79,8 +80,8 @@ class AutomaticPreviewScopeTest {
                 try (var fixture = new Fixture(root, content)) {
                     PreviewDecodeProbe.beginScope();
                     try {
-                        try (var candidate = use.equals("generation") ? fixture.detached()
-                            : fixture.load(ModelResourcePurpose.GUI)) {
+                        try (var candidate =
+                            use.equals("generation") ? fixture.detached() : fixture.load(ModelResourcePurpose.GUI)) {
                             var target = candidate.publish(fixture.publisher);
                             assertNull(target.playerResources().defaultVariant().armModel());
                             var selected = fixture.key(fixture.request(ModelResourcePurpose.GUI)).selectedTexture();

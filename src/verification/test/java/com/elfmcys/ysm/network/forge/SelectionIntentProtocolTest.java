@@ -104,7 +104,7 @@ class SelectionIntentProtocolTest {
             SessionProtocolHandler.acceptSelectModelResult(connection, result(0, SelectionStatus.INVALID_REQUEST));
             SessionProtocolHandler.acceptSelectModelResult(connection, result(2, SelectionStatus.INVALID_REQUEST));
             SessionProtocolHandler.acceptSelectModelResult(connection, result(1, SelectionStatus.ACCEPTED));
-            try (var bytes = ArrayBuffer.borrow(new byte[] {8, 99, 16, 1})) {
+            try (var bytes = ArrayBuffer.move(new byte[] {8, 99, 16, 1})) {
                 SessionProtocolHandler.acceptSelectModelResult(connection,
                     ProtocolBuffer.parse(bytes, SelectModelResultProto::parseFrom));
             }

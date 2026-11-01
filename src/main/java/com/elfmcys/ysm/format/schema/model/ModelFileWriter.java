@@ -2,6 +2,7 @@ package com.elfmcys.ysm.format.schema.model;
 
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.buffer.NativeBuffer;
+import com.elfmcys.ysm.buffer.SharedNativeBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.schema.file.AssetFileWriter;
 import com.elfmcys.ysm.model.domain.Hash256;
@@ -39,9 +40,8 @@ public class ModelFileWriter extends AssetFileWriter {
         Objects.requireNonNull(chunks, "chunks");
         var ids = new int[chunks.length];
         for (var index = 0; index < chunks.length; ++index) {
-            try (var data = NativeBuffer.copyOf(chunks[index])) {
-                ids[index] = addBlob(data, 0);
-            }
+            var data = SharedNativeBuffer.adopt(NativeBuffer.copyOf(chunks[index]));
+            ids[index] = addBlob(data, 0);
         }
         return ids;
     }

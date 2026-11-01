@@ -2,8 +2,6 @@ package com.elfmcys.ysm.buffer;
 
 import com.elfmcys.ysm.natives.buffer.NativeHeapBuffer;
 import com.elfmcys.ysm.util.ScopeGuard;
-import io.netty.util.internal.PlatformDependent;
-
 import java.io.IOException;
 import java.lang.ref.Reference;
 import java.nio.ByteBuffer;
@@ -13,30 +11,26 @@ public interface NativeBuffer extends UniBuffer {
     long ptr();
 
     @Override
-    NativeBuffer slice(int offset, int size);
-
-    @Override
-    default NativeBuffer borrow() {
-        return new NativeNioBuffer(nio(), false);
+    default BorrowedNativeBuffer slice(int offset, int size) {
+        return BorrowedNativeBuffer.of(this, nio(), offset, size);
     }
 
     @Override
-    NativeBuffer acquire();
+    default BorrowedNativeBuffer borrow() {
+        return slice(0, size());
+    }
 
     @Override
-    default NativeBuffer copy() {
-        var size = size();
-        try (var bufScope = allocateWithScope(size)) {
-            var target = bufScope.get();
-            try {
-                if (size != 0) {
-                    PlatformDependent.copyMemory(ptr(), target.ptr(), size);
-                }
-            } finally {
-                Reference.reachabilityFence(this);
-                Reference.reachabilityFence(target);
-            }
-            return bufScope.release();
+    default NativeStorage copy() {
+        return copyNative();
+    }
+
+    @Override
+    default NativeStorage copy(int offset, int size) {
+        try {
+            return NativeBuffer.copyOf(slice(offset, size));
+        } finally {
+            Reference.reachabilityFence(this);
         }
     }
 
@@ -45,67 +39,56 @@ public interface NativeBuffer extends UniBuffer {
         return BufferType.NATIVE;
     }
 
-    @Override
-    default NativeBuffer acquireNative() {
-        return acquire();
-    }
-
-    @Override
-    default ArrayBuffer acquireArray() {
-        var result = ArrayBuffer.allocate(size());
-        try {
-            UniBufferIO.copy(this, 0, result, 0, size());
-            return result;
-        } catch (Throwable error) {
-            result.close();
-            throw error;
-        }
-    }
-
-    static NativeBuffer allocate(int size) {
+    static NativeStorage allocate(int size) {
         return new NativeHeapBuffer(size);
     }
 
-    static NativeBuffer allocate(int size, int alignment) {
+    static NativeStorage allocate(int size, int alignment) {
         return new NativeHeapBuffer(size, alignment);
     }
 
-    static ScopeGuard<NativeBuffer> allocateWithScope(int size) {
+    static ScopeGuard<NativeStorage> allocateWithScope(int size) {
         return ScopeGuard.create(allocate(size));
     }
 
-    static ScopeGuard<NativeBuffer> allocateWithScope(int size, int alignment) {
+    static ScopeGuard<NativeStorage> allocateWithScope(int size, int alignment) {
         return ScopeGuard.create(allocate(size, alignment));
     }
 
-    static NativeBuffer move(ByteBuffer data) {
-        return new NativeNioBuffer(data, true);
+    static NativeStorage move(ByteBuffer data) {
+        return new NativeNioBuffer(data);
     }
 
-    static NativeBuffer borrow(ByteBuffer data) {
-        return new NativeNioBuffer(data, false);
+    static BorrowedNativeBuffer borrow(ByteBuffer data) {
+        return BorrowedNativeBuffer.of(data, data, 0, data.remaining());
     }
 
-    static NativeBuffer mapFile(FileChannel file, long offset, long size) throws IOException {
+    static NativeStorage mapFile(FileChannel file, long offset, long size) throws IOException {
         return new MappedFileBuffer(file, offset, size);
     }
 
-    static NativeBuffer copyOf(ByteBuffer data) {
-        var result = allocate(data.remaining());
+    static NativeStorage copyOf(UniBuffer source) {
+        var target = allocate(source.size());
         try {
-            if (data.isDirect() && result.size() != 0) {
-                PlatformDependent.copyMemory(PlatformDependent.directBufferAddress(data) + data.position(),
-                    result.ptr(), result.size());
-            } else {
-                result.nio().put(data.duplicate());
-            }
-        } catch (RuntimeException | Error error) {
-            result.close();
-            throw error;
-        } finally {
-            Reference.reachabilityFence(data);
-            Reference.reachabilityFence(result);
+            UniBufferIO.copy(source, 0, target, 0, source.size());
+            return target;
+        } catch (RuntimeException | Error failure) {
+            target.close();
+            throw failure;
         }
-        return result;
+    }
+
+    static NativeStorage copyOf(ByteBuffer source) {
+        var target = allocate(source.remaining());
+        try {
+            target.nio().put(source.duplicate());
+            return target;
+        } catch (RuntimeException | Error failure) {
+            target.close();
+            throw failure;
+        } finally {
+            Reference.reachabilityFence(source);
+            Reference.reachabilityFence(target);
+        }
     }
 }

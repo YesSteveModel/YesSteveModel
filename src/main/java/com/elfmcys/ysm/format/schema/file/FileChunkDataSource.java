@@ -1,7 +1,8 @@
 package com.elfmcys.ysm.format.schema.file;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.container.InlineChunkReader;
@@ -38,40 +39,37 @@ public final class FileChunkDataSource implements ChunkDataSource {
     }
 
     @Override
-    public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+    public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
         return read(chunk, bufferType, InlineChunkReader::readPayload);
     }
 
     @Override
-    public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+    public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        throws IOException {
         return read(chunk, bufferType, InlineChunkReader::readStoredVerified);
     }
 
     @Override
-    public Map<String, UniBuffer> readPayloads(BooleanSupplier cancelled,
+    public Map<String, SharedBuffer> readPayloads(BooleanSupplier cancelled,
         Collection<AssetContainerView.ChunkInfo> chunks, BufferType bufferType) throws IOException {
         if (chunks.isEmpty())
             return ChunkDataSource.super.readPayloads(cancelled, chunks, bufferType);
-        Map<String, UniBuffer> result = null;
         try (var phase = openReadPhase()) {
-            result = phase.readPayloads(cancelled, chunks, bufferType);
+            return phase.readPayloads(cancelled, chunks, bufferType);
         } catch (IOException | RuntimeException | Error failure) {
-            if (result != null)
-                result.values().forEach(UniBuffer::close);
             if (failure instanceof AssetLoadException asset)
                 throw asset;
             if (failure instanceof IOException || failure instanceof SecurityException)
                 throw AssetLoadException.access("Failed to read model chunk batch: " + file, failure);
             throw failure;
         }
-        return result;
     }
 
-    private UniBuffer read(AssetContainerView.ChunkInfo chunk, BufferType bufferType, ChannelRead operation)
+    private SharedBuffer read(AssetContainerView.ChunkInfo chunk, BufferType bufferType, ChannelRead operation)
         throws IOException {
-        UniBuffer result = null;
+        BufferStorage result = null;
         try (var phase = ChannelReadPhase.open(opener, this::verifyExpectedSize)) {
-            result = phase.read(channel -> operation.read(channel, chunk, bufferType), UniBuffer::close);
+            result = phase.read(channel -> operation.read(channel, chunk, bufferType), BufferStorage::close);
         } catch (AssetLoadException error) {
             close(result);
             throw error;
@@ -82,7 +80,7 @@ public final class FileChunkDataSource implements ChunkDataSource {
             close(result);
             throw error;
         }
-        return result;
+        return SharedBuffer.adopt(result);
     }
 
     @Override
@@ -98,20 +96,22 @@ public final class FileChunkDataSource implements ChunkDataSource {
         try {
             return new ReadPhase() {
                 @Override
-                public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
+                public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type)
+                    throws IOException {
                     return read(chunk, type, InlineChunkReader::readPayload);
                 }
 
                 @Override
-                public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
+                public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
                     throws IOException {
                     return read(chunk, type, InlineChunkReader::readStoredVerified);
                 }
 
-                private UniBuffer read(AssetContainerView.ChunkInfo chunk, BufferType type, ChannelRead reader)
+                private SharedBuffer read(AssetContainerView.ChunkInfo chunk, BufferType type, ChannelRead reader)
                     throws IOException {
                     try {
-                        return phase.read(channel -> reader.read(channel, chunk, type), UniBuffer::close);
+                        return SharedBuffer
+                            .adopt(phase.read(channel -> reader.read(channel, chunk, type), BufferStorage::close));
                     } catch (AssetLoadException failure) {
                         throw failure;
                     } catch (IOException | SecurityException failure) {
@@ -120,12 +120,12 @@ public final class FileChunkDataSource implements ChunkDataSource {
                 }
 
                 @Override
-                public Map<String, UniBuffer> readPayloads(BooleanSupplier cancelled,
+                public Map<String, SharedBuffer> readPayloads(BooleanSupplier cancelled,
                     Collection<AssetContainerView.ChunkInfo> chunks, BufferType type) throws IOException {
                     return phase.read(
                         channel -> ChunkDataSource.collectPayloads(cancelled, chunks,
-                            chunk -> InlineChunkReader.readPayload(channel, chunk, type)),
-                        values -> values.values().forEach(UniBuffer::close));
+                            chunk -> SharedBuffer.adopt(InlineChunkReader.readPayload(channel, chunk, type))),
+                        Map::clear);
                 }
 
                 @Override
@@ -155,7 +155,7 @@ public final class FileChunkDataSource implements ChunkDataSource {
         return AssetLoadException.access(message, cause);
     }
 
-    private static void close(UniBuffer buffer) {
+    private static void close(BufferStorage buffer) {
         if (buffer != null) {
             buffer.close();
         }
@@ -168,7 +168,7 @@ public final class FileChunkDataSource implements ChunkDataSource {
 
     @FunctionalInterface
     private interface ChannelRead {
-        UniBuffer read(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+        BufferStorage read(SeekableByteChannel channel, AssetContainerView.ChunkInfo chunk, BufferType bufferType)
             throws IOException;
     }
 }

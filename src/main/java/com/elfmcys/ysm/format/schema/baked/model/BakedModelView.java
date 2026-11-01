@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.schema.baked.model;
 
+import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -73,7 +74,7 @@ public class BakedModelView {
     }
 
     @Nullable
-    public UniBuffer readModelData(SeekableByteChannel file) throws IOException {
+    public BufferStorage readModelData(SeekableByteChannel file) throws IOException {
         var chunk = assetView.getChunkInfo(BakedModelConstant.MODEL_CHUNK_NAME);
         return chunk == null ? null : InlineChunkReader.readPayload(file, chunk, BufferType.NATIVE);
     }

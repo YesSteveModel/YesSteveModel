@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.model.resource.client.audio;
 
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.schema.model.views.SoundMedia;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
@@ -24,7 +24,7 @@ import java.util.function.BooleanSupplier;
 public final class VerifiedChunkAccess implements AutoCloseable {
     private final ModelFileIdentity representation;
     private final SoundMedia media;
-    private final UniBuffer firstChunk;
+    private SharedBuffer firstChunk;
     private final ChunkReader reader;
     private final Executor ownerExecutor;
     private int nextIndex;
@@ -32,7 +32,7 @@ public final class VerifiedChunkAccess implements AutoCloseable {
     private Interest active;
     private boolean closed;
 
-    private VerifiedChunkAccess(ModelFileIdentity representation, SoundMedia media, UniBuffer firstChunk,
+    private VerifiedChunkAccess(ModelFileIdentity representation, SoundMedia media, SharedBuffer firstChunk,
         ChunkReader reader, Executor ownerExecutor) {
         this.representation = representation;
         this.media = media;
@@ -51,31 +51,26 @@ public final class VerifiedChunkAccess implements AutoCloseable {
             throw AssetLoadException.access("Sound access does not match the current model representation");
         }
         var firstChunk = source.acquireFirstChunk();
-        try {
-            final ChunkReader reader;
-            if (content instanceof RemoteModelContent remote) {
-                reader = (cancelled, index) -> {
-                    if (cancelled.getAsBoolean()) {
-                        return CompletableFuture
-                            .failedFuture(new CancellationException("Sound chunk request was cancelled"));
-                    }
-                    return remote.requestSoundChunk(source.media(), index, fetcher, workers);
-                };
-            } else {
-                reader = (cancelled, index) -> CompletableFuture.supplyAsync(() -> {
-                    try {
-                        return content.chunks().readPayload(cancelled, source.media().chunkInfos().get(index),
-                            BufferType.NATIVE);
-                    } catch (IOException failure) {
-                        throw new CompletionException(failure);
-                    }
-                }, workers);
-            }
-            return new VerifiedChunkAccess(source.representation(), source.media(), firstChunk, reader, ownerExecutor);
-        } catch (RuntimeException | Error failure) {
-            firstChunk.close();
-            throw failure;
+        final ChunkReader reader;
+        if (content instanceof RemoteModelContent remote) {
+            reader = (cancelled, index) -> {
+                if (cancelled.getAsBoolean()) {
+                    return CompletableFuture
+                        .failedFuture(new CancellationException("Sound chunk request was cancelled"));
+                }
+                return remote.requestSoundChunk(source.media(), index, fetcher, workers);
+            };
+        } else {
+            reader = (cancelled, index) -> CompletableFuture.supplyAsync(() -> {
+                try {
+                    return content.chunks().readPayload(cancelled, source.media().chunkInfos().get(index),
+                        BufferType.NATIVE);
+                } catch (IOException failure) {
+                    throw new CompletionException(failure);
+                }
+            }, workers);
         }
+        return new VerifiedChunkAccess(source.representation(), source.media(), firstChunk, reader, ownerExecutor);
     }
 
     public ModelFileIdentity representation() {
@@ -115,9 +110,9 @@ public final class VerifiedChunkAccess implements AutoCloseable {
         if (active != null || heldChunks != 0 || nextIndex != media.chunkInfos().size()) {
             throw new IllegalStateException("Sound chunk access can restart only after complete consumption");
         }
-        var restartedFirst = firstChunk.acquire();
+        var restartedFirst = firstChunk;
         closed = true;
-        firstChunk.close();
+        firstChunk = null;
         return new VerifiedChunkAccess(representation, media, restartedFirst, reader, ownerExecutor);
     }
 
@@ -131,11 +126,11 @@ public final class VerifiedChunkAccess implements AutoCloseable {
             closed = true;
             pending = active;
             active = null;
+            firstChunk = null;
         }
         if (pending != null) {
             pending.cancel();
         }
-        firstChunk.close();
     }
 
     private void executeOwner(Runnable task) {
@@ -158,25 +153,25 @@ public final class VerifiedChunkAccess implements AutoCloseable {
     }
 
     private void start(Interest interest) {
-        final CompletableFuture<UniBuffer> acquisition;
+        final CompletableFuture<SharedBuffer> acquisition;
         synchronized (this) {
             if (closed || active != interest || interest.cancelled.get()) {
                 interest.fail(new CancellationException("Sound chunk access was cancelled"));
                 return;
             }
-            acquisition = interest.index == 0 ? CompletableFuture.completedFuture(firstChunk.acquire())
+            acquisition = interest.index == 0 ? CompletableFuture.completedFuture(firstChunk)
                 : reader.read(interest.cancelled::get, interest.index);
             interest.acquisition = acquisition;
         }
         acquisition.whenComplete((buffer, failure) -> completeOnOwner(interest, buffer, failure));
     }
 
-    private void completeOnOwner(Interest interest, UniBuffer buffer, Throwable failure) {
+    private void completeOnOwner(Interest interest, SharedBuffer buffer, Throwable failure) {
         try {
             ownerExecutor.execute(() -> complete(interest, buffer, failure));
         } catch (RuntimeException rejected) {
-            close(buffer);
             synchronized (this) {
+                interest.acquisition = null;
                 if (active == interest) {
                     active = null;
                 }
@@ -185,18 +180,17 @@ public final class VerifiedChunkAccess implements AutoCloseable {
         }
     }
 
-    private void complete(Interest interest, UniBuffer buffer, Throwable failure) {
+    private void complete(Interest interest, SharedBuffer buffer, Throwable failure) {
         synchronized (this) {
+            interest.acquisition = null;
             if (active == interest) {
                 active = null;
             }
             if (closed || interest.cancelled.get()) {
-                close(buffer);
                 interest.fail(new CancellationException("Sound chunk access was cancelled"));
                 return;
             }
             if (failure != null) {
-                close(buffer);
                 interest.fail(unwrap(failure));
                 return;
             }
@@ -213,21 +207,18 @@ public final class VerifiedChunkAccess implements AutoCloseable {
     }
 
     private void cancel(Interest interest) {
-        CompletableFuture<UniBuffer> acquisition;
-        boolean releaseFirst;
+        CompletableFuture<SharedBuffer> acquisition;
         synchronized (this) {
-            releaseFirst = !closed;
             closed = true;
+            firstChunk = null;
             if (active == interest) {
                 active = null;
             }
             acquisition = interest.acquisition;
+            interest.acquisition = null;
         }
         if (acquisition != null) {
             acquisition.cancel(false);
-        }
-        if (releaseFirst) {
-            firstChunk.close();
         }
     }
 
@@ -246,15 +237,9 @@ public final class VerifiedChunkAccess implements AutoCloseable {
         return current;
     }
 
-    private static void close(UniBuffer buffer) {
-        if (buffer != null) {
-            buffer.close();
-        }
-    }
-
     @FunctionalInterface
     private interface ChunkReader {
-        CompletableFuture<UniBuffer> read(BooleanSupplier cancelled, int index);
+        CompletableFuture<SharedBuffer> read(BooleanSupplier cancelled, int index);
     }
 
     public static final class Interest {
@@ -263,7 +248,7 @@ public final class VerifiedChunkAccess implements AutoCloseable {
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private final AtomicBoolean terminal = new AtomicBoolean();
         private final CompletableFuture<Chunk> result = new CompletableFuture<>();
-        private volatile CompletableFuture<UniBuffer> acquisition;
+        private volatile CompletableFuture<SharedBuffer> acquisition;
 
         private Interest(VerifiedChunkAccess owner, int index) {
             this.owner = owner;
@@ -307,11 +292,11 @@ public final class VerifiedChunkAccess implements AutoCloseable {
         private final int index;
         private final ModelFileIdentity representation;
         private final Hash256 mediaIdentity;
-        private final UniBuffer buffer;
+        private SharedBuffer buffer;
         private final AtomicBoolean closed = new AtomicBoolean();
 
         private Chunk(VerifiedChunkAccess owner, int index, ModelFileIdentity representation, Hash256 mediaIdentity,
-            UniBuffer buffer) {
+            SharedBuffer buffer) {
             this.owner = owner;
             this.index = index;
             this.representation = representation;
@@ -331,27 +316,28 @@ public final class VerifiedChunkAccess implements AutoCloseable {
             return mediaIdentity;
         }
 
-        public UniBuffer acquireBuffer() {
+        public synchronized SharedBuffer acquireBuffer() {
             if (closed.get()) {
                 throw new IllegalStateException("Sound chunk is closed");
             }
-            return buffer.acquire();
+            return buffer;
         }
 
         /** Borrowed read-only bytes valid until this chunk is closed. */
-        public java.nio.ByteBuffer borrowBuffer() {
+        public synchronized java.nio.ByteBuffer borrowBuffer() {
             if (closed.get()) {
                 throw new IllegalStateException("Sound chunk is closed");
             }
-            return buffer.nio().asReadOnlyBuffer();
+            var data = buffer.nio();
+            return data.asReadOnlyBuffer().order(data.order());
         }
 
         @Override
-        public void close() {
+        public synchronized void close() {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
-            buffer.close();
+            buffer = null;
             owner.release();
         }
     }

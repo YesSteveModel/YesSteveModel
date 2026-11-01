@@ -200,7 +200,13 @@ public class ModelFileView {
 
     public static ModelFileView readMetadata(UniBuffer metadataPrefix, @Nullable ModelFileView reusable)
         throws IOException {
-        try (var bytes = metadataPrefix.acquireArray()) {
+        if (!(metadataPrefix instanceof ArrayBuffer)) {
+            try (var bytes = metadataPrefix.copyArray()) {
+                return readMetadata(bytes, reusable);
+            }
+        }
+        var bytes = (ArrayBuffer)metadataPrefix;
+        try {
             var assetView = AssetContainerReader.readPreamble(bytes.array(), bytes.arrayOffset(), bytes.size());
             var manifestChunk = requireMetadataLayout(assetView);
             var prefixSize = Math.addExact(manifestChunk.offset(), manifestChunk.size());
@@ -223,6 +229,8 @@ public class ModelFileView {
                 }
             }
             return new ModelFileView(assetView, ModelFileIdentityReader.read(assetView), new ManifestData(manifest));
+        } finally {
+            java.lang.ref.Reference.reachabilityFence(metadataPrefix);
         }
     }
 

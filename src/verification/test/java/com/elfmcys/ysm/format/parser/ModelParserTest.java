@@ -2,6 +2,8 @@ package com.elfmcys.ysm.format.parser;
 
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
+import com.elfmcys.ysm.buffer.NativeStorage;
+import com.elfmcys.ysm.buffer.BorrowedNativeBuffer;
 import com.elfmcys.ysm.expression.host.BuiltinDeclarations;
 import com.elfmcys.ysm.expression.host.HostAvailability;
 import com.elfmcys.ysm.format.vfs.Directory;
@@ -138,8 +140,9 @@ class ModelParserTest {
         @TempDir Path outputDirectory) throws IOException {
         var optional = BuiltinDeclarations.group("ctrl:parcool_state");
         assertFalse(HostAvailability.none().versions().containsKey(optional.dependencies().get(0).modId()));
-        try (var vfs = expressionFixture("return ctrl.parcool_state;");
-            var container = ModelParser.parseBuiltinDefaultMemory(vfs); var bytes = container.bytes()) {
+        try (var vfs = expressionFixture("return ctrl.parcool_state;")) {
+            var container = ModelParser.parseBuiltinDefaultMemory(vfs);
+            var bytes = container.bytes();
             assertTrue(bytes.size() > 0);
         }
         var observed = new AtomicInteger();
@@ -502,17 +505,12 @@ class ModelParserTest {
         }
 
         @Override
-        public NativeBuffer slice(int offset, int size) {
+        public BorrowedNativeBuffer slice(int offset, int size) {
             return underlying.slice(offset, size);
         }
 
         @Override
-        public NativeBuffer acquire() {
-            return underlying.acquire();
-        }
-
-        @Override
-        public NativeBuffer copy() {
+        public NativeStorage copy() {
             copyCount.incrementAndGet();
             return new TrackingOwner(underlying.copy(), closeCount);
         }
@@ -527,24 +525,17 @@ class ModelParserTest {
             return underlying.size();
         }
 
-        @Override
-        public void close() {}
     }
 
-    private record TrackingOwner(NativeBuffer underlying, AtomicInteger closeCount) implements NativeBuffer {
+    private record TrackingOwner(NativeStorage underlying, AtomicInteger closeCount) implements NativeStorage {
         @Override
         public long ptr() {
             return underlying.ptr();
         }
 
         @Override
-        public NativeBuffer slice(int offset, int size) {
+        public BorrowedNativeBuffer slice(int offset, int size) {
             return underlying.slice(offset, size);
-        }
-
-        @Override
-        public NativeBuffer acquire() {
-            return underlying.acquire();
         }
 
         @Override
@@ -565,7 +556,7 @@ class ModelParserTest {
     }
 
     private static final class MemoryVfs implements VirtualFileSystem, AutoCloseable {
-        private final Map<String, NativeBuffer> files = new LinkedHashMap<>();
+        private final Map<String, NativeStorage> files = new LinkedHashMap<>();
         private final Set<String> readFiles = new LinkedHashSet<>();
 
         void add(String path, String content) {
@@ -619,7 +610,7 @@ class ModelParserTest {
 
         @Override
         public void close() {
-            files.values().forEach(NativeBuffer::close);
+            files.values().forEach(NativeStorage::close);
         }
 
         private static String directoryPrefix(String path) {

@@ -108,11 +108,15 @@ public final class SoundMedia {
         Objects.requireNonNull(cancelled, "cancelled");
         Objects.requireNonNull(source, "source");
         try (var decoder = OpusDecoder.create(frames); var scratch = NativeBuffer.allocate(PCM_SCRATCH_SIZE);
-            var head = NativeBuffer.copyOf(ByteBuffer.wrap(firstPage));
-            var first = source.readPayload(cancelled, chunks.get(0), BufferType.NATIVE)) {
-            feed(decoder, head.nio(), scratch, false, cancelled);
-            if (!feed(decoder, first.nio(), scratch, true, cancelled)) {
-                throw content("Sound prefix produced no effective PCM");
+            var head = NativeBuffer.copyOf(ByteBuffer.wrap(firstPage))) {
+            var first = source.readPayload(cancelled, chunks.get(0), BufferType.NATIVE);
+            try {
+                feed(decoder, head.nio(), scratch, false, cancelled);
+                if (!feed(decoder, first.nio(), scratch, true, cancelled)) {
+                    throw content("Sound prefix produced no effective PCM");
+                }
+            } finally {
+                java.lang.ref.Reference.reachabilityFence(first);
             }
         }
     }
@@ -127,8 +131,11 @@ public final class SoundMedia {
                 if (cancelled.getAsBoolean()) {
                     throw new java.util.concurrent.CancellationException("Sound validation was cancelled");
                 }
-                try (var payload = source.readPayload(cancelled, chunk, BufferType.NATIVE)) {
+                var payload = source.readPayload(cancelled, chunk, BufferType.NATIVE);
+                try {
                     feed(decoder, payload.nio(), scratch, false, cancelled);
+                } finally {
+                    java.lang.ref.Reference.reachabilityFence(payload);
                 }
             }
             decoder.endInput();

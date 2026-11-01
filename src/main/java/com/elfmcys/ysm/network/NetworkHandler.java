@@ -71,7 +71,7 @@ public final class NetworkHandler {
         try (payload; var protobuf = ProtocolBuffer.serialize(payload.protobuf());
             var empty = ArrayBuffer.allocate(0)) {
             var spec = messageSpec(payload.protobuf(), NetworkDirection.PLAY_TO_SERVER);
-            var raw = payload.raw().orElse(empty);
+            var raw = payload.raw().<UniBuffer>map(value -> value).orElse(empty);
             spec.attachmentPolicy().validate(raw.size());
             try (var frame = FrameCodec.encode(spec.id(), protobuf, raw)) {
                 traceNetwork("outbound", "direction=" + NetworkDirection.PLAY_TO_SERVER,
@@ -144,8 +144,9 @@ public final class NetworkHandler {
     }
 
     private static void send(PacketDistributor.PacketTarget target, NetworkPayload<?> payload) {
-        try (payload; var protobuf = ProtocolBuffer.serialize(payload.protobuf());
-            var attachment = payload.raw().map(UniBuffer::borrow).orElseGet(() -> ArrayBuffer.allocate(0))) {
+        try (payload; var protobuf = ProtocolBuffer.serialize(payload.protobuf())) {
+            var attachment =
+                payload.raw().<UniBuffer>map(value -> value).orElseGet(() -> ArrayBuffer.borrow(new byte[0]));
             var spec = messageSpec(payload.protobuf(), target.getDirection());
             spec.attachmentPolicy().validate(attachment.size());
             try (var frame = FrameCodec.encode(spec.id(), protobuf, attachment)) {
@@ -172,10 +173,13 @@ public final class NetworkHandler {
     private static void receive(NetworkEvent event, MessageDirection direction) {
         var context = event.getSource();
         traceNetwork("inbound", "direction=" + direction, "frameBytes=" + event.getPayload().readableBytes());
-        try (var wire = ForgeUniBufferIO.readNative(event.getPayload(), event.getPayload().readableBytes());
-            var frame = FrameCodec.decode(wire, id -> ProtocolInbound.accepts(id, direction))) {
-            var spec = ProtocolMessages.REGISTRY.find(frame.messageId()).orElseThrow();
-            ProtocolInbound.dispatch(frame, spec, context);
+        try {
+            var wire = com.elfmcys.ysm.buffer.SharedNativeBuffer
+                .adopt(ForgeUniBufferIO.readNative(event.getPayload(), event.getPayload().readableBytes()));
+            try (var frame = FrameCodec.decode(wire, id -> ProtocolInbound.accepts(id, direction))) {
+                var spec = ProtocolMessages.REGISTRY.find(frame.messageId()).orElseThrow();
+                ProtocolInbound.dispatch(frame, spec, context);
+            }
         } catch (RuntimeException error) {
             YesSteveModel.LOGGER.warn("Rejected invalid YSM frame", error);
             if (direction == MessageDirection.SERVER_TO_CLIENT) {

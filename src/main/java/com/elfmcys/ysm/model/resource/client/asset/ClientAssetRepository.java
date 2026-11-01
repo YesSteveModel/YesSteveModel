@@ -429,7 +429,8 @@ public final class ClientAssetRepository {
                 if (chunk == null)
                     return registerEager(() -> CompletableFuture
                         .failedFuture(new IOException("Model contains no requested presentation")), null, null);
-                try (var ignored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY)) {
+                try {
+                    content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                     return registerEager(() -> contentPresentation(this::cancelled, content, selector), null, null);
                 } catch (IOException missing) {
                     var slot = assets.size();
@@ -503,14 +504,15 @@ public final class ClientAssetRepository {
             if (data == null)
                 return CompletableFuture.failedFuture(new IOException("Remote preview produced no outcome"));
             CompletableFuture<ImageSource> decoded;
-            try (var bytes = data.bytes()) {
+            var bytes = data.bytes();
+            try {
                 if (rawPreview != null) {
                     decoded = rawPreview.apply(payload.content, bytes);
                 } else {
                     // Standalone repository fixtures have no preview operation owner.
-                    var fixed = bytes.copy();
+                    var fixed = bytes.share();
                     decoded = CompletableFuture.supplyAsync(() -> {
-                        try (fixed) {
+                        try {
                             return previewStore == null ? PreviewStore.decode(fixed) : previewStore
                                 .forContent(payload.content).accept(payload.identity.containerId(), fixed);
                         } catch (IOException failure) {
@@ -703,7 +705,7 @@ public final class ClientAssetRepository {
             if (data != null) {
                 throw new IOException("Remote preview produced more than one payload");
             }
-            data = new RemotePresentationFetcher.Data(source.bytes().acquire(), source.observation());
+            data = new RemotePresentationFetcher.Data(source.bytes().share(), source.observation());
         }
 
         private synchronized RemotePresentationFetcher.Data take() {
@@ -715,7 +717,6 @@ public final class ClientAssetRepository {
         private synchronized void close() {
             closed = true;
             if (data != null) {
-                data.bytes().close();
                 data = null;
             }
         }
@@ -758,14 +759,11 @@ public final class ClientAssetRepository {
         if (bytes.size() != pack.coverSize() || !ModelHashing.blake3(bytes).equals(pack.coverHash())) {
             throw new IOException("Remote pack cover content mismatch");
         }
-        var stored = bytes.acquire();
+        var stored = bytes.share();
         try (var image = com.elfmcys.ysm.natives.image.Image.probe(stored)) {
             if (!image.format().name().equalsIgnoreCase(pack.coverFormat())) {
                 throw new IOException("Remote pack cover format mismatch");
             }
-        } catch (IOException | RuntimeException | Error failure) {
-            stored.close();
-            throw failure;
         }
         return () -> com.elfmcys.ysm.natives.image.Image.probe(stored);
     }

@@ -281,6 +281,36 @@ class ServerPreviewRepairTest {
     }
 
     @Test
+    void completedUploadRetainsBytesForDuplicateChecksWhileCommitIsQueued() throws Exception {
+        var owner = harness(catalog);
+        try (var preview = TestPreviews.blank()) {
+            admit(owner, 1, preview);
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            try (var blocker = work.acquire(false, 0)) {
+                blocker.execute(() -> {
+                    entered.countDown();
+                    try {
+                        release.await();
+                    } catch (InterruptedException failure) {
+                        throw new AssertionError(failure);
+                    }
+                });
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                fragment(owner, 1, preview.bytes(), 0, true);
+                fragment(owner, 1, preview.bytes(), 0, true);
+                assertTrue(owner.failures.isEmpty());
+                release.countDown();
+                await(() -> !owner.notifications.isEmpty());
+                assertEquals(1, owner.notifications.size());
+            } finally {
+                release.countDown();
+            }
+            await(() -> work.activeRequests() == 0);
+        }
+    }
+
+    @Test
     void removeAndReaddSameIdentityBeforeAtomicGateMakesOldUploadStale() throws Exception {
         var owner = harness(catalog);
         try (var preview = TestPreviews.blank()) {
@@ -412,14 +442,14 @@ class ServerPreviewRepairTest {
                 public com.elfmcys.ysm.format.schema.file.ChunkDataSource chunks() {
                     return new com.elfmcys.ysm.format.schema.file.ChunkDataSource() {
                         @Override
-                        public com.elfmcys.ysm.buffer.UniBuffer readPayload(
+                        public com.elfmcys.ysm.buffer.SharedBuffer readPayload(
                             com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
                             com.elfmcys.ysm.buffer.BufferType type) throws IOException {
                             throw new IOException("Injected source access failure");
                         }
 
                         @Override
-                        public com.elfmcys.ysm.buffer.UniBuffer readStoredVerified(
+                        public com.elfmcys.ysm.buffer.SharedBuffer readStoredVerified(
                             com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
                             com.elfmcys.ysm.buffer.BufferType type) throws IOException {
                             throw new IOException("Injected source access failure");
@@ -492,7 +522,8 @@ class ServerPreviewRepairTest {
             var chunk = view.getFileView().getAssetView()
                 .getChunkInfo(com.elfmcys.ysm.format.schema.file.AssetFileConstant.BLOB_CHUNK_PREFIX + image.blobId());
             request.addIcons(imageMember(expected.size(), chunk));
-            try (var bytes = content.chunks().readStoredVerified(chunk, com.elfmcys.ysm.buffer.BufferType.ARRAY)) {
+            {
+                var bytes = content.chunks().readStoredVerified(chunk, com.elfmcys.ysm.buffer.BufferType.ARRAY);
                 var stored = new byte[bytes.size()];
                 bytes.nio().get(stored);
                 expected.add(stored);

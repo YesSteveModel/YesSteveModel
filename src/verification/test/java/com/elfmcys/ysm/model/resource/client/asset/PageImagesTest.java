@@ -298,7 +298,8 @@ class PageImagesTest {
             try {
                 id = source.modelId();
                 if (useRemote) {
-                    try (var prefix = source.representation().metadataPrefix().orElseThrow()) {
+                    {
+                        var prefix = source.representation().metadataPrefix().orElseThrow();
                         remote = store.commitMetadataPrefix(source.representation().identity(), prefix);
                     }
                 } else {

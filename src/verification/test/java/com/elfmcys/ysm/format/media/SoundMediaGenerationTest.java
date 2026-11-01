@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.media;
 
+import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
 import com.elfmcys.ysm.natives.image.Image;
@@ -83,7 +84,7 @@ class SoundMediaGenerationTest {
         try (var writer = new ModelFileWriter()) {
             assertEquals(1, writer.addProtoBlob(StringDataProto.newBuilder().build(), 16));
             try (var data = NativeBuffer.copyOf(direct(8, 9));
-                var image = new Image(Image.Format.PNG, 1, 1, data.acquire())) {
+                var image = Image.adopt(Image.Format.PNG, 1, 1, data.copy())) {
                 assertEquals(2, writer.addImageBlob(image));
                 for (var id = 3; id <= 9; ++id) {
                     assertEquals(id, writer.addBlob(data, 0));
@@ -123,7 +124,7 @@ class SoundMediaGenerationTest {
         }
     }
 
-    private static NativeBuffer source(String relative) throws Exception {
+    private static NativeStorage source(String relative) throws Exception {
         var bytes = Files.readAllBytes(Path.of("src/main/resources/assets/ysm/builtin").resolve(relative));
         return NativeBuffer.copyOf(ByteBuffer.wrap(bytes));
     }

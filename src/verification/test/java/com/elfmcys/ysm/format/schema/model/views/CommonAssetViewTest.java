@@ -1,9 +1,9 @@
 package com.elfmcys.ysm.format.schema.model.views;
 
+import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.NativeBuffer;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.schema.file.AssetFileView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
@@ -109,14 +109,14 @@ class CommonAssetViewTest {
         var reads = new AtomicInteger();
         var source = new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
                 reads.incrementAndGet();
-                return bufferType == BufferType.NATIVE ? NativeBuffer.copyOf(ByteBuffer.wrap(remainder))
-                    : ArrayBuffer.move(remainder.clone());
+                return SharedBuffer.adopt(bufferType == BufferType.NATIVE
+                    ? NativeBuffer.copyOf(ByteBuffer.wrap(remainder)) : ArrayBuffer.move(remainder.clone()));
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
                 throw new AssertionError("stored representation was not requested");
             }
         };
@@ -129,12 +129,12 @@ class CommonAssetViewTest {
         corrupt[corrupt.length - 1] ^= 1;
         assertThrows(IOException.class, () -> view.validateSoundContent(() -> false, new ChunkDataSource() {
             @Override
-            public UniBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
-                return NativeBuffer.copyOf(ByteBuffer.wrap(corrupt));
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+                return SharedBuffer.adopt(NativeBuffer.copyOf(ByteBuffer.wrap(corrupt)));
             }
 
             @Override
-            public UniBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType) {
                 throw new AssertionError("stored representation was not requested");
             }
         }));
