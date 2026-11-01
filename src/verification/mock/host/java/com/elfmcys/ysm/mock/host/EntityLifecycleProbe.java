@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.mock.host;
 
-import com.elfmcys.ysm.api.molang.MolangActionView;
+import com.elfmcys.ysm.api.molang.MolangContextView;
 import com.elfmcys.ysm.capability.PlayerAnimatableCapability;
 import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
@@ -38,7 +38,7 @@ final class EntityLifecycleProbe {
         return List.copyOf(EVENTS);
     }
 
-    static void block(MolangActionView<Entity> context) {
+    static void block(MolangContextView<Entity> context) {
         var current = gate;
         if (current == null)
             return;
@@ -49,12 +49,15 @@ final class EntityLifecycleProbe {
             if (!current.release.await(5, TimeUnit.SECONDS))
                 throw new IllegalStateException("Worker gate was not released");
             var attempts = new ArrayList<String>();
+            @SuppressWarnings("unchecked")
+            var typedOwner = (AnimatableEntity<Entity>)(Object)current.owner;
+            var model = new com.elfmcys.ysm.expression.host.builtin.ModelBuiltins(typedOwner);
             lateInput(attempts, "sound",
-                () -> context.playSound("late_retired_worker", "minecraft:block.note_block.harp", 6, 1, 1));
-            lateInput(attempts, "sync", () -> context.sync(9876));
-            lateInput(attempts, "particle", () -> context.particle("minecraft:flame", 0, 0, 0));
-            lateInput(attempts, "deferred", () -> context.defer(1, 9876));
-            lateInput(attempts, "controller", () -> context.setAnimation("trace", 0));
+                () -> model.playSound(context, 5, "late_retired_worker", "minecraft:block.note_block.harp", 6, 1, 1));
+            lateInput(attempts, "sync", () -> model.sync(context, 1, 9876));
+            lateInput(attempts, "particle", () -> model.particle(context, 4, "minecraft:flame", 0, 0, 0));
+            lateInput(attempts, "deferred", () -> model.defer(context, 2, 1, 9876));
+            lateInput(attempts, "controller", () -> com.elfmcys.ysm.expression.host.builtin.ControlBuiltins.setAnimation(context, 2, "trace", 0));
             current.staged = List.copyOf(attempts);
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();

@@ -27,7 +27,7 @@ final class OptionalLinkageVerifier {
 
     static void verify(OptionalCapability capability, ClassLoader loader) {
         var roots = BuiltinDeclarations.surfaces().stream()
-            .filter(surface -> surface.optionalCapability() == capability).map(BuiltinSurface::declaringOwner)
+            .filter(surface -> surface.dependencies().stream().anyMatch(d -> d.modId().equals(capability.modId()))).map(BuiltinSurface::declaringOwner)
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         verify(loader, roots, capability::ownsExternalClass, binaryName -> binaryName.startsWith(COMPAT_PACKAGE));
     }

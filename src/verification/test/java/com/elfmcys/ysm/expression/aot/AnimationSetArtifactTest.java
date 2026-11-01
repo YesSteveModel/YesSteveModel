@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
 import com.elfmcys.ysm.expression.host.*;
@@ -185,9 +186,9 @@ class AnimationSetArtifactTest {
             assertEquals(0, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
             try (var runtime = new EntityExpressionRuntime()) {
                 TestExpressionModules.replace(runtime, warm, Map.of());
-                float actual = runtime.update(new EntityExpressionRuntime.InvocationInputs(new InvocationInputs() {
+                float actual = runtime.update(new EntityExpressionRuntime.InvocationInputs(new InvocationInputs<net.minecraft.world.entity.Entity>() {
                     @Override
-                    public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+                    public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
                 }, (commands, provenance) -> () -> {
                 }, () -> false), evaluation -> {
                     evaluation.execute(idle.customInstructionKeyframes.get(0).getEventData()[0]);

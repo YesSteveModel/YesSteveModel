@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.expression.host.MolangContext;
@@ -10,7 +11,6 @@ import com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics;
 import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory;
 import com.elfmcys.ysm.expression.aot.TestExpressionModules;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
-import com.elfmcys.ysm.expression.host.EffectCommand;
 import com.elfmcys.ysm.expression.host.ExpressionHost;
 import com.elfmcys.ysm.expression.host.HostAvailability;
 import com.elfmcys.ysm.expression.host.InvocationInputs;
@@ -166,9 +166,9 @@ class GuiAnimationClosureTest {
                 location("function/@player_update", ProgramRole.EVENT_PLAYER_UPDATE, "player_update:0"));
             TestExpressionModules.replace(runtime, module,
                 Map.of("player_init", List.of(init), "player_update", List.of(update)));
-            var inputs = new EntityExpressionRuntime.InvocationInputs(new InvocationInputs() {
+            var inputs = new EntityExpressionRuntime.InvocationInputs(new InvocationInputs<net.minecraft.world.entity.Entity>() {
                 @Override
-                public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+                public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
             }, (commands, provenance) -> () -> {
             }, () -> false);
             float actual = runtime.update(inputs, evaluation -> {

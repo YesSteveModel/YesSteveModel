@@ -24,11 +24,6 @@ final class BuiltinReadBindingOracleTest {
             var descriptor = host.builtins().stream().filter(value -> value.stableId().equals(capability.stableId()))
                 .findFirst().orElseThrow();
             assertTrue(descriptor.available(), capability.label());
-            assertEquals(
-                descriptor.surface().declaringOwner().endsWith("PositionComponent")
-                    || descriptor.surface().declaringOwner().endsWith("ImmersiveMelodiesBuiltinComponent")
-                        ? InvocationKind.INSTANCE : InvocationKind.STATIC,
-                binding.invocationKind(), capability.label());
             assertEquals(descriptor.binding(), binding, capability.label());
             assertEquals(descriptor.componentClass(), binding.owner(), capability.label());
             assertEquals(binding.invocationKind() == InvocationKind.INSTANCE, binding.providerId().isPresent(),

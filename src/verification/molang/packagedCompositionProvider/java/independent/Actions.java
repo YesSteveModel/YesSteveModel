@@ -15,9 +15,10 @@ public final class Actions {
     }
 
     @MolangFunction(effect = MolangEffect.ACTION)
-    public static float action(MolangActionView<Entity> view, int argc, @DefaultValue("0") float value) {
+    public static float action(MolangContextView<Entity> view, int argc, @DefaultValue("0") float value) {
         Query.observe(view);
-        System.setProperty("composition.actions", System.getProperty("composition.actions", "") + value + ",");
+        view.submit((PreparedEffect)() ->
+            System.setProperty("composition.actions", System.getProperty("composition.actions", "") + value + ","));
         return 100 + value;
     }
 }

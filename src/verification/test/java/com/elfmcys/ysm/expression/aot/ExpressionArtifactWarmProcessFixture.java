@@ -1,9 +1,9 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.model.resource.client.BakeProfile;
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
-import com.elfmcys.ysm.expression.host.EffectCommand;
 import com.elfmcys.ysm.expression.host.EventArguments;
 import com.elfmcys.ysm.expression.host.ExpressionHost;
 import com.elfmcys.ysm.expression.host.HostAvailability;
@@ -37,7 +37,6 @@ import com.elfmcys.ysm.proto.mixel.manifest.info.ConfigLabelProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.ExtraAnimationButtonProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
 import com.elfmcys.ysm.util.ProtoUtil;
-import dev.semaweave.RuntimeValue;
 import dev.semaweave.BuiltinType;
 import dev.semaweave.EntryResult;
 import dev.semaweave.ProgramKey;
@@ -114,7 +113,7 @@ public final class ExpressionArtifactWarmProcessFixture {
         }
 
         @Override
-        public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+        public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
     };
 
     private ExpressionArtifactWarmProcessFixture() {}
@@ -175,6 +174,13 @@ public final class ExpressionArtifactWarmProcessFixture {
         var runtime = new EntityExpressionRuntime();
         var values = new ArrayList<String>();
         var effects = new ArrayList<String>();
+        var owner = com.elfmcys.ysm.expression.host.TestComponentHolders.owner(SUBJECT);
+        var controller = new com.elfmcys.ysm.geckolib3.core.controller.CodedAnimationController<>(owner, "warm", 0,
+            event -> com.elfmcys.ysm.geckolib3.core.PlayState.CONTINUE) {
+            public void setAnimation(String name, com.elfmcys.ysm.geckolib3.core.builder.LoopType loop) {
+                effects.add("controller:" + name + ":" + loop);
+            }
+        };
         var handlers = Map.of("player_init",
             List.of(module
                 .requireEventProgram(route("function/@player_init", ProgramRole.EVENT_PLAYER_INIT, "player_init:0"))),
@@ -183,16 +189,12 @@ public final class ExpressionArtifactWarmProcessFixture {
                 route("function/@player_update", ProgramRole.EVENT_PLAYER_UPDATE, "player_update:0"))),
             "sync", List.of(module.requireEventProgram(route("function/@sync", ProgramRole.EVENT_SYNC, "sync:0"))),
             "defer", List.of(module.requireEventProgram(route("function/@defer", ProgramRole.EVENT_DEFER, "defer:0"))));
-        var components =
-            module.prepareComponents(com.elfmcys.ysm.expression.host.TestComponentHolders.owner(SUBJECT), null);
+        var components = module.prepareComponents(owner, null);
         runtime.replace(module, handlers, components);
         var inputs = new EntityExpressionRuntime.InvocationInputs(INPUTS, (commands, provenance) -> {
-            if (!commands.isEmpty()) {
-                effects.add(
-                    commands.stream().map(ExpressionArtifactWarmProcessFixture::canonicalEffect).toList().toString());
-            }
-            return () -> {
-            };
+            if (!commands.isEmpty())
+                require(effects.isEmpty(), "effects escaped before the round committed");
+            return () -> commands.forEach(PreparedEffect::commit);
         }, () -> false);
         long evaluationNanos;
         try {
@@ -218,8 +220,11 @@ public final class ExpressionArtifactWarmProcessFixture {
                 values.add("object-clear=" + cleared);
                 values.add("object-present=" + present);
                 values.add("invalid-sentinel=" + invalid);
+                evaluation.setControllerContext(new com.elfmcys.ysm.expression.host.ControllerExecutionState(false,
+                    controller));
                 evaluation.execute(module.requireVoidProgram(
                     route("animation/main/idle/instruction/0", ProgramRole.ANIMATION_INSTRUCTION, "")));
+                require(effects.isEmpty(), "prepared controller effects became visible inside the body");
                 require(evaluation.evaluate(module.requireBooleanProgram(
                     route("controller/main/main/state/default/animation", ProgramRole.CONTROLLER_ANIMATION, "idle:0"))),
                     "controller animation result");
@@ -251,6 +256,8 @@ public final class ExpressionArtifactWarmProcessFixture {
         } finally {
             runtime.close();
         }
+        require(effects.equals(List.of("controller:first:LOOP", "controller:second:HOLD_ON_LAST_FRAME")),
+            "committed effect payload/order " + effects);
         var replacements = module.compilationReport().replacements();
         require(replacements.size() == 1, "expected one invalid-sentinel replacement: " + replacements);
         var replacement = replacements.get(0);
@@ -284,23 +291,6 @@ public final class ExpressionArtifactWarmProcessFixture {
     }
 
     private record ExecutionObservation(String canonical, long evaluationNanos) {
-    }
-
-    private static String canonicalEffect(EffectCommand command) {
-        if (command instanceof EffectCommand.Sync sync) {
-            return "sync:" + sync.arguments().stream().map(value -> "F32:" + Float.toHexString(value)).toList();
-        }
-        return command.toString();
-    }
-
-    private static String canonicalValue(RuntimeValue value) {
-        return switch (value.tag()) {
-            case UNSET -> "UNSET";
-            case BOOL -> "BOOL:" + value.asBoolean();
-            case F32 -> "F32:" + Float.toHexString(value.asFloat());
-            case STRING -> "STRING:" + value.asString();
-            default -> value.tag() + ":" + value.type().stableId();
-        };
     }
 
     private static void verifyObservation(Path root, ExpressionArtifactStore.Source source, String observation)
@@ -352,7 +342,8 @@ public final class ExpressionArtifactWarmProcessFixture {
                     .build())
                 .build())
             .addInstructionKeyframes(InstructionKeyFrameProto.newBuilder().setStartTick(0)
-                .setPrograms(program("ysm.sync(0,1)", MolangFrontend.SourceMode.INSTRUCTION)).build())
+                .setPrograms(program("ctrl.set_animation('first',10);ctrl.set_animation('second',12);ysm.sync(0,1)",
+                    MolangFrontend.SourceMode.INSTRUCTION)).build())
             .build();
         var objectClear = animation("object_clear", "((fn.clear_object()??'replacement')=='replacement')?11:0");
         var objectPresent = animation("object_present", "((fn.present_object()??'replacement')=='value')?12:0");
@@ -410,7 +401,8 @@ public final class ExpressionArtifactWarmProcessFixture {
         var backend = new JaninoJavaCompilerBackend();
         var unit = identityUnit(host);
         var artifact = new DefaultExpressionAotCompiler<MolangContext>(backend).compile(TaskContext.NONE, unit,
-            host.hostAbi(), host.registry(), CompilerOptions.DEFAULT, ExpressionIdentityHash.SHA_256);
+            host.hostAbi(), host.registry(), CompilerOptions.DEFAULT, host.expressionBinding().bindingPlan(),
+            ExpressionIdentityHash.SHA_256);
         var encoded = ArtifactCodecs.v1().encode(artifact, ExpressionIdentityHash.SHA_256);
         Files.write(root.resolve("fixture").resolve("identity-artifact.swa"), encoded.toByteArray());
     }
@@ -418,7 +410,7 @@ public final class ExpressionArtifactWarmProcessFixture {
     private static void verifyOldIdentityRejection(Path root, ExpressionHost host) throws Exception {
         var backend = new JaninoJavaCompilerBackend();
         var current = ExpectedArtifactIdentity.create(identityUnit(host), host.hostAbi(), host.registry(),
-            CompilerOptions.DEFAULT, backend.descriptor(), ExpressionIdentityHash.SHA_256);
+            CompilerOptions.DEFAULT, host.expressionBinding().bindingPlan(), backend.descriptor(), ExpressionIdentityHash.SHA_256);
         var identity = current.identity();
         var legacyIdentity = new CompiledArtifactIdentity(identity.hashAlgorithm(), identity.input(),
             "portable-program-v1-semantics-v6", identity.runtimeAbi(), identity.codegenAbi(), identity.javaFeature(),
@@ -434,11 +426,28 @@ public final class ExpressionArtifactWarmProcessFixture {
             require(expected.reason() == ArtifactIdentityMismatchException.Reason.PROGRAM_SEMANTIC_ABI,
                 "legacy semantic identity rejection reason");
         }
+        for (String dimension : List.of("effect", "binding", "dependencies")) {
+            var changed = com.elfmcys.ysm.expression.host.ArtifactContractVariants.changed(host, dimension);
+            var expected = ExpectedArtifactIdentity.create(identityUnit(changed), changed.hostAbi(), changed.registry(),
+                CompilerOptions.DEFAULT, changed.expressionBinding().bindingPlan(), backend.descriptor(),
+                ExpressionIdentityHash.SHA_256);
+            try {
+                ArtifactCodecs.v1().decodeAndVerify(encoded, expected, ExpressionIdentityHash.SHA_256);
+                throw new AssertionError("old artifact accepted after " + dimension + " changed");
+            } catch (ArtifactIdentityMismatchException rejected) {
+                System.out.println("DECLARATION_IDENTITY_REJECTION dimension=" + dimension + " reason=" + rejected.reason());
+            }
+            var rebuilt = new DefaultExpressionAotCompiler<MolangContext>(backend).compile(TaskContext.NONE,
+                identityUnit(changed), changed.hostAbi(), changed.registry(), CompilerOptions.DEFAULT,
+                changed.expressionBinding().bindingPlan(), ExpressionIdentityHash.SHA_256);
+            ArtifactCodecs.v1().decodeAndVerify(ArtifactCodecs.v1().encode(rebuilt, ExpressionIdentityHash.SHA_256),
+                expected, ExpressionIdentityHash.SHA_256);
+        }
     }
 
     private static CompilationUnit identityUnit(ExpressionHost host) throws Exception {
         var codec = PortableProgramCodecs.v1();
-        var encoded = new MolangFrontend().compile("1", MolangFrontend.SourceMode.EXPRESSION,
+        var encoded = new MolangFrontend().compile("math.abs(-2)", MolangFrontend.SourceMode.EXPRESSION,
             new MolangFrontend.SourceLocation("warm-process/identity")).program();
         var source = new ProgramSource(new ProgramKey(ReadOnlyBytes.copyOf(new byte[] {1})), encoded,
             new TopLevelEntrySignature(ProgramShape.F32, new EntryResult.Value(BuiltinType.F32), List.of(), List.of()),

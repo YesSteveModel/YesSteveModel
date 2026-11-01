@@ -303,7 +303,7 @@ class MolangDeclarationProcessorTest {
                 .decode(Files.newInputStream(output.resolve(DeclarationSchema.RESOURCE_ROOT + "sample.Matrix.bin")));
             assertEquals(4, schema.members().size());
             assertEquals(2, schema.members().stream().filter(DeclarationSchema.Member::isStatic).count());
-            assertTrue(schema.members().stream().allMatch(m -> m.view().equals("CONTEXT")));
+            assertTrue(schema.members().stream().allMatch(m -> m.contextFreeTarget().isEmpty()));
             var value = schema.members().stream().filter(m -> m.javaName().equals("value")).findFirst().orElseThrow();
             assertEquals("RECORD", value.result().kind());
             assertEquals("java.lang.String", value.fixed().get(0).carrier());
@@ -531,7 +531,7 @@ class MolangDeclarationProcessorTest {
                 @MolangFunction(minArgs=1,maxArgs=16)
                 public static int tail(MolangContextView<Entity> c,int argc,String... keys){return argc;}
                 @MolangFunction(effect=MolangEffect.ACTION)
-                public static void reset(MolangActionView<Entity> c){c.resetController();}
+                public static void reset(MolangContextView<Entity> c){c.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> {});}
                 @MolangFunction(effect=MolangEffect.ACTION)
                 public static void signal(MolangContextView<Entity> c){}
             }
@@ -553,9 +553,9 @@ class MolangDeclarationProcessorTest {
         assertEquals(List.of(11), parsedDefaults(byName.get("optional")));
         assertEquals(1, byName.get("tail").minimum());
         assertEquals(16, byName.get("tail").maximum());
-        assertEquals("ACTION", byName.get("reset").view());
+        assertEquals("ACTION", byName.get("reset").effect());
         assertEquals("ACTION", byName.get("signal").effect());
-        assertEquals("CONTEXT", byName.get("signal").view());
+        assertEquals("", byName.get("signal").contextFreeTarget());
         String helper = Files.readString(output.resolve("sample/WeaponMolangBindings.java"));
         assertTrue(helper.contains("MolangContext<net.minecraft.world.entity.Entity> context"));
         assertTrue(helper.contains("sample.Weapon.reset(context)"));
@@ -582,7 +582,6 @@ class MolangDeclarationProcessorTest {
             "public interface Custom extends MolangContextView<Entity>{}"
                 + "@MolangFunction public static int f(Custom c){return 1;}",
             "@MolangFunction public static int f(com.elfmcys.ysm.expression.host.MolangContext<Entity> c){return 1;}",
-            "@MolangFunction public static int f(MolangActionView<Entity> c){return 1;}",
             "@MolangFunction public static int f(MolangContextView<Entity> c){c.reset();return 1;}",
             "@MolangFunction public static int f(MolangContextView<Entity> c){c.batch();return 1;}",
             "@MolangFunction public static int f(MolangContextView<Entity> c){c.execute();return 1;}"))
@@ -592,6 +591,28 @@ class MolangDeclarationProcessorTest {
                 header.replace("InvalidBoundary", "InvalidNamespace").replace("\"weapon\"", "\"" + namespace + "\"")
                     + "@MolangFunction public static int f(MolangContextView<Entity> c){return 1;}}",
                 false);
+    }
+
+    @Test
+    void contextFreeMetadataRequiresFixedStaticPrimitiveContextDeclarations() throws Exception {
+        String header = "package sample;import com.elfmcys.ysm.api.annotation.*;"
+            + "import com.elfmcys.ysm.api.molang.*;import net.minecraft.world.entity.Entity;"
+            + "@YsmEntityComponent(\"pure_meta\") public class PureMetadata {";
+        var output = compile("sample.PureMetadata", header +
+            "@MolangFunction(contextFreeTarget=\"target\") public static float declared(MolangContextView<Entity> c,float x){return x;}"
+            + "public static float target(float x){return x;}}", true);
+        var schema = DeclarationSchema.decode(Files.newInputStream(
+            output.resolve(DeclarationSchema.RESOURCE_ROOT + "sample.PureMetadata.bin")));
+        assertEquals("target", schema.members().get(0).contextFreeTarget());
+        assertArrayEquals(schema.encode(), DeclarationSchema.decode(new java.io.ByteArrayInputStream(schema.encode())).encode());
+        for (String declaration : List.of(
+            "@MolangFunction(contextFreeTarget=\"bad.name\") public static float f(MolangContextView<Entity> c,float x){return x;}",
+            "@MolangFunction(contextFreeTarget=\"target\",effect=MolangEffect.ACTION) public static float f(MolangContextView<Entity> c,float x){return x;}",
+            "@MolangFunction(contextFreeTarget=\"target\") public static Float f(MolangContextView<Entity> c,float x){return x;}",
+            "@MolangFunction(contextFreeTarget=\"target\") public static String f(MolangContextView<Entity> c,String x){return x;}",
+            "@MolangFunction(contextFreeTarget=\"target\") public static float f(MolangContextView<Entity> c,int argc,@DefaultValue(\"0\") float x){return x;}",
+            "@MolangFunction(contextFreeTarget=\"target\",maxArgs=5) public static float f(MolangContextView<Entity> c,int argc,float... x){return 0;}"))
+            compile("sample.PureMetadata", header + declaration + "}", false);
     }
 
     private static List<Object> parsedDefaults(DeclarationSchema.Member member) {

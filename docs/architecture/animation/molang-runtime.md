@@ -38,7 +38,7 @@ YSM 的 entity owner barrier 串行安排 update、evaluate、迁移和 close。
 
 该 barrier 同时排序完整实体安装与效果封口。候选只构造私有 instance/组件，当前查询仍见旧安装；封口立即拒绝旧 instance 的报告、Roaming 投影与新效果。物理关闭等已接纳任务及同步借用结束。同 module 重装仍更换资格，兼容变体只撤销几何输出。
 
-完整逻辑求值是一轮，包含组件生命周期及 pre/main/post 执行。每轮复用同一个 `MolangContext`，同时承担 context 与 frame；公共两种 view 引用同一载体，不逐表达式或逐 provider 建立 wrapper。业务 view 只同步借用查询或动作能力，不暴露入口执行、预算、batch 或 reset；精确签名和借用契约见[声明边界](molang-declarations.md#公共业务-view)。
+完整逻辑求值是一轮，包含组件生命周期及 pre/main/post 执行。每轮复用同一个 `MolangContext`，同时承担 context 与 frame；公共统一 view 引用同一载体，不逐表达式或逐 provider 建立 wrapper。业务 view 只同步借用 subject、只读轮输入和申请提交能力，不暴露入口执行、预算、batch 或 reset；精确签名和借用契约见[声明边界](molang-declarations.md#公共业务-view)。
 
 `ExpressionPolicy` 是宿主预算 owner，显式选择冷编译与五项执行额度。registry、unit、persistent/transient、可信 expected、decode/load 和 frame 消费同一冻结策略；模型及远端内容没有加额入口。数值属于私有调优值。
 
@@ -46,7 +46,9 @@ YSM 的 entity owner barrier 串行安排 update、evaluate、迁移和 close。
 
 Provider 不得直接或经 helper 同步重入任何 persistent/transient 入口，包括其他 instance、frame 或实体。相同 context 的重复 begin 在写入前拒绝，不取得外层清理责任。成功接纳的表达式在所有退出路径清除 program、参数、预算、递归、固定许可和临时引用；失败与逃逸载荷先形成独立来源快照。整轮输入、首次失败、效果 batch 及调度中的采样位置不由表达式 reset 清除；采样位置由 controller/animation 切换，轮结束才解除轮级宿主借用。
 
-粒子、声音、controller、sync/defer 先形成有界 typed command batch。Runtime 在组件生命周期外拥有整轮窗口；全部 program、必要 begin/end hook、效果验证及 owner 资格成功后才提交一次。首次失败不会被后续成功或表达式 reset 清除；最后只读入口的许可不撤销先前合法动作。失败丢弃尚未提交 batch，清理完成前不能提前提交；已进入外部系统的效果没有跨系统回滚。
+声音、粒子、controller、骨骼和 sync 的声明实现先固定目标与载荷，再提交通用 `PreparedEffect`。Runtime 不按业务 symbol 或效果分类分派。Runtime 在组件生命周期外拥有整轮窗口；全部 program、必要 begin/end hook、效果验证及 owner 资格成功后才提交一次。首次失败不会被后续成功或表达式 reset 清除；最后只读入口的许可不撤销先前合法动作。失败丢弃尚未提交 batch，清理完成前不能提前提交。提交按申请顺序调用领域操作；一旦外部提交开始，失败只清除剩余引用，不承诺跨系统回滚。
+
+`defer` 是 runtime 内部调度申请，独立于普通效果提交。Runtime 复制已求值的有限 F32 与来源，按当前安装和 animation context 绑定 capture。上下文结束时按登记逆序调用 handler；每次调用建立新的顶层许可与预算窗口，产生的普通效果仍归同轮 batch。轮级累计捕获上限约束递归 defer。回调失败丢弃整轮效果，过期安装不分发 capture，轮结束不留下跨轮队列。
 
 调用恢复的实参丢弃、presence、重载与对象写语义只在[静态语言规则](molang-static-language.md)定义。Registry 冻结与类级资格见[扩展接入设计](../integration/overview.md#扩展资格与冻结)。
 

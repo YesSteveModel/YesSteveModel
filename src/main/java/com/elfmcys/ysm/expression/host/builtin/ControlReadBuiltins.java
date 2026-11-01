@@ -1,4 +1,11 @@
 package com.elfmcys.ysm.expression.host.builtin;
+import com.elfmcys.ysm.capability.PlayerAnimatableCapability;
+import com.elfmcys.ysm.client.compat.parcool.ParCoolCompat;
+import com.elfmcys.ysm.client.entity.CustomPlayerEntity;
+import com.elfmcys.ysm.client.entity.IPreviewEntity;
+import com.elfmcys.ysm.geckolib3.core.AnimationState;
+import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.player.Player;
 
 import com.elfmcys.ysm.accessor.IArrowExtraInfo;
 import com.elfmcys.ysm.expression.host.EntityComponent;
@@ -23,75 +30,77 @@ public final class ControlReadBuiltins implements EntityComponent<Entity> {
     private static final int CTRL_STATE_STOP_VALUE = 3;
     private static final int CTRL_STATE_BYPASS_VALUE = 5;
 
-    public ControlReadBuiltins(com.elfmcys.ysm.client.entity.AnimatableEntity<Entity> owner) {}
+    private final com.elfmcys.ysm.client.entity.AnimatableEntity<?> owner;
+    public ControlReadBuiltins(com.elfmcys.ysm.client.entity.AnimatableEntity<Entity> owner) { this.owner = owner; }
 
     @BuiltinFunction(value = "attacked", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean attacked(MolangContextView<Entity> context) {
+    public boolean attacked(MolangContextView<Entity> context) {
         return control(context, "attacked");
     }
 
     @BuiltinFunction(value = "death", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean death(MolangContextView<Entity> context) {
+    public boolean death(MolangContextView<Entity> context) {
         return control(context, "death");
     }
 
     @BuiltinFunction(value = "elytra_fly", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean elytraFly(MolangContextView<Entity> context) {
+    public boolean elytraFly(MolangContextView<Entity> context) {
         return control(context, "elytra_fly");
     }
 
     @BuiltinFunction(value = "fly", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean fly(MolangContextView<Entity> context) {
+    public boolean fly(MolangContextView<Entity> context) {
         return control(context, "fly");
     }
 
     @BuiltinFunction(value = "idle", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean idle(MolangContextView<Entity> context) {
+    public boolean idle(MolangContextView<Entity> context) {
         return control(context, "idle");
     }
 
     @BuiltinFunction(value = "jump", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean jump(MolangContextView<Entity> context) {
+    public boolean jump(MolangContextView<Entity> context) {
         return control(context, "jump");
     }
 
     @BuiltinFunction(value = "ladder_down", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean ladderDown(MolangContextView<Entity> context) {
+    public boolean ladderDown(MolangContextView<Entity> context) {
         return control(context, "ladder_down");
     }
 
     @BuiltinFunction(value = "ladder_stillness", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean ladderStillness(MolangContextView<Entity> context) {
+    public boolean ladderStillness(MolangContextView<Entity> context) {
         return control(context, "ladder_stillness");
     }
 
     @BuiltinFunction(value = "ladder_up", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean ladderUp(MolangContextView<Entity> context) {
+    public boolean ladderUp(MolangContextView<Entity> context) {
         return control(context, "ladder_up");
     }
 
     @BuiltinFunction(value = "playing_extra_animation", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean playingExtraAnimation(MolangContextView<Entity> context) {
-        return context.playingExtraAnimation();
+    public boolean playingExtraAnimation(MolangContextView<Entity> context) {
+        return owner instanceof CustomPlayerEntity p && p.isPlayingExtraAnimation()
+            && p.getCodedAnimationStates(com.elfmcys.ysm.client.controller.collections.PlayerControllerCollection.CAP_CONTROLLER) != AnimationState.IDLE;
     }
 
     @BuiltinFunction(value = "run", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean run(MolangContextView<Entity> context) {
+    public boolean run(MolangContextView<Entity> context) {
         return control(context, "run");
     }
 
     @BuiltinFunction(value = "sleep", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean sleep(MolangContextView<Entity> context) {
+    public boolean sleep(MolangContextView<Entity> context) {
         return control(context, "sleep");
     }
 
     @BuiltinFunction(value = "sneak", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean sneak(MolangContextView<Entity> context) {
+    public boolean sneak(MolangContextView<Entity> context) {
         return control(context, "sneak");
     }
 
     @BuiltinFunction(value = "sneaking", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean sneaking(MolangContextView<Entity> context) {
+    public boolean sneaking(MolangContextView<Entity> context) {
         return control(context, "sneaking");
     }
 
@@ -114,35 +123,38 @@ public final class ControlReadBuiltins implements EntityComponent<Entity> {
     }
 
     @BuiltinFunction(value = "swim", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean swim(MolangContextView<Entity> context) {
+    public boolean swim(MolangContextView<Entity> context) {
         return control(context, "swim");
     }
 
     @BuiltinFunction(value = "swim_stand", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean swimStand(MolangContextView<Entity> context) {
+    public boolean swimStand(MolangContextView<Entity> context) {
         return control(context, "swim_stand");
     }
 
     @BuiltinFunction(value = "walk", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean walk(MolangContextView<Entity> context) {
+    public boolean walk(MolangContextView<Entity> context) {
         return control(context, "walk");
     }
 
     @BuiltinFunction(value = "all_animations_finished", namespace = "query",
         effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
     public static boolean allAnimationsFinished(MolangContextView<Entity> context) {
-        return context.allAnimationsFinished();
+        var input = context.inputs().controller();
+        return input != null && input.allAnimationsFinished();
     }
 
     @BuiltinFunction(value = "anim_time", namespace = "query", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
     public static float animTime(MolangContextView<Entity> context) {
-        return context.animationTime();
+        var input = context.inputs().animation();
+        return input == null ? 0 : input.time();
     }
 
     @BuiltinFunction(value = "any_animation_finished", namespace = "query",
         effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
     public static boolean anyAnimationFinished(MolangContextView<Entity> context) {
-        return context.anyAnimationFinished();
+        var input = context.inputs().controller();
+        return input != null && input.anyAnimationFinished();
     }
 
     @BuiltinFunction(value = "armor_value", namespace = "ysm", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
@@ -194,8 +206,8 @@ public final class ControlReadBuiltins implements EntityComponent<Entity> {
 
     @BuiltinFunction(value = "in_shield_block_cooldown", namespace = "ysm",
         effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public static boolean inShieldBlockCooldown(MolangContextView<Entity> context) {
-        return context.shieldCooldown();
+    public boolean inShieldBlockCooldown(MolangContextView<Entity> context) {
+        return owner instanceof PlayerAnimatableCapability p && p.getStateTracker().inShieldBlockCooldown();
     }
 
     @BuiltinFunction(value = "mainhand_charged_crossbow", namespace = "ysm",
@@ -218,14 +230,63 @@ public final class ControlReadBuiltins implements EntityComponent<Entity> {
         return entity instanceof AbstractArrow && entity instanceof IArrowExtraInfo extra ? extra.getShootItemId() : "";
     }
 
-    private static boolean control(MolangContextView<Entity> context, String name) {
+    private boolean control(MolangContextView<Entity> context, String name) {
 
         var living = living(context.subject());
         return living != null && name.equals(selectedControl(context, living));
     }
 
-    private static String selectedControl(MolangContextView<Entity> context, LivingEntity entity) {
-        return context.selectedControl();
+    private String selectedControl(MolangContextView<Entity> context, LivingEntity entity) {
+        var animatable = owner;
+        var state = animatable.getStateTracker();
+        var cached = state.getMainAnimationCache();
+        if (cached != null) {
+            return cached;
+        }
+        String selected = "";
+        if (!(animatable instanceof IPreviewEntity) && !hasParcoolAnimation(entity)
+            && (entity.getVehicle() == null || !entity.getVehicle().isAlive())) {
+            if (entity.isDeadOrDying())
+                selected = "death";
+            else if (entity.isAutoSpinAttack())
+                selected = "riptide";
+            else if (entity.getPose() == Pose.SLEEPING)
+                selected = "sleep";
+            else if (entity.isSwimming())
+                selected = "swim";
+            else if (entity.getPose() == Pose.SWIMMING && isMoving(context, entity)) {
+                selected = "climb";
+            } else if (entity.getPose() == Pose.SWIMMING)
+                selected = "climbing";
+            else if (entity.onClimbable() && verticalEntitySpeed(entity) > 0) {
+                selected = "ladder_up";
+            } else if (entity.onClimbable() && verticalEntitySpeed(entity) == 0) {
+                selected = "ladder_stillness";
+            } else if (entity.onClimbable())
+                selected = "ladder_down";
+            else if (isFlying(animatable, entity))
+                selected = "fly";
+            else if (entity.getPose() == Pose.FALL_FLYING && entity.isFallFlying()) {
+                selected = "elytra_fly";
+            } else if (entity.isInWater() && !entity.onGround())
+                selected = "swim_stand";
+            else if (entity.hurtTime > 0)
+                selected = "attacked";
+            else if (!entity.onGround() && !entity.isInWater())
+                selected = "jump";
+            else if (entity.onGround() && entity.getPose() == Pose.CROUCHING && isMoving(context, entity))
+                selected = "sneak";
+            else if (entity.onGround() && entity.getPose() == Pose.CROUCHING) {
+                selected = "sneaking";
+            } else if (entity.onGround() && entity.isSprinting())
+                selected = "run";
+            else if (entity.onGround() && isMoving(context, entity))
+                selected = "walk";
+            else
+                selected = "idle";
+        }
+        state.setMainAnimationCache(selected);
+        return selected;
     }
 
     private static boolean equipped(MolangContextView<Entity> context, EquipmentSlot slot) {
@@ -247,5 +308,22 @@ public final class ControlReadBuiltins implements EntityComponent<Entity> {
     @Nullable
     private static LivingEntity living(Entity entity) {
         return entity instanceof LivingEntity value ? value : null;
+    }
+    private static boolean isFlying(com.elfmcys.ysm.client.entity.AnimatableEntity<?> animatable, LivingEntity entity) {
+        if (animatable instanceof PlayerAnimatableCapability capability && !capability.isLocalPlayer()) {
+            return capability.getStateTracker().isFlying();
+        }
+        return entity instanceof Player player && player.getAbilities().flying;
+    }
+
+    private static boolean hasParcoolAnimation(LivingEntity entity) {
+        return entity instanceof Player player && ParCoolCompat.hasAnimation(player);
+    }
+
+    private static float verticalEntitySpeed(LivingEntity entity) {
+        return 20 * (float)(entity.position().y - entity.yo);
+    }
+    private static boolean isMoving(MolangContextView<Entity> context, LivingEntity entity) {
+        return Math.abs(entity.walkAnimation.speed(context.inputs().partialTick())) > MIN_CONTROL_SPEED;
     }
 }

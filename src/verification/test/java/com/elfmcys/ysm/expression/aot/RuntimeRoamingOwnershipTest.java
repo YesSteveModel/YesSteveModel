@@ -1,9 +1,9 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.expression.host.MolangContext;
-import com.elfmcys.ysm.expression.host.EffectCommand;
 import com.elfmcys.ysm.expression.host.ExpressionHost;
 import com.elfmcys.ysm.expression.host.HostAvailability;
 import com.elfmcys.ysm.expression.host.InvocationInputs;
@@ -175,9 +175,9 @@ final class RuntimeRoamingOwnershipTest {
     }
 
     private static EntityExpressionRuntime.InvocationInputs inputs() {
-        return new EntityExpressionRuntime.InvocationInputs(new InvocationInputs() {
+        return new EntityExpressionRuntime.InvocationInputs(new InvocationInputs<net.minecraft.world.entity.Entity>() {
             @Override
-            public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
         }, (commands, provenance) -> () -> {
         }, () -> false);
     }

@@ -16,7 +16,7 @@
 
 每次运行在 `build/verification/declaration-matrix/run-*` 保存 17 个独立 JVM 的 JSON、class-load 日志与 artifact。各场景真正省去 A/B 或声明 JAR，或替换不含所需方法的 B JAR；实现的 subject、字段和方法签名引用依赖类型。版本范围使用 Maven 原生规则。另覆盖初始化失败、缺 generated binding、manual 未提交/成功/失败/重复、auto 双路、冲突、迟到提交与顺序置换。拒绝类不加载/构造，独立 A 类不随 B 失败退出；检查最终符号、绑定、结果及实参/provider 次数。
 
-`verifyPackagedCallableComposition` 复用同一发布接纳与 artifact loader。独立单 mod JAR 中的有状态组件与 static ACTION 组件合并同一 namespace。八条表达式在同一轮交替执行裸读取、默认参数、primitive missing、获准动作与拒绝动作。手写真值为 `1,2,7,103,7,4,100,7`，组件序列为 `1,2,3,4`，动作实参轨迹为 `3,0`，两种 scope 的 view 身份相同。独立 JVM 的 warm 进程应读取同一 artifact，编译分支计数为零。另一 mod 的独立 JAR 导出相同 namespace 时，三个声明全部拒绝，实现类加载与初始化均为零。报告位于 `build/verification/callable-composition/run-*`。
+`verifyPackagedCallableComposition` 复用同一发布接纳与 artifact loader。独立单 mod JAR 中的有状态组件与 static ACTION 组件合并同一 namespace。八条表达式在同一轮交替执行裸读取、默认参数、primitive missing、获准动作与拒绝动作。手写真值为 `1,2,7,103,7,4,100,7`，组件序列为 `1,2,3,4`。动作经 `submit` 准备，提交前轨迹为空，提交后轨迹为 `3,0`。两种 scope 的 view 身份相同。独立 JVM 的 warm 进程应读取同一 artifact，编译分支计数为零。另一 mod 的独立 JAR 导出相同 namespace 时，三个声明全部拒绝，实现类加载与初始化均为零。报告位于 `build/verification/callable-composition/run-*`。
 
 整个运行保留缓存：发布、未发布、声明缺席、恢复发布分别按最终身份选择 artifact；恢复及顺序置换使用 DISK，同身份不同拒绝原因保留 warm，但诊断来自当前启动。缺符号、参数不匹配与 ACTION gate 分别核对局部恢复及 typed missing，没有整 program 替换。
 
@@ -66,7 +66,15 @@ Roaming owner 测试使用真实安装/barrier/投影和受控 module；报告�
 
 `SoundInstanceManagerTest` 使用真实生产适配器和效果封口，核对暂存后切换 animation/controller 时的声音目标及 global 选择；播放停止由 FakePlayback 观察，不验证音频设备。`GuiAnimationClosureTest` 核对 literal、有限选择和未知名称的传递闭包。`HostSemanticContractTest` 保留函数两种源形式与非法赋值覆盖；`ModelParserTest` 核对 canonical symbol 的 default 准入。
 
-作者与接纳回归使用 `YsmEntityComponent`、成员 namespace、来源 mod 归属和发布的 `MolangContextView`／`MolangActionView`。公共 API 的独立编译正反例检查闭合泛型、ACTION view 和不可见的执行控制方法；namespace 冲突与无效来源在实现类加载前拒绝。
+作者与接纳回归使用 `YsmEntityComponent`、成员 namespace、来源 mod 归属和统一的 `MolangContextView`。公共 API 的独立编译正反例检查闭合泛型、声明 effect 和不可见的执行控制方法；namespace 冲突与无效来源在实现类加载前拒绝。
+
+`MolangExtensionAdmissionTest.uniformDeclarationsBindWithoutBusinessCatalogsAndPublicHintsDoNotAuthorizePurity` 独立生成一个扩展 JAR。新查询返回 7，新 ACTION 在提交后写入 `[3]`。夹具通过来源接纳、符号发现、编译和生成调用；新增能力不改通用业务目录。公共纯目标 hint 不取得内部资格。
+
+`PureDeclarationOracleTest` 在冻结 host seam 注入独立函数，核对 `2*x+1`、subject 拒绝、provider 预算、非有限返回及异常 identity。ASM 检查实际调用为 `(F)F`，不携带 context。探针用手工 linked declaration 隔离执行语义；processor 形状检查与真实来源接纳由独立测试覆盖，探针不证明自身具备生产纯度资格。
+
+跨进程暖加载夹具保留冷进程写出的 artifact。完整 target 的冷暖进程执行 `PreparedEffect.commit`，按手写预期核对两个 controller 效果的载荷和顺序：`first:LOOP`、`second:HOLD_ON_LAST_FRAME`。准备及求值期间轨迹为空。暖进程分别改变声明 effect、实际纯目标 binding，以及接纳后的有效依赖集合，尝试读取原 artifact，核对拒绝后重建。effect/binding 变体注入冻结 host seam；依赖变体通过真实接纳筛选。主目标暖加载仍要求 semantic、source generation 和 backend compilation 计数为零。
+
+`PreparedDomainEffectTest` 和 `SoundInstanceManagerTest` 核对 controller/骨骼目标准备、真实声音 manager 接纳及停止。`FirstPersonOwnerIntegrationTest` 的联合回归使用真实安装的预览 owner、已编译声明、声音 manager、controller setter 和本地 `@sync`。成功轮在必要 end 后交付 `[sound, controller, sync]`，并核对音量、音高、动画名、循环模式和 sync 参数。后续表达式、begin/end、效果验证、取消和安装失效六类提交前失败均不交付效果。Hook 失败在真实 component scope 外层注入，声音 factory 与 controller 接收器记录业务交接；测试不证明设备播放或网络发送。
 
 开发测试中的 `ProviderContractAudit` 显式观察已接纳载体、保存发布快照并复查底层修改，诊断携带 provider 方法与字段/索引路径；借用审计关联调用线程和真实 context 窗口。`ProviderContractAuditTest` 覆盖标量 float 非有限返回归一、禁止位置 null、合法 nullable、发布后修改、过期/跨线程借用和 effect 误用。固定许可与禁止同步重入另由 runtime 生命周期回归核对；审计器不维护动态权限栈。审计器仅进入 test source set，不自动插入 generated call，也不承诺识别任意恶意 provider。
 

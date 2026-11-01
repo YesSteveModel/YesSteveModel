@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.verification;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.expression.host.BuiltinDeclarations;
 import com.elfmcys.ysm.expression.host.EntityView;
 import com.elfmcys.ysm.expression.host.EffectValidator;
@@ -30,7 +31,6 @@ import com.elfmcys.ysm.internal.expression.semaweave.RuntimeSymbolTable;
 import com.elfmcys.ysm.internal.expression.semaweave.TopLevelEntrySignature;
 import com.elfmcys.ysm.internal.expression.semaweave.backend.janino.JaninoJavaCompilerBackend;
 import com.elfmcys.ysm.internal.expression.semaweave.compilation.ArtifactCodecs;
-import com.elfmcys.ysm.internal.expression.semaweave.compilation.BindingPlan;
 import com.elfmcys.ysm.internal.expression.semaweave.compilation.CompilationUnit;
 import com.elfmcys.ysm.internal.expression.semaweave.compilation.CompilerOptions;
 import com.elfmcys.ysm.internal.expression.semaweave.compilation.DefaultExpressionAotCompiler;
@@ -289,16 +289,23 @@ public final class PackagedExpressionRuntimeSmoke {
                             }, MolangContext.LogicalPhase.ACTION, (command, scope) -> {
                             }, roaming, new InvocationProvenance("payload", "effect", 0, 1, 1), () -> false, () -> true, 16);
                             round.configureLimits(host.executionLimits());
+                            round.deferredSubmit((request, source) -> allocationObject = request);
                             round.bindExpression("payload-effect", 0);
                             round.beginTopLevel(true);
-                            var command = deferred ? new com.elfmcys.ysm.expression.host.EffectCommand.Deferred(com.elfmcys.ysm.expression.host.EventArguments.deferredFloats(0, 1, 2)) : new com.elfmcys.ysm.expression.host.EffectCommand.Particle(false, "payload", new float[]{1, 2, 3});
-                            round.stage(command);
+                            if (deferred)
+                                round.submit(new com.elfmcys.ysm.expression.host.DeferredRequest(
+                                    com.elfmcys.ysm.expression.host.EventArguments.deferredFloats(0, 1, 2)));
+                            else {
+                                var values = new float[] {1, 2, 3};
+                                round.submit((PreparedEffect)() -> allocationObject = values);
+                            }
                             round.endTopLevel();
                             round.releaseExpression();
                             com.elfmcys.ysm.expression.host.EffectTransaction.finish(round, (commands, source) -> {
-                                if (commands.size() != 1 || !source.programLocation().equals("payload-effect"))
+                                if (commands.size() != (deferred ? 0 : 1)
+                                    || !deferred && !source.programLocation().equals("payload-effect"))
                                     throw new AssertionError("effect snapshot");
-                                allocationObject = commands.get(0);
+                                if (!commands.isEmpty()) allocationObject = commands.get(0);
                                 return () -> {
                                 };
                             }, true);
@@ -369,7 +376,7 @@ public final class PackagedExpressionRuntimeSmoke {
         }, new RenderView() {
         }, new EffectValidator() {
             @Override
-            public void prevalidateEffect(com.elfmcys.ysm.expression.host.EffectCommand command, MolangContext<?> scope) {
+            public void prevalidateEffect(com.elfmcys.ysm.api.molang.PreparedEffect command, MolangContext<?> scope) {
                 throw new AssertionError("unexpected host effect " + command);
             }
         }, roaming, new InvocationProvenance("packaged", "provider", 0, 1, 1), () -> false, () -> true);

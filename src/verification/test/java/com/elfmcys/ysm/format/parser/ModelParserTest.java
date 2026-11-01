@@ -137,7 +137,7 @@ class ModelParserTest {
     void intrinsicDefaultAcceptsUnavailableOptionalBuiltinAndOrdinarySourceKeepsExternalSymbols(
         @TempDir Path outputDirectory) throws IOException {
         var optional = BuiltinDeclarations.group("ctrl:parcool_state");
-        assertFalse(HostAvailability.none().supports(optional.optionalCapability()));
+        assertFalse(HostAvailability.none().versions().containsKey(optional.dependencies().get(0).modId()));
         try (var vfs = expressionFixture("return ctrl.parcool_state;");
             var container = ModelParser.parseBuiltinDefaultMemory(vfs); var bytes = container.bytes()) {
             assertTrue(bytes.size() > 0);

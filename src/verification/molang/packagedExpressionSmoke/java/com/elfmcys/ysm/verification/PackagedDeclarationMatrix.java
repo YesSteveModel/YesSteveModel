@@ -300,9 +300,11 @@ public final class PackagedDeclarationMatrix {
                 if (composed) {
                     require(values.equals(List.of(1f, 2f, 7f, 103f, 7f, 4f, 100f, 7f)), "composition values " + values);
                     require(System.getProperty("composition.sequence", "").equals("1,2,3,4,"), "component sequence");
-                    require(System.getProperty("composition.actions", "").equals("3.0,0.0,"), "action trace");
+                    require(System.getProperty("composition.actions", "").isEmpty(), "action escaped before commit");
                     require(Integer.getInteger("composition.views", 0) == 1, "scope views differ");
                     require(state.firstFailure() == null && !state.isActive(), "expression reset");
+                    EffectTransaction.finish(state, EffectSink.direct(), true);
+                    require(System.getProperty("composition.actions", "").equals("3.0,0.0,"), "committed action trace");
                 } else {
                     require(values.equals(
                                     List.of(published ? 12f : 3f, 3f, 3f, published ? 9f : 7f, aOnly ? 4f : 0f, published ? 9f : 0f)),

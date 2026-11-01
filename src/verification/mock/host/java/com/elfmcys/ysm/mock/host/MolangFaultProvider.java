@@ -4,7 +4,6 @@ import com.elfmcys.ysm.api.annotation.YsmEntityComponent;
 import com.elfmcys.ysm.api.annotation.MolangFunction;
 import com.elfmcys.ysm.api.molang.MolangEffect;
 import com.elfmcys.ysm.api.molang.MolangContextView;
-import com.elfmcys.ysm.api.molang.MolangActionView;
 import it.unimi.dsi.fastutil.floats.FloatList;
 import net.minecraft.world.entity.Entity;
 
@@ -18,26 +17,26 @@ public final class MolangFaultProvider {
     }
 
     @MolangFunction(effect = MolangEffect.ACTION)
-    public static void trace_event(MolangActionView<Entity> context, float value) {
-        EntityLifecycleProbe.trace(value);
+    public static void trace_event(MolangContextView<Entity> context, float value) {
+        context.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> EntityLifecycleProbe.trace(value));
     }
 
     @MolangFunction(effect = MolangEffect.ACTION)
-    public static void worker_gate(MolangActionView<Entity> context) {
+    public static void worker_gate(MolangContextView<Entity> context) {
         EntityLifecycleProbe.block(context);
     }
 
     @MolangFunction(effect = MolangEffect.ACTION)
-    public static Point broken_record(MolangActionView<Entity> context) {
+    public static Point broken_record(MolangContextView<Entity> context) {
         recordCalls++;
-        context.playSound("recovery_discarded", "minecraft:block.note_block.harp", 6, 1, 1);
+        context.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> EntityLifecycleProbe.trace(-9876));
         return null;
     }
 
     @MolangFunction(effect = MolangEffect.ACTION)
-    public static FloatList broken_array(MolangActionView<Entity> context) {
+    public static FloatList broken_array(MolangContextView<Entity> context) {
         arrayCalls++;
-        context.playSound("recovery_discarded", "minecraft:block.note_block.harp", 6, 1, 1);
+        context.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> EntityLifecycleProbe.trace(-9876));
         return null;
     }
 }

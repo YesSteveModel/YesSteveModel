@@ -2,8 +2,10 @@ package com.elfmcys.ysm.expression.host.builtin;
 
 import com.elfmcys.ysm.client.animation.condition.InnerClassify;
 import com.elfmcys.ysm.expression.host.EntityComponent;
+import com.elfmcys.ysm.expression.host.ControllerExecutionState;
+import com.elfmcys.ysm.geckolib3.core.controller.CodedAnimationController;
+import com.elfmcys.ysm.geckolib3.core.builder.LoopType;
 import com.elfmcys.ysm.api.molang.MolangContextView;
-import com.elfmcys.ysm.api.molang.MolangActionView;
 import com.elfmcys.ysm.util.EquipmentUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
@@ -21,7 +23,8 @@ import java.util.Locale;
 public final class ControlBuiltins implements EntityComponent<Entity> {
     private static final int MAX_RELATIVE_BLOCK_POS = 5;
 
-    public ControlBuiltins(com.elfmcys.ysm.client.entity.AnimatableEntity<Entity> owner) {}
+    private final com.elfmcys.ysm.client.entity.AnimatableEntity<?> owner;
+    public ControlBuiltins(com.elfmcys.ysm.client.entity.AnimatableEntity<Entity> owner) { this.owner = owner; }
 
     @BuiltinFunction(value = "armor", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 2,
         maxArgs = 3)
@@ -51,31 +54,41 @@ public final class ControlBuiltins implements EntityComponent<Entity> {
 
     @BuiltinFunction(value = "indicate_reload", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 0,
         maxArgs = 0)
-    public static void indicateReload(MolangActionView<Entity> context) {
-        context.indicateReload();
+    public static void indicateReload(MolangContextView<Entity> context) {
+        var target = controller(context);
+        context.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> { if (target != null) target.indicateReload(); });
     }
 
     @BuiltinFunction(value = "reset", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 0, maxArgs = 0)
-    public static void reset(MolangActionView<Entity> context) {
-        context.resetController();
+    public static void reset(MolangContextView<Entity> context) {
+        var target = controller(context);
+        context.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> { if (target != null) target.reset(); });
     }
 
     @BuiltinFunction(value = "set_animation", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 1,
         maxArgs = 2)
-    public static void setAnimation(MolangActionView<Entity> context, int argc, String name,
+    public static void setAnimation(MolangContextView<Entity> context, int argc, String name,
         @com.elfmcys.ysm.api.annotation.DefaultValue("0") float loop) {
-        context.setAnimation(name, loop);
+        var target = controller(context);
+        var type = switch ((int)loop) {
+            case 10 -> LoopType.LOOP;
+            case 11 -> LoopType.PLAY_ONCE;
+            case 12 -> LoopType.HOLD_ON_LAST_FRAME;
+            default -> null;
+        };
+        context.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> { if (target != null && StringUtils.isNotEmpty(name)) target.setAnimation(name, type); });
     }
 
     @BuiltinFunction(value = "set_beginning_transition_length", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION,
         minArgs = 1, maxArgs = 1)
-    public static void setBeginningTransitionLength(MolangActionView<Entity> context, float length) {
-        context.setBeginningTransitionLength(length);
+    public static void setBeginningTransitionLength(MolangContextView<Entity> context, float length) {
+        var target = controller(context);
+        context.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> { if (target != null && length >= 0) target.setBeginningTransitionLength(length); });
     }
 
     @BuiltinFunction(value = "random_integer", namespace = "math",
         effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 2, maxArgs = 2)
-    public static float randomInteger(MolangContextView<Entity> context, float minimum, float maximum) {
+    public float randomInteger(MolangContextView<Entity> context, float minimum, float maximum) {
 
         var lower = (int)minimum;
         var upper = (int)maximum;
@@ -84,12 +97,12 @@ public final class ControlBuiltins implements EntityComponent<Entity> {
             lower = upper;
             upper = swap;
         }
-        return lower + context.randomInt(upper - lower);
+        return lower + owner.getAnimationProcessor().randomSource().nextInt(upper - lower);
     }
 
     @BuiltinFunction(value = "random", namespace = "math", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT,
         minArgs = 2, maxArgs = 3)
-    public static float random(MolangContextView<Entity> context, int argc, float minimum, float maximum,
+    public float random(MolangContextView<Entity> context, int argc, float minimum, float maximum,
         @com.elfmcys.ysm.api.annotation.DefaultValue("0") float unused) {
 
         if (minimum > maximum) {
@@ -97,7 +110,7 @@ public final class ControlBuiltins implements EntityComponent<Entity> {
             minimum = maximum;
             maximum = swap;
         }
-        return MathBuiltins.finite(minimum + context.random() * (maximum - minimum));
+        return MathBuiltins.finite(minimum + owner.getAnimationProcessor().randomSource().nextFloat() * (maximum - minimum));
     }
 
     @BuiltinFunction(value = "is_item_name_any", namespace = "query",
@@ -206,5 +219,10 @@ public final class ControlBuiltins implements EntityComponent<Entity> {
 
     private enum ItemCheck {
         ARMOR, HOLD, SWING, USE
+    }
+
+    private static CodedAnimationController<?> controller(MolangContextView<Entity> context) {
+        var state = ControllerExecutionState.resolve(context.inputs().controller());
+        return state == null ? null : state.codedController();
     }
 }

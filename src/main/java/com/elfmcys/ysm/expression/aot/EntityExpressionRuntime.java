@@ -183,7 +183,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         boolean successful = false;
         try {
             drainDeferred(evaluation.state, evaluation);
-            T result = runBody(body, evaluation);
+            T result = runWithComponents(body, evaluation);
             successful = true;
             return result;
         } catch (RuntimeException | Error failure) {
@@ -227,7 +227,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         try {
             if (phase != MolangContext.LogicalPhase.OBSERVATION)
                 drainDeferred(evaluation.state, evaluation);
-            T result = runBody(body, evaluation);
+            T result = runWithComponents(body, evaluation);
             successful = true;
             return result;
         } catch (RuntimeException | Error failure) {
@@ -268,6 +268,12 @@ public final class EntityExpressionRuntime implements AutoCloseable {
                         EffectBatch.DEFAULT_MAX_COMMANDS));
             ownerContext.configureLimits(state.module.executionLimits());
             var evaluation = new Evaluation(state, inputs, phase, ownerContext);
+            ownerContext.deferredSubmit((request, source) -> {
+                if (evaluation.deferredCaptures++ >= MAX_DEFERRED_CAPTURES)
+                    throw new IllegalStateException("deferred capture queue exceeds " + MAX_DEFERRED_CAPTURES);
+                deferred.addLast(new DeferredCapture(state, evaluation, ownerContext.animationState(),
+                    ownerContext.controllerState(), request.arguments(), source));
+            });
             evaluating = true;
             return evaluation;
         } catch (Throwable failure) {
@@ -282,9 +288,11 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         Throwable primary = evaluation.failure().orElse(null);
         Throwable closingFailure = null;
         try {
+            if (successful && evaluation.failure().isEmpty())
+                drainDeferred(evaluation.state, evaluation);
             if (evaluation.phase != MolangContext.LogicalPhase.OBSERVATION) {
                 EffectTransaction.finish(evaluation.ownerContext, effectSink(evaluation.state, evaluation.inputs),
-                    successful && evaluation.failure().isEmpty());
+                    successful && evaluation.failure().isEmpty(), () -> closeEvaluation(evaluation));
             }
             if (evaluation.localProjection != null && successful && evaluation.failure().isEmpty()
                 && current == evaluation.state && evaluation.state.accepting
@@ -296,15 +304,16 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             }
         } catch (Throwable failure) {
             closingFailure = failure;
+            EffectTransaction.finish(evaluation.ownerContext, evaluation.inputs.effectSink(), false);
         } finally {
             try {
                 try {
-                    evaluation.inputs.productionInputs().clearPreparedEffects();
+                    deferred.removeIf(capture -> capture.evaluation == evaluation);
                 } catch (Throwable failure) {
                     closingFailure = appendFailure(closingFailure, failure);
                 }
                 try {
-                    evaluation.ownerContext.closeRound();
+                    closeEvaluation(evaluation);
                 } catch (Throwable failure) {
                     closingFailure = appendFailure(closingFailure, failure);
                 }
@@ -325,6 +334,14 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
         if (delta != null && pair != null)
             dispatchArm(pair, delta);
+    }
+
+    private void closeEvaluation(Evaluation evaluation) {
+        if (evaluation.closed)
+            return;
+        evaluation.ownerContext.closeRound();
+        evaluation.closed = true;
+        evaluating = false;
     }
 
     private static Throwable appendFailure(@Nullable Throwable primary, Throwable failure) {
@@ -523,38 +540,63 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     private EffectSink effectSink(State state, InvocationInputs inputs) {
-        int[] preparedCaptures = {0};
-        return (commands, provenance) -> {
-            var captures = new ArrayList<DeferredCapture>();
-            for (var command : commands) {
-                if (command instanceof EffectCommand.Deferred value) {
-                    captures.add(new DeferredCapture(state, value.arguments()));
-                }
-            }
-            preparedCaptures[0] += captures.size();
-            if (deferred.size() + preparedCaptures[0] > MAX_DEFERRED_CAPTURES) {
-                throw new IllegalStateException("deferred capture queue exceeds " + MAX_DEFERRED_CAPTURES);
-            }
-            var externalCommit = inputs.effectSink().prepare(List.copyOf(commands), provenance);
-            return () -> {
-                if (current != state || !state.accepting)
-                    return;
-                externalCommit.commit();
-                if (current == state && state.accepting) {
-                    captures.forEach(deferred::addLast);
-                }
-            };
-        };
+        return inputs.effectSink();
     }
 
     private void drainDeferred(State state, Evaluation evaluation) {
-        var pending = deferred.size();
-        while (pending-- > 0 && !deferred.isEmpty()) {
-            var capture = deferred.removeLast();
-            if (capture.state == state) {
-                evaluation.dispatchDeferred(capture.arguments);
+        drainDeferred(state, evaluation, null, false);
+    }
+
+    private void drainDeferred(State state, Evaluation evaluation, AnimationExecutionState animation, boolean exact) {
+        var previousAnimation = evaluation.ownerContext.animationState();
+        var previousController = evaluation.ownerContext.controllerState();
+        var previousOrigin = evaluation.deferredOrigin;
+        boolean previousActionWindow = evaluation.persistentActionWindow;
+        try {
+            while (evaluation.failure().isEmpty() && current == state && state.accepting) {
+                DeferredCapture selected = null;
+                for (var it = deferred.descendingIterator(); it.hasNext();) {
+                    var candidate = it.next();
+                    if (candidate.state == state && candidate.evaluation == evaluation
+                        && (!exact || candidate.animation == animation)) {
+                        selected = candidate;
+                        it.remove();
+                        break;
+                    }
+                }
+                if (selected == null)
+                    return;
+                evaluation.ownerContext.setAnimationContext(selected.animation);
+                evaluation.ownerContext.setControllerContext(selected.controller);
+                evaluation.deferredOrigin = selected.source;
+                // An admitted capture starts a fresh action entry, including captures from transient calls.
+                evaluation.persistentActionWindow = true;
+                evaluation.dispatchDeferred(selected.arguments);
+            }
+        } finally {
+            evaluation.ownerContext.setAnimationContext(previousAnimation);
+            evaluation.ownerContext.setControllerContext(previousController);
+            evaluation.deferredOrigin = previousOrigin;
+            evaluation.persistentActionWindow = previousActionWindow;
+        }
+    }
+
+    private <T> T runWithComponents(Body<T> body, Evaluation evaluation) {
+        var production = evaluation.inputs.productionInputs();
+        if (!(production instanceof com.elfmcys.ysm.geckolib3.core.processor.MinecraftRuntimeInputs<?> minecraft)
+            || minecraft.animationEvent() == null || evaluation.state.components == null)
+            return runBody(body, evaluation);
+        class ComponentBody implements Runnable {
+            T result;
+            public void run() {
+                result = runBody(body, evaluation);
+                drainDeferred(evaluation.state, evaluation);
             }
         }
+        var scoped = new ComponentBody();
+        evaluation.state.components.evaluate(minecraft.animationEvent(),
+            () -> current == evaluation.state && evaluation.state.accepting, scoped);
+        return scoped.result;
     }
 
     private static <T> T runBody(Body<T> body, Evaluation evaluation) {
@@ -679,78 +721,37 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     public boolean readConfigBoolean(InvocationInputs inputs, long expectedGeneration, ConfigActionRoute route) {
-        var evaluation = beginEvaluation(inputs, MolangContext.LogicalPhase.OBSERVATION);
-        try {
-            return evaluation.readConfigBoolean(expectedGeneration, route);
-        } catch (RuntimeException | Error failure) {
-            evaluation.recordFailure(failure);
-            throw failure;
-        } finally {
-            endEvaluation(evaluation, true);
-        }
+        return observe(inputs, evaluation -> evaluation.readConfigBoolean(expectedGeneration, route));
     }
 
     public float readConfigFloat(InvocationInputs inputs, long expectedGeneration, ConfigActionRoute route) {
-        var evaluation = beginEvaluation(inputs, MolangContext.LogicalPhase.OBSERVATION);
-        try {
-            return evaluation.readConfigFloat(expectedGeneration, route);
-        } catch (RuntimeException | Error failure) {
-            evaluation.recordFailure(failure);
-            throw failure;
-        } finally {
-            endEvaluation(evaluation, true);
-        }
+        return observe(inputs, evaluation -> evaluation.readConfigFloat(expectedGeneration, route));
     }
 
     public void writeConfigBoolean(InvocationInputs inputs, long expectedGeneration, ConfigActionRoute route,
         boolean value) {
-        var evaluation = beginEvaluation(inputs, MolangContext.LogicalPhase.ACTION);
-        boolean successful = false;
-        try {
-            drainDeferred(evaluation.state, evaluation);
+        action(inputs, evaluation -> {
             evaluation.writeConfigBoolean(expectedGeneration, route, value);
-            successful = true;
-        } catch (RuntimeException | Error failure) {
-            evaluation.recordFailure(failure);
-            throw failure;
-        } finally {
-            endEvaluation(evaluation, successful);
-        }
+            return null;
+        });
     }
 
     public void writeConfigFloat(InvocationInputs inputs, long expectedGeneration, ConfigActionRoute route,
         float value) {
-        if (!Float.isFinite(value)) {
+        if (!Float.isFinite(value))
             throw new IllegalArgumentException("config F32 value must be finite");
-        }
-        var evaluation = beginEvaluation(inputs, MolangContext.LogicalPhase.ACTION);
-        boolean successful = false;
-        try {
-            drainDeferred(evaluation.state, evaluation);
+        action(inputs, evaluation -> {
             evaluation.writeConfigFloat(expectedGeneration, route, value);
-            successful = true;
-        } catch (RuntimeException | Error failure) {
-            evaluation.recordFailure(failure);
-            throw failure;
-        } finally {
-            endEvaluation(evaluation, successful);
-        }
+            return null;
+        });
     }
 
     public void executeConfigLabel(InvocationInputs inputs, long expectedGeneration, ConfigActionRoute route,
         String labelName, int labelIndex) {
-        var evaluation = beginEvaluation(inputs, MolangContext.LogicalPhase.ACTION);
-        boolean successful = false;
-        try {
-            drainDeferred(evaluation.state, evaluation);
+        action(inputs, evaluation -> {
             evaluation.executeConfigLabel(expectedGeneration, route, labelName, labelIndex);
-            successful = true;
-        } catch (RuntimeException | Error failure) {
-            evaluation.recordFailure(failure);
-            throw failure;
-        } finally {
-            endEvaluation(evaluation, successful);
-        }
+            return null;
+        });
     }
 
     public Object executeTransient(InvocationInputs inputs, TransientExpressionSession session) {
@@ -856,6 +857,9 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         private java.util.function.Consumer<RoamingPayload> localProjection;
         private final MolangContext ownerContext;
         private boolean persistentActionWindow;
+        private boolean closed;
+        private int deferredCaptures;
+        private InvocationProvenance deferredOrigin;
 
         private Evaluation(State state, InvocationInputs inputs, MolangContext.LogicalPhase phase,
             MolangContext ownerContext) {
@@ -867,12 +871,19 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
 
         public void setControllerContext(@Nullable ControllerExecutionState value) {
+            setAnimationContext(null);
+            drainDeferred(state, this, null, true);
             ownerContext.setControllerContext(value);
         }
 
         public void setAnimationContext(@Nullable AnimationExecutionState value) {
+            var previous = ownerContext.animationState();
+            if (previous != value)
+                drainDeferred(state, this, previous, true);
             ownerContext.setAnimationContext(value);
         }
+
+        public void endAnimationContext() { setAnimationContext(null); }
 
         public float evaluate(FloatExpression expression) {
             Objects.requireNonNull(expression, "expression");
@@ -1015,8 +1026,8 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
 
         public void dispatchPendingDeferred() {
-            if (!persistentActionWindow)
-                throw new IllegalStateException("deferred dispatch requires a normal update window");
+            if (phase == MolangContext.LogicalPhase.OBSERVATION)
+                throw new IllegalStateException("deferred dispatch requires an effect-capable round");
             drainDeferred(state, this);
         }
 
@@ -1115,6 +1126,8 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             if (cause instanceof ThreadDeath fatal)
                 throw fatal;
             var source = provenance(state, location.location(), reference.sourceId());
+            if (deferredOrigin != null)
+                YesSteveModel.LOGGER.debug("Molang deferred capture failed: origin={} handler={}", deferredOrigin, source);
             state.recordFailure(source, cause, isDeterministicProgramFailure(cause),
                 AnimationDiagnostics.errorLevel(inputs.productionInputs()));
             recordFailure(cause);
@@ -1167,6 +1180,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         @Nullable
         private final net.minecraft.world.entity.Entity subject;
         private final dev.semaweave.SubjectBinding subjectBinding;
+        private final ComponentScope components;
         private final List<VoidProgram> playerInit;
         private final List<VoidProgram> playerUpdate;
         private final List<VoidProgram> sync;
@@ -1181,7 +1195,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         private State(RenderTargetExpressionModule module, CompiledModuleInstance<MolangContext> instance,
             CompiledRoamingState roamingState, long entityGeneration,
             @Nullable net.minecraft.world.entity.Entity subject,
-            Map<String, ? extends List<? extends EventProgram>> handlers) {
+            Map<String, ? extends List<? extends EventProgram>> handlers, @Nullable ComponentScope components) {
             this.module = module;
             this.instance = instance;
             this.roamingState = roamingState;
@@ -1191,6 +1205,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             this.targetId = module.identity().targetId();
             this.linkage = module.productionLinkage();
             this.subject = subject;
+            this.components = components;
             this.typedSubject = subject != null;
             this.subjectBinding = instance.bindSubject(subject);
             playerInit = voidHandlers(handlers, "player_init", ProgramRole.EVENT_PLAYER_INIT, targetGeneration);
@@ -1204,7 +1219,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             CompiledRoamingState roamingState, ComponentScope components) {
             var instance = module.newInstance(components, roamingState);
             try {
-                return new State(module, instance, roamingState, entityGeneration, components.subject(), handlers);
+                return new State(module, instance, roamingState, entityGeneration, components.subject(), handlers, components);
             } catch (Throwable failure) {
                 instance.close();
                 throw failure;
@@ -1216,7 +1231,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             CompiledRoamingState roamingState, dev.semaweave.RuntimeLinkage<MolangContext> linkage) {
             var instance = module.newInstance(linkage, roamingState);
             try {
-                return new State(module, instance, roamingState, entityGeneration, null, handlers);
+                return new State(module, instance, roamingState, entityGeneration, null, handlers, null);
             } catch (Throwable failure) {
                 instance.close();
                 throw failure;
@@ -1265,7 +1280,8 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
     }
 
-    private record DeferredCapture(State state, EventArguments arguments) {
+    private record DeferredCapture(State state, Evaluation evaluation, AnimationExecutionState animation,
+        ControllerExecutionState controller, EventArguments arguments, InvocationProvenance source) {
     }
 
 }

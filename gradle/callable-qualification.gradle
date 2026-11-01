@@ -1,7 +1,7 @@
 def packagedGameStubs = layout.buildDirectory.dir('packaged-expression-smoke/game-stubs')
 def packagedExpressionSmokeClasses = layout.buildDirectory.dir('packaged-expression-smoke/classes')
 def packagedHostLibraries = configurations.compileClasspath.filter {
-    it.name.startsWith('gson-') || it.name.startsWith('maven-artifact-') || it.name.startsWith('log4j-api-') || it.name.startsWith('commons-lang3-') || it.name.startsWith('fastutil-')
+    it.name.startsWith('gson-') || it.name.startsWith('maven-artifact-') || it.name.startsWith('log4j-api-') || it.name.startsWith('commons-lang3-') || it.name.startsWith('fastutil-') || it.name.startsWith('asm-')
 }
 def optionalDependencyJars = ['a', 'b', 'broken-b'].collectEntries { name -> [(name): tasks.named("packageExpressionDependency_${name.replace('-', '_')}")] }
 // Independent publication inputs keep source attribution observable.

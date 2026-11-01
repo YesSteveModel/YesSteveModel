@@ -4,7 +4,7 @@
 
 ## 作者签名
 
-公共声明使用 `@YsmEntityComponent(value, modId, dependencies, mode)` 和 `@MolangFunction(value, namespace, effect, minArgs, maxArgs)`。Builtin 使用编译期的 `@BuiltinComponent(value, dependencies)` 和同参数的 `@BuiltinFunction`。两种函数注解默认 CONTEXT，arity 的 `-1` 表示未指定。声明只导出函数；外部函数的无括号访问由[静态语言](molang-static-language.md#调用解析与局部恢复)归一。
+公共声明使用 `@YsmEntityComponent(value, modId, dependencies, mode)` 和 `@MolangFunction(value, namespace, effect, minArgs, maxArgs, contextFreeTarget)`。Builtin 使用编译期的 `@BuiltinComponent(value, dependencies)` 和同参数的 `@BuiltinFunction`。两种函数注解默认 CONTEXT，arity 的 `-1` 表示未指定。声明只导出函数；外部函数的无括号访问由[静态语言](molang-static-language.md#调用解析与局部恢复)归一。
 
 成员 namespace 默认取类 `value`，非空成员 `namespace` 覆盖默认值。短名默认取 Java 方法名按 `Locale.ROOT` 转小写，不插入下划线；非空成员 `value` 覆盖短名。`weapon` 类中的 `isReady` 导出 `weapon:isready`，显式 `value="is_ready"` 导出 `weapon:is_ready`。脚本使用 `weapon.is_ready`。
 
@@ -26,19 +26,29 @@ F 为固定脚本参数数，D 为尾部默认参数数。显式 FIXED/OPTIONAL 
 
 Fixed 参数与 tail 元素只允许 Java boolean/int/float/String，不接纳 boxed、record、语言数组、Object、union 或 SoundId。默认 literal 在声明期检查类型和有限性，int 默认保留精确 int。仅 omitted 参数补默认，supplied UNSET 按 Java 消费规则转换。
 
-同一声明类内的同 symbol 方法组成重载组。组共享 subject、精确 view、static/member、effect、逻辑结果与可能缺值事实。float/Float 均为可能缺值的 F32；int 为必有值 F32，Integer 为可能缺值 F32。int/float 规范化重复参数签名拒绝。跨类同 symbol 按整类冲突拒绝，不构成重载。
+同一声明类内的同 symbol 方法组成重载组。组共享 subject、static/member、effect、逻辑结果与可能缺值事实。float/Float 均为可能缺值的 F32；int 为必有值 F32，Integer 为可能缺值 F32。int/float 规范化重复参数签名拒绝。跨类同 symbol 按整类冲突拒绝，不构成重载。
 
 冷编译先匹配精确实参类型，再匹配合法 scalar 转换；最佳集合并列时选择 canonical exact JVM member 最小者。default/tail 重叠和零实参没有额外优先级。预期返回、运行时值、门禁和发现顺序不选择方法。String 只接受 String 或普通 UNSET 的 Java 消费。
 
 ## 公共业务 view
 
-`MolangContextView<E extends Entity>` 提供 subject、轮输入、查询及 owner 局部推进。`MolangActionView<E>` 继承 ContextView，并提供声音、controller、骨骼呈现、sync、particle 和 defer 动作。CONTEXT 首参应精确为 ContextView；ACTION 可使用任一 view。ACTION 使用 ContextView 不降低声明 effect。
+所有声明的首参应精确为 `MolangContextView<E extends Entity>`，CONTEXT 与 ACTION 使用同一签名。首参不接纳 raw、wildcard、未闭合泛型、作者子接口或内部 context 类。
 
-首参不接纳 raw、wildcard、未闭合泛型、作者子接口或内部 context 类。两个 view 不暴露权限、预算、program、batch、组件目录、processor、资源句柄、execute/evaluate 或生命周期控制，也不继承 AutoCloseable。subject 只读属于作者契约；接口不是 JVM 沙箱。
+View 只提供三项能力：`subject()` 返回主体，`inputs()` 返回当前轮输入快照，`submit(EffectRequest)` 提交通用申请。`MolangInputs` 包含采样时间、controller/animation 的只读值及不透明 target 身份。Target 不提供控制方法。View 不暴露 processor、资源服务、program、预算、batch、execute/evaluate 或生命周期控制。
 
-一轮中的两种 view 引用同一状态载体。生成 helper 直接把同一引用交给方法，不构造 adapter。Provider 仅在本次同步调用内借用 view，不保存、不异步使用、不强转获取另一 scope。整轮仍存活不延长 provider 使用权。
+查询和动作的业务实现属于声明类及原领域 owner。声明类可在 `beginEval` 借用 event，并在 `endEval` 解除。新增查询或动作不需要扩展 context 方法、中央 symbol 表或效果分类表。已有的资源 owner 继续拥有随机、物理、骨骼和声音状态。
 
-CONTEXT 可读取和推进 owner 局部状态。ACTION 还受表达式活跃状态、固定入口许可及提交资格限制。公共动作方法在产生效果前核验许可。无活跃表达式或被禁止的 Java 直接动作调用属于 API 误用，应失败且不记录效果；正常 ACTION symbol 的门禁拒绝仍返回 typed missing 或 no-op。
+`PreparedEffect` 是普通效果申请。声明实现在申请时固定精确目标，并复制可变实参。`validate()` 执行不产生外部效果的检查；`commit()` 才调用领域操作。闭包不保存借用的 context 或 event。Runtime 是待提交申请的唯一 owner；完整求值成功后的提交与失败清理由[运行设计](molang-runtime.md#invocation-与效果)定义。
+
+生成 helper 把同轮同一载体交给 provider，不逐调用构造 adapter。Provider 只在本次同步调用内借用 view，不保存、不异步使用、不强转取得内部能力。Subject 的只读使用属于作者契约，接口不是 JVM 沙箱。
+
+ACTION 受表达式活跃状态、固定入口许可及提交资格限制。`submit` 在入队前核验这些条件；直接 Java 误用失败且不记录申请。正常 ACTION symbol 的门禁拒绝仍返回 typed missing 或 no-op。CONTEXT 可读取和推进 owner 局部状态，但不因此取得提交许可。
+
+## 无 context 的纯调用目标
+
+`contextFreeTarget` 指定同一声明类的 Java 方法名。该元数据只适用于 static、FIXED、CONTEXT 方法，参数及返回应为 primitive boolean/int/float。目标应为 public static，参数恰好等于原方法移除首个 context 后的参数，返回类型也应精确相同。不接纳 optional、tail、boxed、String、复合值、void 或实例目标。
+
+Processor 将目标写入 schema 和 helper 校验内容；接纳器核验真实方法。只有经过内部可信来源核验的 builtin 声明可授权跳过 context。公共注解的相同属性不授予纯性，公共声明继续走普通受控调用。目标元数据、授权来源与实际 BindingPlan 进入编译身份；目标变化不能复用旧 artifact。
 
 ## 组件生命周期
 

@@ -3,7 +3,6 @@ package independent;
 import com.elfmcys.ysm.api.annotation.YsmEntityComponent;
 import com.elfmcys.ysm.api.annotation.MolangFunction;
 import com.elfmcys.ysm.api.molang.MolangContextView;
-import com.elfmcys.ysm.api.molang.MolangActionView;
 import com.elfmcys.ysm.api.molang.MolangEffect;
 
 @YsmEntityComponent("weapon")
@@ -29,7 +28,7 @@ public final class PackagedMolangProvider {
     public static void readAction(MolangContextView<net.minecraft.world.entity.Entity> context) {}
 
     @MolangFunction(effect = MolangEffect.ACTION, namespace = "weapon_actions")
-    public static void action(MolangActionView<net.minecraft.world.entity.Entity> context) {}
+    public static void action(MolangContextView<net.minecraft.world.entity.Entity> context) {}
 
     @MolangFunction(effect = MolangEffect.CONTEXT, minArgs = 2, maxArgs = 4)
     public static float sum(MolangContextView<net.minecraft.world.entity.Entity> context, int argc, float base,

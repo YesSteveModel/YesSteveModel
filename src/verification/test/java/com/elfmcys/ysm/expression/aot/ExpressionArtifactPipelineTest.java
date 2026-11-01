@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
@@ -112,9 +113,9 @@ class ExpressionArtifactPipelineTest {
         }
     }
 
-    private static final InvocationInputs EMPTY_INPUTS = new InvocationInputs() {
+    private static final InvocationInputs<net.minecraft.world.entity.Entity> EMPTY_INPUTS = new InvocationInputs<net.minecraft.world.entity.Entity>() {
         @Override
-        public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+        public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
     };
 
     @Test
@@ -281,7 +282,7 @@ class ExpressionArtifactPipelineTest {
             "player", "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
         var badMetrics = new ExpressionEngineMetrics();
         var bad = new RenderTargetExpressionModuleFactory(store, host, MolangEventCatalog.production(),
-            HostLinkage.production(host).without(HostSymbol.GLOBAL_O), badMetrics);
+            HostLinkage.production(host).without("global:o"), badMetrics);
 
         var first = assertThrows(AssetLoadException.class, () -> bad.create(() -> false, input.model(), "player",
             "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes()));
@@ -888,11 +889,30 @@ class ExpressionArtifactPipelineTest {
                 assertEquals(0, metrics.snapshot().portableProgramDecodes());
             }
             var runtime = new EntityExpressionRuntime();
-            var components = BuiltinDeclarations
-                .createComponents(com.elfmcys.ysm.expression.host.TestComponentHolders.owner(subject), host);
+            var owner = com.elfmcys.ysm.expression.host.TestComponentHolders.owner((Entity)subject);
+            var domainCalls = new java.util.ArrayList<String>();
+            var sounds = new com.elfmcys.ysm.client.sound.instance.SoundInstanceManager() {
+                public boolean playSound(com.elfmcys.ysm.client.entity.AnimatableEntity<?> target, ModelSoundId id,
+                    String name, boolean force, java.util.function.Consumer<com.elfmcys.ysm.client.sound.instance.SoundControl> configure) {
+                    org.junit.jupiter.api.Assertions.assertSame(owner, target);
+                    domainCalls.add("sound:" + id + ":" + name + ":" + force);
+                    return true;
+                }
+            };
+            com.elfmcys.ysm.expression.host.TestComponentHolders.installProcessor(owner,
+                net.minecraft.util.RandomSource.create(), sounds);
+            var target = new com.elfmcys.ysm.geckolib3.core.controller.CodedAnimationController<>(owner, "oracle", 0,
+                event -> com.elfmcys.ysm.geckolib3.core.PlayState.CONTINUE) {
+                public void setBeginningTransitionLength(float seconds) { domainCalls.add("transition:" + seconds); }
+                public void setAnimation(String name, com.elfmcys.ysm.geckolib3.core.builder.LoopType loop) {
+                    domainCalls.add("animation:" + name + ":" + loop);
+                }
+                public void indicateReload() { domainCalls.add("reload"); }
+            };
+            var components = BuiltinDeclarations.createComponents(owner, host);
             runtime.replace(module, Map.of(), components);
-            var controller = new com.elfmcys.ysm.expression.host.ControllerExecutionState(false);
-            var effects = new java.util.ArrayList<EffectCommand>();
+            var controller = new com.elfmcys.ysm.expression.host.ControllerExecutionState(false, target);
+            var effects = new java.util.ArrayList<PreparedEffect>();
             var inputs = new MinecraftRuntimeInputs<Entity>() {
                 public net.minecraft.world.entity.Entity entity() {
                     return subject;
@@ -918,10 +938,13 @@ class ExpressionArtifactPipelineTest {
                     return null;
                 }
 
-                public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+                public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
             };
             var invocation = new EntityExpressionRuntime.InvocationInputs(inputs,
-                (commands, provenance) -> () -> effects.addAll(commands), () -> false);
+                (commands, provenance) -> () -> {
+                    effects.addAll(commands);
+                    commands.forEach(PreparedEffect::commit);
+                }, () -> false);
             var location = new ModelProgramInventory.SemanticLocation("player", "function/@player_ctrl_swing",
                 ProgramRole.EVENT_CODED_CONTROLLER, "player_ctrl_swing:0");
             var program = module.requireFloatProgram(location);
@@ -933,24 +956,15 @@ class ExpressionArtifactPipelineTest {
                         runtime.executeTransient(invocation, session);
                     }
                     effects.clear();
+                    domainCalls.clear();
                     subject.swinging = true;
                     float result = runtime.update(invocation, evaluation -> evaluation.evaluate(program));
                     assertEquals(2, result);
                     String animation = stage == 2 ? "Attackdown4" : stage == 3 ? "Attackdown5" : "Attackdown3";
                     String sound = stage == 2 ? "swingswordtwo" : stage == 3 ? "swingswordspin" : "swingsword";
                     assertEquals(3, effects.size());
-                    assertEquals(
-                        new EffectCommand.Controller(HostSymbol.CTRL_SET_BEGINNING_TRANSITION_LENGTH, "", .05f, 0, 0),
-                        effects.get(0));
-                    assertEquals(new EffectCommand.Controller(HostSymbol.CTRL_SET_ANIMATION, animation, 0, 0, 0),
-                        effects.get(1));
-                    var actualSound = (EffectCommand.Sound)effects.get(2);
-                    assertEquals(ModelSoundId.string(sound), actualSound.soundId());
-                    assertEquals(sound, actualSound.name());
-                    assertEquals(0, actualSound.mode());
-                    assertEquals(1, actualSound.volume());
-                    assertEquals(1, actualSound.pitch());
-                    assertFalse(actualSound.global());
+                    assertEquals(List.of("transition:0.05", "animation:" + animation + ":null",
+                        "sound:" + ModelSoundId.string(sound) + ":" + sound + ":false"), domainCalls);
                     System.out.println("WEDDING_ORACLE " + module.source() + " stage=" + stage + " result=" + result
                         + " effects=" + effects);
                 }
@@ -958,12 +972,11 @@ class ExpressionArtifactPipelineTest {
                 for (boolean finished : List.of(false, true)) {
                     controller.setAllAnimationsFinished(finished);
                     effects.clear();
+                    domainCalls.clear();
                     float result = runtime.update(invocation, evaluation -> evaluation.evaluate(program));
                     assertEquals(0, result);
                     assertEquals(finished ? 1 : 0, effects.size());
-                    if (finished)
-                        assertEquals(HostSymbol.CTRL_INDICATE_RELOAD,
-                            ((EffectCommand.Controller)effects.get(0)).action());
+                    assertEquals(finished ? List.of("reload") : List.of(), domainCalls);
                     System.out.println("WEDDING_ORACLE " + module.source() + " swing=false finished=" + finished
                         + " effects=" + effects);
                 }
@@ -1075,13 +1088,13 @@ class ExpressionArtifactPipelineTest {
         var lifecycleField = com.elfmcys.ysm.client.entity.AnimatableEntity.class.getDeclaredField("lifecycle");
         lifecycleField.setAccessible(true);
         lifecycleField.set(model, lifecycle);
-        var effects = new java.util.ArrayList<EffectCommand>();
+        var effects = new java.util.ArrayList<PreparedEffect>();
         var productionInputs = new InvocationInputs<Entity>() {
             public net.minecraft.world.entity.Entity entity() {
                 return subject;
             }
 
-            public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
         };
         var invocation = new EntityExpressionRuntime.InvocationInputs(productionInputs,
             (commands, provenance) -> () -> effects.addAll(commands), () -> false);

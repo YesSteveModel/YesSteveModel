@@ -77,6 +77,41 @@ public final class TestComponentHolders {
         }
     }
 
+    public static void setBone(AnimatableEntity<?> owner, com.elfmcys.ysm.geckolib3.core.processor.BoneView bone) {
+        ((Owner)owner).bone = bone;
+    }
+
+    public static void setEntity(AnimatableEntity<?> owner, Entity subject) {
+        setField(owner, AnimatableEntity.class, "entity", subject);
+    }
+
+    public static void installProcessor(AnimatableEntity<?> owner, net.minecraft.util.RandomSource random,
+        com.elfmcys.ysm.client.sound.instance.SoundInstanceManager sounds) {
+        try {
+            var processor = new com.elfmcys.ysm.geckolib3.core.processor.AnimationProcessor(owner);
+            setField(processor, processor.getClass(), "random", random);
+            setField(processor, processor.getClass(), "globalSoundManager", sounds);
+            var bindingClass = Class.forName("com.elfmcys.ysm.client.entity.EntityModelBinding");
+            var binding = com.elfmcys.ysm.util.UnsafeUtil.getUnsafe().allocateInstance(bindingClass);
+            var holderClass = Class.forName("com.elfmcys.ysm.client.entity.AnimatableEntity$ResourceHolder");
+            var holder = com.elfmcys.ysm.util.UnsafeUtil.getUnsafe().allocateInstance(holderClass);
+            setField(holder, holderClass, "processor", processor);
+            setField(binding, bindingClass, "resourceHolder", holder);
+            setField(owner, AnimatableEntity.class, "modelBinding", binding);
+            var lifecycleClass = Class.forName("com.elfmcys.ysm.client.entity.EntityExecutionLifecycle");
+            setField(owner, AnimatableEntity.class, "lifecycle",
+                com.elfmcys.ysm.util.UnsafeUtil.getUnsafe().allocateInstance(lifecycleClass));
+        } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+    }
+
+    private static void setField(Object object, Class<?> owner, String name, Object value) {
+        try {
+            var field = owner.getDeclaredField(name);
+            field.setAccessible(true);
+            field.set(object, value);
+        } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+    }
+
     private static Object instantiate(Class<?> type) {
         try {
             return type.getConstructor(AnimatableEntity.class)
@@ -87,6 +122,8 @@ public final class TestComponentHolders {
     }
 
     private static final class Owner extends AnimatableEntity<Entity> {
+        private com.elfmcys.ysm.geckolib3.core.processor.BoneView bone;
+        public com.elfmcys.ysm.geckolib3.core.processor.BoneView getBone(int id) { return bone; }
         private Owner() { super(null); }
         public net.minecraft.resources.ResourceLocation getTextureLocation() { return null; }
         public float getWidthScale() { return 1; }

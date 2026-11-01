@@ -58,7 +58,7 @@ public class CodedAnimationController<T extends AnimatableEntity<?>> implements 
         this.animationPlayer = new AnimationPlayer(animatableEntity, transitionLengthTicks, true);
         this.defaultTransitionTicks = transitionLengthTicks;
         this.blendRotation = blendRotation;
-        this.ctx = new ControllerExecutionState(false);
+        this.ctx = new ControllerExecutionState(false, this);
     }
 
     @Override
@@ -66,33 +66,38 @@ public class CodedAnimationController<T extends AnimatableEntity<?>> implements 
         event.setCodedAnimationController(this);
         evaluation.setControllerContext(ctx);
         evaluation.setAnimationContext(this.animationPlayer.getAnimationContext());
-        PlayState playState = evalMolangPredicate(evaluation);
-        if (playState == null) {
-            playState = this.animationPredicate.test(event);
-        }
-        event.setCodedAnimationController(null);
-
-        if (playState == PlayState.CONTINUE) {
-            this.animationPlayer.process(event.renderTicks, evaluation, executeEvents);
-            this.pause = false;
-        } else if (playState == PlayState.STOP) {
-            var state = this.animationPlayer.getState();
-            if (state == AnimationState.BEGINNING_TRANSITION || state == AnimationState.RUNNING) {
-                this.animationPlayer.stop(event.renderTicks);
-                this.animationPlayer.indicateReload();
+        try {
+            PlayState playState = evalMolangPredicate(evaluation);
+            if (playState == null) {
+                playState = this.animationPredicate.test(event);
             }
-            if (state == AnimationState.ENDING_TRANSITION) {
+            event.setCodedAnimationController(null);
+
+            if (playState == PlayState.CONTINUE) {
                 this.animationPlayer.process(event.renderTicks, evaluation, executeEvents);
+                this.pause = false;
+            } else if (playState == PlayState.STOP) {
+                var state = this.animationPlayer.getState();
+                if (state == AnimationState.BEGINNING_TRANSITION || state == AnimationState.RUNNING) {
+                    this.animationPlayer.stop(event.renderTicks);
+                    this.animationPlayer.indicateReload();
+                }
+                if (state == AnimationState.ENDING_TRANSITION) {
+                    this.animationPlayer.process(event.renderTicks, evaluation, executeEvents);
+                }
+                this.pause = false;
+            } else if (playState == PlayState.PAUSE) {
+                this.animationPlayer.process(event.renderTicks, evaluation, false);
+                this.animationPlayer.resetBoneAnimationQueues();
+                this.pause = true;
             }
-            this.pause = false;
-        } else if (playState == PlayState.PAUSE) {
-            this.animationPlayer.process(event.renderTicks, evaluation, false);
-            this.animationPlayer.resetBoneAnimationQueues();
-            this.pause = true;
-        }
 
-        // 最后给 MoLang 上下文设置当前动画状态
-        event.getAnimatableEntity().setCodedAnimationStates(this.name, this.animationPlayer.getState());
+            // 最后给 MoLang 上下文设置当前动画状态
+            event.getAnimatableEntity().setCodedAnimationStates(this.name, this.animationPlayer.getState());
+        } finally {
+            event.setCodedAnimationController(null);
+            evaluation.endAnimationContext();
+        }
     }
 
     @Nullable

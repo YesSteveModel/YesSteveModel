@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.client.entity;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.expression.host.MolangContext;
@@ -31,7 +32,6 @@ import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory;
 import com.elfmcys.ysm.expression.aot.ExpressionArtifactStore;
 import com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics;
 import com.elfmcys.ysm.expression.host.MolangExtensions;
-import com.elfmcys.ysm.expression.host.EffectCommand;
 import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
 import com.elfmcys.ysm.expression.inventory.ProgramRole;
 import com.elfmcys.ysm.expression.host.EventArguments;
@@ -930,15 +930,15 @@ class EntityModelBindingTest {
                 public static int mode, after;
                 public static final OutOfMemoryError MEMORY = new OutOfMemoryError("injected provider");
                 @MolangFunction(effect=MolangEffect.ACTION)
-                public static Point value(MolangActionView<Entity> c) {
-                    c.sync(1);
+                public static Point value(MolangContextView<Entity> c) {
+                    c.submit((PreparedEffect)() -> {});
                     if(mode==1) throw new NullPointerException("ordinary-provider");
                     if(mode==3) throw MEMORY;
                     return mode==2 ? new Point(1) : null;
                 }
                 @MolangFunction(effect=MolangEffect.ACTION)
-                public static it.unimi.dsi.fastutil.floats.FloatList array(MolangActionView<Entity> c) {
-                    c.sync(1); return null;
+                public static it.unimi.dsi.fastutil.floats.FloatList array(MolangContextView<Entity> c) {
+                    c.submit((PreparedEffect)() -> {}); return null;
                 }
                 @MolangNullable @MolangFunction(effect=MolangEffect.CONTEXT)
                 public static Point nullable(MolangContextView<Entity> c) { return null; }
@@ -947,7 +947,7 @@ class EntityModelBindingTest {
                 @MolangFunction(effect=MolangEffect.CONTEXT)
                 public static String text(MolangContextView<Entity> c) { return null; }
                 @MolangFunction(effect=MolangEffect.ACTION)
-                public static void after(MolangActionView<Entity> c) { after++; }
+                public static void after(MolangContextView<Entity> c) { after++; }
             }
             """;
         var compiler = ToolProvider.getSystemJavaCompiler();
@@ -1114,7 +1114,7 @@ class EntityModelBindingTest {
                 return subject;
             }
 
-            public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {
+            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {
                 prevalidated.incrementAndGet();
             }
         }, (commands, provenance) -> () -> committed.addAndGet(commands.size()), () -> false);

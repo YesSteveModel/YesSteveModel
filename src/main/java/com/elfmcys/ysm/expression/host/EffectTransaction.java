@@ -52,13 +52,18 @@ public final class EffectTransaction {
 
     /** Finalizes an already evaluated owner body without a typed-result handoff wrapper. */
     public static void finish(MolangContext context, EffectSink sink, boolean successful) {
+        finish(context, sink, successful, () -> {});
+    }
+
+    /** Ends the borrowed round after all checks and before an effect can enter another runtime round. */
+    public static void finish(MolangContext context, EffectSink sink, boolean successful, Runnable beforeCommit) {
         if (!successful || context.firstFailure() != null) {
             context.discard();
             return;
         }
         try {
             context.verifyEligible();
-            context.commit(sink);
+            context.commit(sink, beforeCommit);
         } catch (Throwable failure) {
             context.discard();
             throw failure;

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.host;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.client.compat.bettercombat.BetterCombatBuiltinComponent;
 import com.elfmcys.ysm.client.compat.carryon.CarryOnBuiltinComponent;
 import com.elfmcys.ysm.client.compat.immersivemelodies.ImmersiveMelodiesBuiltinComponent;
@@ -500,7 +501,7 @@ final class ComponentScopeTest {
                 assertTrue(Float.isNaN(position.positionDelta(context, -1)));
                 assertEquals(Float.valueOf(0), position.positionDelta(context, 0));
                 assertNull(ControlBuiltins.hold(context, 2, "mainhand", "", false));
-                assertEquals("", ModelBuiltins.modVersion(context, "missing_test_mod"));
+                assertEquals("", new ModelBuiltins(TestComponentHolders.owner((Entity)entity)).modVersion(context, "missing_test_mod"));
             } finally {
                 context.endTopLevel();
                 context.releaseExpression();
@@ -639,7 +640,7 @@ final class ComponentScopeTest {
                 return entity;
             }
 
-            public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {
+            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {
                 throw new AssertionError(command);
             }
         };

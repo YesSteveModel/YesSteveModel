@@ -6,7 +6,6 @@ import com.elfmcys.ysm.expression.aot.EventProgram;
 import com.elfmcys.ysm.expression.aot.TransientExpressionSession;
 import com.elfmcys.ysm.expression.host.ExecutionFailure;
 import com.elfmcys.ysm.expression.host.EventArguments;
-import com.elfmcys.ysm.expression.host.OwnerEffectSink;
 import com.elfmcys.ysm.info.roulette.forms.ConfigActionRoute;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
@@ -60,6 +59,10 @@ public class AnimationProcessor<TEntity extends Entity> {
     private Object2ReferenceMap<String, List<EventProgram>> eventHandlers = Object2ReferenceMaps.emptyMap();
     private final Int2ReferenceOpenHashMap<BoneTopLevelSnapshot> modelBonesMap = new Int2ReferenceOpenHashMap<>();
     private final ArrayDeque<BoneTopLevelSnapshot> activeModelBones = new ArrayDeque<>(); // 即使更新开销大也比链表更优
+
+    public SoundInstanceManager globalSoundManager() { return globalSoundManager; }
+
+    public RandomSource randomSource() { return random; }
 
     private final SoundInstanceManager globalSoundManager = new SoundInstanceManager();
     private final RandomSource random = new XoroshiroRandomSource(RandomSupport.generateUniqueSeed());
@@ -219,7 +222,7 @@ public class AnimationProcessor<TEntity extends Entity> {
 
     public EntityExpressionRuntime.InvocationInputs invocationInputs(AnimationEvent<AnimatableEntity<TEntity>> event) {
         var production = new MinecraftInvocationInputs(animatable, event, random, globalSoundManager, null, null);
-        return new EntityExpressionRuntime.InvocationInputs(production, new OwnerEffectSink(production),
+        return new EntityExpressionRuntime.InvocationInputs(production, com.elfmcys.ysm.expression.host.EffectSink.direct(),
             () -> animatable.getEntity().isRemoved());
     }
 

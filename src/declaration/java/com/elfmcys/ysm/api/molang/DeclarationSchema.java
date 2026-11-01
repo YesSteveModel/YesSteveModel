@@ -46,9 +46,11 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
                 throw new IllegalArgumentException("member context must exactly match EntityComponent<E>");
             if (!Set.of("CONTEXT", "ACTION").contains(member.effect()))
                 throw new IllegalArgumentException("invalid declaration effect");
-            if (!Set.of("CONTEXT", "ACTION").contains(member.view())
-                || member.effect().equals("CONTEXT") && !member.view().equals("CONTEXT"))
-                throw new IllegalArgumentException("invalid context view for declaration effect");
+            if (!member.contextFreeTarget().isEmpty()
+                && (!member.contextFreeTarget().matches("[A-Za-z_$][A-Za-z0-9_$]*") || !member.isStatic()
+                    || !member.effect().equals("CONTEXT") || !member.shape().equals("FIXED")
+                    || !primitiveScalar(member.result()) || member.fixed().stream().anyMatch(v -> !primitiveScalar(v))))
+                throw new IllegalArgumentException("invalid context-free target declaration");
             if (member.minimum() < 0 || member.maximum() > 255 || member.minimum() > member.maximum()
                 || member.defaults().size() > member.fixed().size()
                 || member.tail() != null && (!member.defaults().isEmpty() || member.minimum() < member.fixed().size())
@@ -72,7 +74,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
             for (Member member : group) {
                 if (group.size() > 1
                     && (first.isStatic() != member.isStatic() || !first.subject().equals(member.subject())
-                        || !first.effect().equals(member.effect()) || !first.view().equals(member.view())
+                        || !first.effect().equals(member.effect())
                         || !first.result().logicalIdentity().equals(member.result().logicalIdentity())
                         || first.mayReturnMissing() != member.mayReturnMissing()))
                     throw new IllegalArgumentException("inconsistent overload group " + member.symbol());
@@ -82,6 +84,10 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
                     throw new IllegalArgumentException("duplicate normalized signature " + member.symbol());
             }
         }
+    }
+
+    private static boolean primitiveScalar(Value v) {
+        return Set.of("float", "int", "boolean").contains(v.carrier());
     }
 
     private static boolean validNamespace(String namespace) {
@@ -183,7 +189,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
     }
 
     public record Member(String namespace, String name, String javaName, String descriptor, String adapter,
-        String subject, boolean isStatic, String view, String effect, int minimum, int maximum, List<Value> fixed,
+        String subject, boolean isStatic, String contextFreeTarget, String effect, int minimum, int maximum, List<Value> fixed,
         List<String> defaults, Value tail, Value result, boolean nullableRecord) {
         public Member {
             fixed = List.copyOf(fixed);
@@ -234,7 +240,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
                 out.writeUTF(m.adapter());
                 out.writeUTF(m.subject());
                 out.writeBoolean(m.isStatic());
-                out.writeUTF(m.view());
+                out.writeUTF(m.contextFreeTarget());
                 out.writeUTF(m.effect());
                 out.writeInt(m.minimum());
                 out.writeInt(m.maximum());
@@ -276,7 +282,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
             String memberNamespace = in.readUTF(), name = in.readUTF(), method = in.readUTF(),
                 descriptor = in.readUTF(), adapter = in.readUTF(), e = in.readUTF();
             boolean stat = in.readBoolean();
-            String view = in.readUTF();
+            String target = in.readUTF();
             String effect = in.readUTF();
             int min = in.readInt(), max = in.readInt();
             var fixed = new ArrayList<Value>();
@@ -286,7 +292,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
             for (int d = count(in, 255); d > 0; d--)
                 defaults.add(in.readUTF());
             Value tail = in.readBoolean() ? readValue(in, 1, false) : null;
-            members.add(new Member(memberNamespace, name, method, descriptor, adapter, e, stat, view, effect, min, max,
+            members.add(new Member(memberNamespace, name, method, descriptor, adapter, e, stat, target, effect, min, max,
                 fixed, defaults, tail, readValue(in, 1, true), in.readBoolean()));
         }
         if (in.available() != 0)

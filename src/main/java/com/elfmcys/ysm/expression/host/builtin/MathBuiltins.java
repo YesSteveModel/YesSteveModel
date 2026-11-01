@@ -9,72 +9,72 @@ import net.minecraft.world.entity.Entity;
 public final class MathBuiltins {
     private MathBuiltins() {}
 
-    @BuiltinFunction(value = "abs", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "abs", effect = MolangEffect.CONTEXT, contextFreeTarget = "abs")
     public static float abs(MolangContextView<Entity> context, float a) {
         return abs(a);
     }
 
-    @BuiltinFunction(value = "clamp", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "clamp", effect = MolangEffect.CONTEXT, contextFreeTarget = "clamp")
     public static float clamp(MolangContextView<Entity> context, float a, float b, float c) {
         return clamp(a, b, c);
     }
 
-    @BuiltinFunction(value = "cos", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "cos", effect = MolangEffect.CONTEXT, contextFreeTarget = "cos")
     public static float cos(MolangContextView<Entity> context, float a) {
         return cos(a);
     }
 
-    @BuiltinFunction(value = "exp", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "exp", effect = MolangEffect.CONTEXT, contextFreeTarget = "exp")
     public static float exp(MolangContextView<Entity> context, float a) {
         return exp(a);
     }
 
-    @BuiltinFunction(value = "floor", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "floor", effect = MolangEffect.CONTEXT, contextFreeTarget = "floor")
     public static float floor(MolangContextView<Entity> context, float a) {
         return floor(a);
     }
 
-    @BuiltinFunction(value = "lerp", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "lerp", effect = MolangEffect.CONTEXT, contextFreeTarget = "lerp")
     public static float lerp(MolangContextView<Entity> context, float a, float b, float t) {
         return lerp(a, b, t);
     }
 
-    @BuiltinFunction(value = "max", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "max", effect = MolangEffect.CONTEXT, contextFreeTarget = "max")
     public static float max(MolangContextView<Entity> context, float a, float b) {
         return max(a, b);
     }
 
-    @BuiltinFunction(value = "min", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "min", effect = MolangEffect.CONTEXT, contextFreeTarget = "min")
     public static float min(MolangContextView<Entity> context, float a, float b) {
         return min(a, b);
     }
 
-    @BuiltinFunction(value = "mod", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "mod", effect = MolangEffect.CONTEXT, contextFreeTarget = "mod")
     public static float mod(MolangContextView<Entity> context, float a, float b) {
         return mod(a, b);
     }
 
-    @BuiltinFunction(value = "pow", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "pow", effect = MolangEffect.CONTEXT, contextFreeTarget = "pow")
     public static float pow(MolangContextView<Entity> context, float a, float b) {
         return pow(a, b);
     }
 
-    @BuiltinFunction(value = "round", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "round", effect = MolangEffect.CONTEXT, contextFreeTarget = "round")
     public static float round(MolangContextView<Entity> context, float a) {
         return round(a);
     }
 
-    @BuiltinFunction(value = "sin", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "sin", effect = MolangEffect.CONTEXT, contextFreeTarget = "sin")
     public static float sin(MolangContextView<Entity> context, float a) {
         return sin(a);
     }
 
-    @BuiltinFunction(value = "sqrt", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "sqrt", effect = MolangEffect.CONTEXT, contextFreeTarget = "sqrt")
     public static float sqrt(MolangContextView<Entity> context, float a) {
         return sqrt(a);
     }
 
-    @BuiltinFunction(value = "min_angle", effect = MolangEffect.CONTEXT)
+    @BuiltinFunction(value = "min_angle", effect = MolangEffect.CONTEXT, contextFreeTarget = "minAngle")
     public static float minAngle(MolangContextView<Entity> context, float value) {
         return minAngle(value);
     }

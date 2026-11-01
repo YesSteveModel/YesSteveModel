@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ExpressionHostTest {
@@ -68,31 +67,31 @@ final class ExpressionHostTest {
         assertEquals(NonFinitePolicy.FAIL_EXECUTION, first.compilationPolicy().numericPolicy().nonFinite());
         assertEquals(ArityMismatchPolicy.UNSET_CALL, first.compilationPolicy().arityMismatch());
         assertEquals(ObjectLanguageRules.YSM_STATIC_OBJECTS, first.compilationPolicy().objectLanguageRules());
-        assertEquals(HostSymbol.values().length + 14,
+        assertEquals(123,
             first.registry().variables().size() + first.registry().functions().size());
-        assertEquals(HostSymbol.values().length + 18, first.manifest().size());
+        assertEquals(127, first.manifest().size());
         assertTrue(first.registry().conversionPath(BuiltinType.UNSET, BuiltinType.F32).isEmpty());
         assertTrue(first.registry().conversionPath(BuiltinType.UNSET, BuiltinType.BOOL).isEmpty());
         assertTrue(first.registry().conversionPath(BuiltinType.STRING, BuiltinType.F32).isEmpty());
         assertTrue(first.registry().conversionPath(BuiltinType.STRING, BuiltinType.BOOL).isEmpty());
-        for (var symbol : HostSymbol.values()) {
+        for (var symbol : first.builtins().stream().map(BuiltinDescriptor::stableId).distinct().toList()) {
             assertManifestProjection(first, symbol);
         }
         var random = first.manifest().stream()
-            .filter(entry -> entry.stableId().equals(HostSymbol.MATH_RANDOM.stableId())).findFirst().orElseThrow();
+            .filter(entry -> entry.stableId().equals("math:random")).findFirst().orElseThrow();
         assertEquals("OPTIONAL", random.callShape());
         assertEquals("LEFT_TO_RIGHT_EAGER", random.evaluationOrder());
         assertTrue(first.registry().function(new SymbolKey("math:abs")).isPresent());
         assertTrue(first.registry().function(new SymbolKey("math:pi")).isEmpty());
 
         var betterCombatAnimation = first.manifest().stream()
-            .filter(entry -> entry.stableId().equals(HostSymbol.CTRL_BCOMBAT_ATTACK_ANIMATION.stableId())).findFirst()
+            .filter(entry -> entry.stableId().equals("ctrl:bcombat_attack_animation")).findFirst()
             .orElseThrow();
         assertEquals("builtin:string", betterCombatAnimation.resultType());
         assertTrue(betterCombatAnimation.javaMember().contains("MolangBindings"));
 
         var playSound = first.manifest().stream()
-            .filter(entry -> entry.stableId().equals(HostSymbol.YSM_PLAY_SOUND.stableId()))
+            .filter(entry -> entry.stableId().equals("ysm:play_sound"))
             .filter(entry -> entry.argumentTypes().get(0).equals(BuiltinType.F32.stableId())).findFirst().orElseThrow();
         assertEquals(List.of(BuiltinType.F32.stableId(), BuiltinType.STRING.stableId(), BuiltinType.F32.stableId(),
             BuiltinType.F32.stableId(), BuiltinType.F32.stableId()), playSound.argumentTypes());
@@ -105,7 +104,7 @@ final class ExpressionHostTest {
         var present = ExpressionHost.create(HostAvailability.all());
         var changedLimits = ExpressionHost.create(HostAvailability.none(), new ExecutionLimits(11, 12, 13, 14, 15));
 
-        var optional = new SymbolKey(HostSymbol.YSM_HAS_ANY_CURIOS.stableId());
+        var optional = new SymbolKey("ysm:has_any_curios");
         assertFalse(absent.registry().function(optional).isPresent());
         assertTrue(present.registry().function(optional).isPresent());
         assertNotEquals(absent.registry().fingerprint(), present.registry().fingerprint());
@@ -133,15 +132,14 @@ final class ExpressionHostTest {
         assertEquals(MethodType.methodType(float.class, int.class), list.indexedRead().methodType());
     }
 
-    private static void assertManifestProjection(ExpressionHost host, HostSymbol symbol) {
-        var entry = host.manifest().stream().filter(candidate -> candidate.stableId().equals(symbol.stableId()))
+    private static void assertManifestProjection(ExpressionHost host, String symbol) {
+        var entry = host.manifest().stream().filter(candidate -> candidate.stableId().equals(symbol))
             .findFirst().orElseThrow();
-        var key = new SymbolKey(symbol.stableId());
-        assertEquals(HostSymbol.AccessKind.INVOKE, symbol.accessKind());
+        var key = new SymbolKey(symbol);
         assertEquals("INVOKE", entry.accessKind());
 
         for (var descriptor : host.registry().function(key).orElseThrow().methods()) {
-            entry = host.manifest().stream().filter(candidate -> candidate.stableId().equals(symbol.stableId()))
+            entry = host.manifest().stream().filter(candidate -> candidate.stableId().equals(symbol))
                 .filter(candidate -> candidate.javaMember().startsWith(descriptor.method().toString() + ":"))
                 .findFirst().orElseThrow();
             assertEquals(descriptor.callShape().name(), entry.callShape());

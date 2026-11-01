@@ -23,7 +23,7 @@
 | [JNI 与 native 能力](#jni-与-native-能力) | runtime 初始化、调用期借用、owning output 与 typed handle | `NativeLibUtil`、`NativeRuntime`、`BufferArgument`、`NativeObject` |
 | [Protobuf 字节适配](#protobuf-字节适配) | QuickBuffers 序列化、array buffer source/sink 与只读比较 | `ProtoUtil`、`ProtoBytes` |
 | [扩展兼容基建](#扩展兼容基建) | 编译期 checker 与运行时事件处理器注册 | `@YsmExtension`、`@YsmEventHandler` |
-| [Molang 扩展接纳](#molang-扩展接纳) | 业务 view、typed action 参数与 defer payload | `MolangContextView<E>`、`MolangActionView<E>`、`MolangEffect` |
+| [Molang 扩展接纳](#molang-扩展接纳) | 统一 view、普通效果申请与 defer payload | `MolangContextView<E>`、`MolangInputs`、`PreparedEffect`、`MolangEffect` |
 | [并发与执行边界](#并发与执行边界) | owner、背压、shutdown 与宿主线程约束 | 领域 executor、`ThreadScheduling.entry`、Minecraft/Forge 调度入口 |
 | [启动功能验证](tools/startup_observation/run_functional.py) | 隔离 Forge 世界中的真实消费与 required I/O 失败，保留输入身份、原始日志与独立断言 | `extract_inventory.py` 清点独立输入，`JfrStartupExtract.java` 提取原始 JFR；overlay 在隔离源码的 `ClientStartup` 安装；`REQUIRED_READY` 包含 Catalog activation 的短接纳，可与普通扫描重叠 |
 | [第一人称验证输入](tools/first_person_observation/README.md) | 同源 raw/protobuf 几何、局部矩阵独立期望、动作和 workload 输入 | `generate_fixtures.py`；定向测试核对输入一致性与真实 JNI 接纳 |
@@ -135,7 +135,7 @@ JNI 不暴露 QuickBuffers message、builder、parse cursor 或 allocator。需�
 
 ## Molang 扩展接纳
 
-公共 Molang 声明使用[共同签名与值契约](architecture/animation/molang-declarations.md)，builtin/API 共用 declaration 的规则与 emitter。两个公共业务 view 按该契约同步借用同一轮状态载体，不暴露 processor、inputs、batch 或提交权。随机、物理、骨骼值属于动画 owner，typed 动作申请委托原 prevalidation/commit。
+公共 Molang 声明使用[共同签名与值契约](architecture/animation/molang-declarations.md)，builtin/API 共用 declaration 的规则与 emitter。统一公共 view 只提供 subject、只读轮输入和通用申请提交，不暴露 processor、batch 或执行控制。声明类在原领域 owner 上实现查询和动作准备；普通效果固定目标与不可变载荷，runtime 完成整轮裁决后按序提交。新增业务不扩展 context、中央 symbol 表或 typed command 分类。纯目标由声明元数据提供，只有内部可信来源可授权；消费者使用接纳后的声明集合。
 
 安全发现、all-of 依赖、auto/manual 资格和类级冻结由[扩展接入](architecture/integration/implementation/extension-loading.md#扩展兼容检查与注册)拥有；对外 AP 打包与提交方式见[兼容检测](extension-compatibility.md#molang-声明)。不要新增手写 registry、缺席 placeholder、运行时 availability 重探测或按来源复制 ValueRecipe。
 ## 并发与执行边界

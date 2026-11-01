@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.expression.host.MolangContext;
@@ -9,7 +10,6 @@ import com.elfmcys.ysm.expression.host.ExpressionHost;
 import com.elfmcys.ysm.expression.host.ExpressionBinding;
 import com.elfmcys.ysm.expression.host.HostAvailability;
 import com.elfmcys.ysm.expression.host.InvocationInputs;
-import com.elfmcys.ysm.expression.host.EffectCommand;
 import com.elfmcys.ysm.expression.inventory.ExpressionSet;
 import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
 import com.elfmcys.ysm.expression.inventory.ProgramRole;
@@ -230,9 +230,9 @@ public final class DefaultAnimationInputTest {
         boolean borrowed) {
         var location = new ModelProgramInventory.SemanticLocation(module.identity().targetId(), module.identity().set(),
             "animation/" + (borrowed ? PREFIX : "") + "main/idle/blend-weight", ProgramRole.ANIMATION_SAMPLE, "");
-        return runtime.update(new EntityExpressionRuntime.InvocationInputs(new InvocationInputs() {
+        return runtime.update(new EntityExpressionRuntime.InvocationInputs(new InvocationInputs<net.minecraft.world.entity.Entity>() {
             @Override
-            public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
         }, (commands, provenance) -> () -> {
         }, () -> false), evaluation -> evaluation.evaluate(module.requireFloatProgram(location)));
     }

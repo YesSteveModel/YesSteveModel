@@ -18,9 +18,7 @@ public final class DeclarationLinkage {
             throw new IllegalArgumentException("missing context view");
         Type first = resolve(parameters[0], environment);
         Class<?> subject = Class.forName(member.subject(), false, owner.getClassLoader());
-        Class<?> view = Class.forName(
-            "com.elfmcys.ysm.api.molang.Molang" + (member.view().equals("ACTION") ? "ActionView" : "ContextView"),
-            false, context.getClassLoader());
+        Class<?> view = context;
         if (!(first instanceof ParameterizedType p) || p.getRawType() != view || p.getActualTypeArguments().length != 1
             || p.getActualTypeArguments()[0] != subject || !entity.isAssignableFrom(subject))
             throw new IllegalArgumentException("exact resolved context/subject mismatch");

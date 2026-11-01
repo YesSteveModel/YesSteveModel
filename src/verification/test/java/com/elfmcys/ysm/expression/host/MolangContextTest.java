@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.expression.host;
 
-import com.elfmcys.ysm.api.molang.MolangActionView;
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.api.molang.MolangContextView;
 import dev.semaweave.RoamingRole;
 import java.util.ArrayList;
@@ -17,22 +17,22 @@ class MolangContextTest {
     void scopesShareOneObjectAndPermissionStaysFixedUntilEnd() {
         var context = context(new AtomicBoolean(true));
         MolangContextView<Entity> read = context;
-        MolangActionView<Entity> action = context;
+        MolangContextView<Entity> action = context;
         assertSame(read, action);
-        assertThrows(IllegalStateException.class, action::resetController);
+        assertThrows(IllegalStateException.class, () -> action.submit((PreparedEffect)() -> {}));
         context.bindExpression("action", 3);
         context.beginTopLevel(true);
         assertTrue(context.actionAllowed());
         assertThrows(IllegalStateException.class, () -> context.bindExpression("nested", 6));
         assertThrows(IllegalStateException.class, () -> context.beginTopLevel(false));
         assertTrue(context.actionAllowed());
-        action.resetController();
+        action.submit((PreparedEffect)() -> {});
         context.endTopLevel();
         context.releaseExpression();
         assertFalse(context.actionAllowed());
         context.bindExpression("bone", 4);
         context.beginTopLevel(false);
-        assertThrows(IllegalStateException.class, action::resetController);
+        assertThrows(IllegalStateException.class, () -> action.submit((PreparedEffect)() -> {}));
         context.endTopLevel();
         context.releaseExpression();
         assertEquals(1, context.effects().orElseThrow().size());
@@ -44,13 +44,13 @@ class MolangContextTest {
         context.bindExpression("resample", 1, false);
         context.beginTopLevel(true);
         assertFalse(context.actionAllowed());
-        assertThrows(IllegalStateException.class, context::resetController);
+        assertThrows(IllegalStateException.class, () -> context.submit((PreparedEffect)() -> {}));
         context.endTopLevel();
         context.releaseExpression();
         context.bindExpression("explicit-execute", 2, true);
         context.beginTopLevel(true);
         assertTrue(context.actionAllowed());
-        context.resetController();
+        context.submit((PreparedEffect)() -> {});
         context.endTopLevel();
         context.releaseExpression();
         context.bindExpression("watch", 3, true);
@@ -82,10 +82,12 @@ class MolangContextTest {
     @Test
     void escapedDeferredPayloadKeepsItsValuesAndSourceWithoutRetainingTheContext() throws Exception {
         var context = context(new AtomicBoolean(true));
+        var escaped = new ArrayList<Object>();
+        context.deferredSubmit((request, source) -> { escaped.add(request); escaped.add(source); });
         var values = new float[] {3, 4};
         context.bindExpression("A", 1);
         context.beginTopLevel(true);
-        context.defer(2, values);
+        context.submit(new DeferredRequest(EventArguments.deferred(2, values)));
         context.endTopLevel();
         context.releaseExpression();
         values[0] = 99;
@@ -93,13 +95,9 @@ class MolangContextTest {
         context.beginTopLevel(false);
         context.endTopLevel();
         context.releaseExpression();
-        var escaped = new ArrayList<Object>();
-        EffectTransaction.finish(context, (commands, source) -> () -> {
-            escaped.addAll(commands);
-            escaped.add(source);
-        }, true);
+        EffectTransaction.finish(context, EffectSink.direct(), true);
         context.closeRound();
-        var captured = (EffectCommand.Deferred)escaped.get(0);
+        var captured = (DeferredRequest)escaped.get(0);
         assertEquals(List.of(2f, 3f, 4f), captured.arguments());
         assertEquals(new InvocationProvenance("target", "A", 1, 7, 9), escaped.get(1));
         assertNoContextReference(escaped, new java.util.IdentityHashMap<>());
@@ -168,16 +166,16 @@ class MolangContextTest {
         var context = context(new AtomicBoolean(true));
         context.bindExpression("action", 3);
         context.beginTopLevel(true);
-        context.resetController();
+        context.submit((PreparedEffect)() -> {});
         context.endTopLevel();
         context.releaseExpression();
         context.bindExpression("readonly", 4);
         context.beginTopLevel(false);
         context.endTopLevel();
         context.releaseExpression();
-        context.stageOwner(new EffectCommand.Sync(EventArguments.sync(new float[] {7})));
+        context.stageOwner(() -> {});
         var seen = new ArrayList<InvocationProvenance>();
-        var commands = new ArrayList<EffectCommand>();
+        var commands = new ArrayList<PreparedEffect>();
         EffectTransaction.finish(context, (values, source) -> {
             seen.add(source);
             return () -> commands.addAll(values);
@@ -191,22 +189,21 @@ class MolangContextTest {
     void revokedRoundCannotSealAndPublicViewsExposeOnlyBusinessMethods() throws Exception {
         var current = new AtomicBoolean(true);
         var context = context(current);
-        context.stageOwner(new EffectCommand.Sync(EventArguments.sync(new float[] {7})));
+        context.stageOwner(() -> {});
         current.set(false);
         assertThrows(ExecutionFailure.class, () -> EffectTransaction.finish(context, (values, source) -> {
             throw new AssertionError("revoked effects");
         }, true));
         assertEquals(EffectBatch.State.DISCARDED, context.effects().orElseThrow().state());
-        for (var type : List.of(MolangContextView.class, MolangActionView.class)) {
-            assertFalse(AutoCloseable.class.isAssignableFrom(type));
-            for (var method : type.getMethods()) {
-                assertFalse(List.of("reset", "beginTopLevel", "endTopLevel", "execute", "evaluate", "effects", "phase",
-                    "verifyEligible", "configureLimits").contains(method.getName()));
-                assertFalse(method.toGenericString().contains("semaweave"));
-            }
+        assertFalse(AutoCloseable.class.isAssignableFrom(MolangContextView.class));
+        for (var method : MolangContextView.class.getMethods()) {
+            assertFalse(List.of("reset", "beginTopLevel", "endTopLevel", "execute", "evaluate", "effects", "phase",
+                "verifyEligible", "configureLimits").contains(method.getName()));
+            assertFalse(method.toGenericString().contains("semaweave"));
         }
-        assertEquals(float[].class,
-            MolangActionView.class.getMethod("defer", float.class, float[].class).getParameterTypes()[1]);
+        assertEquals(java.util.Set.of("subject", "inputs", "submit"), java.util.Arrays.stream(
+            MolangContextView.class.getMethods()).map(java.lang.reflect.Method::getName)
+            .collect(java.util.stream.Collectors.toSet()));
     }
 
     @Test
@@ -218,7 +215,7 @@ class MolangContextTest {
         for (int program = 0; program < 2; program++) {
             context.bindExpression("bone", program);
             context.beginTopLevel(false);
-            assertEquals(2.5f, context.animationTime());
+            assertEquals(2.5f, context.inputs().animation().time());
             context.endTopLevel();
             context.releaseExpression();
         }
@@ -227,7 +224,7 @@ class MolangContextTest {
         context.setAnimationContext(second);
         context.bindExpression("next-bone", 2);
         context.beginTopLevel(false);
-        assertEquals(7, context.animationTime());
+        assertEquals(7, context.inputs().animation().time());
         context.endTopLevel();
         context.releaseExpression();
         context.closeRound();
@@ -239,7 +236,7 @@ class MolangContextTest {
         for (int program = 0; program < 2; program++) {
             context.bindExpression("action-" + program, program);
             context.beginTopLevel(true);
-            context.resetController();
+            context.submit((PreparedEffect)() -> {});
             context.endTopLevel();
             context.releaseExpression();
         }

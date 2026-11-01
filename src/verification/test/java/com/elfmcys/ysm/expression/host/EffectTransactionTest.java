@@ -1,8 +1,7 @@
 package com.elfmcys.ysm.expression.host;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import dev.semaweave.ExecutionLimits;
-import dev.semaweave.RuntimeValue;
-import dev.semaweave.RuntimeValues;
 import dev.semaweave.CompiledRoamingState;
 import dev.semaweave.RoamingPayload;
 import dev.semaweave.RoamingRole;
@@ -24,16 +23,12 @@ final class EffectTransactionTest {
         var roaming = com.elfmcys.ysm.expression.TestRoamingStates.create(null, RoamingRole.PRODUCER);
         roaming.write(RoamingMember.EMOTION.memberName(), 1.0f);
         var context = logical(fixture, roaming, () -> false, () -> true);
+        PreparedEffect first = () -> {};
+        PreparedEffect second = () -> {};
 
         EffectTransaction.execute(context, fixture, invocation -> {
-            TestHostInvocations.invoke(invocation, HostSymbol.YSM_PLAY_SOUND,
-                java.util.List.of(soundId("voice"), RuntimeValues.ofString("ysm:test")));
-            invocation.stageOwner(new EffectCommand.Particle(false, "ysm:spark", new float[0]));
-            invocation.stageOwner(
-                new EffectCommand.Controller(HostSymbol.CTRL_SET_BEGINNING_TRANSITION_LENGTH, "", 0.25f, 0, 0));
-            TestHostInvocations.invoke(invocation, HostSymbol.YSM_DEFER,
-                java.util.List.of(RuntimeValues.ofFloat(2.0f)));
-            TestHostInvocations.invoke(invocation, HostSymbol.YSM_SYNC, java.util.List.of(RuntimeValues.ofFloat(3)));
+            invocation.stageOwner(first);
+            invocation.stageOwner(second);
             invocation.authorizeRoamingWrite(invocation.roamingState());
             invocation.roamingState().write(RoamingMember.EMOTION.memberName(), 2.0f);
             return null;
@@ -42,19 +37,12 @@ final class EffectTransactionTest {
         assertEquals(1, fixture.prepareCalls());
         assertEquals(1, fixture.commitCalls());
         assertSame(PROVENANCE, fixture.committedProvenance());
-        var committed = fixture.committedEffects();
-        assertEquals(5, committed.size());
-        assertInstanceOf(EffectCommand.Sound.class, committed.get(0));
-        assertInstanceOf(EffectCommand.Particle.class, committed.get(1));
-        assertInstanceOf(EffectCommand.Controller.class, committed.get(2));
-        assertInstanceOf(EffectCommand.Deferred.class, committed.get(3));
-        assertInstanceOf(EffectCommand.Sync.class, committed.get(4));
+        assertEquals(java.util.List.of(first, second), fixture.committedEffects());
         assertEquals(2.0f, roaming.read(RoamingMember.EMOTION.memberName()));
         assertEquals(EffectBatch.State.COMMITTED, context.effects().orElseThrow().state());
 
         var observation = observation(fixture, roaming, () -> false, () -> true);
-        var failure = assertThrows(ExecutionFailure.class, () -> TestHostInvocations.invoke(observation,
-            HostSymbol.YSM_PLAY_SOUND, java.util.List.of(soundId("voice"), RuntimeValues.ofString("ysm:test"))));
+        var failure = assertThrows(ExecutionFailure.class, () -> observation.stageOwner(first));
         assertEquals(ExecutionFailure.Reason.EFFECT_NOT_AUTHORIZED, failure.reason());
         assertEquals(1, fixture.commitCalls());
     }
@@ -62,13 +50,15 @@ final class EffectTransactionTest {
     @Test
     void everyPreCommitFailureDiscardsTheWholeBatch() {
         assertDiscarded(null, (context, cancelled, current) -> {
-            TestHostInvocations.invoke(context, HostSymbol.YSM_SYNC, java.util.List.of(RuntimeValues.ofFloat(1)));
-            TestHostInvocations.invoke(context, HostSymbol.YSM_PLAY_SOUND,
-                java.util.List.of(soundId("voice"), RuntimeValues.ofString("ysm:test")));
+            context.stageOwner(() -> {});
+            context.stageOwner(new PreparedEffect() {
+                public void validate() { throw new IllegalStateException("prevalidation failure"); }
+                public void commit() { throw new AssertionError("invalid effect committed"); }
+            });
             return null;
         });
         assertDiscarded(ExecutionFailure.Reason.PROVIDER_BUDGET, (context, cancelled, current) -> {
-            TestHostInvocations.invoke(context, HostSymbol.YSM_SYNC, java.util.List.of(RuntimeValues.ofFloat(1)));
+            context.stageOwner(() -> {});
             context.configureLimits(new ExecutionLimits(1, 1, 1, 1, 1));
             context.bindExpression("program", 5);
             context.beginTopLevel(true);
@@ -82,12 +72,12 @@ final class EffectTransactionTest {
             return null;
         });
         assertDiscarded(ExecutionFailure.Reason.CANCELLATION, (context, cancelled, current) -> {
-            TestHostInvocations.invoke(context, HostSymbol.YSM_SYNC, java.util.List.of(RuntimeValues.ofFloat(1)));
+            context.stageOwner(() -> {});
             cancelled.set(true);
             return null;
         });
         assertDiscarded(ExecutionFailure.Reason.STALE_GENERATION, (context, cancelled, current) -> {
-            TestHostInvocations.invoke(context, HostSymbol.YSM_SYNC, java.util.List.of(RuntimeValues.ofFloat(1)));
+            context.stageOwner(() -> {});
             current.set(false);
             return null;
         });
@@ -113,7 +103,6 @@ final class EffectTransactionTest {
         var cancelled = new AtomicBoolean();
         var current = new AtomicBoolean(true);
         var access = new ControlledHostFixture();
-        access.failEffect(HostSymbol.YSM_PLAY_SOUND, new IllegalStateException("prevalidation failure"));
         var roaming = com.elfmcys.ysm.expression.TestRoamingStates.create(null, RoamingRole.PRODUCER);
         var context = logical(access, roaming, cancelled::get, current::get);
         var failure = assertThrows(Throwable.class,
@@ -143,10 +132,6 @@ final class EffectTransactionTest {
         return MolangContext.observation(ENTITY_VIEW, RENDER_VIEW, host, roaming, PROVENANCE, cancellation, current);
     }
 
-    private static RuntimeValue soundId(String value) {
-        return RuntimeValues.ofString(value);
-    }
-
     private static MolangContext<Entity> logical(EffectValidator host, CompiledRoamingState roaming,
         java.util.function.BooleanSupplier cancellation, java.util.function.BooleanSupplier current) {
         return MolangContext.logical(ENTITY_VIEW, RENDER_VIEW, MolangContext.LogicalPhase.UPDATE, host, roaming,
@@ -159,7 +144,7 @@ final class EffectTransactionTest {
 
     @FunctionalInterface
     private interface FailingBody {
-        Object run(MolangContext<Entity> context, AtomicBoolean cancellation, AtomicBoolean current) throws Throwable;
+        Object run(MolangContext<?> context, AtomicBoolean cancellation, AtomicBoolean current) throws Throwable;
     }
 
 }

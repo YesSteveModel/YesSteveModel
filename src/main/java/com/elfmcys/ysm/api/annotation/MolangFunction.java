@@ -12,6 +12,9 @@ public @interface MolangFunction {
 
     MolangEffect effect() default MolangEffect.CONTEXT;
 
+    /** Declares an exact same-class target; this hint does not authorize context-free execution. */
+    String contextFreeTarget() default "";
+
     int minArgs() default -1;
 
     int maxArgs() default -1;

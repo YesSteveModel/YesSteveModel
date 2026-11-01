@@ -146,7 +146,7 @@ class ProviderContractAuditTest {
         context.bindExpression("audit", 0);
         context.beginTopLevel(false);
         try {
-            var action = assertThrows(IllegalStateException.class, () -> context.playSound("voice", "voice", 0, 1, 1));
+            var action = assertThrows(IllegalStateException.class, () -> context.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> {}));
             assertTrue(action.getMessage().contains("entry forbids ACTION"));
         } finally {
             context.endTopLevel();

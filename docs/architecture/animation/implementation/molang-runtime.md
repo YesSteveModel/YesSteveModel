@@ -39,17 +39,23 @@ Artifact 的显式 replacement 集合是 builtin 准入依据，诊断文字或 
 
 `ExpressionHost` 冻结 `ExpressionBinding`；声明环境、BindingPlan 与静态入口上限进入身份，subject 实例和当前许可不进入 key。执行前由引擎核对已绑定 source/entry 配对、shape 和 exact generation；同内容重建也不能复活旧引用。安装为真实 subject 创建同代 SubjectBinding；获准调用缺失精确 provider 时，在求参前失败。
 
-Collector 先完成来源、冲突、依赖与类资格，再绑定实现并冻结 registry；随后才开放 bake/cache lookup。普通与 builtin-only host 来自同一次冻结。Intrinsic default 的 artifact、组件及 transient 使用可信投影，普通模型借用 default 源仍使用普通 host。注册权威见[扩展接入](../../integration/overview.md)。
+Collector 先完成来源、冲突、完整 all-of 依赖与类资格，再绑定实现并冻结 registry；随后才开放 bake/cache lookup。Consumer 从这批已接纳声明派生 effect、符号补全、host linkage 与 builtin-only 投影，不维护另一份发布目录。普通与 builtin-only host 来自同一次冻结。Intrinsic default 的 artifact、组件及 transient 使用可信投影，普通模型借用 default 源仍使用普通 host。注册权威见[扩展接入](../../integration/overview.md)。
 
-每条表达式绑定固定 ACTION 许可，由宿主窗口与 entry/layout 上限求交。表达式 reset 清除本次借用，不清整轮首次失败、输入或 batch。`EffectTransaction` 在全部 program、必要 hook、效果验证与 owner 资格成功后提交一次；清理失败也阻止提交。已提交的外部效果不回滚。
+每条表达式绑定固定 ACTION 许可，由宿主窗口与 entry/layout 上限求交。表达式 reset 清除本次借用，不清整轮首次失败、输入或 batch。独立 action、observation、配置与短期轮通过既有 `ComponentScope.evaluate` 借用输入 event；动画 pass 复用实体外层的同一 hook 窗口，不重复 begin。`EffectTransaction` 在全部 program、必要 hook、效果验证与 owner 资格成功后提交一次；清理失败也阻止提交。已提交的外部效果不回滚。
 
 OOM 保留资源失败归属，越过单 program 的零值或 UNSET 分支，终结包含该求值的整轮执行。实体操作 owner 接纳失败，context、效果 batch 和 barrier 按正常路径退出；不因 OOM 停用 program 或进入默认模型恢复。Transient/watch 先交付已有结果通知，再把执行失败交回同一 owner。
 
-声音预验证选定精确 animation/controller/global manager，提交闭包只捕获该 manager，不从复用 context 补读。`ysm.defer` 复制有限 F32 与独立来源，不保留 argument view；排空时进入新的顶层权限与预算窗口。
+声明类在准备普通效果时选定精确 target。声音实现捕获当时的 animation/controller/global manager，controller 实现捕获当时的 coded controller，骨骼实现捕获当时的 bone。`MolangContext.submit` 只检查许可、资格和容量，再验证并登记通用申请。`EffectBatch` 完成全批验证和最终资格检查后，runtime 先关闭当前轮，再在同一 owner barrier 内按申请顺序提交。提交异常解除剩余引用，不新增重试状态。
+
+`ysm.defer` 提交 `DeferredRequest`。Runtime 保存已复制的有限 F32、独立来源、安装及采样 context，不登记 postcommit 闭包。`AnimationPlayer` 和 coded controller 的上下文退出触发逆序排空；组件 `endEval` 前也排空轮内剩余 capture。排空调用普通 handler 入口，重建顶层许可与预算，效果继续进入当前 batch。整轮累计捕获上限限制递归登记；失败、过期或轮退出均清除未分发 capture。
+
+`LinkedDeclaration` 从 schema 解析纯目标并核验 exact public static 方法。`ExpressionHost` 从已授权成员派生 `BindingPlan.contextFreeCall`，不维护数学名称白名单。Schema/helper、声明环境及实际 binding 共同封闭身份；兼容摘要还覆盖声明、领域实现与 controller 调度源码。
 
 ## Event 与 handler 分发
 
 `@eventType` 登记 target handler，未知后缀不自动获得调用者。Player init/update 由实体前置任务触发；sync 由已验证消息或本地调用触发；defer 在当前 animation context 结束时逆序排空。Coded override 的选择见[Controller](../controllers-and-playback.md#coded-controller-override)。
+
+本地 `sync` 效果捕获当前 processor 和复制后的参数。效果提交时，processor 在已关闭的来源轮之后创建新的 ACTION 轮，不再经过实体顶层入口。实体操作仍持有 barrier；provider 在活跃轮内同步调用实体入口仍被拒绝。本地交付不需要第二份 pending 队列。
 
 ## Privileged ingress
 

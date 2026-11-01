@@ -7,7 +7,6 @@ import com.elfmcys.ysm.client.command.sub.MolangCommand;
 import com.elfmcys.ysm.client.command.sub.SimpleWatchCommand;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.client.gui.overlay.DebugAnimationScreen;
-import com.elfmcys.ysm.expression.host.HostSymbol;
 import com.elfmcys.ysm.expression.host.RoamingMember;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import com.elfmcys.ysm.util.CommandUtil;
@@ -56,7 +55,7 @@ public class ClientRootCommand {
                     }
 
                     // 其他上下文变量
-                    for (var symbol : HostSymbol.values()) {
+                    for (var symbol : cap.getExpressionRuntime().module().map(com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule::publishedSymbols).orElse(java.util.List.of())) {
                         var sourceName = sourceName(symbol);
                         if (sourceName != null) {
                             vars.add(sourceName);
@@ -97,8 +96,7 @@ public class ClientRootCommand {
         return Optional.ofNullable(target);
     }
 
-    static String sourceName(HostSymbol symbol) {
-        var stableId = symbol.stableId();
+    static String sourceName(String stableId) {
         if (stableId.startsWith("query:")) {
             return "q." + stableId.substring("query:".length());
         }

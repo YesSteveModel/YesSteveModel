@@ -149,95 +149,99 @@ public class AnimationPlayer {
      */
     public void process(final float renderTicks, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents) {
         evaluation.setAnimationContext(animationContext);
-        var animTicks = getAnimTicks(renderTicks);
+        try {
+            var animTicks = getAnimTicks(renderTicks);
 
-        // 尾过渡结束后回到待机状态
-        if (this.state == AnimationState.ENDING_TRANSITION && animTicks >= endingTransitionLength) {
-            resetToIdle();
-        }
-
-        /*  PLAY_ONCE 结束后转入尾过渡状态
-         *  为了最后一个指令帧得以执行，以及基岩版控制器下一个状态的过渡动画能够正确衔接，需要延迟一帧停止动画，
-         *  所以这块判断要放在上一块的后面
-         */
-        if (this.state == AnimationState.RUNNING && currentLoopType == LoopType.PLAY_ONCE
-            && animTicks >= currentAnim.animationLength) {
-            resetEventKeyframes(evaluation, executeEvents);
-            setupEndingTransition(renderTicks);
-            animTicks = getAnimTicks(renderTicks);
-        }
-
-        if (this.state == AnimationState.IDLE) {
-            // 没有动画正在播放时，尝试切换下一个动画
-            if (!loadNextAnim()) {
-                return;
+            // 尾过渡结束后回到待机状态
+            if (this.state == AnimationState.ENDING_TRANSITION && animTicks >= endingTransitionLength) {
+                resetToIdle();
             }
 
-            this.animTickOffset = renderTicks;
-            animTicks = 0;
-
-            if (this.beginningTransition.length() > 0) {
-                this.state = AnimationState.BEGINNING_TRANSITION;
-            } else {
-                // 如果过渡长度为 0，直接开始播放
-                this.state = AnimationState.RUNNING;
+            /*  PLAY_ONCE 结束后转入尾过渡状态
+             *  为了最后一个指令帧得以执行，以及基岩版控制器下一个状态的过渡动画能够正确衔接，需要延迟一帧停止动画，
+             *  所以这块判断要放在上一块的后面
+             */
+            if (this.state == AnimationState.RUNNING && currentLoopType == LoopType.PLAY_ONCE
+                && animTicks >= currentAnim.animationLength) {
+                resetEventKeyframes(evaluation, executeEvents);
+                setupEndingTransition(renderTicks);
+                animTicks = getAnimTicks(renderTicks);
             }
-        }
 
-        resetBoneAnimationQueues();
+            if (this.state == AnimationState.IDLE) {
+                // 没有动画正在播放时，尝试切换下一个动画
+                if (!loadNextAnim()) {
+                    return;
+                }
 
-        if (this.state == AnimationState.BEGINNING_TRANSITION) {
-            if (animTicks < this.beginningTransition.length()) {
-                // 更新起始过渡动画
-                animationContext.setAnimTime(0);
-                runBeginningTransition(evaluation, animTicks);
-                return;
-            } else {
-                // 如果当前时间超过了过渡时长，则正式开始播放
-                animTicks = animTicks - this.beginningTransition.length();
-                this.animTickOffset = renderTicks - animTicks;
-                this.state = AnimationState.RUNNING;
-            }
-        }
+                this.animTickOffset = renderTicks;
+                animTicks = 0;
 
-        // 播放中
-        if (this.state == AnimationState.RUNNING) {
-            if (animTicks > this.currentAnim.animationLength) {
-                this.currentAnimFinished = true;
-
-                if (currentLoopType == LoopType.LOOP) {
-                    // 对于循环动画，本轮播放结束后重置 tick offset，开始下一轮循环
-                    if (currentAnim.animationLength > 0) {
-                        animTicks = animTicks % currentAnim.animationLength;
-                    } else {
-                        animTicks = 0;
-                    }
-                    resetEventKeyframes(evaluation, executeEvents);
-                    animTickOffset = renderTicks - animTicks;
-                } else if (currentLoopType == LoopType.HOLD_ON_LAST_FRAME) {
-                    // 对于停在最后一帧的动画，播放完成后 anim ticks 锁定在最后一帧的时间
-                    animTicks = currentAnim.animationLength;
+                if (this.beginningTransition.length() > 0) {
+                    this.state = AnimationState.BEGINNING_TRANSITION;
                 } else {
-                    // PLAY_ONCE 类型在上面就已经处理过了
+                    // 如果过渡长度为 0，直接开始播放
+                    this.state = AnimationState.RUNNING;
                 }
             }
 
-            animationContext.setAnimTime(animTicks / 20f);
-            // 更新事件关键帧（指令、音效、粒子等）
-            executeEventKeyframes(evaluation, animTicks, executeEvents);
-            // 更新动画
-            runAnimation(evaluation, animTicks);
-            return;
-        }
+            resetBoneAnimationQueues();
 
-        if (this.state == AnimationState.ENDING_TRANSITION) {
-            if (animTicks > endingTransitionLength) {
-                animTicks = endingTransitionLength;
+            if (this.state == AnimationState.BEGINNING_TRANSITION) {
+                if (animTicks < this.beginningTransition.length()) {
+                    // 更新起始过渡动画
+                    animationContext.setAnimTime(0);
+                    runBeginningTransition(evaluation, animTicks);
+                    return;
+                } else {
+                    // 如果当前时间超过了过渡时长，则正式开始播放
+                    animTicks = animTicks - this.beginningTransition.length();
+                    this.animTickOffset = renderTicks - animTicks;
+                    this.state = AnimationState.RUNNING;
+                }
             }
 
-            animationContext.setAnimTime(endingTransitionSrcTick / 20f);
-            // 更新结尾过渡动画
-            runEndingTransition(evaluation, animTicks);
+            // 播放中
+            if (this.state == AnimationState.RUNNING) {
+                if (animTicks > this.currentAnim.animationLength) {
+                    this.currentAnimFinished = true;
+
+                    if (currentLoopType == LoopType.LOOP) {
+                        // 对于循环动画，本轮播放结束后重置 tick offset，开始下一轮循环
+                        if (currentAnim.animationLength > 0) {
+                            animTicks = animTicks % currentAnim.animationLength;
+                        } else {
+                            animTicks = 0;
+                        }
+                        resetEventKeyframes(evaluation, executeEvents);
+                        animTickOffset = renderTicks - animTicks;
+                    } else if (currentLoopType == LoopType.HOLD_ON_LAST_FRAME) {
+                        // 对于停在最后一帧的动画，播放完成后 anim ticks 锁定在最后一帧的时间
+                        animTicks = currentAnim.animationLength;
+                    } else {
+                        // PLAY_ONCE 类型在上面就已经处理过了
+                    }
+                }
+
+                animationContext.setAnimTime(animTicks / 20f);
+                // 更新事件关键帧（指令、音效、粒子等）
+                executeEventKeyframes(evaluation, animTicks, executeEvents);
+                // 更新动画
+                runAnimation(evaluation, animTicks);
+                return;
+            }
+
+            if (this.state == AnimationState.ENDING_TRANSITION) {
+                if (animTicks > endingTransitionLength) {
+                    animTicks = endingTransitionLength;
+                }
+
+                animationContext.setAnimTime(endingTransitionSrcTick / 20f);
+                // 更新结尾过渡动画
+                runEndingTransition(evaluation, animTicks);
+            }
+        } finally {
+            evaluation.endAnimationContext();
         }
     }
 

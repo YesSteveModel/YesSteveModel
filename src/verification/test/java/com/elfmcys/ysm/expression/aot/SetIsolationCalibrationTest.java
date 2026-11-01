@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
@@ -228,9 +229,9 @@ final class SetIsolationCalibrationTest {
     }
 
     private static EntityExpressionRuntime.InvocationInputs inputs() {
-        return new EntityExpressionRuntime.InvocationInputs(new InvocationInputs() {
+        return new EntityExpressionRuntime.InvocationInputs(new InvocationInputs<net.minecraft.world.entity.Entity>() {
             @Override
-            public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
         }, (commands, provenance) -> () -> {
         }, () -> false);
     }

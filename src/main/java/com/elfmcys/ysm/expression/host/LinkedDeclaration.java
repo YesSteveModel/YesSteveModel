@@ -18,7 +18,7 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
         members = List.copyOf(members);
     }
 
-    public record Member(DeclarationSchema.Member schema, Class<? extends Entity> subject, JavaMemberBinding binding) {
+    public record Member(DeclarationSchema.Member schema, Class<? extends Entity> subject, JavaMemberBinding binding, Optional<JavaMemberBinding> contextFreeTarget) {
     }
 
     public static LinkedDeclaration link(DeclarationSchema schema, ClassLoader loader)
@@ -87,7 +87,17 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
                 throw new IllegalArgumentException("exact generated adapter mismatch");
             @SuppressWarnings("unchecked")
             Class<? extends Entity> exact = (Class<? extends Entity>)subject;
-            members.add(new Member(m, exact, binding));
+            Optional<JavaMemberBinding> target = Optional.empty();
+            if (!m.contextFreeTarget().isEmpty()) {
+                var targetParameters = Arrays.copyOfRange(original.parameterArray(), 1, original.parameterCount());
+                var targetMethod = owner.getMethod(m.contextFreeTarget(), targetParameters);
+                if (!Modifier.isStatic(targetMethod.getModifiers()) || targetMethod.getReturnType() != result)
+                    throw new IllegalArgumentException("exact context-free target mismatch");
+                // Only the collector's verified internal source can authorize this optimization.
+                if (schema.builtin())
+                    target = Optional.of(binding(owner, targetMethod.getName(), result, targetParameters));
+            }
+            members.add(new Member(m, exact, binding, target));
         }
         if (members.stream().anyMatch(member -> !member.schema().isStatic()))
             com.elfmcys.ysm.api.molang.DeclarationLinkage.verifyComponent(owner, helper,

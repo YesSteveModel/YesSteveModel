@@ -1,7 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
-import com.elfmcys.ysm.expression.host.HostSymbol;
 import com.elfmcys.ysm.model.resource.client.ModelResourcePurpose;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationProto;
@@ -20,7 +19,7 @@ import java.util.Set;
 
 /** A complete GUI input unit; uncertain animation selection retains the entire MAIN input. */
 final class GuiAnimationClosure {
-    private static final String SET_ANIMATION = HostSymbol.CTRL_SET_ANIMATION.stableId();
+    private static final String SET_ANIMATION = "ctrl:set_animation";
     private final Set<String> names = new HashSet<>();
     private boolean unbounded;
 

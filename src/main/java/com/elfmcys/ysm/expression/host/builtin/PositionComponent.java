@@ -118,7 +118,7 @@ public final class PositionComponent implements EntityComponent<Entity> {
     @BuiltinFunction(value = "input_horizontal", namespace = "ysm",
         effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
     public float inputHorizontal(MolangContextView<Entity> context) {
-        return relativeMoveInput(false, context.partialTick());
+        return relativeMoveInput(false, context.inputs().partialTick());
     }
 
     public float inputHorizontal() {
@@ -128,7 +128,7 @@ public final class PositionComponent implements EntityComponent<Entity> {
     @BuiltinFunction(value = "input_vertical", namespace = "ysm",
         effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
     public float inputVertical(MolangContextView<Entity> context) {
-        return relativeMoveInput(true, context.partialTick());
+        return relativeMoveInput(true, context.inputs().partialTick());
     }
 
     public float inputVertical() {

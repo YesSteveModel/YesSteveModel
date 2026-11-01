@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.client.sound.instance;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.api.client.audio.AudioBackend;
 import com.elfmcys.ysm.expression.host.*;
 import org.junit.jupiter.api.Test;
@@ -47,30 +48,25 @@ class SoundInstanceManagerTest {
         assertTrue(globalSounds.startResolved(id, false, () -> globalPlayback));
 
         var owner = TestComponentHolders.owner(null);
-        var event =
-            new com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent<>(owner, 0, 0, 0, null, null, null);
-        var constructor = Class.forName("com.elfmcys.ysm.geckolib3.core.processor.MinecraftInvocationInputs")
-            .getDeclaredConstructor(com.elfmcys.ysm.client.entity.AnimatableEntity.class,
-                com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent.class,
-                net.minecraft.util.RandomSource.class, SoundInstanceManager.class, ControllerExecutionState.class,
-                AnimationExecutionState.class);
-        constructor.setAccessible(true);
-        var inputs = (InvocationInputs<net.minecraft.world.entity.Entity>)constructor.newInstance(owner, event,
-            net.minecraft.util.RandomSource.create(), globalSounds, null, null);
+        TestComponentHolders.installProcessor(owner, net.minecraft.util.RandomSource.create(), globalSounds);
+        var model = new com.elfmcys.ysm.expression.host.builtin.ModelBuiltins(owner);
+        var inputs = new InvocationInputs<net.minecraft.world.entity.Entity>() {
+            public net.minecraft.world.entity.Entity entity() { return null; }
+        };
         var context =
             MolangContext.logical(inputs, inputs, MolangContext.LogicalPhase.ACTION, inputs::prevalidateEffect,
                 com.elfmcys.ysm.expression.TestRoamingStates.create(null, dev.semaweave.RoamingRole.PRODUCER),
                 new InvocationProvenance("sound-owner", "local-scope", 1, 2, 3), () -> false, () -> true, 8);
-        EffectTransaction.execute(context, new OwnerEffectSink((OwnerEffectSink.Owner)inputs), active -> {
+        EffectTransaction.execute(context, EffectSink.direct(), active -> {
             active.setControllerContext(firstController);
             active.setAnimationContext(controllerScope ? null : firstAnimation);
             active.bindExpression("local-scope", 1);
             active.beginTopLevel(true);
             try {
                 if (stopAll)
-                    active.stopAllSounds(global);
+                    model.stopAllSounds(active, 1, global);
                 else
-                    active.stopSound("voice", global);
+                    model.stopSound(active, 2, "voice", global);
             } finally {
                 active.endTopLevel();
                 active.releaseExpression();
@@ -102,31 +98,17 @@ class SoundInstanceManagerTest {
             MolangContext.logical(new EntityView() {}, new RenderView() {}, MolangContext.LogicalPhase.ACTION, fixture,
                 com.elfmcys.ysm.expression.TestRoamingStates.create(null, dev.semaweave.RoamingRole.PRODUCER),
                 new InvocationProvenance("sound-owner", "zero", 1, 2, 3), () -> false, () -> true, 8);
-        EffectSink sink = (commands, provenance) -> () -> {
-            for (var command : commands) {
-                var sound = (EffectCommand.Sound)command;
-                if (sound.action() == HostSymbol.YSM_PLAY_SOUND) {
-                    assertTrue(manager.startResolved(sound.soundId(), false, () -> {
-                        starts.incrementAndGet();
-                        return sound.soundId().equals(ModelSoundId.numeric(0)) ? anonymous : named;
-                    }));
-                } else {
-                    assertTrue(manager.stopPlayingSound(sound.soundId()));
-                }
-            }
-        };
-        EffectTransaction.execute(invocation, sink, context -> {
-            context.bindExpression("zero", 1);
-            context.beginTopLevel(true);
+        EffectTransaction.execute(invocation, EffectSink.direct(), context -> {
+            context.bindExpression("zero", 1); context.beginTopLevel(true);
             try {
-                var view = context;
-                view.playSound(0, "voice", 0, 1, 1);
-                view.playSound("0", "voice", 0, 1, 1);
-                view.stopSound("0", false);
-            } finally {
-                context.endTopLevel();
-                context.releaseExpression();
-            }
+                context.submit((PreparedEffect)() -> manager.startResolved(ModelSoundId.numeric(0), false, () -> {
+                    starts.incrementAndGet(); return anonymous;
+                }));
+                context.submit((PreparedEffect)() -> manager.startResolved(ModelSoundId.string("0"), false, () -> {
+                    starts.incrementAndGet(); return named;
+                }));
+                context.submit((PreparedEffect)() -> manager.stopPlayingSound(ModelSoundId.string("0")));
+            } finally { context.endTopLevel(); context.releaseExpression(); }
             assertEquals(0, starts.get());
             return null;
         });
@@ -135,7 +117,7 @@ class SoundInstanceManagerTest {
         assertFalse(anonymous.stopped);
         assertFalse(other.stopped);
         org.junit.jupiter.api.Assertions.assertThrows(ExecutionFailure.class,
-            () -> EffectTransaction.finish(invocation, sink, true));
+            () -> EffectTransaction.finish(invocation, EffectSink.direct(), true));
         assertEquals(2, starts.get());
         manager.stopAllPlayingSounds();
         assertEquals(AudioBackend.CancelReason.SCOPE_RETIRED, anonymous.reason);

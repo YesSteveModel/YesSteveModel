@@ -30,7 +30,6 @@ import dev.semaweave.registry.IndexedListTypeDescriptor;
 import dev.semaweave.registry.JavaMemberBinding;
 import dev.semaweave.registry.RegistrySnapshot;
 import dev.semaweave.registry.StructMemberDescriptor;
-import com.elfmcys.ysm.expression.host.builtin.MathBuiltins;
 
 import java.lang.invoke.MethodType;
 import java.nio.charset.StandardCharsets;
@@ -50,20 +49,6 @@ public final class ExpressionHost {
     public static final ListType EVENT_F32_ARGUMENTS = FLOAT_LIST;
 
     private static final String OWNER_ID = "ysm:expression-host";
-    private static final Map<String,
-        JavaMemberBinding> CONTEXT_FREE_MATH = Map.ofEntries(mathCall("abs", "abs", 1), mathCall("clamp", "clamp", 3),
-            mathCall("cos", "cos", 1), mathCall("exp", "exp", 1), mathCall("floor", "floor", 1),
-            mathCall("lerp", "lerp", 3), mathCall("max", "max", 2), mathCall("min", "min", 2),
-            mathCall("mod", "mod", 2), mathCall("pow", "pow", 2), mathCall("round", "round", 1),
-            mathCall("sin", "sin", 1), mathCall("sqrt", "sqrt", 1), mathCall("min_angle", "minAngle", 1));
-
-    private static Map.Entry<String, JavaMemberBinding> mathCall(String symbol, String method, int arity) {
-        Class<?>[] parameters = new Class<?>[arity];
-        java.util.Arrays.fill(parameters, float.class);
-        return Map.entry("math:" + symbol,
-            LinkedDeclaration.binding(MathBuiltins.class, method, float.class, parameters));
-    }
-
     private final HostAvailability availability;
     private final ExecutionLimits executionLimits;
     private final ContextType<MolangContext> contextType;
@@ -198,14 +183,7 @@ public final class ExpressionHost {
             for (var member : declaration.members()) {
                 builder.guard(member.binding(), member.binding(),
                     dev.semaweave.registry.DeclarationEffect.valueOf(member.schema().effect()), member.subject());
-                if (declaration.owner() == MathBuiltins.class && declaration.schema().builtin()) {
-                    var target = CONTEXT_FREE_MATH.get(member.schema().symbol());
-                    if (target != null) {
-                        if (!member.schema().javaName().equals(target.methodName()))
-                            throw new IllegalArgumentException("trusted math declaration member mismatch");
-                        builder.contextFreeCall(member.binding(), target);
-                    }
-                }
+                member.contextFreeTarget().ifPresent(target -> builder.contextFreeCall(member.binding(), target));
             }
         var plan = builder.build();
         plan.validate(registry);

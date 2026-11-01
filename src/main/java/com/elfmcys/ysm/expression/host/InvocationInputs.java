@@ -1,9 +1,11 @@
 package com.elfmcys.ysm.expression.host;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
+
 import net.minecraft.world.entity.Entity;
 
 /**
- * Invocation-scoped production read/action source. Implementations capture the exact entity and render inputs; they
+ * Invocation-scoped production input source. Implementations capture the exact entity and render inputs; they
  * must not consult a process-global current entity.
  */
 public interface InvocationInputs<E extends Entity> extends EntityView, RenderView, EffectValidator {
@@ -25,6 +27,8 @@ public interface InvocationInputs<E extends Entity> extends EntityView, RenderVi
         return this;
     }
 
-    /** Releases invocation-local prevalidation scratch after commit or discard. */
-    default void clearPreparedEffects() {}
+    @Override
+    default void prevalidateEffect(PreparedEffect effect, MolangContext<?> scope) {
+        effect.validate();
+    }
 }

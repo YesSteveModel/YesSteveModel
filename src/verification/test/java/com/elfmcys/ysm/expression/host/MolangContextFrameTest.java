@@ -1,10 +1,10 @@
 package com.elfmcys.ysm.expression.host;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import dev.semaweave.ExecutionLimits;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -144,6 +144,6 @@ final class MolangContextFrameTest {
 
     private static final class EmptyAccess implements EffectValidator {
         @Override
-        public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {}
+        public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
     }
 }

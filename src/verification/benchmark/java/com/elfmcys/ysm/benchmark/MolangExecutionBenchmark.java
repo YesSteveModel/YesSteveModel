@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.benchmark;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.expression.host.*;
 import dev.semaweave.*;
 import dev.semaweave.backend.janino.JaninoJavaCompilerBackend;
@@ -77,7 +78,7 @@ public class MolangExecutionBenchmark {
         context.verifyEligible();
     }
 
-    public static final class Inputs implements InvocationInputs {
+    public static final class Inputs implements InvocationInputs<net.minecraft.world.entity.Entity> {
         @Override
         public net.minecraft.world.entity.Entity entity() {
             return null;
@@ -94,7 +95,7 @@ public class MolangExecutionBenchmark {
         }
 
         @Override
-        public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {
+        public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {
         }
     }
 

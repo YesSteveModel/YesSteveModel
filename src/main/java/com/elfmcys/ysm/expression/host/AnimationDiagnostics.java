@@ -9,7 +9,7 @@ public final class AnimationDiagnostics {
 
     public static Level errorLevel(@Nullable InvocationInputs<?> inputs) {
         return errorLevel(inputs instanceof MinecraftRuntimeInputs<?> minecraft
-            && minecraft.animationEvent().getDebugSource() != null);
+            && minecraft.animationEvent() != null && minecraft.animationEvent().getDebugSource() != null);
     }
 
     public static Level errorLevel(boolean animationDebug) {

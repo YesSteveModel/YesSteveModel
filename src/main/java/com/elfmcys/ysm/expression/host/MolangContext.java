@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.expression.host;
 
-import com.elfmcys.ysm.api.molang.MolangActionView;
+import com.elfmcys.ysm.api.molang.*;
+
 import dev.semaweave.ArgumentScratch;
 import dev.semaweave.ExecutionFrame;
 import dev.semaweave.ExecutionLimits;
@@ -14,7 +15,7 @@ import net.minecraft.world.entity.Entity;
 import org.jetbrains.annotations.Nullable;
 
 /** One round owns its inputs and effects; each expression exclusively borrows the execution state. */
-public final class MolangContext<E extends Entity> implements RoamingWriteContext, MolangActionView<E>, ExecutionFrame {
+public final class MolangContext<E extends Entity> implements RoamingWriteContext, MolangContextView<E>, ExecutionFrame {
     public enum LogicalPhase {
         OBSERVATION, UPDATE, ACTION
     }
@@ -49,6 +50,12 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
     private boolean controllerSelected;
     private boolean animationSelected;
     private CallFailure firstFailure;
+    private java.util.function.BiConsumer<DeferredRequest, InvocationProvenance> deferredSubmit;
+
+    public void deferredSubmit(java.util.function.BiConsumer<DeferredRequest, InvocationProvenance> handler) {
+        requireIdle();
+        deferredSubmit = Objects.requireNonNull(handler);
+    }
 
     public record CallFailure(InvocationProvenance provenance, int programId, String path, String callee,
         Throwable cause) {
@@ -167,11 +174,21 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
         return (InvocationInputs<E>)inputs;
     }
 
-    public void stage(EffectCommand command) {
+    public void submit(EffectRequest request) {
         requireAction();
+        Objects.requireNonNull(request, "request");
+        if (request instanceof DeferredRequest capture) {
+            if (deferredSubmit == null)
+                throw new IllegalStateException("invocation has no deferred scheduler");
+            deferredSubmit.accept(capture, provenance());
+            return;
+        }
+        if (!(request instanceof PreparedEffect effect))
+            throw new IllegalArgumentException("unsupported effect request");
         var batch = requireEffects();
-        hostAccess.prevalidateEffect(command, this);
-        batch.append(command, provenance());
+        batch.requireCapacity();
+        hostAccess.prevalidateEffect(effect, this);
+        batch.append(effect, provenance());
     }
 
     public void verifyEligible() {
@@ -200,6 +217,10 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
 
     void commit(EffectSink sink) {
         requireEffects().commit(sink, this::verifyEligible);
+    }
+
+    void commit(EffectSink sink, Runnable beforeCommit) {
+        requireEffects().commit(sink, this::verifyEligible, beforeCommit);
     }
 
     void discard() {
@@ -321,10 +342,11 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
     }
 
     /** Owner scheduling has its own round qualification, independent of the most recent expression. */
-    public void stageOwner(EffectCommand command) {
+    public void stageOwner(PreparedEffect command) {
         requireIdle();
         verifyEligible();
         var batch = requireEffects();
+        batch.requireCapacity();
         hostAccess.prevalidateEffect(command, this);
         batch.append(command, ownerProvenance);
     }
@@ -342,6 +364,7 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
         controllerContext = null;
         animationContext = null;
         effects = Optional.empty();
+        deferredSubmit = null;
     }
 
     private void requireIdle() {
@@ -435,235 +458,25 @@ public final class MolangContext<E extends Entity> implements RoamingWriteContex
         return limits;
     }
 
-    public void playSound(String id, String name, int mode, float volume, float pitch) {
-        playSound(ModelSoundId.string(id), name, mode, volume, pitch);
-    }
-
-    public void playSound(float id, String name, int mode, float volume, float pitch) {
-        playSound(ModelSoundId.numeric(id), name, mode, volume, pitch);
-    }
-
-    public void playSound(ModelSoundId id, String name, int mode, float volume, float pitch) {
-        requireAction();
-        this.stage(new EffectCommand.Sound(HostSymbol.YSM_PLAY_SOUND, java.util.Objects.requireNonNull(id), name, mode,
-            volume, pitch, false));
-    }
-
-    public void stopSound(String id, boolean global) {
-        stopSound(ModelSoundId.string(id), global);
-    }
-
-    public void stopSound(float id, boolean global) {
-        stopSound(ModelSoundId.numeric(id), global);
-    }
-
-    public void stopSound(ModelSoundId id, boolean global) {
-        requireAction();
-        this.stage(new EffectCommand.Sound(HostSymbol.YSM_STOP_SOUND, java.util.Objects.requireNonNull(id), "", 0, 1, 1,
-            global));
-    }
-
-    public void stopAllSounds(boolean global) {
-        requireAction();
-        this.stage(new EffectCommand.Sound(HostSymbol.YSM_STOP_ALL_SOUNDS, null, "", 0, 1, 1, global));
-    }
-
-    public void setAnimation(String name, float loop) {
-        controller(HostSymbol.CTRL_SET_ANIMATION, name, loop, 0, 0);
-    }
-
-    public void resetController() {
-        controller(HostSymbol.CTRL_RESET, "", 0, 0, 0);
-    }
-
-    public void indicateReload() {
-        controller(HostSymbol.CTRL_INDICATE_RELOAD, "", 0, 0, 0);
-    }
-
-    public void setBeginningTransitionLength(float length) {
-        controller(HostSymbol.CTRL_SET_BEGINNING_TRANSITION_LENGTH, "", length, 0, 0);
-    }
-
-    public void boneColor(String name, float red, float green, float blue) {
-        controller(HostSymbol.YSM_BONE_COLOR, name, red, green, blue);
-    }
-
-    public void boneGlow(String name, float glow) {
-        controller(HostSymbol.YSM_BONE_GLOW, name, glow, 0, 0);
-    }
-
-    public void boneTransparency(String name, float alpha) {
-        controller(HostSymbol.YSM_BONE_TRANSPARENCY, name, alpha, 0, 0);
-    }
-
-    public void sync(float... values) {
-        requireAction();
-        this.stage(new EffectCommand.Sync(EventArguments.sync(values)));
-    }
-
-    public void particle(String name, float... values) {
-        namedFloats(HostSymbol.YSM_PARTICLE, name, values);
-    }
-
-    public void absoluteParticle(String name, float... values) {
-        namedFloats(HostSymbol.YSM_ABS_PARTICLE, name, values);
-    }
-
-    public void defer(float delay, float... values) {
-        requireAction();
-        this.stage(new EffectCommand.Deferred(EventArguments.deferred(delay, values)));
-    }
-
-    private void namedFloats(HostSymbol symbol, String name, float[] values) {
-        requireAction();
-        this.stage(new EffectCommand.Particle(symbol == HostSymbol.YSM_ABS_PARTICLE, name, values));
-    }
-
-    private void controller(HostSymbol symbol, String name, float first, float second, float third) {
-        requireAction();
-        this.stage(new EffectCommand.Controller(symbol, name, first, second, third));
-    }
-
-    /** The legacy absolute-pivot capability currently has no host implementation. */
-    public MolangVector bonePivotAbsolute(String name) {
+    @Override
+    public MolangInputs inputs() {
         requireRead();
-        java.util.Objects.requireNonNull(name);
-        return new MolangVector(0, 0, 0);
-    }
-
-    public boolean keyboard(float... keys) {
-        requireRead();
-        return ContextReads.keyboard(keys);
-    }
-
-    public String modVersion(String id) {
-        requireRead();
-        return ContextReads.modVersion(id);
-    }
-
-    public float partialTick() {
-        requireRead();
-        return this.productionInputs().partialTick();
-    }
-
-    public float renderTickDelta() {
-        requireRead();
-        return this.productionInputs().renderTickDelta();
-    }
-
-    public float renderTicks() {
-        requireRead();
-        return ContextReads.inputs(this).animationEvent().getRenderTicks();
-    }
-
-    public float headPitch() {
-        requireRead();
-        return ContextReads.inputs(this).animationEvent().getExtraData().headPitch;
-    }
-
-    public float headYaw() {
-        requireRead();
-        return ContextReads.inputs(this).animationEvent().getExtraData().netHeadYaw;
-    }
-
-    public float bodyYaw() {
-        requireRead();
-        return ContextReads.inputs(this).animationEvent().getExtraData().lerpBodyRot;
-    }
-
-    public float lifeTime() {
-        requireRead();
-        return ContextReads.inputs(this).animatable().getSeekTime() / 20.0f;
-    }
-
-    public float foodLevel() {
-        requireRead();
-        return ContextReads.foodLevel(this);
-    }
-
-    public float forwardInput() {
-        requireRead();
-        return ContextReads.forwardInput(this);
-    }
-
-    public float random() {
-        requireRead();
-        return ContextReads.inputs(this).randomSource().nextFloat();
-    }
-
-    public String textureName() {
-        requireRead();
-        return ContextReads.textureName(this);
-    }
-
-    public boolean playingExtraAnimation() {
-        requireRead();
-        return ContextReads.playingExtraAnimation(this);
-    }
-
-    public boolean shieldCooldown() {
-        requireRead();
-        return ContextReads.shieldCooldown(this);
-    }
-
-    public String selectedControl() {
-        requireRead();
-        return ContextReads.selectedControl(this);
-    }
-
-    public float health(boolean maximum) {
-        requireRead();
-        return ContextReads.health(this, maximum);
-    }
-
-    public boolean renderingInInventory() {
-        requireRead();
-        return com.elfmcys.ysm.util.PersonView.isInInventory(ContextReads.inputs(this).animationEvent());
-    }
-
-    public float animationTime() {
-        requireRead();
-        var v = animationState();
-        return v == null ? 0 : v.animTime();
-    }
-
-    public boolean allAnimationsFinished() {
-        requireRead();
-        var v = controllerState();
-        return v != null && v.isAllAnimationsFinished();
-    }
-
-    public boolean anyAnimationFinished() {
-        requireRead();
-        var v = controllerState();
-        return v != null && v.isAnyAnimationFinished();
+        var source = productionInputs();
+        var controller = controllerState();
+        var animation = animationState();
+        return new MolangInputs(source == null ? 0 : source.partialTick(), source == null ? 0 : source.renderTickDelta(),
+            controller == null ? null : controller.input(), animation == null ? null : animation.input());
     }
 
     public @Nullable AnimationExecutionState animationState() {
-        return animationSelected ? animationContext : ContextReads.inputs(this).animationState();
+        if (animationSelected) return animationContext;
+        return productionInputs() instanceof com.elfmcys.ysm.geckolib3.core.processor.MinecraftRuntimeInputs<?> value
+            ? value.animationState() : null;
     }
 
     public @Nullable ControllerExecutionState controllerState() {
-        return controllerSelected ? controllerContext : ContextReads.inputs(this).controllerState();
-    }
-
-    public int randomInt(int bound) {
-        requireRead();
-        return ContextReads.inputs(this).randomSource().nextInt(bound);
-    }
-
-    public MolangVector boneRotation(String name) {
-        requireRead();
-        return ContextReads.boneRotation(this, name);
-    }
-
-    public float firstOrder(String key, float value, float... coefficients) {
-        requireRead();
-        return ContextReads.physics(this, key, value, true, coefficients);
-    }
-
-    public float secondOrder(String key, float value, float... coefficients) {
-        requireRead();
-        return ContextReads.physics(this, key, value, false, coefficients);
+        if (controllerSelected) return controllerContext;
+        return productionInputs() instanceof com.elfmcys.ysm.geckolib3.core.processor.MinecraftRuntimeInputs<?> value
+            ? value.controllerState() : null;
     }
 }

@@ -108,6 +108,11 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
         this.generationId = NEXT_GENERATION_ID.incrementAndGet();
     }
 
+    public java.util.List<String> publishedSymbols() {
+        return host.declarations().stream().flatMap(d -> d.members().stream()).map(m -> m.schema().symbol())
+            .distinct().sorted().toList();
+    }
+
     public ExpressionArtifactIdentity identity() {
         return identity;
     }

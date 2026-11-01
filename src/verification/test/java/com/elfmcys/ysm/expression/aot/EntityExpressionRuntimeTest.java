@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.expression.host.*;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
@@ -14,7 +15,6 @@ import dev.semaweave.ProgramId;
 import dev.semaweave.ProgramShape;
 import dev.semaweave.ResourceLease;
 import dev.semaweave.RuntimeLinkage;
-import dev.semaweave.RuntimeValues;
 import dev.semaweave.compilation.BakedConstantTable;
 import dev.semaweave.compilation.ProgramCatalog;
 import dev.semaweave.compilation.ProgramRef;
@@ -57,7 +57,7 @@ final class EntityExpressionRuntimeTest {
                         com.elfmcys.ysm.geckolib3.geo.RenderContext.levelImmutable(),
                         new com.elfmcys.ysm.geckolib3.model.provider.data.EntityModelData(),
                         debug ? com.elfmcys.ysm.client.animation.debug.CustomDebugSource.INSTANCE : null);
-                var production = new MinecraftRuntimeInputs() {
+                var production = new MinecraftRuntimeInputs<net.minecraft.world.entity.Entity>() {
                     @Override
                     public com.elfmcys.ysm.client.entity.AnimatableEntity<?> animatable() {
                         return null;
@@ -84,7 +84,7 @@ final class EntityExpressionRuntimeTest {
                     }
 
                     @Override
-                    public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {
+                    public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {
                     }
                 };
                 var inputs =
@@ -177,7 +177,10 @@ final class EntityExpressionRuntimeTest {
             float second = runtime.update(inputs, evaluation -> evaluation.evaluate(harness.sample));
             assertEquals(2f, second);
             float observation =
-                    runtime.animationPass(inputs, false, evaluation -> evaluation.evaluate(harness.sample), null);
+                    runtime.animationPass(inputs, false, evaluation -> {
+                        evaluation.dispatchPendingDeferred();
+                        return evaluation.evaluate(harness.sample);
+                    }, null);
             assertEquals(3f, observation);
         }
     }
@@ -215,59 +218,18 @@ final class EntityExpressionRuntimeTest {
     }
 
     @Test
-    void roundCleanupPreservesPrimaryFailureAndReleasesTheOwner() {
+    void failedRoundPreservesPrimaryFailureAndReleasesTheOwner() {
         var harness = harness(new Script());
         var primary = new IllegalStateException("body failure");
-        var cleanup = new AssertionError("input cleanup failure");
         var effects = new RecordingEffects();
-        var production = new InvocationInputs() {
-            @Override
-            public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {
-            }
-
-            @Override
-            public void clearPreparedEffects() {
-                throw cleanup;
-            }
-        };
         try (var runtime = new EntityExpressionRuntime(); var module = harness.module) {
             TestExpressionModules.replace(runtime, module, harness.events);
-            var failedInputs = new EntityExpressionRuntime.InvocationInputs(production, effects, () -> false);
-            assertSame(primary,
-                    assertThrows(IllegalStateException.class, () -> runtime.update(failedInputs, evaluation -> {
-                        throw primary;
-                    })));
-            assertEquals(List.of(cleanup), List.of(primary.getSuppressed()));
+            assertSame(primary, assertThrows(IllegalStateException.class,
+                () -> runtime.update(inputs(effects), evaluation -> { throw primary; })));
             assertEquals(0, effects.commits.get());
             float next = runtime.update(inputs(effects), evaluation -> evaluation.evaluate(harness.sample));
             assertEquals(1f, next);
             assertEquals(1, effects.commits.get());
-        }
-    }
-
-    @Test
-    void cleanupOnlyFailureIsObservableAndTheNextRoundCanRun() {
-        var harness = harness(new Script());
-        var cleanup = new IllegalStateException("input cleanup failure");
-        var production = new InvocationInputs() {
-            @Override
-            public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {
-            }
-
-            @Override
-            public void clearPreparedEffects() {
-                throw cleanup;
-            }
-        };
-        try (var runtime = new EntityExpressionRuntime(); var module = harness.module) {
-            TestExpressionModules.replace(runtime, module, harness.events);
-            var failedInputs =
-                    new EntityExpressionRuntime.InvocationInputs(production, new RecordingEffects(), () -> false);
-            assertSame(cleanup, assertThrows(IllegalStateException.class,
-                    () -> runtime.observe(failedInputs, evaluation -> evaluation.evaluate(harness.sample))));
-            float next =
-                    runtime.observe(inputs(new RecordingEffects()), evaluation -> evaluation.evaluate(harness.sample));
-            assertEquals(2f, next);
         }
     }
 
@@ -508,15 +470,110 @@ final class EntityExpressionRuntimeTest {
             evaluation.execute(harness.stageDeferred);
             return null;
         });
-        assertEquals(2, runtime.pendingDeferredCount());
-
-        runtime.update(inputs(effects), evaluation -> null);
         assertEquals(List.of("defer-b:2.0", "defer-a:2.0", "defer-b:1.0", "defer-a:1.0"), script.events);
         assertEquals(0, runtime.pendingDeferredCount());
-        assertEquals(2, effects.commits.get());
+        assertEquals(1, effects.commits.get());
+        runtime.update(inputs(effects), evaluation -> null);
+        assertEquals(4, script.events.size());
 
         runtime.close();
         harness.module.close();
+    }
+
+    @Test
+    void deferredHandlersRunAtTheCapturedAnimationBoundaryBeforeCommit() {
+        var script = new Script();
+        script.stageDeferredEffect = true;
+        var harness = harness(script);
+        var effects = new RecordingEffects();
+        try (var runtime = new EntityExpressionRuntime(); var module = harness.module) {
+            TestExpressionModules.replace(runtime, module, harness.events);
+            runtime.update(inputs(effects), evaluation -> {
+                var first = new com.elfmcys.ysm.expression.host.AnimationExecutionState(); first.setAnimTime(1);
+                var second = new com.elfmcys.ysm.expression.host.AnimationExecutionState(); second.setAnimTime(2);
+                evaluation.setAnimationContext(first);
+                evaluation.execute(harness.stageDeferred);
+                assertTrue(script.events.isEmpty());
+                evaluation.setAnimationContext(second);
+                assertEquals(List.of(1f, 1f), script.deferredTimes);
+                assertEquals(0, effects.commands.get());
+                evaluation.execute(harness.stageDeferred);
+                evaluation.endAnimationContext();
+                assertEquals(List.of(1f, 1f, 2f, 2f), script.deferredTimes);
+                evaluation.evaluate(harness.sample);
+                return null;
+            });
+            assertEquals(4, effects.commands.get());
+            assertEquals(0, runtime.pendingDeferredCount());
+        }
+    }
+
+    @Test
+    void deferredFailureDiscardsEarlierAndHandlerEffectsAndReleasesTheRound() {
+        var script = new Script();
+        script.stageCodedEffect = true;
+        script.stageDeferredEffect = true;
+        script.failDeferred = true;
+        var harness = harness(script);
+        var effects = new RecordingEffects();
+        try (var runtime = new EntityExpressionRuntime(); var module = harness.module) {
+            TestExpressionModules.replace(runtime, module, harness.events);
+            runtime.update(inputs(effects), evaluation -> {
+                evaluation.evaluate(harness.coded);
+                evaluation.execute(harness.stageDeferred);
+                return null;
+            });
+            assertEquals(List.of("defer-b:1.0", "defer-a:1.0"), script.events);
+            assertEquals(0, effects.commands.get());
+            assertEquals(0, effects.commits.get());
+            assertEquals(0, runtime.pendingDeferredCount());
+            float next = runtime.update(inputs(effects), evaluation -> evaluation.evaluate(harness.sample));
+            assertEquals(1f, next);
+        }
+    }
+
+    @Test
+    void transientCapturesDrainBeforeHooksInANonTickAnimationPass() {
+        var script = new Script();
+        script.stageDeferredEffect = true;
+        var harness = harness(script);
+        var effects = new RecordingEffects();
+        try (var runtime = new EntityExpressionRuntime(); var module = harness.module) {
+            TestExpressionModules.replace(runtime, module, harness.events);
+            runtime.animationPass(inputs(effects), false, evaluation -> {
+                evaluation.evaluate(harness.sample);
+                var context = script.contexts.get(0);
+                // Use the same explicit action window that an admitted transient session binds.
+                context.bindExpression("transient-capture", -1, true);
+                context.beginTopLevel(true);
+                try {
+                    context.submit(new com.elfmcys.ysm.expression.host.DeferredRequest(
+                        EventArguments.deferredFloats(1)));
+                } finally { context.endTopLevel(); context.releaseExpression(); }
+                evaluation.dispatchPendingDeferred();
+                assertEquals(List.of("defer-b:1.0", "defer-a:1.0"), script.events);
+                assertEquals(0, effects.commits.get());
+                return null;
+            }, null);
+            assertEquals(2, effects.commands.get());
+            assertEquals(2, effects.commits.get());
+        }
+    }
+
+    @Test
+    void recursiveDeferredRegistrationUsesOneCumulativeRoundLimit() {
+        var script = new Script();
+        script.recurseDeferred = true;
+        var harness = harness(script);
+        var effects = new RecordingEffects();
+        try (var runtime = new EntityExpressionRuntime(); var module = harness.module) {
+            TestExpressionModules.replace(runtime, module, harness.events);
+            runtime.update(inputs(effects), evaluation -> { evaluation.execute(harness.stageDeferred); return null; });
+            assertTrue(script.events.size() <= 2 * EntityExpressionRuntime.MAX_DEFERRED_CAPTURES);
+            assertTrue(script.stagedDeferred > EntityExpressionRuntime.MAX_DEFERRED_CAPTURES);
+            assertEquals(0, effects.commits.get());
+            assertEquals(0, runtime.pendingDeferredCount());
+        }
     }
 
     @Test
@@ -619,6 +676,8 @@ final class EntityExpressionRuntimeTest {
         private volatile CountDownLatch entered;
         private volatile CountDownLatch release;
         private int stagedDeferred;
+        private boolean stageDeferredEffect, failDeferred, recurseDeferred;
+        private final List<Float> deferredTimes = new ArrayList<>();
     }
 
     private static dev.semaweave.SubjectBinding testBinding(Object subject,
@@ -788,8 +847,7 @@ final class EntityExpressionRuntimeTest {
                         frame.chargeProviderCall();
                     }
                     if (script.stageCodedEffect) {
-                        com.elfmcys.ysm.expression.host.TestHostInvocations.invoke(context,
-                                HostSymbol.YSM_STOP_ALL_SOUNDS, List.of());
+                        context.submit((PreparedEffect)() -> {});
                     }
                     if (script.failCoded)
                         throw new IllegalStateException("provider failure");
@@ -836,9 +894,15 @@ final class EntityExpressionRuntimeTest {
                     case 3, 4 -> {
                         var values = (EventArguments) arguments.referenceValue(0);
                         script.events.add("defer-" + (id.sourceId() == 3 ? "a:" : "b:") + values.getFloat(0));
+                        assertTrue(context.isActive()); assertTrue(context.actionAllowed());
+                        var animation = context.inputs().animation();
+                        script.deferredTimes.add(animation == null ? -1 : animation.time());
+                        if (script.stageDeferredEffect) context.submit((PreparedEffect)() -> {});
+                        if (script.failDeferred && id.sourceId() == 3) throw new IllegalStateException("deferred handler");
+                        if (script.recurseDeferred)
+                            context.submit(new DeferredRequest(EventArguments.deferredFloats(++script.stagedDeferred)));
                     }
-                    case 7 -> com.elfmcys.ysm.expression.host.TestHostInvocations.defer(context,
-                            List.of(RuntimeValues.ofFloat(++script.stagedDeferred)));
+                    case 7 -> context.submit(new DeferredRequest(EventArguments.deferredFloats(++script.stagedDeferred)));
                     default -> throw new AssertionError(id);
                 }
             } finally {
@@ -857,15 +921,15 @@ final class EntityExpressionRuntimeTest {
         private final AtomicInteger commands = new AtomicInteger();
 
         @Override
-        public PreparedCommit prepare(List<EffectCommand> commands, InvocationProvenance provenance) {
+        public PreparedCommit prepare(List<PreparedEffect> commands, InvocationProvenance provenance) {
             this.commands.addAndGet(commands.size());
             return commits::incrementAndGet;
         }
     }
 
-    private static final class Inputs implements InvocationInputs {
+    private static final class Inputs implements InvocationInputs<net.minecraft.world.entity.Entity> {
         @Override
-        public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {
+        public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {
         }
     }
 }

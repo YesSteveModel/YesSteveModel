@@ -593,6 +593,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                             getAnimationProcessor().processTransientTasks(evaluation, false);
                             if (isCurrent(installation))
                                 codeAnimation(animationEvent, true);
+                            if (isCurrent(installation))
+                                evaluation.dispatchPendingDeferred();
                         });
                         return null;
                     }, this::onNormalRoamingChanges);

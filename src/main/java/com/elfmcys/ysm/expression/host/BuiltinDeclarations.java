@@ -57,7 +57,7 @@ public final class BuiltinDeclarations {
         for (var symbol : result.referencedSymbols())
             if (symbol.domain() == dev.semaweave.program.ProgramNode.SymbolDomain.EXTERNAL
                 && !BY_SYMBOL.containsKey(symbol.name()))
-                throw new IllegalArgumentException("Intrinsic default source requires an unpublished builtin: "
+                throw new IllegalArgumentException("Intrinsic default source requires a builtin declaration candidate: "
                     + location + " symbol=" + symbol.name());
     }
 
@@ -80,10 +80,6 @@ public final class BuiltinDeclarations {
         }
 
         // Common facts have already been validated by DeclarationSchema; no method is selected here.
-        public HostSymbol.AccessKind accessKind() {
-            return methods.get(0).accessKind();
-        }
-
         public dev.semaweave.ValueType resultType() {
             return methods.get(0).resultType();
         }
@@ -96,17 +92,9 @@ public final class BuiltinDeclarations {
             return methods.stream().mapToInt(BuiltinSurface::maximumArguments).max().orElseThrow();
         }
 
-        public OptionalCapability optionalCapability() {
-            return methods.get(0).optionalCapability();
-        }
+        public List<DeclarationSchema.Dependency> dependencies() { return methods.get(0).dependencies(); }
+        public com.elfmcys.ysm.api.molang.MolangEffect effect() { return methods.get(0).effect(); }
 
-        public Set<EffectKind> effects() {
-            return methods.get(0).effects();
-        }
-
-        public boolean staged() {
-            return methods.get(0).staged();
-        }
     }
 
     public static ComponentScope createComponents(com.elfmcys.ysm.client.entity.AnimatableEntity<?> owner,
@@ -115,21 +103,9 @@ public final class BuiltinDeclarations {
     }
 
     static BuiltinSurface surface(DeclarationSchema owner, DeclarationSchema.Member m) {
-        OptionalCapability capability =
-            owner.dependencies().isEmpty() ? null : Arrays.stream(OptionalCapability.values())
-                .filter(c -> c.modId().equals(owner.dependencies().get(0).modId())).findFirst().orElse(null);
-        Set<EffectKind> effects = Set.of(EffectKind.CONTEXT_STATE);
-        if (m.effect().equals("ACTION")) {
-            var id = m.symbol();
-            effects = Set.of(EffectKind.CONTEXT_STATE,
-                id.contains("sound") ? EffectKind.SOUND
-                    : id.contains("particle") ? EffectKind.PARTICLE : id.endsWith(":sync") ? EffectKind.SYNC
-                        : id.endsWith(":defer") ? EffectKind.DEFER : EffectKind.CONTROLLER);
-        }
-        return new BuiltinSurface(m.symbol(), m.symbol(), HostSymbol.AccessKind.INVOKE,
-            LinkedDeclaration.type(m.result()), m.minimum(), m.maximum(),
-            m.fixed().stream().map(LinkedDeclaration::type).toList(),
-            Optional.ofNullable(m.tail()).map(LinkedDeclaration::type), capability, effects, m.defaults(), "",
-            owner.owner(), m.adapter(), m.subject(), m.effect().equals("ACTION"));
+        return new BuiltinSurface(m.symbol(), m.symbol(), LinkedDeclaration.type(m.result()), m.minimum(), m.maximum(),
+            m.fixed().stream().map(LinkedDeclaration::type).toList(), Optional.ofNullable(m.tail()).map(LinkedDeclaration::type),
+            owner.dependencies(), com.elfmcys.ysm.api.molang.MolangEffect.valueOf(m.effect()), m.defaults(),
+            owner.owner(), m.adapter(), m.subject());
     }
 }

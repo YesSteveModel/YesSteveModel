@@ -10,7 +10,6 @@ import com.elfmcys.ysm.client.renderer.CustomFirstPersonArmRenderer;
 import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.event.api.SpecialPlayerRenderEvent;
 import com.elfmcys.ysm.expression.aot.TestExpressionModules;
-import com.elfmcys.ysm.expression.host.EffectCommand;
 import com.elfmcys.ysm.expression.host.ExpressionHost;
 import com.elfmcys.ysm.expression.host.HostAvailability;
 import com.elfmcys.ysm.expression.host.InvocationInputs;
@@ -79,6 +78,7 @@ class FirstPersonOwnerIntegrationTest {
     private static final ForgeConfigSpec.BooleanValue ORIGINAL_MODEL = ClientConfig.DISABLE_SELF_MODEL;
     private static final ForgeConfigSpec.BooleanValue ORIGINAL_HANDS = ClientConfig.DISABLE_SELF_HANDS;
     private static final ForgeConfigSpec.BooleanValue ORIGINAL_OTHER = ClientConfig.DISABLE_OTHER_MODEL;
+    private static final ForgeConfigSpec.DoubleValue ORIGINAL_SOUND_VOLUME = ClientConfig.SOUND_VOLUME;
     private static Object originalMinecraft;
     private static Object originalRenderer;
     private static Object originalRenderThread;
@@ -185,6 +185,7 @@ class FirstPersonOwnerIntegrationTest {
         ClientConfig.DISABLE_SELF_MODEL = ORIGINAL_MODEL;
         ClientConfig.DISABLE_SELF_HANDS = ORIGINAL_HANDS;
         ClientConfig.DISABLE_OTHER_MODEL = ORIGINAL_OTHER;
+        ClientConfig.SOUND_VOLUME = ORIGINAL_SOUND_VOLUME;
         field(Minecraft.class, "instance").set(null, originalMinecraft);
         field(RegisterEntityRenderersEvent.class, "CUSTOM_FIRST_PERSON_RENDERER").set(null, originalRenderer);
         field(RenderSystem.class, "renderThread").set(null, originalRenderThread);
@@ -200,6 +201,7 @@ class FirstPersonOwnerIntegrationTest {
         ClientConfig.DISABLE_SELF_MODEL = builder.define("model", false);
         ClientConfig.DISABLE_SELF_HANDS = builder.define("hands", false);
         ClientConfig.DISABLE_OTHER_MODEL = builder.define("other", false);
+        ClientConfig.SOUND_VOLUME = builder.defineInRange("volume", 100.0, 0.0, 100.0);
         builder.build().setConfig(CommentedConfig.inMemory());
         player = allocate(FakePlayer.class);
         field(net.minecraft.world.entity.Entity.class, "position").set(player, net.minecraft.world.phys.Vec3.ZERO);
@@ -2766,6 +2768,255 @@ class FirstPersonOwnerIntegrationTest {
             cap.retire();
             assertOwnerReleased(cap);
         }
+    }
+
+    @Test
+    void localSyncCommitsOnceAfterAnAcceptedPreviewAnimationRound(
+        @org.junit.jupiter.api.io.TempDir Path cache) throws Exception {
+        var definition = com.elfmcys.ysm.format.parser.AnimationBuilder
+            .build(com.elfmcys.ysm.format.parser.pojo.animation.AnimationFile.createGson(false).fromJson("""
+                {"animations":{"sync_probe":{"animation_length":1,"timeline":{"0":"r.sync_count=0;ysm.sync(3);"}}}}
+                """, com.elfmcys.ysm.format.parser.pojo.animation.AnimationFile.class));
+        var model = com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto.newBuilder()
+            .putAnimationFiles("main", definition).build();
+        var encoded = com.elfmcys.ysm.expression.EncodedProgramMapper.toProto(
+            new com.elfmcys.ysm.expression.frontend.MolangFrontend().compile("r.sync_count=r.sync_count+1;",
+                com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceMode.EXPRESSION,
+                new com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceLocation("review/local-sync")).program());
+        var strings = com.elfmcys.ysm.proto.mixel.asset.strings.StringDataProto.newBuilder()
+            .addUserFunctions(com.elfmcys.ysm.proto.mixel.asset.strings.data.UserFunctionProto.newBuilder()
+                .setName("@sync").setBody(encoded).build()).build();
+        var artifactStore = new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
+            new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache));
+        var factory = new com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory(artifactStore,
+            ExpressionHost.create(HostAvailability.none()), new com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics());
+        try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get());
+            var module = factory.create(() -> false,
+                new com.elfmcys.ysm.model.domain.ModelFileIdentity(OwnerResourceFixtures.hash(1),
+                    OwnerResourceFixtures.hash(255)),
+                "player", "", OwnerResourceFixtures.PROFILE, false, model, strings,
+                com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto.newBuilder().build(), new byte[0])) {
+            artifactStore.awaitPersistence();
+            var binder = new com.elfmcys.ysm.model.resource.client.render.AnimationProtoMapper.ProgramBinder() {
+                private com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation
+                    location(String path, com.elfmcys.ysm.expression.inventory.ProgramRole role, String discriminator) {
+                    return new com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation("player",
+                        path, role, discriminator);
+                }
+
+                public com.elfmcys.ysm.expression.aot.FloatExpression.Program bindFloat(String path,
+                    com.elfmcys.ysm.expression.inventory.ProgramRole role, String discriminator) {
+                    return module.requireFloatProgram(location(path, role, discriminator));
+                }
+
+                public com.elfmcys.ysm.expression.aot.BooleanProgram bindBoolean(String path,
+                    com.elfmcys.ysm.expression.inventory.ProgramRole role, String discriminator) {
+                    return module.requireBooleanProgram(location(path, role, discriminator));
+                }
+
+                public com.elfmcys.ysm.expression.aot.VoidProgram bindVoid(String path,
+                    com.elfmcys.ysm.expression.inventory.ProgramRole role, String discriminator) {
+                    return module.requireVoidProgram(location(path, role, discriminator));
+                }
+            };
+            var owner = new CustomPlayerEntity(player, true, false) {};
+            var resources = new OwnerResourceFixtures();
+            resources.attach(owner);
+            var target = resources.target(1, module, fixture.model);
+            target.assets().eventHandlers().put("sync", List.of(module.requireEventProgram(
+                new com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation("player",
+                    "function/@sync", com.elfmcys.ysm.expression.inventory.ProgramRole.EVENT_SYNC, "sync:0"))));
+            target.playerResources().animations().put("sync_probe",
+                com.elfmcys.ysm.model.resource.client.render.AnimationProtoMapper
+                    .animation(definition.animations().get(0), "animation/main", binder));
+            try {
+                owner.updateModelAndTexture(target.modelHash(), "variant0");
+                DemandFixtures.advance(owner);
+                owner.playExtraAnimation("sync_probe");
+                assertNotNull(DemandFixtures.produce(owner, 0.25f, RenderContext.levelImmutable()));
+                assertEquals(1f, owner.getExpressionRuntime().takeRoamingFull().values()
+                    .get("sync_count"));
+            } finally {
+                owner.retire();
+            }
+        }
+    }
+
+    @Test
+    void realDomainEffectsCommitInOrderAfterHooksAndDiscardEveryPrecommitFailure(
+        @org.junit.jupiter.api.io.TempDir Path cache) throws Exception {
+        var definition = com.elfmcys.ysm.format.parser.AnimationBuilder
+            .build(com.elfmcys.ysm.format.parser.pojo.animation.AnimationFile.createGson(false).fromJson("""
+                {"animations":{
+                  "joint":{"animation_length":1,"blend_weight":"7","timeline":{"0":
+                    "ysm.play_sound('voice','sound',0,0.5,1.25);ctrl.set_animation('walk',10);ysm.sync(3);"}},
+                  "failure":{"animation_length":1,"timeline":{"0":"loop(1000000,0);"}}
+                }}
+                """, com.elfmcys.ysm.format.parser.pojo.animation.AnimationFile.class));
+        var model = com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto.newBuilder()
+            .putAnimationFiles("main", definition).build();
+        var encoded = com.elfmcys.ysm.expression.EncodedProgramMapper.toProto(
+            new com.elfmcys.ysm.expression.frontend.MolangFrontend()
+                .compile("ysm.play_sound('sync','sync',0,args[0],1);",
+                    com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceMode.EXPRESSION,
+                    new com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceLocation("joint/sync")).program());
+        var strings = com.elfmcys.ysm.proto.mixel.asset.strings.StringDataProto.newBuilder()
+            .addUserFunctions(com.elfmcys.ysm.proto.mixel.asset.strings.data.UserFunctionProto.newBuilder()
+                .setName("@sync").setBody(encoded).build()).build();
+        var store = new com.elfmcys.ysm.expression.aot.ExpressionArtifactStore(cache,
+            new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache));
+        var factory = new com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory(store,
+            ExpressionHost.create(HostAvailability.none()), new com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics());
+        try (var fixture = new Fixture("parts-a", com.elfmcys.ysm.client.model.locator.PlayerLocator.get());
+            var module = factory.create(() -> false,
+                new com.elfmcys.ysm.model.domain.ModelFileIdentity(OwnerResourceFixtures.hash(1),
+                    OwnerResourceFixtures.hash(255)),
+                "player", "", OwnerResourceFixtures.PROFILE, false, model, strings,
+                com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto.newBuilder().build(), new byte[0])) {
+            store.awaitPersistence();
+            var action = module.requireVoidProgram(jointLocation("animation/main/joint/instruction/0",
+                com.elfmcys.ysm.expression.inventory.ProgramRole.ANIMATION_INSTRUCTION, ""));
+            var laterFailure = module.requireVoidProgram(jointLocation("animation/main/failure/instruction/0",
+                com.elfmcys.ysm.expression.inventory.ProgramRole.ANIMATION_INSTRUCTION, ""));
+            var readonly = module.requireFloatProgram(jointLocation("animation/main/joint/blend-weight",
+                com.elfmcys.ysm.expression.inventory.ProgramRole.ANIMATION_SAMPLE, ""));
+            var sync = module.requireEventProgram(jointLocation("function/@sync",
+                com.elfmcys.ysm.expression.inventory.ProgramRole.EVENT_SYNC, "sync:0"));
+            for (var failure : List.of("none", "expression", "begin", "end", "validation", "cancel", "retire")) {
+                var trace = new ArrayList<String>();
+                var payloads = new ArrayList<String>();
+                CustomPlayerEntity owner = new CustomPlayerEntity(player, true, false) {
+                    public java.util.Optional<com.elfmcys.ysm.client.sound.instance.AudioPlaybackFactory>
+                        getSoundPlayback(String name) {
+                        return java.util.Optional.of(control -> {
+                            trace.add(name);
+                            var captured = control.snapshot(false);
+                            payloads.add(name + ":" + captured.authorVolume() + ":" + captured.pitch());
+                            return new com.elfmcys.ysm.client.sound.instance.ICanStopSound() {
+                                boolean stopped;
+                                public void setStopped() { stopped = true; }
+                                public boolean isPlaybackStopped() { return stopped; }
+                            };
+                        });
+                    }
+                };
+                var resources = new OwnerResourceFixtures();
+                resources.attach(owner);
+                var target = resources.target(1, module, fixture.model);
+                target.assets().eventHandlers().put("sync", List.of(sync));
+                try {
+                    owner.updateModelAndTexture(target.modelHash(), "variant0");
+                    DemandFixtures.advance(owner);
+                    owner.checkModelUpdate();
+                    var runtime = owner.getExpressionRuntime();
+                    var known = new IllegalStateException(failure);
+                    var hooks = new JointRoundHooks(module.prepareComponents(owner, null), trace, failure, known);
+                    hooks.setRenderTarget(target, () -> true);
+                    runtime.replace(module, java.util.Map.of("sync", List.of(sync)), hooks);
+                    var controller = new com.elfmcys.ysm.geckolib3.core.controller.CodedAnimationController<>(owner,
+                        "first", 0, event -> com.elfmcys.ysm.geckolib3.core.PlayState.CONTINUE) {
+                        public void setAnimation(String name,
+                            com.elfmcys.ysm.geckolib3.core.builder.LoopType loop) {
+                            trace.add("controller");
+                            payloads.add("controller:" + name + ":" + loop);
+                        }
+                    };
+                    var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+                    var event = new AnimationEvent<AnimatableEntity<net.minecraft.world.entity.player.Player>>(
+                        owner, player.tickCount, .25f, .25f,
+                        RenderContext.levelImmutable(), new com.elfmcys.ysm.geckolib3.model.provider.data.EntityModelData(),
+                        null);
+                    var production = owner.getAnimationProcessor().invocationInputs(event).productionInputs();
+                    var inputs = new com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.InvocationInputs(production,
+                        (effects, provenance) -> {
+                            assertTrue(hooks.ended, "all necessary hooks precede sink preparation");
+                            assertTrue(trace.isEmpty(), "preparation has no visible domain effects");
+                            if (failure.equals("validation"))
+                                throw known;
+                            return () -> effects.forEach(com.elfmcys.ysm.api.molang.PreparedEffect::commit);
+                        }, cancelled::get);
+                    org.junit.jupiter.api.function.Executable round = () -> owner.inCall(() -> runtime.update(inputs,
+                        evaluation -> {
+                            evaluation.setControllerContext(new com.elfmcys.ysm.expression.host.ControllerExecutionState(
+                                false, controller));
+                            evaluation.setAnimationContext(new com.elfmcys.ysm.expression.host.AnimationExecutionState());
+                            evaluation.execute(action);
+                            assertTrue(trace.isEmpty());
+                            assertThrows(IllegalStateException.class,
+                                () -> owner.dispatchSync(com.elfmcys.ysm.expression.host.EventArguments.sync(99)));
+                            evaluation.setControllerContext(null);
+                            if (failure.equals("expression")) {
+                                evaluation.execute(laterFailure);
+                                assertTrue(evaluation.failure().isPresent());
+                            }
+                            assertEquals(7f, evaluation.evaluate(readonly));
+                            if (failure.equals("cancel"))
+                                cancelled.set(true);
+                            if (failure.equals("retire"))
+                                runtime.invalidate();
+                            return null;
+                        }));
+                    if (List.of("begin", "end", "validation").contains(failure))
+                        assertSame(known, assertThrows(IllegalStateException.class, round));
+                    else if (failure.equals("cancel") || failure.equals("retire"))
+                        assertThrows(RuntimeException.class, round);
+                    else
+                        assertDoesNotThrow(round);
+                    assertEquals(failure.equals("none") ? List.of("sound", "controller", "sync") : List.of(),
+                        trace, failure);
+                    assertEquals(failure.equals("none")
+                        ? List.of("sound:0.5:1.25", "controller:walk:LOOP", "sync:3.0:1.0") : List.of(),
+                        payloads, failure);
+                } finally {
+                    owner.retire();
+                }
+            }
+        }
+    }
+
+    private static com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation
+        jointLocation(String path, com.elfmcys.ysm.expression.inventory.ProgramRole role, String discriminator) {
+        return new com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation("player", path, role,
+            discriminator);
+    }
+
+    private static final class JointRoundHooks implements com.elfmcys.ysm.expression.host.ComponentScope {
+        private final com.elfmcys.ysm.expression.host.ComponentScope actual;
+        private final List<String> trace;
+        private final String failure;
+        private final RuntimeException known;
+        boolean outer = true;
+        boolean ended;
+        JointRoundHooks(com.elfmcys.ysm.expression.host.ComponentScope actual, List<String> trace, String failure,
+            RuntimeException known) {
+            this.actual = actual; this.trace = trace; this.failure = failure; this.known = known;
+        }
+        public AnimatableEntity<?> owner() { return actual.owner(); }
+        public Entity subject() { return actual.subject(); }
+        public void setRenderTarget(ModelRenderTarget target, java.util.function.BooleanSupplier current) {
+            actual.setRenderTarget(target, current);
+        }
+        public void evaluate(AnimationEvent<?> event, java.util.function.BooleanSupplier current, Runnable body) {
+            boolean first = outer;
+            outer = false;
+            if (first && failure.equals("begin")) throw known;
+            actual.evaluate(event, current, body);
+            if (first) {
+                assertTrue(trace.isEmpty(), "necessary end still precedes every domain handoff");
+                if (failure.equals("end")) throw known;
+                ended = true;
+            }
+        }
+        public void tick(int previous, int next, java.util.function.BooleanSupplier current) {
+            actual.tick(previous, next, current);
+        }
+        public void update(float previous, float next, float partial, java.util.function.BooleanSupplier current) {
+            actual.update(previous, next, partial, current);
+        }
+        public void invalidate() { actual.invalidate(); }
+        public <T> java.util.Optional<T> exact(Class<T> type) { return actual.exact(type); }
+        public dev.semaweave.ProviderInstanceTable providers(ExpressionHost host,
+            dev.semaweave.compilation.BindingPlan plan) { return actual.providers(host, plan); }
     }
 
     @Test

@@ -60,7 +60,7 @@ final class OptionalCapabilityAdmissionTest {
         var result = admission.finish();
         var host = ExpressionHost.create(result.availability());
         assertTrue(host.registry()
-            .variable(new dev.semaweave.SymbolKey(HostSymbol.CTRL_HAS_SOPHISTICATED_BACKPACK.stableId())).isEmpty());
+            .variable(new dev.semaweave.SymbolKey("ctrl:has_sophisticated_backpack")).isEmpty());
         var subject = (ArmorStand)UnsafeUtil.getUnsafe().allocateInstance(ArmorStand.class);
         var holder = BuiltinDeclarations.createComponents(TestComponentHolders.owner(subject), host);
 

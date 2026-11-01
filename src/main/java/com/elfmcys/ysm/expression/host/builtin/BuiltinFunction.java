@@ -12,6 +12,8 @@ public @interface BuiltinFunction {
 
     MolangEffect effect() default MolangEffect.CONTEXT;
 
+    String contextFreeTarget() default "";
+
     int minArgs() default -1;
 
     int maxArgs() default -1;

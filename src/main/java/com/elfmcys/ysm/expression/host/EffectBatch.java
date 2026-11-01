@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.expression.host;
 
+import com.elfmcys.ysm.api.molang.PreparedEffect;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -14,7 +16,7 @@ public final class EffectBatch {
 
     private final int maximumCommands;
     private final InvocationProvenance provenance;
-    private final ArrayList<EffectCommand> commands = new ArrayList<>();
+    private final ArrayList<PreparedEffect> commands = new ArrayList<>();
     private final ArrayList<InvocationProvenance> sources = new ArrayList<>();
     private State state = State.OPEN;
 
@@ -26,21 +28,31 @@ public final class EffectBatch {
         this.provenance = Objects.requireNonNull(provenance, "provenance");
     }
 
-    void append(EffectCommand command, InvocationProvenance source) {
+    void append(PreparedEffect command, InvocationProvenance source) {
+        requireCapacity();
+        commands.add(Objects.requireNonNull(command, "command"));
+        sources.add(Objects.requireNonNull(source, "source"));
+    }
+
+    void requireCapacity() {
         requireOpen();
         if (commands.size() == maximumCommands) {
             throw failure(ExecutionFailure.Reason.EFFECT_BATCH_LIMIT,
                 "effect command count exceeds " + maximumCommands);
         }
-        commands.add(Objects.requireNonNull(command, "command"));
-        sources.add(Objects.requireNonNull(source, "source"));
     }
 
     void commit(EffectSink sink, Runnable eligibilityCheck) {
+        commit(sink, eligibilityCheck, () -> {});
+    }
+
+    void commit(EffectSink sink, Runnable eligibilityCheck, Runnable beforeCommit) {
         requireOpen();
         Objects.requireNonNull(sink, "sink");
         Objects.requireNonNull(eligibilityCheck, "eligibilityCheck");
+        Objects.requireNonNull(beforeCommit, "beforeCommit");
         eligibilityCheck.run();
+        commands.forEach(PreparedEffect::validate);
         var prepared = new ArrayList<EffectSink.PreparedCommit>();
         if (commands.isEmpty()) {
             prepared.add(Objects.requireNonNull(sink.prepare(List.of(), provenance), "prepared commit"));
@@ -55,10 +67,19 @@ public final class EffectBatch {
             start = end;
         }
         eligibilityCheck.run();
+        try {
+            beforeCommit.run();
+        } catch (Throwable failure) {
+            discard();
+            throw failure;
+        }
         state = State.COMMITTED;
-        prepared.forEach(EffectSink.PreparedCommit::commit);
-        commands.clear();
-        sources.clear();
+        try {
+            prepared.forEach(EffectSink.PreparedCommit::commit);
+        } finally {
+            commands.clear();
+            sources.clear();
+        }
     }
 
     void discard() {

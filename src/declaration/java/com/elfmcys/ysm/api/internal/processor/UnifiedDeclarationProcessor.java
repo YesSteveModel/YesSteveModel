@@ -16,7 +16,6 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
     private static final String API = "com.elfmcys.ysm.api.annotation.";
     private static final String BUILTIN = "com.elfmcys.ysm.expression.host.builtin.";
     private static final String CONTEXT = "com.elfmcys.ysm.api.molang.MolangContextView";
-    private static final String ACTION = "com.elfmcys.ysm.api.molang.MolangActionView";
     private static final String OWNER = "com.elfmcys.ysm.client.entity.AnimatableEntity";
     private static final String COMPONENT = "com.elfmcys.ysm.expression.host.EntityComponent";
     private final Set<String> emitted = new HashSet<>();
@@ -92,8 +91,8 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
             if (parameters.isEmpty())
                 throw invalid("first parameter must be an exact Molang context view");
             String viewType = processingEnv.getTypeUtils().erasure(parameters.get(0)).toString();
-            if (!viewType.equals(CONTEXT) && !viewType.equals(ACTION))
-                throw invalid("first parameter must be an exact MolangContextView<E> or MolangActionView<E>");
+            if (!viewType.equals(CONTEXT))
+                throw invalid("first parameter must be an exact MolangContextView<E>");
             String entity = subject(parameters.get(0), viewType);
             if (entity.isEmpty())
                 throw invalid("first parameter must be a closed Molang context view");
@@ -147,7 +146,7 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
                 "(" + erased.getParameterTypes().stream().map(this::descriptor).reduce("", String::concat) + ")"
                     + descriptor(erased.getReturnType());
             members.add(new Member(memberNamespace, name, method.getSimpleName().toString(), descriptor,
-                "m" + members.size(), entity, stat, viewType.equals(ACTION) ? "ACTION" : "CONTEXT", effect, min, max,
+                "m" + members.size(), entity, stat, text(attrs, "contextFreeTarget"), effect, min, max,
                 fixed, defaults, variadic, result, annotation(method, API + "MolangNullable") != null));
         }
         var dependencies = new ArrayList<Dependency>();

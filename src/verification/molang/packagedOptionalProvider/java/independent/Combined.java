@@ -25,7 +25,7 @@ public final class Combined implements EntityComponent<Subject> {
     }
 
     @MolangFunction(effect = MolangEffect.ACTION)
-    public int action(MolangActionView<Subject> context, float ignored) {
+    public int action(MolangContextView<Subject> context, float ignored) {
         count("combined.action");
         return Api.value();
     }

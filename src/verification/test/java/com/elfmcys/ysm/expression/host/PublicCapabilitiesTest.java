@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.expression.host;
 
+import com.elfmcys.ysm.api.molang.MolangContextView;
+import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
@@ -23,7 +25,6 @@ import com.elfmcys.ysm.util.StringPool;
 import java.nio.file.Path;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.elfmcys.ysm.api.molang.MolangActionView;
 import com.elfmcys.ysm.client.animation.physics.PhysicsManager;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
 import com.elfmcys.ysm.geckolib3.core.processor.BoneView;
@@ -33,7 +34,6 @@ import dev.semaweave.*;
 import java.lang.reflect.Proxy;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import org.junit.jupiter.api.Test;
@@ -84,10 +84,17 @@ class PublicCapabilitiesTest {
                     .allocateInstance(net.minecraft.world.entity.decoration.ArmorStand.class);
                 b.subject = (Entity)com.elfmcys.ysm.util.UnsafeUtil.getUnsafe()
                     .allocateInstance(net.minecraft.world.entity.decoration.ArmorStand.class);
+                var positionField = Entity.class.getDeclaredField("position");
+                positionField.setAccessible(true);
+                positionField.set(a.subject, net.minecraft.world.phys.Vec3.ZERO);
+                positionField.set(b.subject, net.minecraft.world.phys.Vec3.ZERO);
+                a.requireEvent = b.requireEvent = true;
+                TestComponentHolders.setEntity(a.model, a.subject);
+                TestComponentHolders.setEntity(b.model, b.subject);
                 runtimeA.replace(module, Map.of(),
-                    BuiltinDeclarations.createComponents(TestComponentHolders.owner(a.subject), host));
+                    BuiltinDeclarations.createComponents(a.model, host));
                 runtimeB.replace(module, Map.of(),
-                    BuiltinDeclarations.createComponents(TestComponentHolders.owner(b.subject), host));
+                    BuiltinDeclarations.createComponents(b.model, host));
                 var oracleA = RandomSource.create(41);
                 var oracleB = RandomSource.create(41);
                 var first = module.requireFloatProgram(firstLocation);
@@ -109,8 +116,6 @@ class PublicCapabilitiesTest {
                 assertEquals(oracleA.nextFloat() + position, runtimeA.observe(inputsA, e -> e.evaluate(copy)),
                     0.00001f);
                 assertEquals(oracleB.nextFloat(), runtimeB.<Float>observe(inputsB, e -> e.evaluate(copy)));
-                assertEquals(3, a.randomAccesses);
-                assertEquals(2, b.randomAccesses);
                 store.awaitPersistence();
             } finally {
                 com.elfmcys.ysm.testutil.DerivedStorageTestScope.drain();
@@ -131,24 +136,28 @@ class PublicCapabilitiesTest {
         var state = state(first, current, false);
         var a = state;
         var b = state(second, new AtomicBoolean(true), false);
+        var modelA = new com.elfmcys.ysm.expression.host.builtin.ModelBuiltins(first.model);
+        var modelB = new com.elfmcys.ysm.expression.host.builtin.ModelBuiltins(second.model);
+        var controlA = new com.elfmcys.ysm.expression.host.builtin.ControlBuiltins(first.model);
+        var controlB = new com.elfmcys.ysm.expression.host.builtin.ControlBuiltins(second.model);
         try {
             var oracle = RandomSource.create(41);
-            assertEquals(oracle.nextFloat(), a.random());
-            assertEquals(oracle.nextFloat(), a.random());
-            assertEquals(RandomSource.create(41).nextFloat(), b.random());
-            assertEquals(2f, a.firstOrder("spring", 2, 1));
-            assertEquals(9f, b.firstOrder("spring", 9, 1));
-            assertEquals(4f, a.secondOrder("other", 4, 1, 1, 1));
+            assertEquals(oracle.nextFloat(), controlA.random(a, 2, 0, 1, 0));
+            assertEquals(oracle.nextFloat(), controlA.random(a, 2, 0, 1, 0));
+            assertEquals(RandomSource.create(41).nextFloat(), controlB.random(b, 2, 0, 1, 0));
+            assertEquals(2f, modelA.firstOrder(a, 2, "spring", 2, 1));
+            assertEquals(9f, modelB.firstOrder(b, 2, "spring", 9, 1));
+            assertEquals(4f, modelA.secondOrder(a, 2, "other", 4, 1, 1, 1));
             assertNotSame(first.model.physics.get(StringPool.computeIfAbsent("spring")),
                 second.model.physics.get(StringPool.computeIfAbsent("spring")));
-            var vector = a.boneRotation("root");
+            var vector = modelA.boneRotation(a, "root");
             assertEquals(-90f, vector.x(), 0.0001f);
             assertEquals(0f, vector.y(), 0.0001f);
             assertEquals(180f, vector.z(), 0.0001f);
             first.rotation = 0;
             assertEquals(-90f, vector.x(), 0.0001f);
-            assertEquals(0f, a.boneRotation("root").x(), 0.0001f);
-            assertEquals(new MolangVector(0, 0, 0), a.boneRotation("missing"));
+            assertEquals(0f, modelA.boneRotation(a, "root").x(), 0.0001f);
+            assertEquals(new MolangVector(0, 0, 0), modelA.boneRotation(a, "missing"));
             current.set(false);
             assertThrows(ExecutionFailure.class, state::verifyEligible);
             assertFalse(a.actionAllowed());
@@ -158,51 +167,38 @@ class PublicCapabilitiesTest {
         }
         var pure = state(second, new AtomicBoolean(true), true);
         try {
-            assertDoesNotThrow(pure::random);
-            assertDoesNotThrow(() -> pure.firstOrder("spring", 1));
-            assertDoesNotThrow(() -> pure.boneRotation("root"));
+            assertDoesNotThrow(() -> controlB.random(pure, 2, 0, 1, 0));
+            assertDoesNotThrow(() -> modelB.firstOrder(pure, 2, "spring", 1));
+            assertDoesNotThrow(() -> modelB.boneRotation(pure, "root"));
         } finally {
             end(pure);
         }
     }
 
     @Test
-    void everyActionCategorySharesPermissionPrevalidationAndBatch() throws Exception {
-        List<Consumer<MolangActionView<Entity>>> requests = List.of(c -> c.playSound("voice", "clip", 0, 1, 1),
-            c -> c.stopSound("voice", false), c -> c.stopAllSounds(false), c -> c.particle("smoke", 1),
-            c -> c.absoluteParticle("smoke", 1), c -> c.boneColor("root", 1, 1, 1), c -> c.boneGlow("root", 1),
-            c -> c.boneTransparency("root", 1), MolangActionView::resetController, c -> c.setAnimation("idle", 1),
-            c -> c.sync(1, 2), c -> c.defer(1, 2f));
+    void publicSurfaceOnlyBorrowsInputsAndSubmitsDomainNeutralRequests() throws Exception {
+        assertEquals(Set.of("subject", "inputs", "submit"), Arrays.stream(MolangContextView.class.getMethods())
+            .map(java.lang.reflect.Method::getName).collect(java.util.stream.Collectors.toSet()));
         var inputs = new Inputs();
         var state = state(inputs, new AtomicBoolean(true), true);
+        var commits = new ArrayList<Integer>();
+        PreparedEffect effect = () -> commits.add(3);
         state.endTopLevel();
         state.beginTopLevel(false);
-        try {
-            for (var request : requests) {
-                assertThrows(IllegalStateException.class, () -> request.accept(state));
-                assertEquals(0, state.effects().orElseThrow().size());
-            }
-            state.endTopLevel();
-            state.beginTopLevel(true);
-            inputs.reject = true;
-            for (var request : requests)
-                assertEquals(inputs.failure, assertThrows(IllegalStateException.class, () -> request.accept(state)));
-            assertEquals(0, state.effects().orElseThrow().size());
-            inputs.reject = false;
-            inputs.commands.clear();
-            requests.forEach(request -> request.accept(state));
-            assertEquals(requests.size(), state.effects().orElseThrow().size());
-            assertTrue(inputs.commands.stream().anyMatch(EffectCommand.Sound.class::isInstance));
-            assertTrue(inputs.commands.stream().anyMatch(EffectCommand.Particle.class::isInstance));
-            assertTrue(inputs.commands.stream().anyMatch(EffectCommand.Controller.class::isInstance));
-            assertTrue(inputs.commands.stream().anyMatch(EffectCommand.Sync.class::isInstance));
-            assertTrue(inputs.commands.stream().anyMatch(EffectCommand.Deferred.class::isInstance));
-            int count = state.effects().orElseThrow().size();
-            assertThrows(IllegalArgumentException.class, () -> state.sync(Float.NaN));
-            assertEquals(count, state.effects().orElseThrow().size());
-        } finally {
-            end(state);
-        }
+        assertThrows(IllegalStateException.class, () -> state.submit(effect));
+        assertEquals(0, state.effects().orElseThrow().size());
+        state.endTopLevel();
+        state.beginTopLevel(true);
+        inputs.reject = true;
+        assertSame(inputs.failure, assertThrows(IllegalStateException.class, () -> state.submit(effect)));
+        assertEquals(0, state.effects().orElseThrow().size());
+        inputs.reject = false;
+        state.submit(effect);
+        assertTrue(commits.isEmpty());
+        state.endTopLevel(); state.releaseExpression();
+        EffectTransaction.finish(state, EffectSink.direct(), true);
+        assertEquals(List.of(3), commits);
+        state.closeRound();
     }
 
     private static void end(MolangContext<?> context) {
@@ -226,9 +222,11 @@ class PublicCapabilitiesTest {
     private static final class Inputs implements MinecraftRuntimeInputs<Entity> {
         final Model model;
         final RandomSource random = RandomSource.create(41);
-        final List<EffectCommand> commands = new ArrayList<>();
+        final List<PreparedEffect> commands = new ArrayList<>();
         final IllegalStateException failure = new IllegalStateException("host-rejected");
         boolean reject;
+        boolean requireEvent;
+        AnimationEvent<?> event;
         int randomAccesses;
         Entity subject;
         float rotation = (float)(Math.PI / 2);
@@ -238,6 +236,8 @@ class PublicCapabilitiesTest {
             model = (Model)com.elfmcys.ysm.util.UnsafeUtil.getUnsafe().allocateInstance(Model.class);
             model.physics = new PhysicsManager();
             model.inputs = this;
+            event = new AnimationEvent<>(model, 0, 0, 0, null, null, null);
+            TestComponentHolders.installProcessor(model, random, new com.elfmcys.ysm.client.sound.instance.SoundInstanceManager());
         }
 
         public Entity entity() {
@@ -249,7 +249,7 @@ class PublicCapabilitiesTest {
         }
 
         public AnimationEvent<?> animationEvent() {
-            return null;
+            return event;
         }
 
         public RandomSource randomSource() {
@@ -265,7 +265,7 @@ class PublicCapabilitiesTest {
             return null;
         }
 
-        public void prevalidateEffect(EffectCommand command, MolangContext<?> scope) {
+        public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {
             if (reject)
                 throw failure;
             commands.add(command);
@@ -281,6 +281,7 @@ class PublicCapabilitiesTest {
         }
 
         public PhysicsManager getPhysicsManager(AnimationEvent<?> event) {
+            if (inputs.requireEvent) assertSame(inputs.event, event);
             return physics;
         }
 
