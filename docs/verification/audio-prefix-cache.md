@@ -8,7 +8,7 @@
 |---|---|
 | Native `OpusCodecTest` | mono/stereo、gain、非零 origin、未完成 pre-skip、跨页 partial packet；续接与连续解码逐字节一致；同一 checkpoint 的两个恢复实例独立；拒绝未 drain、半页、EOS 和失败状态 |
 | `NativeObjectAdoptionIntegrationTest` | checkpoint 与恢复 decoder 的原始 handle 在采用失败时回收；同一 checkpoint 可重复恢复 |
-| `PlaybackAudioStreamTest` | 按 chunk 数分类；零需求、缓存足量和恰好用尽不恢复；首次缺口、延迟输入、水位独立、跨轮消费；cold/hot/loop PCM 一致及 mono host format；调度分配失败归还 encoded 与解码数据预算 |
+| `PlaybackAudioStreamTest` | 按 chunk 数分类；零需求、缓存足量和恰好用尽不恢复；首次缺口、水位独立、跨轮消费；尾块延迟时，prepared 前重复消费与宿主补给均等待原请求；cold/hot/loop PCM 与连续解码一致，host format 为 mono；调度分配失败归还 encoded 与解码数据预算 |
 | `AudioRetentionCacheTest` | 分段范围读取、只读结果、前缀帧数、checkpoint 计价、TTL/LRU、receipt 和活动强引用 |
 | `ClientAudioRuntimeIntegrationTest` | 每次触发重新授权、恢复失败、发布和宿主提交与 stop 的原子边界、提交期间同步关闭、候选预算不足及尾部失败隔离；真实 JNI restore 内暂停后取消，覆盖 prepared 前和宿主提交后，无迟到提交且活动账本归零 |
 | `SoundResourceAccessIntegrationTest` | 驻留首块 token、顺序尾块、延迟完成、取消和 loop restart |

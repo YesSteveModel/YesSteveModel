@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class PlaybackAudioStreamTest {
     private static final AudioFormat FORMAT = new AudioFormat(48_000, 16, 1, true, false);
@@ -131,16 +132,114 @@ class PlaybackAudioStreamTest {
         }
 
         @Test
+        void pendingLastChunkSurvivesRepeatedConsumptionBeforePreparation() throws Exception {
+            try (var fixture = AudioPlaybackFixture.create(temp, "/audio-fixtures/opus-origin.ogg")) {
+                var expected = fixture.reference();
+                var prefix = fixture.prefix();
+                assertTrue(fixture.media.frames() < 4 * 48_000);
+                for (boolean cached : new boolean[] {false, true}) {
+                    var workers = new ManualExecutor();
+                    var delayed = new ManualExecutor();
+                    var capacity = new AudioRuntimeCapacity();
+                    var failure = new AtomicReference<Throwable>();
+                    var stream = stream(fixture, cached ? prefix : null, false, workers,
+                        delayLastChunk(fixture, delayed), capacity, failure);
+                    try (stream) {
+                        workers.runAll();
+                        assertEquals(1, delayed.tasks.size());
+                        assertFalse(stream.prepared().isDone());
+                        for (int attempt = 0; attempt < 3; attempt++) {
+                            assertEquals(0, stream.consumePcm(8192));
+                            workers.runAll();
+                            assertNull(failure.get());
+                            assertFalse(stream.isClosed());
+                        }
+                        delayed.runAll();
+                        workers.runAll();
+                        assertTrue(stream.prepared().isDone());
+                        stream.prepared().join();
+                        assertArrayEquals(expected, readAll(stream, 8192));
+                        assertNull(failure.get());
+                    }
+                    workers.runAll();
+                    assertIdle(capacity);
+                }
+            }
+        }
+
+        @Test
+        void pendingLastChunkSurvivesHostRefillsForColdHotAndLoopingPlayback() throws Exception {
+            try (var fixture = AudioPlaybackFixture.create(temp, "/audio-playback/mono-four-plus.ogg")) {
+                var expected = fixture.reference();
+                var prefix = fixture.prefix();
+                for (boolean cached : new boolean[] {false, true}) {
+                    for (boolean looping : new boolean[] {false, true}) {
+                        var workers = new ManualExecutor();
+                        var delayed = new ManualExecutor();
+                        var capacity = new AudioRuntimeCapacity();
+                        var failure = new AtomicReference<Throwable>();
+                        var stream = stream(fixture, cached ? prefix : null, looping, workers,
+                            delayLastChunk(fixture, delayed), capacity, failure);
+                        try (stream) {
+                            workers.runAll();
+                            assertTrue(stream.prepared().isDone());
+                            stream.prepared().join();
+                            var actual = new ByteArrayOutputStream();
+                            while (delayed.tasks.isEmpty()) {
+                                assertTrue(actual.size() < expected.length);
+                                var chunk = stream.read(8192);
+                                assertTrue(chunk.hasRemaining());
+                                actual.writeBytes(bytes(chunk));
+                                workers.runAll();
+                                assertNull(failure.get());
+                            }
+                            // A refill must wait even while the host still has buffered PCM.
+                            var chunk = stream.read(2 * 96_000);
+                            assertTrue(chunk.hasRemaining());
+                            actual.writeBytes(bytes(chunk));
+                            workers.runAll();
+                            assertNull(failure.get());
+                            assertFalse(stream.isClosed());
+                            assertEquals(1, delayed.tasks.size());
+                            delayed.runAll();
+                            workers.runAll();
+                            int length = expected.length * (looping ? 2 : 1);
+                            while (actual.size() < length) {
+                                chunk = stream.read(Math.min(8192, length - actual.size()));
+                                assertTrue(chunk.hasRemaining());
+                                actual.writeBytes(bytes(chunk));
+                                workers.runAll();
+                                assertNull(failure.get());
+                            }
+                            var pcm = actual.toByteArray();
+                            assertArrayEquals(expected, Arrays.copyOf(pcm, expected.length));
+                            if (looping) {
+                                assertArrayEquals(expected, Arrays.copyOfRange(pcm, expected.length, pcm.length));
+                            } else {
+                                assertFalse(stream.read(8192).hasRemaining());
+                                assertTrue(stream.isClosed());
+                            }
+                        }
+                        workers.runAll();
+                        assertIdle(capacity);
+                    }
+                }
+            }
+        }
+
+        @Test
         void chunkSchedulingFailureReturnsTheUnadoptedEncodedReservation() throws Exception {
             try (var fixture = AudioPlaybackFixture.create(temp, "/audio-fixtures/opus-long.ogg")) {
                 var failure = new OutOfMemoryError("Injected chunk scheduling failure");
                 var reported = new AtomicReference<Throwable>();
                 var workers = new ManualExecutor();
                 var capacity = new AudioRuntimeCapacity();
-                var access = VerifiedChunkAccess.create(fixture.source, fixture.content, null, Runnable::run,
-                    task -> { throw failure; });
+                var access = VerifiedChunkAccess.create(fixture.source, fixture.content, null, Runnable::run, task -> {
+                    throw failure;
+                });
                 var stream = new PlaybackAudioStream(fixture.media, access, false, workers, capacity, receipt(),
-                    () -> true, (audio, ignored) -> true, () -> {}, reported::set);
+                    () -> true, (audio, ignored) -> true, () -> {
+                    }, reported::set);
                 workers.runAll();
                 assertTrue(stream.isClosed());
                 assertTrue(stream.prepared().isCompletedExceptionally());
@@ -158,8 +257,9 @@ class PlaybackAudioStreamTest {
                 var capacity = new AudioRuntimeCapacity();
                 final PlaybackAudioStream stream;
                 try {
-                    stream = stream(fixture, prefix, false, task -> { throw failure; }, Runnable::run, capacity,
-                        reported);
+                    stream = stream(fixture, prefix, false, task -> {
+                        throw failure;
+                    }, Runnable::run, capacity, reported);
                 } catch (OutOfMemoryError escaped) {
                     assertIdle(capacity);
                     throw new AssertionError("Scheduling failure escaped without a playback terminal", escaped);
@@ -206,11 +306,14 @@ class PlaybackAudioStreamTest {
                 long creates = AudioPlaybackFixture.nativeCount("nCreateCount");
                 long restores = AudioPlaybackFixture.nativeCount("nRestoreCount");
                 var publications = new AtomicInteger();
-                var stream = new PlaybackAudioStream(fixture.media, fixture.access(Runnable::run), true,
-                    Runnable::run, capacity, receipt(), () -> true, (audio, ignored) -> {
+                var stream = new PlaybackAudioStream(fixture.media, fixture.access(Runnable::run), true, Runnable::run,
+                    capacity, receipt(), () -> true, (audio, ignored) -> {
                         publications.incrementAndGet();
                         return false;
-                    }, () -> {}, failure -> { throw new AssertionError(failure); });
+                    }, () -> {
+                    }, failure -> {
+                        throw new AssertionError(failure);
+                    });
                 try (stream) {
                     var actual = readExactly(stream, expected.length * 2, 16_383);
                     assertArrayEquals(expected, Arrays.copyOf(actual, expected.length));
@@ -235,7 +338,10 @@ class PlaybackAudioStreamTest {
                         Runnable::run, capacity, receipt(), () -> true, (audio, ignored) -> {
                             published.set(audio);
                             return true;
-                        }, () -> {}, failure -> { throw new AssertionError(failure); });
+                        }, () -> {
+                        }, failure -> {
+                            throw new AssertionError(failure);
+                        });
                     if (fixture.media.frames() > 5 * 48_000) {
                         assertEquals(null, published.get(), "Complete publication requires a verified EOF");
                     }
@@ -259,11 +365,14 @@ class PlaybackAudioStreamTest {
                 var expected = fixture.reference();
                 var capacity = new AudioRuntimeCapacity(1, 1, 1 << 20, 550_000);
                 var publications = new AtomicInteger();
-                var stream = new PlaybackAudioStream(fixture.media, fixture.access(Runnable::run), true,
-                    Runnable::run, capacity, receipt(), () -> true, (audio, ignored) -> {
+                var stream = new PlaybackAudioStream(fixture.media, fixture.access(Runnable::run), true, Runnable::run,
+                    capacity, receipt(), () -> true, (audio, ignored) -> {
                         publications.incrementAndGet();
                         return true;
-                    }, () -> {}, failure -> { throw new AssertionError(failure); });
+                    }, () -> {
+                    }, failure -> {
+                        throw new AssertionError(failure);
+                    });
                 try (stream) {
                     var actual = readExactly(stream, expected.length * 2, 16_383);
                     assertArrayEquals(expected, Arrays.copyOf(actual, expected.length));
@@ -276,12 +385,11 @@ class PlaybackAudioStreamTest {
 
         @Test
         void monoAndStereoColdHotAndLoopMatchContinuousNativeOutput() throws Exception {
-            for (var resource : new String[] {
-                "/audio-playback/mono-long.ogg", "/audio-playback/mono-four-plus.ogg",
+            for (var resource : new String[] {"/audio-playback/mono-long.ogg", "/audio-playback/mono-four-plus.ogg",
                 "/audio-playback/mono-over-five.ogg", "/audio-fixtures/opus-long.ogg",
                 "/audio-playback/stereo-four-plus.ogg", "/audio-playback/stereo-over-five.ogg"}) {
-                try (var fixture = AudioPlaybackFixture.create(
-                    temp.resolve(Path.of(resource).getFileName().toString()), resource)) {
+                try (var fixture =
+                    AudioPlaybackFixture.create(temp.resolve(Path.of(resource).getFileName().toString()), resource)) {
                     var expected = fixture.reference();
                     assertEquals(fixture.media.frames() * Short.BYTES, expected.length);
                     var capacity = new AudioRuntimeCapacity();
@@ -290,23 +398,26 @@ class PlaybackAudioStreamTest {
                         Runnable::run, capacity, receipt(), () -> true, (audio, ignored) -> {
                             published.set(audio);
                             return true;
-                        }, () -> {}, failure -> { throw new AssertionError(failure); });
+                        }, () -> {
+                        }, failure -> {
+                            throw new AssertionError(failure);
+                        });
                     assertEquals(1, cold.getFormat().getChannels());
                     assertArrayEquals(expected, readAll(cold, 16_383));
                     var prefix = assertInstanceOf(CachedAudio.Prefix.class, published.get());
                     assertEquals(prefix.pcm().size() / Short.BYTES, prefix.checkpoint().emittedFrames());
                     assertTrue(!resource.contains("over-five") || prefix.pcm().size() > 5 * 96_000);
-                    var hot = stream(fixture, prefix, false, Runnable::run, Runnable::run, capacity,
-                        new AtomicReference<>());
+                    var hot =
+                        stream(fixture, prefix, false, Runnable::run, Runnable::run, capacity, new AtomicReference<>());
                     assertArrayEquals(expected, readAll(hot, 12_287));
-                    var loop = stream(fixture, prefix, true, Runnable::run, Runnable::run, capacity,
-                        new AtomicReference<>());
+                    var loop =
+                        stream(fixture, prefix, true, Runnable::run, Runnable::run, capacity, new AtomicReference<>());
                     try (loop) {
                         var actual = readExactly(loop, expected.length * 2 + 510, 15_361);
                         for (int offset = 0; offset < actual.length; offset += expected.length) {
-                            assertArrayEquals(Arrays.copyOf(expected, Math.min(expected.length,
-                                actual.length - offset)), Arrays.copyOfRange(actual, offset,
-                                    Math.min(actual.length, offset + expected.length)));
+                            assertArrayEquals(
+                                Arrays.copyOf(expected, Math.min(expected.length, actual.length - offset)),
+                                Arrays.copyOfRange(actual, offset, Math.min(actual.length, offset + expected.length)));
                         }
                     }
                     assertIdle(capacity);
@@ -346,12 +457,26 @@ class PlaybackAudioStreamTest {
     private static PlaybackAudioStream stream(AudioPlaybackFixture fixture, CachedAudio cached, boolean looping,
         Executor workers, Executor inputWorkers, AudioRuntimeCapacity capacity, AtomicReference<Throwable> failure)
         throws Exception {
-        return new PlaybackAudioStream(fixture.media, fixture.access(inputWorkers), cached, looping, workers,
-            capacity, receipt(), () -> true, (audio, ignored) -> true, () -> {}, failure::set);
+        return new PlaybackAudioStream(fixture.media, fixture.access(inputWorkers), cached, looping, workers, capacity,
+            receipt(), () -> true, (audio, ignored) -> true, () -> {
+            }, failure::set);
     }
 
     private static AudioRetentionCache.Receipt receipt() {
         return new AudioRetentionCache.Receipt(System.nanoTime(), 1);
+    }
+
+    private static Executor delayLastChunk(AudioPlaybackFixture fixture, ManualExecutor delayed) {
+        int lastRequest = fixture.media.chunkInfos().size() - 1;
+        assertTrue(lastRequest > 0);
+        var requests = new AtomicInteger();
+        return task -> {
+            if (requests.incrementAndGet() == lastRequest) {
+                delayed.execute(task);
+            } else {
+                task.run();
+            }
+        };
     }
 
     private static void assertIdle(AudioRuntimeCapacity capacity) {

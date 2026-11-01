@@ -371,6 +371,13 @@ final class PlaybackAudioStream implements CustomAudioStream {
                 throw AssetLoadException.content("Invalid Ogg Opus playback stream");
             }
 
+            synchronized (this) {
+                // The completion callback publishes input under this monitor; an in-flight request is not EOF.
+                if (pendingInterest != null) {
+                    return supplied;
+                }
+            }
+
             if (input != null && input.hasRemaining()) {
                 if (decoder.feed(input) == 0) {
                     throw AssetLoadException.content("Opus playback decoder made no input progress");
@@ -731,8 +738,8 @@ final class PlaybackAudioStream implements CustomAudioStream {
             capacity.releaseDecoded(cachedBytes);
         }
         ResourceDiagnostics.log("audio stream cleanup: stream={} sound={} decoderClosed={} accessClosed={} capacity={}",
-            System.identityHashCode(this), media == null ? "cached-pcm" : media.name(), decoder == null,
-            access == null, capacity.snapshot());
+            System.identityHashCode(this), media == null ? "cached-pcm" : media.name(), decoder == null, access == null,
+            capacity.snapshot());
     }
 
     private synchronized boolean readyBelowLowWater() {
