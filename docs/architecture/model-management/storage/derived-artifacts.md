@@ -4,68 +4,85 @@
 
 ## 职责与边界
 
-本级展开[存储的精确身份](overview.md#精确身份与原子提交)，承担几何、动画和 expression 产物的复用及加载。
+本级细化[存储的精确身份](overview.md#精确身份与原子提交)，负责几何、未绑定动画输入与 AOT 制品的身份划分、缓存复用、原子提交和加载校验。其中“动画输入”同时包含动画数据和未绑定的程序载荷。核心思路是把这三类派生物解耦：各自按实际输入独立生成和持久化，互不把对方当作有效性前提；在构建 FULL 候选时，再由构造方核对动画输入与 AOT 的组合一致性。
 
 ## Seam Contract
 
 ### 边界与权威
 
-本地加载信任只适用于本地 expression artifact，不扩展到外部 bytes、模型 chunk 或 geometry cache，也不抵抗本地产物与摘要同时被修改。
+本地暖加载信任机制只适用于本地生成的表达式制品（expression artifact），不扩展到外部字节、模型 chunk 或几何缓存，也不防备本地制品文件与摘要同时被外部篡改。
 
 ### 前置条件与输入
 
 #### 独立身份与原子集合
 
-派生 key 排除 `ModelId`，覆盖精确内容及实际产物输入；renderer 只提供技术 profile，不能取得容器身份。Geometry 与 animation set 分别建 key，不因共享容器就复用不同纹理、选项或 ABI 的结果。
+派生键不包含业务层的 `ModelId`，只覆盖精确容器内容及该产物真正依赖的输入；渲染器只提供技术 profile，不接触容器身份。几何、动画输入与 AOT 制品各自建立独立身份，按各自实际输入决定能否复用：
 
-Animation set 与 expression artifact 作为完整集合一次原子提交，绑定引用只在本产物内解释，避免动画与 bytecode 错配。Set 身份包含用途规则、实际借用默认源、冻结声明与编译环境、编译后端及其版本；不依赖 geometry、所选纹理或 consumer `ModelId`。各动画延迟解码并按原范围隔离失败；代价是静态绑定环境变化需重建集合。
-
-宿主、引擎、编译后端和内部制品共用全局动画 ABI；兼容性变化只迭代该全局版本。实际引擎包名隔离开发与重定位产物，但目录隔离不替代精确身份与 linkage 检查。版本归属见[ABI 索引](../../../abi/current.md#五个全局-abi)。Unstable/dev/snapshot 派生物只按完整原始版本字符串复用，不扫描或迁移旧 ABI 产物。
+- **动画输入**：独立的预期校验值（expected）覆盖精确内容、逻辑目标与动画集、来源位置、实际默认补全来源、源转换选项、语言输入格式以及动画布局。它保存每个程序的来源、角色、程序键、长度与内容摘要，文件内编号只用来定位未绑定输入。每个动画独占一个数据块，非动画程序按需读取，查询名称索引不需要解码函数体。
+- **AOT 制品**：在动画输入之上，额外封闭执行用途、主体 binding、冻结声明与编译环境、编译后端及其版本。当只有 Java 绑定、主体计划或编译后端变化时，原有的动画输入仍按自己的 expected 保持有效。动画输入与 AOT 拥有独立的文件、内存缓存和原子提交，一方成功并不证明另一方有效。
+- **组合校验**：FULL 候选的构造方在对外发布前，必须根据受检程序描述符逐一核对来源、角色、内容与 AOT 导出，并核对实际默认补全来源与接收模型选项。独立 expected 与 loader 共同构成组合保证；配对过程不需要提前解码全部动画，延迟加载的数据块在实际消费时再做校验。
+- **ABI 与版本边界**：宿主动画与表达式契约共用全局动画 ABI，引擎、编译后端与内部制品使用独立引擎 ABI（版本归属与迭代见[ABI 维护规则](../../../abi/maintenance.md#缓存与表达式制品)）。实际引擎包名会写入 AOT 索引身份，用以隔离开发环境与重定位打包产物。索引命中不能替代精确身份与链接检查。处于 unstable、dev 或 snapshot 阶段的派生物，只按完整原始版本字符串精确复用，不扫描也不迁移旧 ABI 产物。
 
 #### GUI 与 cache-only
 
-根主体 binding 与 purpose 分区允许 GUI、玩家与 default 同时存在。GUI 只探测自身分区；不存在分区可省去输入推导，存在仍须验证独立 expected。分区只能作廉价否定判断，不提供有效性或权限。
+AOT 缓存按实际根主体 binding、用途以及编译环境分区，专供 FULL、手部与中央完整动画预览使用。分区只提供廉价的快速排除（命中后仍须校验独立 expected），不授予任何资源权限。GUI 没有 AOT 也不设持久化的解释分区，而是直接获取按自身身份共享的未绑定动画与程序输入。
 
-FULL 准备完整输入并供中央动画预览和实际实体使用；player GUI 使用展示闭包，其他 kind 保守保留完整 MAIN。GUI 不准备 FP_ARM，不读取 FULL 文件或恢复 FULL inventory。普通和 cache-only 共用 GUI 闭包及精确 expected。用途语义见[展示闭包与主体特化](../../animation/molang-runtime.md#展示闭包与主体特化)。
+GUI 严格按实际消费按需解码并绑定表达式，函数体在首次调用时读取；它不恢复 FULL 的 inventory 或字节码，也不准备 `FP_ARM`。如果准备结果中已经保留了源程序，且与已接纳的输入描述符精确配对，则首次程序绑定可直接复用这份内存源程序，不必再去磁盘重读相同副本；但这不能省略缓存获取校验或实际动画块的载荷校验。绑定成功的结果随独立的[AnimationStore](../client-resources/overview.md#动画资源所有权与退休)存活，不进入输入 LRU。FULL 路径继续执行完整准备并在发布候选前核对输入与 AOT 的组合。用途划分见[执行用途与主体资格](../../animation/molang-runtime.md#执行用途与主体资格)。
 
-Cache-only 不编译、不写缓存、不联网。Remote cache-only 只核验目标实际需要的 chunks，不因无关 lazy chunk 缺失拒绝可用玩家产物；普通 offline 内容打开仍执行自身完整 lazy chunk 核验。离线 miss 不成为后续普通准备失败。
+Cache-only 模式允许从已有本地输入构建内存解释程序，但禁止执行 AOT 编译、联网拉取或任何新写盘操作；只要所需输入不足就直接返回未命中。远端资源的 cache-only 只校验目标实际需要的 chunk，不会因为无关的 lazy chunk 缺失就拒绝可用的玩家产物；而普通的 offline 内容打开仍按自身规则核验全部 lazy chunk。离线未命中不会演变成后续普通准备的失败记录。
 
 ### 结果与保证
 
+每个实际的 CACHE 区域只维护一个 `Bake` 索引，几何、动画输入与 AOT 共用该索引；本地、builtin 与 remote 内容在同一存储区域内共享派生物。`Catalog` 与 `Remote` 各自维护来源事实，`Bake` 只记录关联来源的 CID，不保存来源引用计数。查询来源引用时按 CID 聚合，存在未知覆盖时不能判定为无引用。
+
+完整的 `CACHE_GEOMETRY` 或 `CACHE_ANIMATION` 值直接作为对应分区的 `cacheVersion`。动画输入与 AOT 共用 `ANIMATION` 类别及当前动画缓存版本，在内部通过私有布局域隔离各自的精确键：输入分区标记为未绑定，其编译环境字段同样为未绑定常量；AOT 分区则保留实际的 binding、用途与编译环境。旧的合并布局域统一按未命中处理——普通获取按当前策略冷重建，cache-only 则保持未命中且零写入。宿主不额外增加 `EngineAbi.version()` 门槛，引擎内部的 expected、编解码器、manifest、loader 与类链接校验保持原有职责。
+
+每次持久化前，producer 先向区域分配器预留整数 ID 与实例 token，把完整文件从 `f/b/s/<id>` 原子发布到 `f/b/<id>`（文件名固定为 16 位小写十六进制），再通过短事务更新 `Bake` 索引。多个并发 writer 针对同一键可能各自生成独占文件，互不覆盖已发布文件。索引写入失败只会让后续可选的暖加载不可用，不会撤销本次已经交付的内存结果。
+
 #### 暖加载信任
 
-Expected 从已验证输入重建，artifact/header 不提供自己的期望值。本地 producer 的 expression artifact 可在版本、长度、完整 artifact hash 与独立 expected 校验后可信还原；恢复对象仍在 loader 完整验证 class closure、ABI 和内部完整性。
+预期的校验值（expected）一律从已验证的输入现场重建，绝不信任制品自身文件头携带的期望值：
 
-冷编译的原始不可变 expression artifact 可直接交给 loader。compiler 的内部证明覆盖最终 payload；loader 在 exact registry、BindingPlan 和 limits 匹配时省去同项产物复验。每次加载仍检查独立 expected、parent 和真实 `Class` identity/可见性，并执行实际 class definition、Root ABI/工厂解析、链接与常量构造。普通构造、bytes 复制和磁盘恢复不继承原始对象资格；持久化是否完成不影响资格。
-
-Geometry 的普通与 cache-only 命中共用一次取得。固定 channel 读取 manifest、独立 expected 和 payload，完整校验后把同一 payload 交给 native decoder。路径在取得后被替换，不改变本次消费的数据。冷烘焙先构造完整运行 geometry，再提交独立的 metadata 和共享 native 引用；后台 staging 校验继续成立。
-
-本地还原只在上述独立 expected 与 bytes 完整性检查后还原同一 payload；活跃 prepared resource 可复用已验证结果，不能用全局 decoded cache 或 trust marker 代替加载准入。
+- **本地暖加载表达式制品**：先核对版本、长度、完整制品摘要以及独立重建的 expected，全部通过后可信还原对象；但进入 loader 时仍须完整校验类闭包（class closure）、ABI 和内部完整性。
+- **冷编译直交 loader**：刚冷编译产出的原始不可变表达式制品可以直接交给 loader。由于编译器的内部证明已经覆盖最终 payload，当 registry、`BindingPlan` 和限制参数完全匹配时，loader 可跳过同项产物的重复语义检验。即便如此，每次加载仍必须校验独立 expected、parent 以及真实的 `Class` 身份与可见性，并执行实际的类定义、Root ABI 与工厂解析、链接和常量构造。普通构造、字节数组复制或从磁盘恢复的对象不继承原始编译对象的豁免资格；该制品是否已落盘也不影响其资格。
+- **几何缓存命中**：普通模式与 cache-only 模式的几何命中共用同一次读取。通过固定 channel 读取 manifest、独立 expected 与 payload，完整校验后把同一份 payload 交给 native 解码器；即使打开后磁盘路径被替换，也不会影响本次读取的数据。冷烘焙先构造出完整可用的运行几何对象，再异步提交独立的 metadata 与共享 native 引用，后台 staging 校验照常执行。
+- **加载边界**：本地还原只能在通过上述独立 expected 与字节完整性校验后，还原同一份 payload。活跃的已准备资源可以复用已验证结果，但绝不能用全局解码缓存或简单的信任标记跳过加载检查。
 
 ### 所有权与时序
 
-Expression 内存复用保留原始 artifact 和完整不可变 animation set，不为复用先编码再还原。后台 worker 编码并提交完整集合，不用并发磁盘赢家替换本次原始对象。磁盘恢复对象仍走所属来源的加载验证。
+每个存储区域分别维护不可变的动画输入缓存与原始 AOT 制品缓存，消费者各自申请独立使用，不为了内存复用而先序列化再反序列化。任何输入消费者都可以先查缓存并触发生成；AOT 准备直接向动画输入存储申请能力，不由 AOT store 自行创建或持有动画 producer。
 
-`BakedAnimationSet` 的长期 source 只保留受检 opener 和已接纳 expected。Controller discovery 和实体同步 animation pass 各持局部批次视图；同能力的 local/fallback 读取共用一个 channel，不预解码未消费动画。实体只在同步入口内投影该视图，并在 finally 撤销；共享 store 的当前 source 不变。已绑定结果可在阶段结束后复用，后续未加载动画重新取得来源资格。每次读取仍验证长度、descriptor/hash 和动画身份。普通失败后，批次 owner 关闭当前阶段；局部 context 按新阶段重新取得 reader，让既有 fallback 与健康动画继续。关闭失败、取消或 OOM 不恢复；不自动重试坏动画。Staging validator 直接借 writer 的同一个 channel 验证完整集合，不取得关闭权。
+几何、动画输入和 AOT 的后台持久化任务各自保活自己的输入，独立完成编码、校验、文件发布与索引提交，不会用并发落盘的赢家结果回头替换本次内存结果。并发冷未命中允许各自生成完整的独占文件；一次上层请求退出不会取消另一条并发请求或已经接纳的存储任务。从磁盘恢复的对象一律走所属来源的常规加载校验。
 
-淘汰只撤 store 引用，不撤消费者保留。对象大小不参与保留或可选持久接纳；格式和 compiler limits 仍独立校验。
+[启动预热](../../runtime/overview.md#启动模型一次性预热)复用上述命中与冷准备路径，只补齐本次实际缺失且策略允许生成的产物。FULL 资源进入 Ready 即证明组合准备与宿主交接已完成，三类可选持久化各自异步收尾，预热不阻塞等待文件或索引落盘。
+
+`BakedAnimationSet` 的长期 source 只保存受检的 opener 与已接纳的 expected。Controller 发现阶段与实体同步动画阶段各自持有局部批次视图：同一能力下的本地与 fallback 读取共用一个 channel，不预解码未消费的动画。实体只在同步入口期间临时绑定该视图，并在 `finally` 中撤销，不改变共享 store 当前的 source。已经绑定的动画可在阶段结束后持续复用，后续未加载的动画再重新核验来源资格。每次实际读取仍校验长度、描述符、内容摘要与动画身份；程序载荷同样在读取时校验，未消费的函数体保持未打开。遇到普通读取失败时，批次 owner 关闭当前阶段，局部上下文开启新阶段重新获取 reader，让既有的 fallback 和其他健康动画继续工作；关闭失败、取消或 OOM 不恢复，也不自动重试损坏动画。动画输入的 staging 校验器直接借用 writer 的同一个 channel 校验全部动画与程序块，不取得关闭权。
+
+每次索引命中在交付文件或延迟 opener 之前，都会向实际 CACHE 根登记保留 `(pool, fileId, instance)`；预留 staging 文件时也会同步登记输出实例。该保留一直持续到 JVM 退出，请求取消不提前释放。每次延迟打开和实际数据库操作仍须借用根消费登记；显式关闭时先封口，再等物理工作全部返回。
+
+动画输入缓存与 AOT 缓存的淘汰只撤销各自 store 的引用，已经交付给消费者的输入或执行资源继续有效。关闭某个读取批次只结束该批次的 channel 借用，不影响其他消费者的延迟来源。对象体积不参与内存保留计数或可选持久化接纳限制，格式、实际表示与精确链接关系仍各自独立校验。
 
 ### 失败与拒收
 
-普通准备只有初始 cache 取得失败可转入冷准备。编译、烘焙及运行对象构造失败直接拒绝候选。完整内存候选直接交付运行；派生持久化的拒绝、失败、取消或 shutdown 不撤销有效运行结果，也不声称文件已提交。
+普通准备流程中，只有初始缓存读取失败才可以转入冷准备；编译、烘焙或运行对象构造失败会直接拒绝候选。完整的内存候选直接交付运行；几何、动画输入与 AOT 任一类的持久化拒收、失败、取消或关闭，只终止该类持久任务本身，既保留其他类的有效结果与已交付的内存候选，也不对外声称失败文件已提交。后续恢复时只重建本次策略允许且实际缺失的产物。
 
 ### 证据与依赖
 
-本级依赖已验证输入重建独立 expected；用途和 Ready 交接依赖[客户端资源](../client-resources/overview.md#用途与派生物)，动画用途依赖[展示闭包与主体特化](../../animation/molang-runtime.md#展示闭包与主体特化)。当前验证范围与限制见[模型管理验证](../../../verification/model-management.md)及[模型管理问题](../../../status/known-issues/model-management.md)。
+本级依赖从已验证输入现场重建的独立 expected；用途与 Ready 交接依赖[客户端资源](../client-resources/overview.md#用途与派生物)，动画用途边界依赖[执行用途与主体资格](../../animation/molang-runtime.md#执行用途与主体资格)。当前验证范围与已知限制见[模型管理验证](../../../verification/model-management.md)和[模型管理问题](../../../status/known-issues/model-management.md)。
 
 ## 设计取舍
 
-复用 producer 的证明可省去重复语义重验，代价是限定 producer 与每次交付的加载准入。
+复用本地 producer 的内部证明可以省去昂贵的重复语义重验，代价是必须严格限定 producer 资格并在每次交付时守住加载校验。把动画输入与 AOT 制品拆分后，Java 绑定或编译环境变化时依然能复用已提取的动画输入，代价是 FULL 候选构造方必须独立核对两者的组合一致性。
 
 ## 实现与验证入口
 
-`ExpressionArtifactStore` 拥有集合文件的读取、内存复用与原子提交；`ModelRenderTargetLoader` 按实际区域取得 store。
+`CacheRegion` 分别持有 `AnimationInputStore` 和 `ExpressionArtifactStore`，由 `ContentStorageBinding` 按实际存储区域对外提供。前者负责未绑定动画输入的查询、生成、内存复用与持久提交，后者专门负责 AOT 制品。`RenderTargetExpressionModuleFactory` 负责获取这两类产物并在发布前做组合校验。
 
-集合文件按 `bake/<animation ABI>/<container>/<binding>/<purpose rule>/<lookup>.anim.ysm-cache` 定位。内存探测也匹配 binding 与 purpose。目录与 lookup 共同区分用途，不扫描旧目录或迁移旧产物。
+`BakeIndexStore` 将带类型信息的精确键映射到整数文件 ID，物理文件名本身不编码 CID、ABI、binding 或用途。AOT 的廉价快速排除依赖按类型划分的分区查询，GUI 只查询未绑定输入；当 Bake 库尚不存在时，只读打开不会凭空建库。执行绑定的内存复用仍严格匹配实际环境与用途；两套新布局既不读取也不迁移旧的合并文件。
 
-`ExpressionArtifactStore` 的内存复用默认每 store／区域保留 16 项，超出项数时按 LRU 淘汰。
+各类缓存文件的池路径与索引归属如下：
+- 独立预览图使用 `f/p/<id>`，由 `Catalog` 与 `Remote` 分别保存所属预览图的整数定位。
+- Remote metadata 与 chunk 使用 `f/r/<id>`，metadata 与完整来源身份在同一个 SQLite 事务中发布。
+- `direct` 容器的目录证明保存在 `Catalog` 的纯 metadata 表中，不分配文件 ID。
+
+`AnimationInputStore` 与 `ExpressionArtifactStore` 各自默认保留 16 项内存结果，并分别按 LRU 淘汰。

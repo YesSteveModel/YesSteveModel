@@ -104,8 +104,7 @@ final class FirstPersonModelState {
             }
             prepared[index] = true;
         }
-        return NativeRenderer.render(consumer, pose, output, output.getTotalVertexCount(), light, overlay, color,
-            RenderContextType.LEVEL);
+        return NativeRenderer.render(consumer, pose, output, light, overlay, color, RenderContextType.LEVEL);
     }
 
     void clear() {

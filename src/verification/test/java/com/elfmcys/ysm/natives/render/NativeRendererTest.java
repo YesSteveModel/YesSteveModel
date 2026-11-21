@@ -22,13 +22,18 @@ class NativeRendererTest {
             new IllegalStateException("host consumer")}) {
             var consumer = (com.mojang.blaze3d.vertex.VertexConsumer)java.lang.reflect.Proxy.newProxyInstance(
                 getClass().getClassLoader(), new Class<?>[] {com.mojang.blaze3d.vertex.VertexConsumer.class},
-                (proxy, method, arguments) -> { throw failure; });
+                (proxy, method, arguments) -> {
+                    throw failure;
+                });
             assertSame(failure, assertThrows(failure.getClass(), () -> FallbackVertexWriter.write(consumer, 1, 0)));
         }
         var calls = new java.util.concurrent.atomic.AtomicInteger();
         var next = (com.mojang.blaze3d.vertex.VertexConsumer)java.lang.reflect.Proxy.newProxyInstance(
             getClass().getClassLoader(), new Class<?>[] {com.mojang.blaze3d.vertex.VertexConsumer.class},
-            (proxy, method, arguments) -> { calls.incrementAndGet(); return null; });
+            (proxy, method, arguments) -> {
+                calls.incrementAndGet();
+                return null;
+            });
         FallbackVertexWriter.write(next, 1, 0);
         assertEquals(1, calls.get());
     }

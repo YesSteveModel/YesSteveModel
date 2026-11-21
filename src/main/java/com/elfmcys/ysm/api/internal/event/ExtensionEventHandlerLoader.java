@@ -12,14 +12,17 @@ import net.minecraftforge.forgespi.language.ModFileScanData;
 /**
  * Internal Forge discovery and registration bridge for {@link YsmEventHandler}.
  *
- * <p>Execution: discovery and registration run in the load-complete listener's invocation window.
- * Registration does not grant render-thread access to constructors or later callbacks.
+ * <p>
+ * Execution: discovery and registration run in the load-complete listener's invocation window. Registration does not
+ * grant render-thread access to constructors or later callbacks.
  *
- * <p>Failure: qualification failures are isolated per handler. Registration exceptions are logged,
- * but this bridge currently does not undo any listeners installed before register throws.
+ * <p>
+ * Failure: qualification failures are isolated per handler. Failed registration is rolled back on the same bus and
+ * handler instance. A rollback failure is retained with the original error; listeners may remain installed.
  *
- * <p>Seam: implements [optional handler admission](docs/architecture/integration/overview.md#失败隔离与声明寿命); see the
- * [partial-registration rollback gap](docs/status/known-issues/integration.md#可选-handler-注册回滚).
+ * <p>
+ * Seam: implements [optional handler admission](docs/architecture/integration/overview.md#失败隔离与声明寿命); see the [rollback
+ * verification boundary](docs/status/known-issues/integration.md#可选-handler-注册回滚).
  */
 public final class ExtensionEventHandlerLoader {
     private static final String ANNOTATION_NAME = YsmEventHandler.class.getName();
@@ -27,8 +30,8 @@ public final class ExtensionEventHandlerLoader {
     private ExtensionEventHandlerLoader() {}
 
     /**
-     * Attaches one load-complete registration callback to the supplied bus. The bootstrap caller invokes
-     * this once per intended bus; this method does not deduplicate repeated attachment or own bus shutdown.
+     * Attaches one load-complete registration callback to the supplied bus. The bootstrap caller invokes this once per
+     * intended bus; this method does not deduplicate repeated attachment or own bus shutdown.
      */
     public static void attach(IEventBus eventBus) {
         eventBus.addListener((FMLLoadCompleteEvent event) -> registerAll(eventBus));
@@ -64,7 +67,7 @@ public final class ExtensionEventHandlerLoader {
             .sorted().toList();
     }
 
-    private static void registerOne(IEventBus eventBus, String handlerName, ClassLoader loader) {
+    static void registerOne(IEventBus eventBus, String handlerName, ClassLoader loader) {
         ExtensionEventHandlerRegistration.Outcome outcome;
         try {
             outcome = ExtensionEventHandlerRegistration.prepare(handlerName, loader);
@@ -93,10 +96,21 @@ public final class ExtensionEventHandlerLoader {
 
         try {
             eventBus.register(outcome.handler());
-            YesSteveModel.LOGGER.info("Registered @YsmEventHandler {}", handlerName);
         } catch (RuntimeException | LinkageError exception) {
-            YesSteveModel.LOGGER.error("Failed to register @YsmEventHandler {}; continuing without it", handlerName,
+            try {
+                eventBus.unregister(outcome.handler());
+            } catch (RuntimeException | LinkageError rollbackFailure) {
+                if (rollbackFailure != exception)
+                    exception.addSuppressed(rollbackFailure);
+                YesSteveModel.LOGGER.error(
+                    "Failed to register @YsmEventHandler {} and roll back its listeners; residual listeners may remain",
+                    handlerName, exception);
+                return;
+            }
+            YesSteveModel.LOGGER.error("Failed to register @YsmEventHandler {}; rolled back its listeners", handlerName,
                 exception);
+            return;
         }
+        YesSteveModel.LOGGER.info("Registered @YsmEventHandler {}", handlerName);
     }
 }

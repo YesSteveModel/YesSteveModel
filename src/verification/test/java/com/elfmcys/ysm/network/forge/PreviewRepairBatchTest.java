@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.domain.Hash256;
@@ -105,10 +106,9 @@ class PreviewRepairBatchTest {
             var result = MissingPreviewFragmentProto.newBuilder().setDataTransferId(1).setFinalFragment(true);
             for (int i = 0; i < failures.length; i++) {
                 var member = identity(i + 1);
-                result.addEntries(
-                    MissingPreviewEntryProto.newBuilder().setModelId(ByteBuffer.wrap(member.modelId().bytes()))
-                        .setContainerId(ByteBuffer.wrap(member.containerId().bytes()))
-                        .setHierarchyPath("local:custom/fixture/" + (i + 1)).setProbeFailure(failures[i]).build());
+                result.addEntries(MissingPreviewEntryProto.newBuilder().setModelId(member.modelId().toString())
+                    .setContainerId(ByteBuffer.wrap(member.containerId().bytes()))
+                    .setHierarchyPath("local:fixture/" + (i + 1)).setProbeFailure(failures[i]).build());
             }
             transfer.acceptMissingPreviews(result.build());
         }
@@ -117,7 +117,7 @@ class PreviewRepairBatchTest {
     private static RemotePublicationSnapshot publication(int... markers) {
         var entries = new ArrayList<PublicationEntry>();
         for (int marker : markers)
-            entries.add(new PublicationEntry(identity(marker), new HierarchyPath("local:custom/fixture/" + marker),
+            entries.add(new PublicationEntry(identity(marker), new HierarchyPath("local:fixture/" + marker),
                 CatalogAccess.PUBLIC, true));
         return new RemotePublicationSnapshot(entries, Set.of(), List.of(), Map.of());
     }
@@ -127,6 +127,6 @@ class PreviewRepairBatchTest {
         bytes[0] = (byte)marker;
         var container = new byte[32];
         container[0] = (byte)(marker + 100);
-        return new ModelFileIdentity(new Hash256(bytes), new Hash256(container));
+        return new ModelFileIdentity(ModelId.fromHash(new Hash256(bytes)), new Hash256(container));
     }
 }

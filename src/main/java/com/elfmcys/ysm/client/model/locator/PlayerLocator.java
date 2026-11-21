@@ -29,15 +29,12 @@ public class PlayerLocator extends GeoLocatorType {
         super(new ResourceLocation(YesSteveModel.MOD_ID, "player"));
     }
 
+    /** Initializes and freezes declarations on the bootstrap owner before resource workers can read them. */
     public static void init() {
         if (INSTANCE == null) {
-            synchronized (PlayerLocator.class) {
-                if (INSTANCE == null) {
-                    INSTANCE = new PlayerLocator();
-                    YesSteveModel.postEvent(new RegisterModelLocatorEvent(ModelKind.HUMANOID_FULL, INSTANCE::register));
-                    INSTANCE.freeze();
-                }
-            }
+            INSTANCE = new PlayerLocator();
+            YesSteveModel.postEvent(new RegisterModelLocatorEvent(ModelKind.HUMANOID_FULL, INSTANCE::register));
+            INSTANCE.freeze();
         }
     }
 

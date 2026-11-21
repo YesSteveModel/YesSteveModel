@@ -9,20 +9,21 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 
 /**
  * Advances one consumer's demand without waiting for its asynchronous acquisitions.
  *
- * <p><b>Execution:</b> The demand owner serializes advance, inspection and close. Access callbacks can
- * complete inline. A shared preparation does not merge this consumer's lease or failure with another use.
+ * <p>
+ * <b>Execution:</b> The demand owner serializes advance, inspection and close. A shared preparation does not merge this
+ * consumer's lease or failure with another use.
  *
- * <p><b>Ownership:</b> This object owns every acquisition until advance returns its Ready lease.
- * The receiving consumer then owns closure. Closing the demand cancels only untransferred interests;
- * a late result is closed by the attempt that still owns it.
+ * <p>
+ * <b>Ownership:</b> This object owns every acquisition until advance returns its Ready lease. The receiving consumer
+ * then owns closure. Closing the demand cancels only untransferred interests; the resource owner terminates its own
+ * work and unadopted results.
  *
- * <p><b>Seam:</b> [independent demand reception](docs/architecture/model-management/demand/overview.md#用途准备与独立接收).
+ * <p>
+ * <b>Seam:</b> [independent demand reception](docs/architecture/model-management/demand/overview.md#用途准备与独立接收).
  */
 public final class ModelResourceDemand implements AutoCloseable {
     public enum Mode {
@@ -34,9 +35,9 @@ public final class ModelResourceDemand implements AutoCloseable {
 
         Optional<ResourceLease> findReady(ResourceRequest request);
 
-        CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkPriority priority);
+        ResourceLease getOrStartCached(ResourceRequest request, WorkPriority priority);
 
-        CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request, WorkPriority priority);
+        ResourceLease getOrStartOffline(ResourceRequest request, WorkPriority priority);
 
         ResourceLease getOrStart(ResourceRequest request, WorkPriority priority);
     }
@@ -44,7 +45,6 @@ public final class ModelResourceDemand implements AutoCloseable {
     private final Access access;
     private final ResourceRequest request;
     private final WorkPriority priority;
-    private Attempt attempt;
     private ResourceLease lease;
     private Mode attempted;
     private Throwable failure;
@@ -74,17 +74,16 @@ public final class ModelResourceDemand implements AutoCloseable {
     }
 
     public boolean hasUnfinishedWork() {
-        return attempt != null || lease != null;
+        return lease != null;
     }
 
     /**
-     * Tries the allowed acquisition level and transfers at most one Ready lease.
-     * A lower level retires an incompatible pending attempt. A prior local failure does not prevent
-     * reuse of a Ready target produced by another consumer.
+     * Tries the allowed acquisition level and transfers at most one Ready lease. A lower level retires an incompatible
+     * pending attempt. A prior local failure does not prevent reuse of a Ready target produced by another consumer.
      *
      * @param allowed the non-null maximum acquisition level permitted by current demand admission
-     * @return an independently owned Ready lease, or null when closed, pending, denied, absent or failed;
-     *     inspect {@link #failure()} and {@link #denied()} to distinguish recorded rejection or failure
+     * @return an independently owned Ready lease, or null when closed, pending, denied, absent or failed; inspect
+     *         {@link #failure()} and {@link #denied()} to distinguish recorded rejection or failure
      */
     public @Nullable ResourceLease advance(Mode allowed) {
         if (closed)
@@ -94,62 +93,44 @@ public final class ModelResourceDemand implements AutoCloseable {
                 releasePending();
                 attempted = allowed;
             }
-            // An existing acquisition retains its admission; a cache hit is a new use.
-            if (lease == null && attempt == null && !access.permitsAcquisition(request)) {
+            if (lease == null && !access.permitsAcquisition(request)) {
                 denied = true;
                 attempted = null;
                 return null;
             }
             denied = false;
-            if (attempt != null && attempt.isDone()) {
-                var completed = attempt;
-                attempt = null;
-                lease = completed.take();
-            }
-            if (lease == null) {
-                // A previous miss must not hide Ready published by another consumer.
-                var ready = access.findReady(request).orElse(null);
-                if (ready != null) {
+            var ready = takeReady();
+            if (ready != null)
+                return ready;
+            if (lease == null || attempted == Mode.CACHED || attempted == Mode.OFFLINE) {
+                var published = access.findReady(request).orElse(null);
+                if (published != null) {
                     releasePending();
-                    lease = ready;
+                    lease = published;
+                    ready = takeReady();
                 }
             }
-            var ready = takeReady();
-            if (ready != null || failure != null || lease != null)
+            if (ready != null || failure != null)
                 return ready;
-
-            if (allowed == Mode.READY)
+            // Offline work can finish without restarting it when online permission becomes available.
+            if (lease != null && (attempted != Mode.CACHED || allowed == Mode.CACHED))
+                return null;
+            if (allowed == Mode.READY || attempted != null && attempted.ordinal() >= allowed.ordinal())
                 return null;
 
-            if ((attempt == null || attempted != Mode.OFFLINE)
-                && (attempted == null || attempted.ordinal() < allowed.ordinal())) {
-                releasePending();
-                // Offline local work already uses the ordinary Flight. Do not restart it online.
-                var next = attempted == null && allowed == Mode.ONLINE ? Mode.OFFLINE : allowed;
-                attempted = next;
-                if (next == Mode.ONLINE)
-                    lease = Objects.requireNonNull(access.getOrStart(request, priority), "Acquisition returned no lease");
-                else
-                    attempt = new Attempt(
-                        next == Mode.CACHED ? access.getOrStartCached(request, priority)
-                            : access.getOrStartOffline(request, priority));
-                if (attempt != null && attempt.isDone()) {
-                    var completed = attempt;
-                    attempt = null;
-                    lease = completed.take();
-                }
-                ready = takeReady();
-                if (ready == null && lease == null && attempt == null && failure == null
-                    && next.ordinal() < allowed.ordinal()) {
-                    return advance(allowed);
-                }
-            }
-            return ready;
+            var next = switch (allowed) {
+                case CACHED -> access.getOrStartCached(request, priority);
+                case OFFLINE -> access.getOrStartOffline(request, priority);
+                case ONLINE -> access.getOrStart(request, priority);
+                case READY -> throw new IllegalStateException("Ready acquisition was already inspected");
+            };
+            // Receiving use is established before the old use can release the last retained target.
+            releasePending();
+            lease = next;
+            attempted = allowed;
+            return takeReady();
         } catch (RuntimeException error) {
             releasePending();
-            while (error instanceof CompletionException && error.getCause() instanceof RuntimeException cause) {
-                error = cause;
-            }
             failure = error;
             return null;
         }
@@ -163,7 +144,7 @@ public final class ModelResourceDemand implements AutoCloseable {
             failure = new CancellationException("Resource owner is no longer current");
             return null;
         }
-        var result = Objects.requireNonNull(lease.poll(), "Acquisition returned no outcome");
+        var result = lease.poll();
         if (result instanceof AcquireResult.Ready) {
             var ready = lease;
             lease = null;
@@ -173,15 +154,16 @@ public final class ModelResourceDemand implements AutoCloseable {
         if (result instanceof AcquireResult.Failed failed) {
             failure = failed.failure().cause();
             releasePending();
+        } else if (result instanceof AcquireResult.Missing) {
+            releasePending();
+        } else if (result instanceof AcquireResult.Ended) {
+            failure = new CancellationException("Resource use ended");
+            releasePending();
         }
         return null;
     }
 
     private void releasePending() {
-        if (attempt != null) {
-            attempt.close();
-            attempt = null;
-        }
         if (lease != null) {
             lease.close();
             lease = null;
@@ -194,58 +176,4 @@ public final class ModelResourceDemand implements AutoCloseable {
         releasePending();
     }
 
-    /** Completion and owner retirement race only over this exact acquisition. */
-    private static final class Attempt implements AutoCloseable {
-        private final CompletableFuture<Optional<ResourceLease>> future;
-        private ResourceLease result;
-        private Throwable failure;
-        private boolean done;
-        private boolean closed;
-
-        Attempt(CompletableFuture<Optional<ResourceLease>> future) {
-            this.future = Objects.requireNonNull(future, "acquisition future");
-            future.whenComplete((acquired, error) -> {
-                synchronized (this) {
-                    var next = acquired == null ? null : acquired.orElse(null);
-                    if (closed) {
-                        if (next != null)
-                            next.close();
-                    } else {
-                        result = next;
-                        failure = error != null ? error
-                            : acquired == null ? new IllegalStateException("Acquisition returned no outcome") : null;
-                        done = true;
-                    }
-                }
-            });
-        }
-
-        synchronized boolean isDone() {
-            return done;
-        }
-
-        synchronized ResourceLease take() {
-            closed = true;
-            var acquired = result;
-            result = null;
-            if (failure != null) {
-                if (acquired != null)
-                    acquired.close();
-                throw new CompletionException(failure);
-            }
-            return acquired;
-        }
-
-        @Override
-        public synchronized void close() {
-            if (closed)
-                return;
-            closed = true;
-            if (result != null) {
-                result.close();
-                result = null;
-            }
-            future.cancel(false);
-        }
-    }
 }

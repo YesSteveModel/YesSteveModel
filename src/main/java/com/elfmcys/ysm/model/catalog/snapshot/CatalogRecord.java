@@ -29,11 +29,10 @@ public record CatalogRecord(CatalogEntry entry, CatalogLocation location, Conten
 
     private static CatalogEntry localEntry(CatalogLocation location, ContentBinding binding) {
         var path = new HierarchyPath(location.value());
-        var access = location.rootKind() == CatalogRootKind.AUTH ? CatalogAccess.AUTHORIZED : CatalogAccess.PUBLIC;
         var content = binding.content();
         var view = content.modelFile();
         var metadata = view.getMetadata().getMetadata();
-        return new CatalogEntry(binding.modelId(), path, access,
+        return new CatalogEntry(binding.modelId(), path, CatalogAccess.PUBLIC,
             new CatalogPresentation(metadata == null ? "" : metadata.name(),
                 metadata == null ? "" : metadata.tips().orElse(""),
                 asset(view, ModelFileConstant.THUMB_ICON_CHUNK_NAME, AssetRef.Kind.ICON),

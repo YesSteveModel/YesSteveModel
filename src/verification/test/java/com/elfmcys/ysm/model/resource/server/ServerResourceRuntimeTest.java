@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.server;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
@@ -23,17 +24,15 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ExecutionException;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.elfmcys.ysm.model.resource.server.ServerResourceRuntime.State.*;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -46,147 +45,182 @@ class ServerResourceRuntimeTest {
     Path temp;
 
     @Test
-    void idleWorkersRetireAndLaterReadsCreateNewWorkers() throws Exception {
-        var firstWorker = new AtomicReference<Thread>();
-        var secondWorker = new AtomicReference<Thread>();
-        var first = source(identity(9, 19), bytes(1), () -> firstWorker.set(Thread.currentThread()));
-        var second = source(identity(10, 20), bytes(2), () -> secondWorker.set(Thread.currentThread()));
-        try (var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
-        })) {
-            var field = ServerResourceRuntime.class.getDeclaredField("workers");
-            field.setAccessible(true);
-            var workers = (ThreadPoolExecutor)field.get(runtime);
-            assertEquals(30, workers.getKeepAliveTime(TimeUnit.SECONDS));
-            workers.setKeepAliveTime(50, TimeUnit.MILLISECONDS);
+    void sharedBudgetEvictsLruEntryAcrossChunksAndPreviewsWithoutRevokingLeases() throws Exception {
+        var now = new AtomicLong();
+        var workers = new ControlledWorkers();
+        var store = previewStore();
+        var chunk = source(identity(2, 12), bytes(1, 2, 3));
+        var id = hash(22);
+        var previewContent = previewContent(id);
+        writePreview(id, bytes(4, 5, 6));
+        try (var runtime = runtime(store, workers, now, 5)) {
+            var chunkResult = runtime.acquireChunk(chunk.content(), chunk.chunk());
+            runtime.tick();
+            workers.runFirst();
+            runtime.tick();
+            var chunkLease = chunkResult;
 
-            try (var lease = finish(runtime, runtime.acquireChunk(first.content(), first.chunk()))) {
-                assertArrayEquals(bytes(1), copy(lease));
-            }
-            var retired = firstWorker.get();
-            retired.join(5_000);
-            assertFalse(retired.isAlive());
-            assertEquals(0, workers.getPoolSize());
+            now.incrementAndGet();
+            var previewResult = runtime.acquirePreview(previewContent);
+            runtime.tick();
+            workers.runFirst();
+            runtime.tick();
+            var previewLease = previewResult;
 
-            try (var lease = finish(runtime, runtime.acquireChunk(second.content(), second.chunk()))) {
-                assertArrayEquals(bytes(2), copy(lease));
-            }
-            assertNotSame(retired, secondWorker.get());
+            var previewHit = runtime.acquirePreview(previewContent);
+            runtime.tick();
+            assertEquals(0, workers.size());
+            previewHit.close();
+
+            var reacquiredChunk = runtime.acquireChunk(chunk.content(), chunk.chunk());
+            runtime.tick();
+            assertEquals(1, workers.size());
+            workers.runFirst();
+            runtime.tick();
+            assertEquals(2, chunk.reads().get());
+            reacquiredChunk.close();
+
+            assertArrayEquals(bytes(1, 2, 3), copy(chunkLease));
+            assertArrayEquals(bytes(4, 5, 6), copy(previewLease));
+            chunkLease.close();
+            previewLease.close();
         }
     }
 
     @Test
-    void idleEvictionDropsOnlyCacheReachabilityWhileAnActiveLeaseStaysValid() throws Exception {
+    void idleEvictionRespectsDeadlineAndRefreshWithoutRevokingLeases() throws Exception {
         var now = new AtomicLong();
-        var source = source(identity(1, 11), bytes(1, 2, 3));
-        try (var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
-        }, now::get, 16)) {
-            var lease = finish(runtime, runtime.acquireChunk(source.content(), source.chunk()));
-            assertEquals(1, runtime.cachedCount());
+        var workers = new ControlledWorkers();
+        var store = previewStore();
+        var content = previewContent(hash(23));
+        writePreview(content.representation().containerId(), bytes(1, 2, 3));
+        try (var runtime = runtime(store, workers, now, 16)) {
+            var lease = runtime.acquirePreview(content);
+            runtime.tick();
+            workers.runFirst();
+            runtime.tick();
 
             now.set(ServerResourceRuntime.IDLE_NANOS - 1);
+            var refreshed = runtime.acquirePreview(content);
             runtime.tick();
-            assertEquals(1, runtime.cachedCount());
-            now.incrementAndGet();
+            assertEquals(0, workers.size());
+            refreshed.close();
+
+            now.addAndGet(ServerResourceRuntime.IDLE_NANOS - 1);
+            var stillCached = runtime.acquirePreview(content);
+            runtime.tick();
+            assertEquals(0, workers.size());
+            stillCached.close();
+
+            now.addAndGet(ServerResourceRuntime.IDLE_NANOS);
+            runtime.tick();
+            var missed = runtime.acquirePreview(content);
+            runtime.tick();
+            assertEquals(1, workers.size());
+            missed.close();
+            workers.runFirst();
             runtime.tick();
 
-            assertEquals(0, runtime.cachedCount());
             assertArrayEquals(bytes(1, 2, 3), copy(lease));
             lease.close();
         }
     }
 
     @Test
-    void bytePressureEvictsTheLruCacheEntryWithoutClosingEitherLease() throws Exception {
-        var now = new AtomicLong();
-        var first = source(identity(2, 12), bytes(1, 2, 3));
-        var second = source(identity(3, 13), bytes(4, 5, 6));
-        try (var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
-        }, now::get, 5)) {
-            var firstLease = finish(runtime, runtime.acquireChunk(first.content(), first.chunk()));
-            now.incrementAndGet();
-            var secondLease = finish(runtime, runtime.acquireChunk(second.content(), second.chunk()));
-
-            assertEquals(1, runtime.cachedCount());
-            assertEquals(3, runtime.cachedBytes());
-            assertArrayEquals(bytes(1, 2, 3), copy(firstLease));
-            assertArrayEquals(bytes(4, 5, 6), copy(secondLease));
-
-            var firstAgain = finish(runtime, runtime.acquireChunk(first.content(), first.chunk()));
-            assertEquals(2, first.reads().get());
-            firstAgain.close();
-            firstLease.close();
-            secondLease.close();
-        }
-    }
-
-    @Test
     void oversizedChunkIsDeliveredWithoutEnteringTheResidentCache() throws Exception {
+        var workers = new ControlledWorkers();
         var source = source(identity(4, 14), bytes(1, 2, 3));
-        try (var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
-        }, () -> 0L, 2)) {
-            var lease = finish(runtime, runtime.acquireChunk(source.content(), source.chunk()));
-
-            assertEquals(0, runtime.cachedCount());
-            assertEquals(0, runtime.cachedBytes());
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 2)) {
+            var lease = runtime.acquireChunk(source.content(), source.chunk());
+            runtime.tick();
+            workers.runFirst();
+            runtime.tick();
             assertArrayEquals(bytes(1, 2, 3), copy(lease));
+
+            var second = runtime.acquireChunk(source.content(), source.chunk());
+            runtime.tick();
+            assertEquals(1, workers.size());
+            workers.runFirst();
+            runtime.tick();
+            assertEquals(2, source.reads().get());
+            second.close();
             lease.close();
         }
     }
 
     @Test
     void pendingReadsCoalesceOnlyForTheSameExactSourceButReadyBytesAreReusable() throws Exception {
-        var identity = identity(5, 15);
-        var first = source(identity, bytes(7, 8, 9));
-        try (var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
-        }, () -> 0L, 16)) {
+        var id = identity(5, 15);
+        var first = source(id, bytes(7, 8, 9));
+        var workers = new ControlledWorkers();
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 16)) {
             var sameSourceA = runtime.acquireChunk(first.content(), first.chunk());
             var sameSourceB = runtime.acquireChunk(first.content(), first.chunk());
-            var firstLease = finish(runtime, sameSourceA);
-            var secondLease = finish(runtime, sameSourceB);
+            runtime.tick();
+            assertEquals(1, workers.size());
+            workers.runFirst();
+            runtime.tick();
             assertEquals(1, first.reads().get());
 
-            var equivalent = source(identity, bytes(7, 8, 9));
-            var reused = finish(runtime, runtime.acquireChunk(equivalent.content(), equivalent.chunk()));
+            var equivalent = source(id, bytes(7, 8, 9));
+            var reused = runtime.acquireChunk(equivalent.content(), equivalent.chunk());
+            runtime.tick();
+            assertEquals(0, workers.size());
             assertEquals(0, equivalent.reads().get());
-            assertEquals(3, runtime.cachedBytes());
+            assertEquals(READY, reused.state());
 
-            firstLease.close();
-            secondLease.close();
+            sameSourceA.close();
+            sameSourceB.close();
             reused.close();
         }
     }
 
     @Test
     void concurrentEquivalentExactSourcesDoNotDoubleCountOneReadyEntry() throws Exception {
-        var identity = identity(6, 16);
-        var first = source(identity, bytes(1, 1, 1));
-        var second = source(identity, bytes(1, 1, 1));
-        try (var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
-        }, () -> 0L, 16)) {
+        var id = identity(6, 16);
+        var first = source(id, bytes(1, 1, 1));
+        var second = source(id, bytes(1, 1, 1));
+        var third = source(identity(16, 26), bytes(9));
+        var workers = new ControlledWorkers();
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 4)) {
             var a = runtime.acquireChunk(first.content(), first.chunk());
             var b = runtime.acquireChunk(second.content(), second.chunk());
-            var firstLease = finish(runtime, a);
-            var secondLease = finish(runtime, b);
-
+            runtime.tick();
+            workers.runFirst();
+            workers.runFirst();
+            runtime.tick();
             assertEquals(1, first.reads().get());
             assertEquals(1, second.reads().get());
-            assertEquals(1, runtime.cachedCount());
-            assertEquals(3, runtime.cachedBytes());
-            firstLease.close();
-            secondLease.close();
+
+            var c = runtime.acquireChunk(third.content(), third.chunk());
+            runtime.tick();
+            workers.runFirst();
+            runtime.tick();
+
+            var firstHit = runtime.acquireChunk(first.content(), first.chunk());
+            var thirdHit = runtime.acquireChunk(third.content(), third.chunk());
+            runtime.tick();
+            assertEquals(0, workers.size());
+            assertEquals(READY, firstHit.state());
+            assertEquals(READY, thirdHit.state());
+            a.close();
+            b.close();
+            c.close();
+            firstHit.close();
+            thirdHit.close();
         }
     }
 
     @Test
     void acquireAfterRuntimeCloseFailsWithoutQueuingWork() {
         var source = source(identity(7, 17), bytes(1));
-        var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
+        var runtime = new ServerResourceRuntime(previewStore(), ignored -> {
         });
         runtime.close();
 
         var failure = runtime.acquireChunk(source.content(), source.chunk());
-        assertTrue(failure.isCompletedExceptionally());
-        assertThrows(Exception.class, () -> failure.get(1, TimeUnit.SECONDS));
+        assertEquals(FAILED, failure.state());
+        assertTrue(failure.failure() instanceof IllegalStateException);
         assertEquals(0, source.reads().get());
     }
 
@@ -205,8 +239,9 @@ class ServerResourceRuntimeTest {
                 }
             }
         });
-        var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
-        });
+        var runtime = new ServerResourceRuntime(new PreviewStore(temp, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp))), ignored -> {
+            });
         var acquired = runtime.acquireChunk(source.content(), source.chunk());
         runtime.tick();
         assertTrue(entered.await(5, TimeUnit.SECONDS));
@@ -223,8 +258,8 @@ class ServerResourceRuntimeTest {
         try {
             assertTrue(interrupted.await(5, TimeUnit.SECONDS));
             assertFalse(finished.isDone());
-            assertTrue(acquired.isCompletedExceptionally());
-            assertTrue(runtime.acquireChunk(source.content(), source.chunk()).isCompletedExceptionally());
+            assertEquals(FAILED, acquired.state());
+            assertEquals(FAILED, runtime.acquireChunk(source.content(), source.chunk()).state());
         } finally {
             release.countDown();
             closer.join(5_000);
@@ -237,27 +272,27 @@ class ServerResourceRuntimeTest {
     void previewReadsShareOneFlightAndCancellationReleasesOnlyOneInterest() throws Exception {
         var workers = new ControlledWorkers();
         var id = hash(21);
+        var content = previewContent(id);
         writePreview(id, bytes(1, 2, 3));
-        try (var runtime = runtime(workers, new AtomicLong(), 16)) {
-            var cancelled = runtime.acquirePreview(id);
-            var first = runtime.acquirePreview(id);
-            var second = runtime.acquirePreview(id);
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 16)) {
+            var cancelled = runtime.acquirePreview(content);
+            var first = runtime.acquirePreview(content);
+            var second = runtime.acquirePreview(content);
             runtime.tick();
             assertEquals(1, workers.size());
-            assertTrue(cancelled.cancel(false));
+            cancelled.close();
             workers.runFirst();
             runtime.tick();
-            try (var a = first.join().orElseThrow(); var b = second.join().orElseThrow()) {
+            try (var a = first; var b = second) {
                 assertNotSame(a, b);
                 assertArrayEquals(bytes(1, 2, 3), copy(a));
                 a.close();
                 assertArrayEquals(bytes(1, 2, 3), copy(b));
             }
-            assertTrue(cancelled.isCancelled());
-            assertEquals(1, runtime.cachedCount());
-            var hit = runtime.acquirePreview(id);
+            assertEquals(ENDED, cancelled.state());
+            var hit = runtime.acquirePreview(content);
             runtime.tick();
-            try (var lease = hit.join().orElseThrow()) {
+            try (var lease = hit) {
                 assertArrayEquals(bytes(1, 2, 3), copy(lease));
             }
             assertEquals(0, workers.size());
@@ -265,142 +300,85 @@ class ServerResourceRuntimeTest {
     }
 
     @Test
-    void chunkAndPreviewShareBudgetAndIdleEvictionWithoutRevokingLeases() throws Exception {
-        var now = new AtomicLong();
-        var workers = new ControlledWorkers();
-        var chunk = source(identity(22, 32), bytes(1, 2, 3));
-        var id = hash(22);
-        writePreview(id, bytes(4, 5, 6));
-        try (var runtime = runtime(workers, now, 5)) {
-            var chunkResult = runtime.acquireChunk(chunk.content(), chunk.chunk());
-            runtime.tick();
-            workers.runFirst();
-            runtime.tick();
-            var chunkLease = chunkResult.join();
-            now.incrementAndGet();
-            var previewResult = runtime.acquirePreview(id);
-            runtime.tick();
-            workers.runFirst();
-            runtime.tick();
-            var previewLease = previewResult.join().orElseThrow();
-            assertEquals(1, runtime.cachedCount());
-            assertEquals(3, runtime.cachedBytes());
-            now.addAndGet(ServerResourceRuntime.IDLE_NANOS);
-            runtime.tick();
-            assertEquals(0, runtime.cachedCount());
-            assertArrayEquals(bytes(1, 2, 3), copy(chunkLease));
-            assertArrayEquals(bytes(4, 5, 6), copy(previewLease));
-            chunkLease.close();
-            previewLease.close();
-        }
-    }
-
-    @Test
-    void successfulPreviewLeaseRefreshesTheIdleDeadline() throws Exception {
-        var now = new AtomicLong();
-        var workers = new ControlledWorkers();
-        var id = hash(23);
-        writePreview(id, bytes(1));
-        try (var runtime = runtime(workers, now, 16)) {
-            var initial = runtime.acquirePreview(id);
-            runtime.tick();
-            workers.runFirst();
-            runtime.tick();
-            initial.join().orElseThrow().close();
-            now.set(ServerResourceRuntime.IDLE_NANOS - 1);
-            var hit = runtime.acquirePreview(id);
-            runtime.tick();
-            hit.join().orElseThrow().close();
-            now.incrementAndGet();
-            runtime.tick();
-            assertEquals(1, runtime.cachedCount());
-            now.addAndGet(ServerResourceRuntime.IDLE_NANOS - 1);
-            runtime.tick();
-            assertEquals(0, runtime.cachedCount());
-        }
-    }
-
-    @Test
     void missingPreviewIsNeverNegativeCachedAndBoundedInvalidMediaRemainsEncodedData() throws Exception {
         var workers = new ControlledWorkers();
         var id = hash(24);
-        try (var runtime = runtime(workers, new AtomicLong(), 16)) {
-            var missing = runtime.acquirePreview(id);
+        var content = previewContent(id);
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 16)) {
+            var missing = runtime.acquirePreview(content);
             runtime.tick();
             workers.runFirst();
             runtime.tick();
-            assertTrue(missing.join().isEmpty());
-            assertEquals(0, runtime.cachedCount());
+            assertEquals(MISSING, missing.state());
+            missing.close();
             writePreview(id, bytes(7, 8));
-            var acquired = runtime.acquirePreview(id);
+            var acquired = runtime.acquirePreview(content);
             runtime.tick();
             assertEquals(1, workers.size());
             workers.runFirst();
             runtime.tick();
-            try (var lease = acquired.join().orElseThrow()) {
+            try (var lease = acquired) {
                 assertArrayEquals(bytes(7, 8), copy(lease));
             }
         }
     }
 
     @Test
-    void oldCompletionCannotRemoveReplacementFlightOrRepublishItsSnapshot() throws Exception {
+    void detachedInvalidatedFlightDoesNotReplaceNewFlightOrReadyCache() throws Exception {
         var workers = new ControlledWorkers();
-        var id = hash(25);
-        writePreview(id, bytes(1));
-        try (var runtime = runtime(workers, new AtomicLong(), 16)) {
-            var old = runtime.acquirePreview(id);
+        var store = previewStore();
+        try (var runtime = runtime(store, workers, new AtomicLong(), 16)) {
+            var beforeTickId = hash(25);
+            var beforeTickContent = previewContent(beforeTickId);
+            writePreview(beforeTickId, bytes(1));
+            var old = runtime.acquirePreview(beforeTickContent);
             runtime.tick();
             workers.runFirst();
-            runtime.invalidatePreview(id);
-            writePreview(id, bytes(2));
-            var replacement = runtime.acquirePreview(id);
+            runtime.invalidatePreview(store, beforeTickId);
+            writePreview(beforeTickId, bytes(2));
+            var replacement = runtime.acquirePreview(beforeTickContent);
             runtime.tick();
             assertEquals(1, workers.size());
-            assertEquals(1, runtime.activeFlightCount());
-            assertEquals(0, runtime.cachedCount());
-            try (var lease = old.join().orElseThrow()) {
+            try (var lease = old) {
                 assertArrayEquals(bytes(1), copy(lease));
             }
-            var joined = runtime.acquirePreview(id);
+            var joined = runtime.acquirePreview(beforeTickContent);
             runtime.tick();
             assertEquals(1, workers.size());
             workers.runFirst();
             runtime.tick();
-            try (var lease = replacement.join().orElseThrow(); var other = joined.join().orElseThrow()) {
+            try (var lease = replacement; var other = joined) {
                 assertArrayEquals(bytes(2), copy(lease));
                 assertArrayEquals(bytes(2), copy(other));
             }
-            assertEquals(1, runtime.cachedBytes());
-        }
-    }
+            try (var hit = runtime.acquirePreview(beforeTickContent)) {
+                runtime.tick();
+                assertEquals(0, workers.size());
+                assertArrayEquals(bytes(2), copy(hit));
+            }
 
-    @Test
-    void detachedCompletionAfterNewReadyCannotReplaceOrDoubleCountIt() throws Exception {
-        var workers = new ControlledWorkers();
-        var id = hash(26);
-        writePreview(id, bytes(1));
-        try (var runtime = runtime(workers, new AtomicLong(), 16)) {
-            var old = runtime.acquirePreview(id);
+            var lateId = hash(26);
+            var lateContent = previewContent(lateId);
+            writePreview(lateId, bytes(1));
+            var lateOld = runtime.acquirePreview(lateContent);
             runtime.tick();
-            runtime.invalidatePreview(id);
-            writePreview(id, bytes(2));
-            var replacement = runtime.acquirePreview(id);
+            runtime.invalidatePreview(store, lateId);
+            writePreview(lateId, bytes(2));
+            var lateReplacement = runtime.acquirePreview(lateContent);
             runtime.tick();
             workers.runLast();
             runtime.tick();
-            replacement.join().orElseThrow().close();
-            writePreview(id, bytes(3, 3));
+            lateReplacement.close();
+            writePreview(lateId, bytes(3, 3));
             workers.runFirst();
             runtime.tick();
-            try (var lease = old.join().orElseThrow()) {
+            try (var lease = lateOld) {
                 assertArrayEquals(bytes(3, 3), copy(lease));
             }
-            assertEquals(1, runtime.cachedBytes());
-            var hit = runtime.acquirePreview(id);
-            runtime.tick();
-            try (var lease = hit.join().orElseThrow()) {
-                assertArrayEquals(bytes(2), copy(lease));
+            try (var hit = runtime.acquirePreview(lateContent)) {
+                runtime.tick();
+                assertEquals(0, workers.size());
+                assertArrayEquals(bytes(2), copy(hit));
             }
         }
     }
@@ -408,26 +386,29 @@ class ServerResourceRuntimeTest {
     @Test
     void repeatedInvalidationKeepsDetachedWorkersWithinTheSameFlightCapacity() throws Exception {
         var workers = new ControlledWorkers();
+        var store = previewStore();
         var id = hash(27);
+        var content = previewContent(id);
         writePreview(id, bytes(1));
-        try (var runtime = runtime(workers, new AtomicLong(), 16)) {
+        try (var runtime = runtime(store, workers, new AtomicLong(), 16)) {
             for (var count = 0; count < ServerResourceRuntime.MAX_IN_FLIGHT; count++) {
-                runtime.acquirePreview(id);
+                runtime.acquirePreview(content);
                 runtime.tick();
-                runtime.invalidatePreview(id);
+                runtime.invalidatePreview(store, id);
             }
-            assertEquals(ServerResourceRuntime.MAX_IN_FLIGHT, runtime.activeFlightCount());
-            var rejected = runtime.acquirePreview(id);
+            var rejected = runtime.acquirePreview(content);
             runtime.tick();
-            var failure = assertThrows(ExecutionException.class, rejected::get);
-            assertTrue(failure.getCause() instanceof ServerResourceRuntime.BusyException);
+            assertEquals(FAILED, rejected.state());
+            assertTrue(rejected.failure() instanceof ServerResourceRuntime.BusyException);
             assertEquals(ServerResourceRuntime.MAX_IN_FLIGHT, workers.size());
             workers.runFirst();
             runtime.tick();
-            var accepted = runtime.acquirePreview(id);
+            var accepted = runtime.acquirePreview(content);
+            var overflow = runtime.acquirePreview(previewContent(hash(127)));
             runtime.tick();
-            assertFalse(accepted.isDone());
-            assertEquals(ServerResourceRuntime.MAX_IN_FLIGHT, runtime.activeFlightCount());
+            assertEquals(PENDING, accepted.state());
+            assertEquals(FAILED, overflow.state());
+            assertTrue(overflow.failure() instanceof ServerResourceRuntime.BusyException);
         }
     }
 
@@ -435,49 +416,53 @@ class ServerResourceRuntimeTest {
     void invalidatingAllPreviewsPreservesChunksAndOtherPreviewLeases() throws Exception {
         var workers = new ControlledWorkers();
         var id = hash(28);
+        var content = previewContent(id);
         var chunk = source(identity(28, 38), bytes(5));
         writePreview(id, bytes(1));
-        try (var runtime = runtime(workers, new AtomicLong(), 16)) {
-            var preview = runtime.acquirePreview(id);
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 16)) {
+            var preview = runtime.acquirePreview(content);
             var stored = runtime.acquireChunk(chunk.content(), chunk.chunk());
             runtime.tick();
             workers.runFirst();
             workers.runFirst();
             runtime.tick();
-            var lease = preview.join().orElseThrow();
-            stored.join().close();
+            var lease = preview;
+            stored.close();
             runtime.invalidatePreviews();
-            assertEquals(1, runtime.cachedCount());
             var hit = runtime.acquireChunk(chunk.content(), chunk.chunk());
             runtime.tick();
-            hit.join().close();
+            hit.close();
             assertEquals(1, chunk.reads().get());
             assertArrayEquals(bytes(1), copy(lease));
             lease.close();
+            var missedPreview = runtime.acquirePreview(content);
+            runtime.tick();
+            assertEquals(1, workers.size());
+            missedPreview.close();
         }
     }
 
     @Test
     void closeTerminatesDetachedQueuedAndUndeliveredPreviewRequests() throws Exception {
         var workers = new ControlledWorkers();
-        var runtime = runtime(workers, new AtomicLong(), 16);
+        var store = previewStore();
+        var runtime = runtime(store, workers, new AtomicLong(), 16);
         var id = hash(29);
+        var content = previewContent(id);
         writePreview(id, bytes(1));
-        var detached = runtime.acquirePreview(id);
+        var detached = runtime.acquirePreview(content);
         runtime.tick();
-        runtime.invalidatePreview(id);
-        var completion = runtime.acquirePreview(id);
+        runtime.invalidatePreview(store, id);
+        var completion = runtime.acquirePreview(content);
         runtime.tick();
         workers.runLast();
-        var queued = runtime.acquirePreview(hash(30));
+        var queued = runtime.acquirePreview(previewContent(hash(30)));
         runtime.close();
-        assertTrue(detached.isCompletedExceptionally());
-        assertTrue(completion.isCompletedExceptionally());
-        assertTrue(queued.isCompletedExceptionally());
-        assertEquals(0, runtime.activeFlightCount());
-        assertEquals(0, runtime.cachedCount());
-        assertTrue(runtime.acquirePreview(id).isCompletedExceptionally());
-        runtime.invalidatePreview(id);
+        assertEquals(FAILED, detached.state());
+        assertEquals(FAILED, completion.state());
+        assertEquals(FAILED, queued.state());
+        assertEquals(FAILED, runtime.acquirePreview(content).state());
+        runtime.invalidatePreview(store, id);
         runtime.invalidatePreviews();
     }
 
@@ -487,111 +472,158 @@ class ServerResourceRuntimeTest {
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
         var workers = new ControlledWorkers();
         var owner = new AtomicReference<ServerResourceRuntime>();
-        var store = new PreviewStore(temp, id -> owner.get().invalidatePreview(id));
+        var storeRef = new AtomicReference<PreviewStore>();
+        var store = new PreviewStore(temp,
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp)),
+            id -> owner.get().invalidatePreview(storeRef.get(), id));
+        storeRef.set(store);
         var id = hash(31);
         var otherId = hash(32);
+        var content = previewContent(id);
+        var otherContent = previewContent(otherId);
         writePreview(id, bytes(1));
         writePreview(otherId, bytes(2));
         try (var runtime = new ServerResourceRuntime(store, ignored -> {
         }, () -> 0L, 1_024, workers)) {
             owner.set(runtime);
-            var old = runtime.acquirePreview(id);
-            var other = runtime.acquirePreview(otherId);
+            var old = runtime.acquirePreview(content);
+            var other = runtime.acquirePreview(otherContent);
             runtime.tick();
             workers.runFirst();
             workers.runFirst();
             runtime.tick();
-            var oldLease = old.join().orElseThrow();
-            other.join().orElseThrow().close();
+            var oldLease = old;
+            other.close();
             try (var ignored = store.accept(id, png)) {
-                assertEquals(1, runtime.cachedCount());
             }
             assertArrayEquals(bytes(1), copy(oldLease));
             oldLease.close();
-            var updated = runtime.acquirePreview(id);
+            var updated = runtime.acquirePreview(content);
             runtime.tick();
+            assertEquals(1, workers.size());
             workers.runFirst();
             runtime.tick();
-            try (var lease = updated.join().orElseThrow()) {
+            try (var lease = updated) {
                 assertArrayEquals(png, copy(lease));
             }
-            assertEquals(2, runtime.cachedCount());
             try (var encoded = ArrayBuffer.move(png)) {
                 assertThrows(IOException.class, () -> store.commit(id, encoded, replacement -> {
                     throw new IOException("Effect retired");
                 }));
-                assertEquals(2, runtime.cachedCount());
+                try (var stillCached = runtime.acquirePreview(content)) {
+                    runtime.tick();
+                    assertEquals(0, workers.size());
+                    assertArrayEquals(png, copy(stillCached));
+                }
                 store.commit(id, encoded, replacement -> replacement.run());
-                assertEquals(1, runtime.cachedCount());
             }
-            var retained = runtime.acquirePreview(otherId);
+            var retained = runtime.acquirePreview(otherContent);
             runtime.tick();
-            try (var lease = retained.join().orElseThrow()) {
+            try (var lease = retained) {
                 assertArrayEquals(bytes(2), copy(lease));
             }
             assertEquals(0, workers.size());
+            var refreshed = runtime.acquirePreview(content);
+            runtime.tick();
+            assertEquals(1, workers.size());
+            refreshed.close();
         }
     }
 
     @Test
     void requestBacklogHasTheSameTypedCapacityFailureForPreviewAndChunk() {
         var workers = new ControlledWorkers();
-        try (var runtime = runtime(workers, new AtomicLong(), 16)) {
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 16)) {
+            var previewItem = previewContent(hash(33));
             for (var count = 0; count < ServerResourceRuntime.MAX_REQUEST_BACKLOG; count++)
-                runtime.acquirePreview(hash(33));
-            var preview = runtime.acquirePreview(hash(33));
+                runtime.acquirePreview(previewItem);
+            var preview = runtime.acquirePreview(previewItem);
             var source = source(identity(33, 43), bytes(1));
             var chunk = runtime.acquireChunk(source.content(), source.chunk());
-            assertTrue(assertThrows(java.util.concurrent.CompletionException.class, preview::join)
-                .getCause() instanceof ServerResourceRuntime.BusyException);
-            assertTrue(assertThrows(java.util.concurrent.CompletionException.class, chunk::join)
-                .getCause() instanceof ServerResourceRuntime.BusyException);
+            assertEquals(FAILED, preview.state());
+            assertTrue(preview.failure() instanceof ServerResourceRuntime.BusyException);
+            assertEquals(FAILED, chunk.state());
+            assertTrue(chunk.failure() instanceof ServerResourceRuntime.BusyException);
             assertEquals(0, workers.size());
         }
     }
 
     @Test
-    void closeTerminatesAHotHitAfterItLeavesTheRequestQueueBeforeLeaseDelivery() throws Exception {
+    void readyHitIsImmediateAndIndependentUsesSurviveRuntimeClose() throws Exception {
         var workers = new ControlledWorkers();
-        var pause = new AtomicBoolean();
-        var entered = new CountDownLatch(1);
-        var release = new CountDownLatch(1);
         var id = hash(34);
+        var content = previewContent(id);
         writePreview(id, bytes(1));
-        var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
-        }, () -> {
-            if (pause.compareAndSet(true, false)) {
-                entered.countDown();
-                try {
-                    if (!release.await(5, TimeUnit.SECONDS))
-                        throw new AssertionError("Hot-hit delivery was not released");
-                } catch (InterruptedException interrupted) {
-                    throw new AssertionError(interrupted);
-                }
-            }
-            return 0L;
-        }, 16, workers);
-        var initial = runtime.acquirePreview(id);
+        var runtime = runtime(previewStore(), workers, new AtomicLong(), 16);
+        var initial = runtime.acquirePreview(content);
         runtime.tick();
         workers.runFirst();
         runtime.tick();
-        initial.join().orElseThrow().close();
-        var hot = runtime.acquirePreview(id);
-        pause.set(true);
-        var ticker = new Thread(runtime::tick);
-        ticker.start();
-        try {
-            assertTrue(entered.await(5, TimeUnit.SECONDS));
-            assertFalse(hot.isDone());
+        initial.close();
+        try (var hot = runtime.acquirePreview(content); var retained = hot.retain()) {
+            assertEquals(READY, hot.state());
             runtime.close();
-            assertTrue(hot.isCompletedExceptionally());
-        } finally {
-            release.countDown();
-            ticker.join(5_000);
-            runtime.close();
+            hot.close();
+            assertEquals(ENDED, hot.state());
+            assertArrayEquals(bytes(1), copy(retained));
         }
-        assertFalse(ticker.isAlive());
-        assertEquals(0, runtime.cachedCount());
+    }
+
+    @Test
+    void lastPendingUseRetiresJoinAndPublicationWithoutConsumerPoll() throws Exception {
+        var workers = new ControlledWorkers();
+        var id = hash(34);
+        var content = previewContent(id);
+        writePreview(id, bytes(1));
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 16)) {
+            var abandoned = runtime.acquirePreview(content);
+            runtime.tick();
+            abandoned.close();
+            abandoned.close();
+            var replacement = runtime.acquirePreview(content);
+            runtime.tick();
+            assertEquals(2, workers.size());
+            workers.runFirst();
+            runtime.tick();
+            assertEquals(PENDING, replacement.state());
+            workers.runFirst();
+            runtime.tick();
+            try (replacement) {
+                assertArrayEquals(bytes(1), copy(replacement));
+            }
+        }
+    }
+
+    @Test
+    void independentReadRetentionEndsAtRejectionQueuedExitOrActualReadTerminal() throws Exception {
+        var workers = new ControlledWorkers();
+        var released = new AtomicInteger();
+        var source = source(identity(37, 47), bytes(1));
+        var runtime = runtime(previewStore(), workers, new AtomicLong(), 16);
+        var queued = runtime.acquireChunk(source.content(), source.chunk(), released::incrementAndGet);
+        queued.close();
+        queued.close();
+        assertEquals(1, released.get());
+        runtime.tick();
+        assertEquals(0, workers.size());
+        var pending = runtime.acquireChunk(source.content(), source.chunk(), released::incrementAndGet);
+        runtime.tick();
+        pending.close();
+        assertEquals(1, released.get());
+        workers.runFirst();
+        assertEquals(2, released.get());
+        runtime.tick();
+        var uncached = runtime.acquireChunk(source.content(), source.chunk(), released::incrementAndGet);
+        runtime.tick();
+        assertEquals(1, workers.size());
+        uncached.close();
+        runtime.close();
+        assertEquals(3, released.get());
+        try (var rejected = runtime.acquireChunk(source.content(), source.chunk(), released::incrementAndGet)) {
+            assertEquals(FAILED, rejected.state());
+            assertEquals(4, released.get());
+        }
     }
 
     @Test
@@ -607,22 +639,20 @@ class ServerResourceRuntimeTest {
                 throw new AssertionError(interrupted);
             }
         });
-        try (var runtime = new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
+        try (var runtime = new ServerResourceRuntime(previewStore(), ignored -> {
         })) {
             var acquired = runtime.acquireChunk(source.content(), source.chunk());
             runtime.tick();
             try {
                 assertTrue(closing.await(5, TimeUnit.SECONDS));
                 runtime.tick();
-                assertFalse(acquired.isDone());
-                assertEquals(1, runtime.activeFlightCount());
+                assertEquals(PENDING, acquired.state());
             } finally {
                 release.countDown();
             }
             try (var lease = finish(runtime, acquired)) {
                 assertArrayEquals(bytes(1), copy(lease));
             }
-            assertEquals(0, runtime.activeFlightCount());
         }
     }
 
@@ -633,28 +663,35 @@ class ServerResourceRuntimeTest {
         var source = source(identity(36, 46), bytes(1), () -> {
             throw expected;
         });
-        try (var runtime = runtime(workers, new AtomicLong(), 16)) {
+        try (var runtime = runtime(previewStore(), workers, new AtomicLong(), 16)) {
             var acquired = runtime.acquireChunk(source.content(), source.chunk());
             runtime.tick();
             workers.runFirst();
             runtime.tick();
-            var failure = assertThrows(ExecutionException.class, acquired::get);
-            org.junit.jupiter.api.Assertions.assertSame(expected, failure.getCause());
-            assertEquals(0, runtime.activeFlightCount());
-            assertEquals(0, runtime.cachedCount());
+            assertEquals(FAILED, acquired.state());
+            org.junit.jupiter.api.Assertions.assertSame(expected, acquired.failure());
             runtime.tick();
-            assertEquals(0, runtime.cachedBytes());
+            var retry = runtime.acquireChunk(source.content(), source.chunk());
+            runtime.tick();
+            assertEquals(1, workers.size());
+            retry.close();
         }
     }
 
-    private ServerResourceRuntime runtime(ControlledWorkers workers, AtomicLong now, long budget) {
-        return new ServerResourceRuntime(new PreviewStore(temp), ignored -> {
+    private PreviewStore previewStore() {
+        return new PreviewStore(temp, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp)));
+    }
+
+    private ServerResourceRuntime runtime(PreviewStore store, ControlledWorkers workers, AtomicLong now, long budget) {
+        return new ServerResourceRuntime(store, ignored -> {
         }, now::get, budget, workers);
     }
 
     private void writePreview(Hash256 id, byte[] bytes) throws Exception {
         Files.createDirectories(temp.resolve("previews"));
-        Files.write(temp.resolve("previews").resolve(id + ".image"), bytes);
+        var file = Files.write(temp.resolve("previews").resolve(id + ".image"), bytes);
+        com.elfmcys.ysm.model.storage.TestPreviews.index(temp, id, file);
     }
 
     private static final class ControlledWorkers extends AbstractExecutorService {
@@ -712,29 +749,33 @@ class ServerResourceRuntimeTest {
     @Test
     void previewInvalidationAffectsOnlyTheContentRegionAndKeepsTheOldLease() throws Exception {
         var id = identity(41, 42);
-        var local = new com.elfmcys.ysm.model.storage.CacheRegion(temp.resolve("local"));
-        var global = new com.elfmcys.ysm.model.storage.CacheRegion(temp.resolve("global"));
+        var local = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.CacheRegion(temp.resolve("local")));
+        var global = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.CacheRegion(temp.resolve("global")));
         for (var region : List.of(local, global)) {
-            var path = Files.createDirectories(region.root().resolve("previews")).resolve(id.containerId() + ".image");
+            var path = com.elfmcys.ysm.model.storage.TestCacheFiles.path(region.root(),
+                com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.PREVIEW, id.containerId().toString(),
+                true);
             Files.write(path, bytes(region == local ? 11 : 22));
         }
         var localContent = regional(id, local);
         var globalContent = regional(id, global);
         try (var runtime = new ServerResourceRuntime(com.elfmcys.ysm.model.storage.PreviewStorage.routed(), ignored -> {
         })) {
-            local.previews().storedObserver(key -> runtime.invalidatePreview(local.previews(), key));
-            global.previews().storedObserver(key -> runtime.invalidatePreview(global.previews(), key));
-            try (var old = finish(runtime, runtime.acquirePreview(localContent)).orElseThrow();
-                var other = finish(runtime, runtime.acquirePreview(globalContent)).orElseThrow()) {
+            var localPreviews = localContent.storageBinding().previews();
+            var globalPreviews = globalContent.storageBinding().previews();
+            localPreviews.storedObserver(key -> runtime.invalidatePreview(localPreviews, key));
+            globalPreviews.storedObserver(key -> runtime.invalidatePreview(globalPreviews, key));
+            try (var old = finish(runtime, runtime.acquirePreview(localContent));
+                var other = finish(runtime, runtime.acquirePreview(globalContent))) {
                 assertArrayEquals(bytes(11), copy(old));
                 assertArrayEquals(bytes(22), copy(other));
-                assertEquals(2, runtime.cachedCount());
                 var png = Base64.getDecoder().decode(
                     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
-                try (var image = local.previews().accept(id.containerId(), png)) {
-                    assertEquals(1, runtime.cachedCount());
-                    try (var replacement = finish(runtime, runtime.acquirePreview(localContent)).orElseThrow();
-                        var retained = finish(runtime, runtime.acquirePreview(globalContent)).orElseThrow()) {
+                try (var image = localPreviews.accept(id.containerId(), png)) {
+                    try (var replacement = finish(runtime, runtime.acquirePreview(localContent));
+                        var retained = finish(runtime, runtime.acquirePreview(globalContent))) {
                         assertArrayEquals(png, copy(replacement));
                         assertArrayEquals(bytes(22), copy(retained));
                         assertArrayEquals(bytes(11), copy(old));
@@ -742,6 +783,21 @@ class ServerResourceRuntimeTest {
                 }
             }
         }
+    }
+
+    private static ModelContent previewContent(Hash256 containerId) {
+        var representation = representation(new ModelFileIdentity(ModelId.fromHash(containerId), containerId));
+        return new ModelContent() {
+            @Override
+            public ModelRepresentation representation() {
+                return representation;
+            }
+
+            @Override
+            public ChunkDataSource chunks() {
+                return null;
+            }
+        };
     }
 
     private static ModelContent regional(ModelFileIdentity id, com.elfmcys.ysm.model.storage.CacheRegion region) {
@@ -765,13 +821,15 @@ class ServerResourceRuntimeTest {
         };
     }
 
-    private static <T> T finish(ServerResourceRuntime runtime, CompletableFuture<T> result) throws Exception {
+    private static ServerResourceRuntime.BytesLease finish(ServerResourceRuntime runtime,
+        ServerResourceRuntime.BytesLease result) throws Exception {
         var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!result.isDone() && System.nanoTime() < deadline) {
+        while (result.state() == PENDING && System.nanoTime() < deadline) {
             runtime.tick();
             Thread.onSpinWait();
         }
-        return result.get(1, TimeUnit.SECONDS);
+        assertEquals(READY, result.state());
+        return result;
     }
 
     private static byte[] copy(ServerResourceRuntime.BytesLease lease) {
@@ -829,7 +887,7 @@ class ServerResourceRuntimeTest {
     }
 
     private static ModelFileIdentity identity(int model, int container) {
-        return new ModelFileIdentity(hash(model), hash(container));
+        return new ModelFileIdentity(ModelId.fromHash(hash(model)), hash(container));
     }
 
     private static Hash256 hash(int marker) {

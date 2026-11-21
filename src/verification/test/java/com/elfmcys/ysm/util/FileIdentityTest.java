@@ -15,15 +15,41 @@ class FileIdentityTest {
 
     private static BasicFileAttributes attributes(Object key, long created) {
         return new BasicFileAttributes() {
-            public FileTime lastModifiedTime() { return FileTime.fromMillis(created); }
-            public FileTime lastAccessTime() { return FileTime.fromMillis(100); }
-            public FileTime creationTime() { return FileTime.fromMillis(created); }
-            public boolean isRegularFile() { return true; }
-            public boolean isDirectory() { return false; }
-            public boolean isSymbolicLink() { return false; }
-            public boolean isOther() { return false; }
-            public long size() { return 10; }
-            public Object fileKey() { return key; }
+            public FileTime lastModifiedTime() {
+                return FileTime.fromMillis(created);
+            }
+
+            public FileTime lastAccessTime() {
+                return FileTime.fromMillis(100);
+            }
+
+            public FileTime creationTime() {
+                return FileTime.fromMillis(created);
+            }
+
+            public boolean isRegularFile() {
+                return true;
+            }
+
+            public boolean isDirectory() {
+                return false;
+            }
+
+            public boolean isSymbolicLink() {
+                return false;
+            }
+
+            public boolean isOther() {
+                return false;
+            }
+
+            public long size() {
+                return 10;
+            }
+
+            public Object fileKey() {
+                return key;
+            }
         };
     }
 }

@@ -14,11 +14,10 @@ public final class Actions {
         throw new AssertionError("static provider constructed");
     }
 
-    @MolangFunction(effect = MolangEffect.ACTION)
+    @MolangFunction(action = true)
     public static float action(MolangContextView<Entity> view, int argc, @DefaultValue("0") float value) {
         Query.observe(view);
-        view.submit((PreparedEffect)() ->
-            System.setProperty("composition.actions", System.getProperty("composition.actions", "") + value + ","));
+        System.setProperty("composition.actions", System.getProperty("composition.actions", "") + value + ",");
         return 100 + value;
     }
 }

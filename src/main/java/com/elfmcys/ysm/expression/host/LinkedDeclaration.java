@@ -18,7 +18,7 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
         members = List.copyOf(members);
     }
 
-    public record Member(DeclarationSchema.Member schema, Class<? extends Entity> subject, JavaMemberBinding binding, Optional<JavaMemberBinding> contextFreeTarget) {
+    public record Member(DeclarationSchema.Member schema, Class<? extends Entity> subject, JavaMemberBinding binding) {
     }
 
     public static LinkedDeclaration link(DeclarationSchema schema, ClassLoader loader)
@@ -71,7 +71,8 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
             if (m.tail() != null)
                 verifyRecipe(helper, m.tail(), loader, visibilityRoot);
             var parameters = new ArrayList<Class<?>>();
-            parameters.add(MolangContext.class);
+            if (m.injectContext())
+                parameters.add(MolangContext.class);
             if (!m.shape().equals("FIXED"))
                 parameters.add(int.class);
             for (var v : m.fixed())
@@ -87,19 +88,9 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
                 throw new IllegalArgumentException("exact generated adapter mismatch");
             @SuppressWarnings("unchecked")
             Class<? extends Entity> exact = (Class<? extends Entity>)subject;
-            Optional<JavaMemberBinding> target = Optional.empty();
-            if (!m.contextFreeTarget().isEmpty()) {
-                var targetParameters = Arrays.copyOfRange(original.parameterArray(), 1, original.parameterCount());
-                var targetMethod = owner.getMethod(m.contextFreeTarget(), targetParameters);
-                if (!Modifier.isStatic(targetMethod.getModifiers()) || targetMethod.getReturnType() != result)
-                    throw new IllegalArgumentException("exact context-free target mismatch");
-                // Only the collector's verified internal source can authorize this optimization.
-                if (schema.builtin())
-                    target = Optional.of(binding(owner, targetMethod.getName(), result, targetParameters));
-            }
-            members.add(new Member(m, exact, binding, target));
+            members.add(new Member(m, exact, binding));
         }
-        if (members.stream().anyMatch(member -> !member.schema().isStatic()))
+        if (!schema.componentSubject().isEmpty())
             com.elfmcys.ysm.api.molang.DeclarationLinkage.verifyComponent(owner, helper,
                 com.elfmcys.ysm.client.entity.AnimatableEntity.class, EntityComponent.class,
                 Class.forName(schema.componentSubject(), false, loader));
@@ -135,6 +126,10 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
             throw new IllegalArgumentException("exact value helper mismatch");
     }
 
+    public boolean hasComponent() {
+        return !schema.componentSubject().isEmpty();
+    }
+
     public boolean hasMembers() {
         return members.stream().anyMatch(m -> !m.schema().isStatic());
     }
@@ -163,6 +158,7 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
             case "BOOLEAN" -> BuiltinType.BOOL;
             case "STRING" -> BuiltinType.STRING;
             case "VOID" -> BuiltinType.UNSET;
+            case "ENTITY" -> ExpressionHost.ENTITY;
             case "RECORD" -> value.carrier().equals(MolangVector.class.getName()) ? ExpressionHost.VECTOR
                 : new StructType(new SymbolKey("ysm.java:record_" + hash(value.carrier())));
             case "LIST" -> new ListType(type(value.element()), "ysm.java:" + hash(value.identity()));
@@ -198,8 +194,8 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
 
     static void register(ExpressionRegistry.Builder<MolangContext> builder, List<ExpressionHost.ManifestEntry> manifest,
         List<LinkedDeclaration> declarations) {
-        Set<String> types =
-            new HashSet<>(Set.of(ExpressionHost.VECTOR.stableId(), ExpressionHost.FLOAT_LIST.stableId()));
+        Set<String> types = new HashSet<>(Set.of(ExpressionHost.VECTOR.stableId(), ExpressionHost.FLOAT_LIST.stableId(),
+            ExpressionHost.ENTITY.stableId()));
         for (var d : declarations) {
             if (d.hasMembers())
                 builder.registerProvider(
@@ -224,7 +220,7 @@ public record LinkedDeclaration(DeclarationSchema schema, String verifiedModId, 
                             s.minimum(), s.maximum(), s.fixed().stream().map(LinkedDeclaration::type).toList(),
                             defaults, Optional.ofNullable(s.tail()).map(LinkedDeclaration::type), type(s.result()),
                             m.binding(), effects, d.verifiedModId(), ExpressionAbi.ANIMATION_NUMBER, Optional.empty(),
-                            s.mayReturnMissing()));
+                            s.mayReturnMissing(), s.injectContext()));
                 }
                 manifest.add(new ExpressionHost.ManifestEntry(s.symbol(), "INVOKE", s.shape(), s.minimum(), s.maximum(),
                     s.fixed().stream().map(v -> type(v).stableId()).toList(), s.defaults(),

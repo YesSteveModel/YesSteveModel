@@ -117,7 +117,7 @@ public final class RemotePublicationScenarioFixture {
         var file =
             Files.copy(asset.file(), root.resolve("inaccessible-local.mxc"), StandardCopyOption.REPLACE_EXISTING);
         var entry = new CatalogIndexEntry(asset.identity(),
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("inaccessible-local")), file);
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("inaccessible-local")), file);
         var view = Files.getFileAttributeView(file, AclFileAttributeView.class);
         if (view == null) {
             throw new AssertionError("Recorded platform must expose a Windows ACL view");
@@ -134,7 +134,7 @@ public final class RemotePublicationScenarioFixture {
 
     public static CatalogRecord record(Asset asset, String path, CatalogAccess access) {
         var location = new CatalogLocation(
-            access == CatalogAccess.AUTHORIZED ? CatalogRootKind.AUTH : CatalogRootKind.CUSTOM, new ModelPath(path));
+            access == CatalogAccess.AUTHORIZED ? CatalogRootKind.MODELS : CatalogRootKind.MODELS, new ModelPath(path));
         return new CatalogRecord(location, new CatalogContentBinding(asset.identity().modelId(), asset.content()));
     }
 
@@ -149,7 +149,7 @@ public final class RemotePublicationScenarioFixture {
         }
         var file = parsed;
         if (!builtin) {
-            var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath(name));
+            var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath(name));
             var content = ManagedContainer.openDirect(parsed, location);
             try {
                 file =
@@ -191,7 +191,7 @@ public final class RemotePublicationScenarioFixture {
         try (var channel = FileChannel.open(file, StandardOpenOption.READ)) {
             identity = ModelFileIdentityReader.read(channel);
         }
-        var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath(name));
+        var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath(name));
         return new Asset(name, file, identity,
             ManagedContainer.openIndexed(new CatalogIndexEntry(identity, location, file)));
     }

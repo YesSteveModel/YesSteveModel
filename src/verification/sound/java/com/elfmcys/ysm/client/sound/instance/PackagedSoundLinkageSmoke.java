@@ -10,8 +10,8 @@ public final class PackagedSoundLinkageSmoke {
 
     public static void main(String[] args) throws Exception {
         var expectedArchive = Path.of(args[0]).toRealPath();
-        var actualArchive = Path.of(SoundInstanceManager.class.getProtectionDomain().getCodeSource().getLocation()
-            .toURI()).toRealPath();
+        var actualArchive = Path
+            .of(SoundInstanceManager.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toRealPath();
         if (!expectedArchive.equals(actualArchive)) {
             throw new AssertionError("Sound manager was not loaded from the packaged archive: " + actualArchive);
         }
@@ -20,7 +20,7 @@ public final class PackagedSoundLinkageSmoke {
         // An empty scope still links the method reference used by trim.
         manager.trim();
 
-        for (var implementation : new String[]{MinecraftSoundInstance.class.getName(),
+        for (var implementation : new String[] {MinecraftSoundInstance.class.getName(),
             "com.elfmcys.ysm.model.resource.client.audio.ClientAudioRuntime$Playback"}) {
             var type = Class.forName(implementation, false, PackagedSoundLinkageSmoke.class.getClassLoader());
             var query = type.getDeclaredMethod("isPlaybackStopped");

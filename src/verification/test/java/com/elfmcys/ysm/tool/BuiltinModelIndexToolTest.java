@@ -1,8 +1,9 @@
 package com.elfmcys.ysm.tool;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.catalog.builtin.BuiltinModelIndex;
 import com.elfmcys.ysm.model.catalog.content.DefaultAnimationKey;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
 import com.elfmcys.ysm.expression.inventory.ProgramRole;
@@ -30,7 +31,7 @@ class BuiltinModelIndexToolTest {
     @Test
     void defaultContractContainsOnlyTheDefaultModelAndCurrentAnimationHashes() throws Exception {
         var key = new DefaultAnimationKey("player/main", "idle");
-        var current = hash(2);
+        var current = Hash256.parse(hash(2).toString().substring(5));
 
         var contract = BuiltinModelIndexTool.createDefaultContract(hash(1), Map.of(key, current));
 
@@ -42,8 +43,8 @@ class BuiltinModelIndexToolTest {
     void indexGenerationMergesHistoryWithoutWeakeningTheDefaultProof() throws Exception {
         var key = new DefaultAnimationKey("player/main", "idle");
         var defaultHash = hash(1);
-        var current = hash(2);
-        var historical = hash(3);
+        var current = Hash256.parse(hash(2).toString().substring(5));
+        var historical = Hash256.parse(hash(3).toString().substring(5));
         var contract = BuiltinModelIndexTool.createDefaultContract(defaultHash, Map.of(key, current));
 
         var index =
@@ -61,8 +62,8 @@ class BuiltinModelIndexToolTest {
     void rejectsAContractWithExtraModelsOrHistoricalAnimationHashes() throws Exception {
         var key = new DefaultAnimationKey("player/main", "idle");
         var defaultHash = hash(1);
-        var current = hash(2);
-        var historical = hash(3);
+        var current = Hash256.parse(hash(2).toString().substring(5));
+        var historical = Hash256.parse(hash(3).toString().substring(5));
         var modelHashes = Map.of(DEFAULT_PATH, defaultHash);
         var extraModelContract =
             BuiltinModelIndex.of(Map.of(DEFAULT_PATH, defaultHash, new ModelPath("misc/example"), hash(4)));
@@ -83,8 +84,10 @@ class BuiltinModelIndexToolTest {
               "builtinIndexHash": "%s",
               "verifiedModelCount": 27
             }
-            """.formatted(hash(9)), BuiltinModelIndexTool.verificationReceipt(hash(9), 27));
-        assertThrows(IllegalArgumentException.class, () -> BuiltinModelIndexTool.verificationReceipt(hash(9), 0));
+            """.formatted(Hash256.parse(hash(9).toString().substring(5))),
+            BuiltinModelIndexTool.verificationReceipt(Hash256.parse(hash(9).toString().substring(5)), 27));
+        assertThrows(IllegalArgumentException.class,
+            () -> BuiltinModelIndexTool.verificationReceipt(Hash256.parse(hash(9).toString().substring(5)), 0));
     }
 
     @Test
@@ -121,9 +124,9 @@ class BuiltinModelIndexToolTest {
         return new ModelProgramInventory.SemanticLocation("player", value, role, discriminator);
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         bytes[bytes.length - 1] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 }

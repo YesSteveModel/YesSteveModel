@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.dispatch;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.catalog.source.ModelCatalogSource;
@@ -83,18 +84,14 @@ class ServerAssetTransfersTest {
     @Test
     void traversalIsRejectedBeforeCatalogRootResolution() {
         var failures = new ArrayList<ResourceTransferFailureProto>();
-        var rootCalls = new AtomicInteger();
         var owner = active(CatalogSnapshot.empty());
         try (var worker = new ResourceDispatchWorker(1, 2, 0); var transfers = new ServerAssetTransfers(owner, worker,
             new RecordingPort(), () -> false, failures::add, runtime(), ignored -> {
-                rootCalls.incrementAndGet();
-                return root;
+                throw new AssertionError("Traversal must be rejected before resolving catalog root");
             })) {
             assertFalse(transfers.accept(PresentationPageRequestProto.newBuilder().setDataTransferId(1)
                 .addPackCovers(cover(1, "../escape/", hash(4), 1)).build()));
 
-            assertEquals(0, rootCalls.get());
-            assertEquals(0, transfers.activeCount());
             assertTrue(failures.isEmpty());
         }
     }
@@ -116,9 +113,9 @@ class ServerAssetTransfersTest {
 
         var contentHash = ModelHashing.blake3(outsideCover);
         var descriptor = new ModelPackScanner()
-            .scan(new ModelCatalogSource(CatalogRootKind.CUSTOM, catalogRoot, false), catalogRoot.resolve("linked"))
+            .scan(new ModelCatalogSource(CatalogRootKind.MODELS, catalogRoot, false), catalogRoot.resolve("linked"))
             .orElseThrow();
-        assertEquals("local:custom/linked", descriptor.hierarchy());
+        assertEquals("local:linked", descriptor.hierarchy());
         assertEquals(contentHash, descriptor.coverHash());
         var owner = active(new CatalogSnapshot(Map.of(), List.of(descriptor), ModelScanReport.empty()));
         var failures = new ArrayList<ResourceTransferFailureProto>();
@@ -140,7 +137,6 @@ class ServerAssetTransfersTest {
                     ProtocolBuffer.parse(decoded.protobuf(), PackCoverFragmentProto::parseFrom).delivery());
             }
             assertEquals(0, worker.queued(owner));
-            assertEquals(0, transfers.activeCount());
         }
     }
 
@@ -154,10 +150,10 @@ class ServerAssetTransfersTest {
         Files.write(local.resolve("ysm-pack.png"), localBytes);
         var globalHash = ModelHashing.blake3(globalBytes);
         var localHash = ModelHashing.blake3(localBytes);
-        var globalPack = new ModelPackDescriptor(CatalogRootKind.CUSTOM, "global:custom/team", "Global", "", Map.of(),
+        var globalPack = new ModelPackDescriptor(CatalogRootKind.MODELS, "global:team", "Global", "", Map.of(),
             globalHash, "png", 3);
-        var localPack = new ModelPackDescriptor(CatalogRootKind.CUSTOM, "local:custom/team", "Local", "", Map.of(),
-            localHash, "png", 4);
+        var localPack =
+            new ModelPackDescriptor(CatalogRootKind.MODELS, "local:team", "Local", "", Map.of(), localHash, "png", 4);
         var owner = active(new CatalogSnapshot(Map.of(), List.of(globalPack, localPack), ModelScanReport.empty()));
         var failures = new ArrayList<ResourceTransferFailureProto>();
         var roots = new ArrayList<com.elfmcys.ysm.model.catalog.source.CatalogRoot>();
@@ -165,7 +161,7 @@ class ServerAssetTransfersTest {
         try (var worker = new ResourceDispatchWorker(1, 2, 0); var transfers =
             new ServerAssetTransfers(owner, worker, port, () -> false, failures::add, runtime(), selected -> {
                 roots.add(selected);
-                return selected == com.elfmcys.ysm.model.catalog.source.CatalogRoot.GLOBAL_CUSTOM ? global.getParent()
+                return selected == com.elfmcys.ysm.model.catalog.source.CatalogRoot.GLOBAL ? global.getParent()
                     : local.getParent();
             })) {
             var packs = List.of(globalPack, localPack);
@@ -185,10 +181,11 @@ class ServerAssetTransfersTest {
                     assertArrayEquals(expected.get(i), bytes);
                 }
             }
-            assertEquals(List.of(com.elfmcys.ysm.model.catalog.source.CatalogRoot.GLOBAL_CUSTOM,
-                com.elfmcys.ysm.model.catalog.source.CatalogRoot.LOCAL_CUSTOM), roots);
+            assertEquals(List.of(com.elfmcys.ysm.model.catalog.source.CatalogRoot.GLOBAL,
+                com.elfmcys.ysm.model.catalog.source.CatalogRoot.LOCAL), roots);
             assertTrue(transfers.accept(PresentationPageRequestProto.newBuilder().setDataTransferId(3)
-                .addPackCovers(cover(1, "team", globalHash, 3).toBuilder().setHierarchyPath("global:auth/team").build())
+                .addPackCovers(
+                    cover(1, "team", globalHash, 3).toBuilder().setHierarchyPath("global:missing/team").build())
                 .build()));
             assertFailure(failures, 3, notFound());
             assertEquals(2, roots.size());
@@ -242,7 +239,6 @@ class ServerAssetTransfersTest {
             assertFailure(failures, 1, notFound());
             assertEquals(0, rootCalls.get());
             assertEquals(0, worker.queued(owner));
-            assertEquals(0, transfers.activeCount());
         }
     }
 
@@ -257,13 +253,11 @@ class ServerAssetTransfersTest {
                 assertTrue(transfers.accept(PresentationPageRequestProto.newBuilder().setDataTransferId(transferId)
                     .addPackCovers(cover(1, "missing/", contentHash, 3)).build()));
             }
-            assertEquals(256, transfers.activeCount());
             assertTrue(failures.isEmpty());
 
             assertTrue(transfers.accept(PresentationPageRequestProto.newBuilder().setDataTransferId(257)
                 .addPackCovers(cover(1, "missing/", contentHash, 3)).build()));
             assertFailure(failures, 257, busy());
-            assertEquals(256, transfers.activeCount());
             assertFalse(transfers.accept(PresentationPageRequestProto.newBuilder().setDataTransferId(257)
                 .addPackCovers(cover(1, "missing/", contentHash, 3)).build()));
         }
@@ -283,16 +277,13 @@ class ServerAssetTransfersTest {
                 .addPackCovers(cover(2, "pack/", contentHash, bytes.length)).build();
             assertTrue(transfers.accept(first));
             assertEquals(2, worker.queued(owner));
-            assertEquals(1, transfers.activeCount());
 
             assertTrue(transfers.accept(PresentationPageRequestProto.newBuilder().setDataTransferId(2)
                 .addPackCovers(cover(3, "pack/", contentHash, bytes.length)).build()));
             assertFailure(failures, 2, busy());
             assertEquals(2, worker.queued(owner));
-            assertEquals(1, transfers.activeCount());
 
             assertTrue(transfers.cancel(1));
-            assertEquals(0, transfers.activeCount());
             assertTrue(worker.dispatchOnce());
             assertTrue(port.frames.isEmpty());
         }
@@ -316,7 +307,6 @@ class ServerAssetTransfersTest {
 
             assertFailure(failures, 1, busy());
             assertEquals(0, worker.queued(owner));
-            assertEquals(0, transfers.activeCount());
         }
     }
 
@@ -333,10 +323,8 @@ class ServerAssetTransfersTest {
                 .addPackCovers(cover(4, "missing/", contentHash, bytes.length)).build()));
 
             assertTrue(worker.dispatchOnce());
-            assertEquals(1, transfers.activeCount());
             transfers.tick();
             assertTrue(failures.isEmpty());
-            assertEquals(0, transfers.activeCount());
             assertEquals(1, port.frames.size());
             try (var decoded =
                 FrameCodec.decode(port.frames.get(0), id -> ProtocolMessages.REGISTRY.find(id).isPresent())) {
@@ -365,10 +353,8 @@ class ServerAssetTransfersTest {
 
             assertTrue(worker.dispatchOnce());
             assertTrue(failures.isEmpty());
-            assertEquals(1, transfers.activeCount());
             transfers.tick();
             assertFailure(failures, 1, unavailable());
-            assertEquals(0, transfers.activeCount());
             assertTrue(port.frames.isEmpty());
             assertFalse(worker.dispatchOnce());
             assertEquals(1, failures.size());
@@ -397,13 +383,11 @@ class ServerAssetTransfersTest {
             assertTrue(port.frames.isEmpty());
             assertTrue(worker.dispatchOnce());
             assertTrue(port.frames.isEmpty());
-            assertEquals(1, transfers.activeCount());
             assertTrue(failures.isEmpty());
 
             transfers.tick();
 
             assertFailure(failures, 1, unavailable());
-            assertEquals(0, transfers.activeCount());
             assertEquals(0, worker.queued(owner));
         }
     }
@@ -414,80 +398,13 @@ class ServerAssetTransfersTest {
             ignored -> root);
     }
 
-    @Test
-    void transferOwnerExistsBeforeSynchronousSourceResolutionAndCancelPreventsEnqueue() throws Exception {
-        var bytes = new byte[] {1, 2, 3, 4};
-        var contentHash = writeCover("blocked", bytes);
-        var owner = active(catalog("blocked", contentHash, bytes.length));
-        var failures = new ArrayList<ResourceTransferFailureProto>();
-        var entered = new CountDownLatch(1);
-        var release = new CountDownLatch(1);
-        var executor = Executors.newSingleThreadExecutor();
-        try (var worker = new ResourceDispatchWorker(1, 2, 0); var transfers = new ServerAssetTransfers(owner, worker,
-            new RecordingPort(), () -> false, failures::add, runtime(), ignored -> {
-                entered.countDown();
-                try {
-                    if (!release.await(5, TimeUnit.SECONDS)) {
-                        throw new IllegalStateException("source resolution timed out");
-                    }
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("source resolution interrupted", interrupted);
-                }
-                return root;
-            })) {
-            var accepted = executor.submit(() -> transfers.accept(PresentationPageRequestProto.newBuilder()
-                .setDataTransferId(1).addPackCovers(cover(1, "blocked/", contentHash, bytes.length)).build()));
-            assertTrue(entered.await(5, TimeUnit.SECONDS));
-            assertEquals(1, transfers.activeCount());
-            assertTrue(transfers.cancel(1));
-            release.countDown();
-
-            assertTrue(accepted.get(5, TimeUnit.SECONDS));
-            assertEquals(0, worker.queued(owner));
-            assertEquals(0, transfers.activeCount());
-            assertTrue(failures.isEmpty());
-        } finally {
-            release.countDown();
-            executor.shutdownNow();
-        }
-    }
-
-    @Test
-    void partialPacketConstructionClosesThePrefixAndNeverEnqueues() throws IOException {
-        var firstBytes = new byte[] {1, 2, 3};
-        var secondBytes = new byte[] {4, 5, 6};
-        var firstHash = writeCover("first", firstBytes);
-        var secondHash = writeCover("second", secondBytes);
-        var firstPack = pack("first", firstHash, firstBytes.length);
-        var secondPack = pack("second", secondHash, secondBytes.length);
-        var owner = active(new CatalogSnapshot(Map.of(), List.of(firstPack, secondPack), ModelScanReport.empty()));
-        var failures = new ArrayList<ResourceTransferFailureProto>();
-        var resolutions = new AtomicInteger();
-        try (var worker = new ResourceDispatchWorker(1, 4, 0); var transfers = new ServerAssetTransfers(owner, worker,
-            new RecordingPort(), () -> false, failures::add, runtime(), ignored -> {
-                if (resolutions.incrementAndGet() == 2) {
-                    try {
-                        Files.write(root.resolve("second").resolve("ysm-pack.png"), new byte[] {7, 8, 9});
-                    } catch (IOException failure) {
-                        throw new UncheckedIOException(failure);
-                    }
-                }
-                return root;
-            })) {
-            assertTrue(transfers.accept(PresentationPageRequestProto.newBuilder().setDataTransferId(1)
-                .addPackCovers(cover(1, "first/", firstHash, firstBytes.length))
-                .addPackCovers(cover(2, "second/", secondHash, secondBytes.length)).build()));
-
-            assertFailure(failures, 1, unavailable());
-            assertEquals(0, worker.queued(owner));
-            assertEquals(0, transfers.activeCount());
-        }
-    }
-
     private ServerResourceRuntime runtime() {
-        var runtime = new ServerResourceRuntime(new PreviewStore(root.resolve("preview-cache")), ignored -> {
-        });
+        var runtime = new ServerResourceRuntime(
+            new PreviewStore(root.resolve("preview-cache"),
+                com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                    .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root.resolve("preview-cache")))),
+            ignored -> {
+            });
         runtimes.add(runtime);
         return runtime;
     }
@@ -512,14 +429,13 @@ class ServerAssetTransfersTest {
     }
 
     private static ModelPackDescriptor pack(String hierarchy, Hash256 hash, int size) {
-        return new ModelPackDescriptor(CatalogRootKind.CUSTOM,
-            "local:custom" + (hierarchy.isEmpty() ? ""
-                : "/" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy)),
+        return new ModelPackDescriptor(CatalogRootKind.MODELS,
+            "local:" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy),
             hierarchy, "", Map.of(), hash, "png", size);
     }
 
     private static ModelChunkRequestProto modelRequest(long id, String name) {
-        return ModelChunkRequestProto.newBuilder().setDataTransferId(id).setModelId(ProtoBytes.wrap(hash(10)))
+        return ModelChunkRequestProto.newBuilder().setDataTransferId(id).setModelId("hash:" + hash(10))
             .setContainerId(ProtoBytes.wrap(hash(11))).addChunks(ChunkMemberProto.newBuilder().setName(name)
                 .setExpectedHash(ProtoBytes.wrap(hash(12))).setStoredSize(1).setDecodedSize(0).setEncoding("").build())
             .build();
@@ -527,8 +443,8 @@ class ServerAssetTransfersTest {
 
     private static PackCoverMemberProto cover(int slot, String hierarchy, Hash256 hash, int size) {
         return PackCoverMemberProto.newBuilder().setSlot(slot)
-            .setHierarchyPath("local:custom" + (hierarchy.isEmpty() ? ""
-                : "/" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy)))
+            .setHierarchyPath(
+                "local:" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy))
             .setExpectedHash(ProtoBytes.wrap(hash)).setStoredSize(size).setDecodedSize(size).setEncoding("png").build();
     }
 

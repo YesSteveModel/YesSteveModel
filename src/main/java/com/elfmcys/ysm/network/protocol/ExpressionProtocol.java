@@ -3,7 +3,7 @@ package com.elfmcys.ysm.network.protocol;
 import com.elfmcys.ysm.expression.host.ExpressionIdentityHash;
 import com.elfmcys.ysm.expression.inventory.SharedExpressionSemantics;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
 import com.elfmcys.ysm.proto.network.ExpressionTargetIdentityProto;
 import com.elfmcys.ysm.util.ProtoBytes;
@@ -27,7 +27,7 @@ public final class ExpressionProtocol {
     public static ExpressionTargetIdentityProto identity(SharedExpressionSemantics identity) {
         Objects.requireNonNull(identity, "identity");
         return ExpressionTargetIdentityProto.newBuilder().setSchemaVersion(SCHEMA_VERSION)
-            .setModelId(ByteBuffer.wrap(identity.modelId().bytes())).setTargetId(identity.targetId())
+            .setModelId(identity.modelId().toString()).setTargetId(identity.targetId())
             .setModuleIdentity(ByteBuffer.wrap(bytes(identity.fingerprint())))
             .setConfigIdentity(ByteBuffer.wrap(bytes(identity.configFingerprint())))
             .setCatalogIdentity(ByteBuffer.wrap(bytes(identity.eventContractFingerprint()))).build();
@@ -38,23 +38,23 @@ public final class ExpressionProtocol {
             return false;
         }
         Objects.requireNonNull(semantics, "semantics");
-        return ProtoBytes.equals(semantics.modelId(), wire.modelId()) && semantics.targetId().equals(wire.targetId())
+        return semantics.modelId().toString().equals(wire.modelId()) && semantics.targetId().equals(wire.targetId())
             && matches(wire.moduleIdentity(), semantics.fingerprint())
             && matches(wire.configIdentity(), semantics.configFingerprint())
             && matches(wire.catalogIdentity(), semantics.eventContractFingerprint());
     }
 
     public static boolean validIdentity(ExpressionTargetIdentityProto wire) {
-        return wire != null && wire.schemaVersion() == SCHEMA_VERSION && wire.modelId().remaining() == Hash256.SIZE
+        return wire != null && wire.schemaVersion() == SCHEMA_VERSION && ModelId.isValid(wire.modelId())
             && !wire.targetId().isBlank() && wire.targetId().length() <= MAX_TARGET_ID_LENGTH
             && wire.moduleIdentity().remaining() == IDENTITY_BYTES
             && wire.configIdentity().remaining() == IDENTITY_BYTES
             && wire.catalogIdentity().remaining() == IDENTITY_BYTES;
     }
 
-    public static boolean matchesServerAuthority(ExpressionTargetIdentityProto wire, Hash256 modelId, String targetId,
+    public static boolean matchesServerAuthority(ExpressionTargetIdentityProto wire, ModelId modelId, String targetId,
         SettingsProto settings) {
-        if (!validIdentity(wire) || !ProtoBytes.equals(Objects.requireNonNull(modelId, "modelId"), wire.modelId())
+        if (!validIdentity(wire) || !Objects.requireNonNull(modelId, "modelId").toString().equals(wire.modelId())
             || !Objects.requireNonNull(targetId, "targetId").equals(wire.targetId())) {
             return false;
         }

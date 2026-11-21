@@ -457,5 +457,22 @@
   "message.yes_steve_model.gen_preview.query_failed": "Preview query failed: %s",
   "message.yes_steve_model.gen_preview.success": "Success",
   "message.yes_steve_model.gen_preview.failed": "Failed",
-  "message.yes_steve_model.gen_preview.skipped": "Skipped"
+  "message.yes_steve_model.gen_preview.skipped": "Skipped",
+  "message.yes_steve_model.selection.failure.preparation": "Could not prepare the selected model.",
+  "message.yes_steve_model.selection.failure.preferences": "Could not restore this model's preferences. Selection was not sent.",
+  "message.yes_steve_model.selection.failure.send": "Could not send the model selection.",
+  "message.yes_steve_model.selection.failure.rejected": "The server rejected the model selection.",
+  "message.yes_steve_model.selection.failure.installation": "Could not install the selected model.",
+  "message.yes_steve_model.selection.failure.timeout": "Model selection timed out.",
+  "message.yes_steve_model.preferences.failure": "Could not read or save player preferences.",
+  "message.yes_steve_model.preferences.clear.saved": "Roaming was cleared locally and saved.",
+  "message.yes_steve_model.preferences.clear.failed": "Roaming was cleared locally, but could not be saved.",
+  "commands.ysm.cache.help": "/%s cache prune-next [all]: schedule cleanup for the next startup on this process. Safety checks still apply. all also removes other schema versions from global converted and bake caches.",
+  "commands.ysm.cache.local": "local",
+  "commands.ysm.cache.global": "global",
+  "commands.ysm.cache.local_global": "local/global",
+  "commands.ysm.cache.scheduled": "%s: scheduled cleanup for the next startup. Process and active-object protection still apply.",
+  "commands.ysm.cache.scheduled_all": "%s: scheduled cleanup for the next startup, including other schema versions of converted and bake caches. Active objects remain protected.",
+  "commands.ysm.cache.failure": "%s: could not schedule cleanup: %s",
+  "commands.ysm.cache.global_disabled": "Global cache is disabled. No global request was saved."
 }

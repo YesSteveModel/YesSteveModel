@@ -2,12 +2,20 @@ package com.elfmcys.ysm.client.demand;
 
 import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.resource.client.*;
+import com.elfmcys.ysm.model.storage.StorageWriteBuffer;
+import com.elfmcys.ysm.model.storage.PlayerPreferences;
+import com.elfmcys.ysm.natives.storage.StorageResult;
+import com.elfmcys.ysm.model.storage.NamedRoamingSnapshot;
+import com.elfmcys.ysm.network.protocol.RoamingDictionary;
 import org.jetbrains.annotations.Nullable;
 
-import java.lang.ref.WeakReference;
+import com.elfmcys.ysm.client.entity.EntityModelDemand;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.LongSupplier;
 import java.util.function.BooleanSupplier;
 
@@ -15,19 +23,25 @@ import java.util.function.BooleanSupplier;
 public final class ClientDemandCoordinator implements AutoCloseable {
     public static final long WAIT_MILLIS = 30_000;
 
-    public record Target(@Nullable Hash256 modelId, String texture) {
+    public record Target(@Nullable ModelId modelId, String texture) {
         public Target {
             texture = Objects.requireNonNullElse(texture, "");
-            if (modelId == null)
-                texture = "";
+        }
+
+        public PublishedModelId identity() {
+            return modelId == null ? PublishedModelId.INTRINSIC_DEFAULT : PublishedModelId.model(modelId);
         }
     }
 
     public interface Resources extends ModelResourceDemand.Access {
         @Nullable
-        ModelContent content(Hash256 modelId);
+        ModelContent content(ModelId modelId);
 
-        ResourceRequest resourceRequest(Hash256 modelId, String target, String texture, ModelResourcePurpose purpose,
+        default @Nullable ModelContent content(PublishedModelId modelId) {
+            return modelId instanceof PublishedModelId.Model model ? content(model.hash()) : null;
+        }
+
+        ResourceRequest resourceRequest(ModelId modelId, String target, String texture, ModelResourcePurpose purpose,
             Class<?> subject);
 
         ResourceRequest defaultResourceRequest(String target, ModelResourcePurpose purpose, Class<?> subject);
@@ -43,7 +57,11 @@ public final class ClientDemandCoordinator implements AutoCloseable {
     }
 
     public record Assignment(@Nullable ResourceRequest request, @Nullable ResourceRequest fallback,
-        ModelResourceDemand.Mode mode, boolean permitted) {
+        ModelResourceDemand.Mode mode, boolean permitted, @Nullable Object operation) {
+        public Assignment(@Nullable ResourceRequest request, @Nullable ResourceRequest fallback,
+            ModelResourceDemand.Mode mode, boolean permitted) {
+            this(request, fallback, mode, permitted, null);
+        }
     }
 
     public enum InstallationResult {
@@ -62,6 +80,11 @@ public final class ClientDemandCoordinator implements AutoCloseable {
 
         /** BUSY retains caller ownership; every other outcome consumes this independent lease. */
         InstallationResult install(ResourceRequest request, ResourceLease lease, boolean fallback, boolean full);
+
+        default InstallationResult install(ResourceRequest request, ResourceLease lease, boolean fallback, boolean full,
+            Object operation) {
+            return install(request, lease, fallback, full);
+        }
     }
 
     public interface CardDisplay {
@@ -70,37 +93,96 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         void deactivate();
     }
 
-    public record SelectionContext(Object owner, boolean remote, boolean available) {
+    public record SelectionContext(Object owner, UUID player, Object preferenceBinding, boolean remote,
+        boolean available) {
+        public boolean matches(SelectionContext other) {
+            return other != null && owner == other.owner && Objects.equals(player, other.player)
+                && preferenceBinding == other.preferenceBinding && remote == other.remote;
+        }
+    }
+
+    public record InitialRoaming(NamedRoamingSnapshot payload, boolean persistable) {
+        public InitialRoaming {
+            Objects.requireNonNull(payload);
+        }
     }
 
     public interface Selections {
+        default boolean updateTexture(Target target) {
+            return false;
+        }
+
         @Nullable
         SelectionContext context();
 
         Target authority();
 
-        boolean installed(Target target);
+        default boolean installed(Target target) {
+            return installed(target, null);
+        }
+
+        /** A non-null application requires publication for that exact identity. */
+        boolean installed(Target target, @Nullable Object application);
 
         default @Nullable Throwable failure(Target target) {
             return null;
         }
 
-        void send(Target target, long intentId);
+        @Nullable
+        InitialRoaming retainedInitial(SelectionContext context, Target target);
+
+        void send(SelectionContext context, Target target, long intentId, @Nullable NamedRoamingSnapshot initial,
+            boolean reinitialize);
 
         void reportFailure(Throwable failure);
+
+        void reportPreferenceReadFailure(Throwable failure);
     }
 
     public record Feedback(boolean waiting, @Nullable Throwable failure) {
         private static final Feedback IDLE = new Feedback(false, null);
     }
 
+    public enum FailureStage {
+        PREPARATION, PREFERENCES, SEND, REJECTED, INSTALLATION, TIMEOUT
+    }
+
+    public static final class SelectionFailure extends RuntimeException {
+        private final FailureStage stage;
+
+        public SelectionFailure(FailureStage stage, Throwable cause) {
+            super("Model selection failed during " + stage, cause);
+            this.stage = stage;
+        }
+
+        public FailureStage stage() {
+            return stage;
+        }
+    }
+
+    public enum SelectionKind {
+        SELECT, RESELECT, CLEAR
+    }
+
+    public record SelectionAssociation(SelectionContext context, Target target, long id, SelectionKind kind,
+        @Nullable InitialRoaming initial, @Nullable RoamingDictionary dictionary) {
+    }
+
+    /** Proves that transport submission was never entered. Other send failures are ambiguous. */
+    public static final class NotSubmitted extends IllegalStateException {
+        public NotSubmitted(String message) {
+            super(message);
+        }
+    }
+
+    private SelectionAssociation association;
     private final LongSupplier clock;
     private final Resources resources;
     private final Selections selections;
+    private final PlayerPreferences preferences;
     private final BooleanSupplier eagerLoading;
-    private final java.util.concurrent.ConcurrentLinkedQueue<EntityScope> entities =
-        new java.util.concurrent.ConcurrentLinkedQueue<>();
-    private final Set<PageScope> pages = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final List<EntityModelDemand> entities = new ArrayList<>();
+    private final Set<PageScope> pages = new HashSet<>();
     private final ContinuousDemand<Target> selectionTimeline = new ContinuousDemand<>();
     private Object owner;
     private long nextIntentId = 1;
@@ -121,20 +203,26 @@ public final class ClientDemandCoordinator implements AutoCloseable {
 
     public ClientDemandCoordinator(LongSupplier clock, Resources resources, Selections selections,
         BooleanSupplier eagerLoading) {
+        this(clock, resources, selections, null, eagerLoading);
+    }
+
+    public ClientDemandCoordinator(LongSupplier clock, Resources resources, Selections selections,
+        @Nullable PlayerPreferences preferences, BooleanSupplier eagerLoading) {
         this.clock = Objects.requireNonNull(clock);
         this.resources = Objects.requireNonNull(resources);
         this.selections = Objects.requireNonNull(selections);
+        this.preferences = preferences;
         this.eagerLoading = Objects.requireNonNull(eagerLoading);
     }
 
-    public EntityScope register(Installation endpoint) {
+    public EntityModelDemand register(Installation endpoint) {
         return register(endpoint, WorkPriority.BACKGROUND);
     }
 
-    public EntityScope register(Installation endpoint, WorkPriority priority) {
+    public EntityModelDemand register(Installation endpoint, WorkPriority priority) {
         if (closed)
             throw new IllegalStateException("Demand owner is closed");
-        var scope = new EntityScope(endpoint, priority);
+        var scope = new EntityModelDemand(endpoint, priority, resources, clock, entities::remove);
         entities.add(scope);
         return scope;
     }
@@ -174,49 +262,93 @@ public final class ClientDemandCoordinator implements AutoCloseable {
 
     public boolean canOpenTextures() {
         var authority = selections.authority();
-        return !feedback.waiting()
-            && (Objects.equals(observedAuthority, authority) || selections.installed(authority));
+        return !feedback.waiting() && (Objects.equals(observedAuthority, authority) || selections.installed(authority));
     }
 
     public void select(Target target) {
+        select(target, SelectionKind.SELECT);
+    }
+
+    private void select(Target target, SelectionKind kind) {
         Objects.requireNonNull(target);
         var context = synchronizeOwner();
         if (closed || context == null || !context.available())
             return;
-        if (current != null && !current.terminal && current.target.equals(target))
+        if (kind == SelectionKind.SELECT && target.identity().equals(selections.authority().identity())
+            && !target.texture().equals(selections.authority().texture()) && selections.updateTexture(target))
             return;
         var previous = current;
+        retire(previous);
+        association = null;
         var preparation = previous != null && !previous.preparation.ended && previous.target.equals(target)
-            ? previous.preparation
-                : new Preparation(target, ModelResourcePurpose.FULL, WorkPriority.LOCAL_PLAYER);
+            ? previous.preparation : new Preparation(target, ModelResourcePurpose.FULL, WorkPriority.LOCAL_PLAYER);
         var now = clock.getAsLong();
+        if (observedAuthority == null)
+            observedAuthority = selections.authority();
         selectionTimeline.observe(target, now);
-        current = new Intent(target, preparation, now);
-        if (context.remote()) {
-            if (idsExhausted) {
-                current.sent = true;
-                failIntent(new IllegalStateException("Model selection intent identifiers are exhausted"));
-            } else {
-                current.id = nextIntentId;
-                if (nextIntentId == -1L)
-                    idsExhausted = true;
-                else
-                    nextIntentId++;
-            }
+        current = new Intent(context, target, preparation, now, kind);
+        if (idsExhausted) {
+            failIntent(FailureStage.SEND,
+                new IllegalStateException("Model selection intent identifiers are exhausted"));
+        } else {
+            current.id = nextIntentId;
+            if (nextIntentId == Long.MAX_VALUE)
+                idsExhausted = true;
+            else
+                nextIntentId++;
         }
         if (!current.terminal) {
-            feedback = new Feedback(!selections.installed(target), null);
+            feedback =
+                new Feedback(context.remote() || kind != SelectionKind.SELECT || !selections.installed(target), null);
             feedbackTarget = target;
+            if (context.remote() || kind == SelectionKind.CLEAR) {
+                try {
+                    current.initial = kind == SelectionKind.CLEAR
+                        ? new InitialRoaming(new NamedRoamingSnapshot(new String[0], new float[0]), true)
+                        : selections.retainedInitial(context, target);
+                } catch (RuntimeException failure) {
+                    failIntent(FailureStage.PREFERENCES, failure);
+                }
+            }
         }
         closeUnused(previous == null ? null : previous.preparation);
     }
 
-    public void disposition(Object source, long intentId, boolean accepted, boolean rejected) {
-        if (current == null || current.terminal || source != owner || intentId == 0 || current.id != intentId)
+    public void reselect(Target target) {
+        select(target, SelectionKind.RESELECT);
+    }
+
+    public void clearAndReselect(Target target) {
+        select(target, SelectionKind.CLEAR);
+    }
+
+    public void cancelSelection(PublishedModelId identity) {
+        if (association != null && association.target().identity().equals(identity))
+            association = null;
+        if (current == null || !current.target.identity().equals(identity))
             return;
-        if (rejected)
-            failIntent(new IllegalStateException("Model selection was rejected"));
-        // ACCEPTED is a disposition, never an installation fact.
+        retire(current);
+        feedback = Feedback.IDLE;
+        feedbackTarget = null;
+        authorityWaiting = false;
+        closeUnused(current.preparation);
+    }
+
+    /** Immutable input retained independently of feedback and resource preparation. */
+    public @Nullable SelectionAssociation association(SelectionContext context, long intentId, Target target) {
+        var value = association;
+        return value != null && value.id() == intentId && intentId != 0 && value.context().matches(context)
+            && value.target().equals(target) ? value : null;
+    }
+
+    public void selectionCommitted(SelectionContext context, long intentId, Target target, Object application) {
+        if (association(context, intentId, target) == null)
+            return;
+        association = null;
+        if (current != null && current.id == intentId && current.context.matches(context)) {
+            current.application = application;
+            current.initial = null;
+        }
     }
 
     public void tick() {
@@ -226,19 +358,44 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         var now = clock.getAsLong();
         for (var page : List.copyOf(pages))
             page.advance(now);
-        if (current != null) {
+        if (current != null && !current.terminal) {
             var intent = current;
             var mode = resourceMode(selectionTimeline, now);
-            if (!intent.terminal && !selections.installed(intent.target))
+            if (now - intent.started >= WAIT_MILLIS)
+                failIntent(FailureStage.TIMEOUT, new IllegalStateException("Model selection timed out"));
+            if (!intent.terminal && (!selections.installed(intent.target)
+                || intent.context.remote() && !intent.sent && (intent.initial == null || intent.dictionary == null)))
                 intent.preparation.advance(mode);
-            if (!intent.sent && context != null && context.available()
+            if (!intent.terminal && !intent.sending && !intent.sent && context != null && context.available()
                 && selectionTimeline.effectEligible(!selections.installed(intent.target) && !intent.preparation.ready(),
                     now, ContinuousDemand.NETWORK_SWITCH_DWELL_MILLIS)) {
-                intent.sent = true;
                 try {
-                    selections.send(intent.target, intent.id);
+                    prepareInitial(intent);
                 } catch (RuntimeException failure) {
-                    failIntent(failure);
+                    failIntent(FailureStage.PREPARATION, failure);
+                }
+                if (current == intent && !intent.terminal
+                    && (!context.remote() || intent.initial != null && intent.dictionary != null)) {
+                    var latest = synchronizeOwner();
+                    if (current == intent && intent.context.matches(latest) && latest.available()) {
+                        // Record the attempt before transport can synchronously reenter this owner.
+                        intent.sending = true;
+                        intent.sent = true;
+                        association = new SelectionAssociation(intent.context, intent.target, intent.id, intent.kind,
+                            intent.initial, intent.dictionary);
+                        try {
+                            selections.send(intent.context, intent.target, intent.id,
+                                intent.initial == null ? null : intent.initial.payload(),
+                                intent.kind != SelectionKind.SELECT);
+                        } catch (RuntimeException failure) {
+                            if (failure instanceof NotSubmitted && current == intent)
+                                association = null;
+                            if (current == intent)
+                                failIntent(FailureStage.SEND, failure);
+                        } finally {
+                            intent.sending = false;
+                        }
+                    }
                 }
             }
         }
@@ -248,16 +405,60 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         for (var scope : List.copyOf(entities))
             scope.advance(now);
         if (current != null && !current.terminal) {
-            if (current.sent && selections.installed(current.target))
+            if (!current.sending && current.sent && (!current.context.remote() || current.application != null)
+                && (current.application == null ? selections.installed(current.target)
+                    : selections.installed(current.target, current.application)))
                 finishIntent();
-            else if (selections.failure(current.target) != null)
-                failIntent(selections.failure(current.target));
-            else if (current.preparation.failure() != null)
-                failIntent(current.preparation.failure());
-            else if (now - current.started >= WAIT_MILLIS)
-                failIntent(new IllegalStateException("Model selection installation timed out"));
+            else if ((!current.context.remote() || current.application != null)
+                && selections.failure(current.target) != null)
+                failIntent(FailureStage.INSTALLATION, selections.failure(current.target));
         }
         observeAuthority(now);
+    }
+
+    private void prepareInitial(Intent intent) {
+        if (!intent.context.remote())
+            return;
+        var operation = intent.preparation.operation;
+        if (intent.dictionary == null) {
+            if (operation == null || operation.anchor == null) {
+                if (intent.preparation.failure() != null)
+                    failIntent(FailureStage.PREPARATION, intent.preparation.failure());
+                return;
+            }
+            var ready = (AcquireResult.Ready)operation.anchor.poll();
+            var fields = ready.target().animationStore().metadata().roamingFields();
+            intent.fields = Set.copyOf(fields);
+            intent.dictionary = RoamingDictionary.declarations(fields);
+        }
+        if (intent.initial != null)
+            return;
+        Throwable readFailure;
+        try {
+            if (intent.restore == null) {
+                intent.restore = Objects.requireNonNull(preferences, "Remote selection requires player preferences")
+                    .restoreRoaming(intent.context.player(), intent.target.identity(), intent.fields);
+                intent.restoreResult = intent.restore.result().toCompletableFuture();
+            }
+            if (!intent.restoreResult.isDone())
+                return;
+            var result = intent.restoreResult.join();
+            if (!result.succeeded() || result.rows().size() != 1) {
+                readFailure = new IllegalStateException("Selection roaming restore failed: " + result);
+            } else {
+                intent.restore = null;
+                intent.restoreResult = null;
+                intent.initial = new InitialRoaming(result.rows().get(0), true);
+                return;
+            }
+        } catch (RuntimeException failure) {
+            readFailure =
+                failure instanceof CompletionException && failure.getCause() != null ? failure.getCause() : failure;
+        }
+        intent.restore = null;
+        intent.restoreResult = null;
+        intent.initial = new InitialRoaming(new NamedRoamingSnapshot(new String[0], new float[0]), false);
+        selections.reportPreferenceReadFailure(readFailure);
     }
 
     private static ModelResourceDemand.Mode resourceMode(ContinuousDemand<?> timeline, long now) {
@@ -286,6 +487,14 @@ public final class ClientDemandCoordinator implements AutoCloseable {
             nextIntentId = 1;
             idsExhausted = false;
         }
+        if (current != null && !current.context.matches(context)) {
+            retire(current);
+            association = null;
+            authorityWaiting = false;
+            feedback = Feedback.IDLE;
+            feedbackTarget = null;
+            closeUnused(current.preparation);
+        }
         return context;
     }
 
@@ -302,13 +511,14 @@ public final class ClientDemandCoordinator implements AutoCloseable {
             authorityWaiting = false;
         if (authorityWaiting && selections.failure(authority) != null) {
             authorityWaiting = false;
-            var failure = selections.failure(authority);
+            var failure = new SelectionFailure(FailureStage.INSTALLATION, selections.failure(authority));
             feedback = new Feedback(false, failure);
             feedbackTarget = authority;
             selections.reportFailure(failure);
         } else if (authorityWaiting && now - authorityStarted >= WAIT_MILLIS) {
             authorityWaiting = false;
-            var failure = new IllegalStateException("Authoritative model installation timed out");
+            var failure = new SelectionFailure(FailureStage.TIMEOUT,
+                new IllegalStateException("Authoritative model installation timed out"));
             feedback = new Feedback(false, failure);
             feedbackTarget = authority;
             selections.reportFailure(failure);
@@ -322,22 +532,35 @@ public final class ClientDemandCoordinator implements AutoCloseable {
     }
 
     private void finishIntent() {
-        current.terminal = true;
+        retire(current);
         authorityWaiting = false;
         feedback = Feedback.IDLE;
         feedbackTarget = null;
         closeUnused(current.preparation);
     }
 
-    private void failIntent(Throwable failure) {
+    private void failIntent(FailureStage stage, Throwable cause) {
         if (current == null || current.terminal)
             return;
-        current.terminal = true;
+        var failure = new SelectionFailure(stage, cause);
+        retire(current);
         authorityWaiting = false;
         feedback = new Feedback(false, failure);
         feedbackTarget = current.target;
-        selections.reportFailure(failure);
         closeUnused(current.preparation);
+        selections.reportFailure(failure);
+    }
+
+    private void retire(@Nullable Intent intent) {
+        if (intent == null)
+            return;
+        intent.terminal = true;
+        intent.initial = null;
+        var restore = intent.restore;
+        intent.restore = null;
+        intent.restoreResult = null;
+        if (restore != null)
+            restore.cancel();
     }
 
     private void closeUnused(@Nullable Preparation preparation) {
@@ -369,9 +592,11 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         var previous = current;
         var previousHover = hover;
         current = null;
+        association = null;
         hover = null;
         hoverPage = null;
-        var failure = cleanup(null, () -> closeUnused(previous == null ? null : previous.preparation));
+        var failure = cleanup(null, () -> retire(previous));
+        failure = cleanup(failure, () -> closeUnused(previous == null ? null : previous.preparation));
         failure = cleanup(failure, () -> closeUnused(previousHover));
         for (var page : List.copyOf(pages))
             failure = cleanup(failure, page::close);
@@ -396,7 +621,7 @@ public final class ClientDemandCoordinator implements AutoCloseable {
         private final ContinuousDemand<Object> timeline;
         private final ContinuousDemand<Target> pointer = new ContinuousDemand<>();
         private final Map<CardDisplay, Target> cards = new WeakHashMap<>();
-        private final Set<EntityScope> pageEntities = Collections.newSetFromMap(new IdentityHashMap<>());
+        private final Set<EntityModelDemand> pageEntities = Collections.newSetFromMap(new IdentityHashMap<>());
         private final List<PageAction> actions = new ArrayList<>();
         private boolean ended;
         private boolean admitted;
@@ -470,9 +695,9 @@ public final class ClientDemandCoordinator implements AutoCloseable {
                 cards.put(display, target);
         }
 
-        public void entity(EntityScope scope) {
+        public void entity(EntityModelDemand scope) {
             if (!ended) {
-                pageEntities.removeIf(EntityScope::isClosed);
+                pageEntities.removeIf(EntityModelDemand::isClosed);
                 pageEntities.add(scope);
             } else
                 scope.close();
@@ -546,7 +771,7 @@ public final class ClientDemandCoordinator implements AutoCloseable {
                 hover = null;
                 hoverPage = null;
             }
-            pageEntities.forEach(scope -> scope.sealed = true);
+            pageEntities.forEach(EntityModelDemand::seal);
             if (!frameActive)
                 finishClose();
         }
@@ -581,371 +806,6 @@ public final class ClientDemandCoordinator implements AutoCloseable {
 
         @Override
         void close();
-    }
-
-    public final class EntityScope implements AutoCloseable {
-        private final WeakReference<Installation> endpoint;
-        private final ContinuousDemand<Use> timeline = new ContinuousDemand<>();
-        private Operation operation;
-        private Operation fallback;
-        private Throwable resourceFailure;
-        private Throwable reportedFailure;
-        private boolean ended;
-
-        private boolean frameInstallation;
-        private boolean sealed;
-        private ReadyInstallation claimed;
-
-        private final WorkPriority priority;
-
-        private EntityScope(Installation endpoint, WorkPriority priority) {
-            this.priority = Objects.requireNonNull(priority);
-            this.endpoint = new WeakReference<>(Objects.requireNonNull(endpoint));
-        }
-
-        public boolean isClosed() {
-            return ended;
-        }
-
-        public @Nullable Throwable failure() {
-            return resourceFailure;
-        }
-
-        public boolean hasUnfinishedWork() {
-            return !ended && (claimed != null || operation != null && operation.unfinished()
-                || fallback != null && fallback.unfinished());
-        }
-
-        /** Only explicitly adopted GUI scopes stop installing from the client tick. */
-        public void useFrameInstallation() {
-            if (ended || sealed)
-                throw new IllegalStateException("Demand scope is closed");
-            frameInstallation = true;
-        }
-
-        public boolean hasReadyInstallation() {
-            return readyCandidate() != null;
-        }
-
-        /** Acquires the receiver before releasing the source anchor; this path starts no resource work. */
-        public @Nullable ReadyInstallation claimReadyInstallation() {
-            var candidate = readyCandidate();
-            if (candidate == null)
-                return null;
-            var lease = findReady(candidate.request);
-            if (lease == null)
-                return null;
-            var intrinsic = candidate == fallback;
-            var next = new ReadyInstallation(candidate.request, lease, intrinsic);
-            claimed = next;
-            if (intrinsic)
-                fallback = null;
-            else
-                operation = null;
-            try {
-                candidate.close();
-            } catch (RuntimeException | Error failure) {
-                try {
-                    next.close();
-                } catch (RuntimeException | Error cleanupFailure) {
-                    if (failure != cleanupFailure)
-                        failure.addSuppressed(cleanupFailure);
-                }
-                throw failure;
-            }
-            return next;
-        }
-
-        private @Nullable ResourceLease findReady(ResourceRequest request) {
-            if (!resources.permitsAcquisition(request))
-                return null;
-            var lease = resources.findReady(request).orElse(null);
-            if (lease == null)
-                return null;
-            final boolean current;
-            try {
-                current = lease.isCurrent(request) && lease.poll() instanceof AcquireResult.Ready;
-            } catch (RuntimeException | Error failure) {
-                try {
-                    lease.close();
-                } catch (RuntimeException | Error cleanupFailure) {
-                    if (failure != cleanupFailure)
-                        failure.addSuppressed(cleanupFailure);
-                }
-                throw failure;
-            }
-            if (!current) {
-                lease.close();
-                return null;
-            }
-            return lease;
-        }
-
-        private @Nullable Operation readyCandidate() {
-            if (ended || sealed || !frameInstallation || claimed != null)
-                return null;
-            var host = endpoint.get();
-            if (host == null)
-                return null;
-            var input = host.assignment();
-            if (!input.permitted())
-                return null;
-            var ready = readyOperation(host, operation, input.request());
-            if (ready != null) {
-                if (ready != operation) {
-                    var previous = operation;
-                    try {
-                        timeline.observe(new Use(ready.request, resources.content(ready.request.modelId())),
-                            clock.getAsLong());
-                    } catch (RuntimeException | Error failure) {
-                        cleanup(failure, ready::close);
-                        throw failure;
-                    }
-                    operation = ready;
-                    resourceFailure = null;
-                    if (previous != null)
-                        previous.close();
-                }
-                return ready;
-            }
-            if (host.hasInstallation())
-                return null;
-            ready = readyOperation(host, fallback, input.fallback());
-            if (ready != null && ready != fallback) {
-                var previous = fallback;
-                fallback = ready;
-                if (previous != null)
-                    previous.close();
-            }
-            return ready;
-        }
-
-        private @Nullable Operation readyOperation(Installation host, @Nullable Operation candidate,
-            @Nullable ResourceRequest request) {
-            if (request == null || request.purpose() != ModelResourcePurpose.GUI || host.matches(request, false)
-                || host.failure(request) != null || !resources.permitsAcquisition(request))
-                return null;
-            if (candidate != null && candidate.request.equals(request) && candidate.ready()
-                && candidate.anchor.isCurrent(request))
-                return candidate;
-            // A miss cannot lower the admission of work already in flight.
-            var lease = findReady(request);
-            if (lease == null)
-                return null;
-            var ready = new Operation(request, priority);
-            ready.anchor = lease;
-            return ready;
-        }
-
-        public final class ReadyInstallation implements AutoCloseable {
-            private final ResourceRequest request;
-            private final boolean fallback;
-            private ResourceLease lease;
-            private boolean completed;
-
-            private ReadyInstallation(ResourceRequest request, ResourceLease lease, boolean fallback) {
-                this.request = request;
-                this.lease = lease;
-                this.fallback = fallback;
-            }
-
-            public ResourceRequest request() {
-                return request;
-            }
-
-            public boolean fallback() {
-                return fallback;
-            }
-
-            /** The task now owns closure until installation consumes this independent capability. */
-            public ResourceLease takeLease() {
-                if (completed || lease == null)
-                    throw new IllegalStateException("Ready installation lease has already transferred");
-                var transferred = lease;
-                lease = null;
-                return transferred;
-            }
-
-            /** Called by the frame owner after joining; BUSY leaves the task responsible for its lease. */
-            public void complete(InstallationResult outcome) {
-                Objects.requireNonNull(outcome);
-                if (completed)
-                    throw new IllegalStateException("Ready installation is already complete");
-                if (lease != null)
-                    throw new IllegalStateException("Ready installation lease has not transferred");
-                completed = true;
-                if (claimed == this)
-                    claimed = null;
-                if (ended || sealed)
-                    return;
-                var host = endpoint.get();
-                if (outcome == InstallationResult.REJECTED && host != null)
-                    resourceFailure = Objects.requireNonNullElseGet(host.failure(request),
-                        () -> new IllegalStateException("Model installation was rejected"));
-                else if (outcome == InstallationResult.INSTALLED)
-                    resources.reportActiveModelUse(request);
-            }
-
-            @Override
-            public void close() {
-                if (completed)
-                    return;
-                completed = true;
-                if (claimed == this)
-                    claimed = null;
-                var owned = lease;
-                lease = null;
-                if (owned != null)
-                    owned.close();
-            }
-        }
-
-        private void advance(long now) {
-            var host = endpoint.get();
-            if (ended || host == null) {
-                close();
-                return;
-            }
-            if (sealed || claimed != null)
-                return;
-            var input = host.assignment();
-            if (!input.permitted()) {
-                clearOperations();
-                return;
-            }
-            var request = input.request();
-            if (request != null) {
-                var use = new Use(request, resources.content(request.modelId()));
-                if (timeline.observe(use, now)) {
-                    var previous = operation;
-                    operation = new Operation(request, priority);
-                    if (previous != null)
-                        previous.close();
-                    resourceFailure = null;
-                }
-                if (host.matches(request, false)) {
-                    if (operation != null) {
-                        operation.close();
-                        operation = null;
-                    }
-                    resources.reportActiveModelUse(request);
-                } else if (host.failure(request) != null) {
-                    resourceFailure = host.failure(request);
-                    if (operation != null) {
-                        operation.close();
-                        operation = null;
-                    }
-                } else {
-                    if (operation == null)
-                        operation = new Operation(request, priority);
-                    var mode = input.mode() == ModelResourceDemand.Mode.ONLINE
-                        && !timeline.effectEligible(true, now, ContinuousDemand.NETWORK_SWITCH_DWELL_MILLIS)
-                            ? ModelResourceDemand.Mode.OFFLINE : input.mode();
-                    operation.advance(mode);
-                    resourceFailure = operation.failure();
-                    if (!frameInstallation)
-                        install(host, operation, false);
-                    if (host.matches(request, false)) {
-                        operation.close();
-                        operation = null;
-                        resources.reportActiveModelUse(request);
-                    }
-                }
-            } else {
-                if (operation != null)
-                    operation.close();
-                operation = null;
-                timeline.end(now);
-            }
-            if (input.fallback() != null && host.failure(input.fallback()) != null) {
-                if (fallback != null)
-                    fallback.close();
-                fallback = null;
-            } else if (input.fallback() != null && !host.hasInstallation()) {
-                if (fallback == null || !fallback.request.equals(input.fallback())) {
-                    if (fallback != null)
-                        fallback.close();
-                    fallback = new Operation(input.fallback(), priority);
-                }
-                fallback.advance(ModelResourceDemand.Mode.ONLINE);
-                if (!frameInstallation)
-                    install(host, fallback, true);
-            }
-            if (resourceFailure != null && resourceFailure != reportedFailure && request != null) {
-                reportedFailure = resourceFailure;
-                var content = resources.content(request.modelId());
-                if (content != null && !request.modelId()
-                    .equals(resources.defaultResourceRequest("player", ModelResourcePurpose.FULL, null).modelId()))
-                    resources.reportActiveModelFailure(content, input.fallback() != null);
-            }
-            if (host.hasInstallation() && fallback != null) {
-                fallback.close();
-                fallback = null;
-            }
-        }
-
-        private void install(Installation host, Operation candidate, boolean intrinsic) {
-            if (!candidate.ready())
-                return;
-            // This scope already acquired its independent receiving lease with its original admission.
-            var lease = candidate.anchor;
-            final InstallationResult result;
-            try {
-                result = host.install(candidate.request, lease, intrinsic, false);
-            } catch (RuntimeException | Error failure) {
-                candidate.close();
-                throw failure;
-            }
-            if (result != InstallationResult.BUSY)
-                candidate.anchor = null;
-            if (result == InstallationResult.REJECTED) {
-                resourceFailure = Objects.requireNonNullElseGet(host.failure(candidate.request),
-                    () -> new IllegalStateException("Model installation was rejected"));
-                candidate.close();
-            }
-        }
-
-        private void clearOperations() {
-            var previous = operation;
-            var previousFallback = fallback;
-            operation = null;
-            fallback = null;
-            Throwable failure = null;
-            try {
-                if (previous != null)
-                    previous.close();
-            } catch (RuntimeException | Error primary) {
-                failure = primary;
-            }
-            try {
-                if (previousFallback != null)
-                    previousFallback.close();
-            } catch (RuntimeException | Error cleanupFailure) {
-                if (failure == null) {
-                    failure = cleanupFailure;
-                } else if ((cleanupFailure instanceof VirtualMachineError && !(cleanupFailure instanceof OutOfMemoryError)
-                    || cleanupFailure instanceof ThreadDeath)
-                    && !(failure instanceof VirtualMachineError || failure instanceof ThreadDeath)) {
-                    cleanupFailure.addSuppressed(failure);
-                    failure = cleanupFailure;
-                } else if (failure != cleanupFailure) {
-                    failure.addSuppressed(cleanupFailure);
-                }
-            }
-            if (failure instanceof RuntimeException runtime)
-                throw runtime;
-            if (failure instanceof Error error)
-                throw error;
-        }
-
-        @Override
-        public void close() {
-            if (ended)
-                return;
-            ended = true;
-            entities.remove(this);
-            clearOperations();
-        }
     }
 
     private record Use(ResourceRequest request, @Nullable ModelContent content) {
@@ -1050,17 +910,29 @@ public final class ClientDemandCoordinator implements AutoCloseable {
     }
 
     private final class Intent {
+        private final SelectionKind kind;
+        private final SelectionContext context;
         private final Target target;
         private final Preparation preparation;
         private final long started;
         private long id;
+        private boolean sending;
         private boolean sent;
         private boolean terminal;
+        private Object application;
+        private InitialRoaming initial;
+        private RoamingDictionary dictionary;
+        private Set<String> fields;
+        private StorageWriteBuffer.Operation<NamedRoamingSnapshot> restore;
+        private CompletableFuture<StorageResult<NamedRoamingSnapshot>> restoreResult;
 
-        private Intent(Target target, Preparation preparation, long started) {
+        private Intent(SelectionContext context, Target target, Preparation preparation, long started,
+            SelectionKind kind) {
+            this.context = context;
             this.target = target;
             this.preparation = preparation;
             this.started = started;
+            this.kind = kind;
         }
     }
 }

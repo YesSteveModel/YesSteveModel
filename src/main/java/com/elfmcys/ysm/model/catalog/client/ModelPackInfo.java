@@ -14,7 +14,7 @@ public class ModelPackInfo {
     /**
      * 最大 260 x 450，是游戏分辨率为 2k 且界面尺寸为 5 时 ModelButton 的大小。
      */
-    private volatile @Nullable AbstractTexture icon;
+    private final @Nullable AbstractTexture icon;
     private final @Nullable Map<String, Map<String, String>> lang;
 
     public ModelPackInfo(String hierarchy, String name, String desc, @Nullable AbstractTexture icon,
@@ -44,10 +44,6 @@ public class ModelPackInfo {
     @Nullable
     public AbstractTexture icon() {
         return icon;
-    }
-
-    public void setIcon(@Nullable AbstractTexture icon) {
-        this.icon = icon;
     }
 
     @Nullable

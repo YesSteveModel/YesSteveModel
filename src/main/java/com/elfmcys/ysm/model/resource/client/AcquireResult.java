@@ -5,11 +5,13 @@ import java.util.Objects;
 /**
  * An observation of one lease's acquisition state.
  *
- * <p><b>Ownership:</b> Ready contains a non-null borrowed target, not a new ownership transfer.
- * The associated open {@link ResourceLease} retains the target. Failed contains a non-null failure;
- * callers must not turn Pending, cancellation or local capacity pressure into a content-corruption claim.
+ * <p>
+ * <b>Ownership:</b> Ready contains a non-null borrowed target, not a new ownership transfer. The associated open
+ * {@link ResourceLease} retains the target. Failed contains a non-null failure; callers must not turn Pending,
+ * cancellation or local capacity pressure into a content-corruption claim.
  *
- * <p><b>Seam:</b> [acquisition states](docs/architecture/model-management/client-resources/overview.md#seam-contract).
+ * <p>
+ * <b>Seam:</b> [acquisition states](docs/architecture/model-management/client-resources/overview.md#seam-contract).
  */
 public sealed interface AcquireResult {
     record Ready(ModelRenderTarget target) implements AcquireResult {
@@ -19,6 +21,12 @@ public sealed interface AcquireResult {
     }
 
     record Pending() implements AcquireResult {
+    }
+
+    record Missing() implements AcquireResult {
+    }
+
+    record Ended() implements AcquireResult {
     }
 
     record Failed(ResourceFailure failure) implements AcquireResult {

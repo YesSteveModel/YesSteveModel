@@ -57,11 +57,6 @@ public final class Hash256 implements Comparable<Hash256> {
         return matches(value, 0, value.length);
     }
 
-    /** Only roaming-variable synchronization is allowed to use this truncated value. */
-    public int roamingHash() {
-        return (int)(word0 >>> Integer.SIZE);
-    }
-
     @Override
     public int compareTo(Hash256 other) {
         var comparison = Long.compareUnsigned(word0, other.word0);

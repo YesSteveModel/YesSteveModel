@@ -18,8 +18,8 @@ public record InvocationProvenance(String targetId, String programLocation, int 
 
     private static String requireText(String value, String label) {
         Objects.requireNonNull(value, label);
-        if (value.isBlank() || value.length() > 1024) {
-            throw new IllegalArgumentException(label + " must contain 1..1024 characters");
+        if (value.isBlank()) {
+            throw new IllegalArgumentException(label + " must not be blank");
         }
         return value;
     }

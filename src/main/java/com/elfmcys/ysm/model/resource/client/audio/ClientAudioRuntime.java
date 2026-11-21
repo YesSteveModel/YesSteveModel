@@ -21,7 +21,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Client owner for backend selection, exact playback identity, and default playback resources. */
 public final class ClientAudioRuntime implements AutoCloseable {
@@ -312,11 +311,15 @@ public final class ClientAudioRuntime implements AutoCloseable {
                 }
             }
             if (rejectedReason != null) {
+                apiAccess.seal();
                 try {
                     backendPlayback.cancel(rejectedReason);
-                } catch (Throwable ignored) {
+                } catch (Throwable cancellationFailure) {
+                    YesSteveModel.LOGGER.debug("External model audio backend cancel failed: {}", source.media().name(),
+                        cancellationFailure);
+                } finally {
+                    apiAccess.close();
                 }
-                apiAccess.close();
                 finishOnOwner(false);
                 return;
             }
@@ -490,6 +493,9 @@ public final class ClientAudioRuntime implements AutoCloseable {
                 failure = streamFailure;
             }
             releasePreparing();
+            if (chunks != null) {
+                chunks.seal();
+            }
             if (stopHost && external != null) {
                 try {
                     external.cancel(reason);
@@ -551,7 +557,6 @@ public final class ClientAudioRuntime implements AutoCloseable {
 
     private static final class ApiChunkAccess implements AudioBackend.ChunkAccess {
         private VerifiedChunkAccess delegate;
-        private final Set<ApiChunk> chunks = Collections.newSetFromMap(new IdentityHashMap<>());
         private boolean closed;
 
         private ApiChunkAccess(VerifiedChunkAccess delegate) {
@@ -571,48 +576,66 @@ public final class ClientAudioRuntime implements AutoCloseable {
                 requireOpen();
                 interest = delegate.request(index);
             }
-            return interest.result().thenApply(chunk -> {
-                synchronized (this) {
-                    if (closed) {
-                        chunk.close();
-                        throw new java.util.concurrent.CancellationException("Audio chunk access is closed");
-                    }
-                    var exposed = new ApiChunk(this, chunk);
-                    chunks.add(exposed);
-                    return exposed;
+            var result = new CompletableFuture<AudioBackend.Chunk>();
+            result.whenComplete((ignored, failure) -> {
+                if (result.isCancelled()) {
+                    interest.cancel();
                 }
             });
+            interest.result().whenComplete((chunk, failure) -> {
+                if (failure != null) {
+                    result.completeExceptionally(unwrap(failure));
+                    return;
+                }
+                final boolean accepted;
+                // Admission shares close's order; backend callbacks must run without holding this monitor.
+                synchronized (this) {
+                    accepted = !closed;
+                }
+                if (!accepted) {
+                    chunk.close();
+                    result.completeExceptionally(
+                        new java.util.concurrent.CancellationException("Audio chunk access is closed"));
+                    return;
+                }
+                final ApiChunk exposed;
+                try {
+                    exposed = new ApiChunk(chunk);
+                } catch (Throwable deliveryFailure) {
+                    chunk.close();
+                    result.completeExceptionally(deliveryFailure);
+                    return;
+                }
+                if (!result.complete(exposed)) {
+                    exposed.close();
+                }
+            });
+            return result;
         }
 
         @Override
         public synchronized AudioBackend.ChunkAccess restart() {
             requireOpen();
-            if (!chunks.isEmpty()) {
-                throw new IllegalStateException("All audio chunks must be closed before restart");
-            }
             delegate = delegate.restart();
             return this;
         }
 
-        @Override
-        public void close() {
-            ArrayList<ApiChunk> delivered;
-            VerifiedChunkAccess access;
-            synchronized (this) {
-                if (closed) {
-                    return;
-                }
-                closed = true;
-                delivered = new ArrayList<>(chunks);
-                chunks.clear();
-                access = delegate;
-            }
-            delivered.forEach(ApiChunk::closeDelegate);
-            access.close();
+        // Pending-result callbacks may await backend cancellation, so admission must seal without notifying them.
+        private synchronized void seal() {
+            closed = true;
         }
 
-        private synchronized void released(ApiChunk chunk) {
-            chunks.remove(chunk);
+        @Override
+        public void close() {
+            final VerifiedChunkAccess access;
+            synchronized (this) {
+                closed = true;
+                access = delegate;
+                delegate = null;
+            }
+            if (access != null) {
+                access.close();
+            }
         }
 
         private void requireOpen() {
@@ -623,12 +646,9 @@ public final class ClientAudioRuntime implements AutoCloseable {
     }
 
     private static final class ApiChunk implements AudioBackend.Chunk {
-        private final ApiChunkAccess owner;
         private final VerifiedChunkAccess.Chunk delegate;
-        private final AtomicBoolean closed = new AtomicBoolean();
 
-        private ApiChunk(ApiChunkAccess owner, VerifiedChunkAccess.Chunk delegate) {
-            this.owner = owner;
+        private ApiChunk(VerifiedChunkAccess.Chunk delegate) {
             this.delegate = delegate;
         }
 
@@ -639,24 +659,12 @@ public final class ClientAudioRuntime implements AutoCloseable {
 
         @Override
         public ByteBuffer data() {
-            if (closed.get()) {
-                throw new IllegalStateException("Audio chunk is closed");
-            }
             return delegate.borrowBuffer();
         }
 
         @Override
         public void close() {
-            if (closed.compareAndSet(false, true)) {
-                delegate.close();
-                owner.released(this);
-            }
-        }
-
-        private void closeDelegate() {
-            if (closed.compareAndSet(false, true)) {
-                delegate.close();
-            }
+            delegate.close();
         }
     }
 }

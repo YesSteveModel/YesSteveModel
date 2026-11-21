@@ -32,7 +32,7 @@ import com.elfmcys.ysm.model.ModelSystem;
 import com.elfmcys.ysm.util.ThreadScheduling;
 import com.elfmcys.ysm.util.ThreadScheduling.ThreadRole;
 import com.elfmcys.ysm.util.ThreadScheduling.ThreadPolicy;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.RenderTargetIds;
 import com.elfmcys.ysm.model.resource.client.remote.RemoteModelStore;
 import com.elfmcys.ysm.model.resource.RuntimeContentStore;
@@ -57,17 +57,24 @@ import java.util.function.Supplier;
 /**
  * Client composition boundary for catalog projection, resource acquisition, and demand progression.
  *
- * <p>Invariant: a published service has completed required preparation and transferred its close
- * responsibility to the process system. Ordinary catalog activation is a separate operation.
+ * <p>
+ * Invariant: a published service has completed required preparation and transferred its close responsibility to the
+ * process system. Ordinary catalog activation is a separate operation.
  *
- * <p>Execution: live client operations run in the render owner's window. Publication accessors are
- * thread-visible snapshots, not lifetime pins. Process teardown must exclude new client operations.
+ * <p>
+ * Execution: live client operations run in the render owner's window. Publication accessors are thread-visible
+ * snapshots, not lifetime pins. Controlled domain closure excludes new operations and follows entity retirement; JVM
+ * termination abandons the process domain.
  *
- * <p>Ownership: child accessors borrow service-owned components. Acquired leases, batches, and
- * playback uses retain their own release obligations; disconnect does not close the process system.
+ * <p>
+ * Ownership: child accessors borrow service-owned components. Acquired leases, batches, and playback uses retain their
+ * own release obligations; disconnect does not close the process system.
  *
- * <p>Seam: implements [client startup](docs/architecture/runtime/overview.md#启动与进入世界) and [client shutdown](docs/architecture/runtime/overview.md#结束与替换). Resource results follow the
- * [client-resource contract](docs/architecture/model-management/client-resources/overview.md#seam-contract) and do not imply entity installation.
+ * <p>
+ * Seam: implements [client startup](docs/architecture/runtime/overview.md#启动与进入世界) and [client
+ * shutdown](docs/architecture/runtime/overview.md#结束与替换). Resource results follow the [client-resource
+ * contract](docs/architecture/model-management/client-resources/overview.md#seam-contract) and do not imply entity
+ * installation.
  */
 public final class ClientModelService implements AutoCloseable {
     private static volatile ClientModelService INSTANCE;
@@ -82,9 +89,13 @@ public final class ClientModelService implements AutoCloseable {
     private final ClientPreviewGenerator previewOperations;
     private final com.elfmcys.ysm.client.demand.ClientDemandCoordinator demands;
     private final Path gameDirectory;
+    private final com.elfmcys.ysm.network.forge.ClientPlayerPreferences preferences;
     private RemoteModelStore remoteStore;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final java.util.concurrent.CountDownLatch closeCompleted = new java.util.concurrent.CountDownLatch(1);
+    private volatile Thread closingThread;
     private int resourceDiagnosticTicks;
+    private final StartupModelWarmup startupWarmup;
 
     private ClientModelService(ModelSystem system, ClientResourceScheduler scheduler,
         ScheduledThreadPoolExecutor notificationTimer, ClientCatalogManager catalogManager,
@@ -100,10 +111,17 @@ public final class ClientModelService implements AutoCloseable {
             new MinecraftAudioHost(), AudioBackends.freeze().orElse(null));
         this.previewOperations = previewOperations;
         this.gameDirectory = gameDirectory;
+        preferences = new com.elfmcys.ysm.network.forge.ClientPlayerPreferences(this, system.storage());
         this.demands = new com.elfmcys.ysm.client.demand.ClientDemandCoordinator(() -> System.nanoTime() / 1_000_000L,
             new com.elfmcys.ysm.model.resource.client.ClientDemandResources(this),
-            new com.elfmcys.ysm.network.forge.ClientDemandSelections(),
+            new com.elfmcys.ysm.network.forge.ClientDemandSelections(preferences), system.storage().preferences(),
             () -> com.elfmcys.ysm.config.ClientConfig.MODEL_SCREEN_EAGER_LOADING.get());
+        startupWarmup = new StartupModelWarmup(() -> {
+            var minecraft = Minecraft.getInstance();
+            return new StartupModelWarmup.HostState(minecraft.player != null,
+                com.elfmcys.ysm.config.ClientConfig.NETWORK_SESSION_MODE.get(), minecraft.getUser().getProfileId());
+        }, new StartupModelWarmup.ClientInputs(system.catalog(), system.storage().preferences(), catalogManager,
+            renderTargetManager), failure -> YesSteveModel.LOGGER.debug("Startup model warmup failed", failure));
     }
 
     private ClientModelService(ModelSystem system, ClientResourceScheduler scheduler,
@@ -138,8 +156,9 @@ public final class ClientModelService implements AutoCloseable {
             var builtins = system.builtins();
             candidateCatalog = new ClientCatalogManager(system.catalog());
             var defaultAnimations = new DefaultAnimationRuntime(system.builtinContract());
-            var expressionModules = new RenderTargetExpressionModuleFactory(storage.local().expressions(),
-                MolangExtensionLoader.createHost(availability), new ExpressionEngineMetrics());
+            var expressionModules =
+                new RenderTargetExpressionModuleFactory(storage.local().expressions(), storage.local().animations(),
+                    MolangExtensionLoader.createHost(availability), new ExpressionEngineMetrics());
             var renderTargetLoader =
                 new ModelRenderTargetLoader(storage, expressionModules, candidateScheduler, defaultAnimations);
             candidateLoader = renderTargetLoader;
@@ -149,8 +168,8 @@ public final class ClientModelService implements AutoCloseable {
                 new ClientModelRenderTargetManager(candidateCatalog, renderTargetLoader, defaultAnimations,
                     candidateScheduler, candidateTimer, ClientModelService::executeOnRenderThread, contentStore);
             var previewStore = system.previews();
-            var previews = new ClientPreviewGenerator(candidateCatalog, candidateTargets, renderTargetLoader,
-                previewStore, ClientModelService::executeOnRenderThread, candidateScheduler);
+            var previews = new ClientPreviewGenerator(candidateTargets, previewStore,
+                ClientModelService::executeOnRenderThread, candidateScheduler);
             candidatePreviews = previews;
             var candidateAssets = new ClientAssetRepository(candidateCatalog, contentStore, previewStore, background,
                 content -> previews.resolveLocal(content,
@@ -202,14 +221,17 @@ public final class ClientModelService implements AutoCloseable {
     /**
      * Completes required preparation before publishing the service; returns the existing service if running.
      *
-     * <p>Requires: non-null process system and fixed host availability, in the client setup render-owner
-     * window. Repeated calls do not reconfigure the existing service from the supplied arguments.
+     * <p>
+     * Requires: non-null process system and fixed host availability, in the client setup render-owner window. Repeated
+     * calls do not reconfigure the existing service from the supplied arguments.
      *
-     * <p>Execution: may block while pumping host work for required preparation. Ordinary catalog activation
-     * does not wait for a scan result.
+     * <p>
+     * Execution: may block while pumping host work for required preparation. Ordinary catalog activation does not wait
+     * for a scan result.
      *
-     * <p>Failure: required preparation or ownership rejection closes the private candidate and propagates
-     * the original cause. Ordinary catalog failure does not revoke an already published service.
+     * <p>
+     * Failure: required preparation or ownership rejection closes the private candidate and propagates the original
+     * cause. Ordinary catalog failure does not revoke an already published service.
      */
     public static synchronized ClientModelService start(ModelSystem system, HostAvailability availability) {
         java.util.Objects.requireNonNull(system, "system");
@@ -296,8 +318,8 @@ public final class ClientModelService implements AutoCloseable {
     }
 
     /**
-     * Attempts a catalog reload without awaiting it, then returns the new resource-session identity.
-     * The connection owner must retain and use this exact identity for later session operations.
+     * Attempts a catalog reload without awaiting it, then returns the new resource-session identity. The connection
+     * owner must retain and use this exact identity for later session operations.
      */
     public Object beginConnection() {
         system.catalog().reload();
@@ -307,12 +329,12 @@ public final class ClientModelService implements AutoCloseable {
     /**
      * Starts remote projection for the current resource session and returns its activation owner.
      *
-     * <p>Requires: the connection owner has selected the current session and live fetch capabilities.
-     * This method is not an atomic rollback boundary: fetcher binding and projection selection precede
-     * opening the remote store.
+     * <p>
+     * Requires: the connection owner has selected the current session and live fetch capabilities. This method is not
+     * an atomic rollback boundary: fetcher binding and projection selection precede opening the remote store.
      *
-     * @throws IOException if the remote store cannot be opened; the connection owner must terminate
-     *         the failed activation through its session failure path
+     * @throws IOException if the remote store cannot be opened; the connection owner must terminate the failed
+     *             activation through its session failure path
      */
     public RemoteCatalogActivation beginRemoteActivation(
         com.elfmcys.ysm.model.resource.client.remote.RemoteMetadataFetcher fetcher,
@@ -332,21 +354,31 @@ public final class ClientModelService implements AutoCloseable {
         catalogManager.failRemote();
     }
 
-    public boolean contains(Hash256 hash) {
+    public boolean contains(ModelId hash) {
         return catalogManager.contains(hash);
     }
 
-    public Optional<String> findRenderTarget(Hash256 hash,
+    public Optional<String> findRenderTarget(ModelId hash,
         com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind kind, ResourceLocation entityType) {
         return catalogManager.findRenderTarget(hash, kind, entityType);
     }
 
-    public Optional<Hash256> resolvePath(String path) {
+    public Optional<String> findIntrinsicRenderTarget(com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind kind,
+        ResourceLocation entityType) {
+        return catalogManager.findRenderTarget(com.elfmcys.ysm.model.domain.PublishedModelId.INTRINSIC_DEFAULT, kind,
+            entityType);
+    }
+
+    public Optional<com.elfmcys.ysm.model.domain.PublishedModelId> resolvePath(String path) {
         return catalogManager.resolvePath(path);
     }
 
-    public String displayPath(Hash256 hash) {
+    public String displayPath(ModelId hash) {
         return catalogManager.displayPath(hash);
+    }
+
+    public String displayPath(com.elfmcys.ysm.model.domain.PublishedModelId modelId) {
+        return catalogManager.displayPath(modelId);
     }
 
     public ModelRenderTarget defaultRenderTarget() {
@@ -357,16 +389,27 @@ public final class ClientModelService implements AutoCloseable {
         return renderTargetManager.bakeProfile();
     }
 
-    public ResourceRequest resourceRequest(Hash256 modelId, String textureName) {
+    public ResourceRequest resourceRequest(ModelId modelId, String textureName) {
         return resourceRequest(modelId, RenderTargetIds.PLAYER, textureName);
     }
 
-    public ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName) {
+    public ResourceRequest resourceRequest(ModelId modelId, String targetId, String textureName) {
         return renderTargetManager.request(modelId, targetId, textureName);
     }
 
-    public ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName,
+    public ResourceRequest resourceRequest(ModelId modelId, String targetId, String textureName,
         com.elfmcys.ysm.model.resource.client.ModelResourcePurpose purpose, Class<?> subjectType) {
+        return renderTargetManager.request(modelId, targetId, textureName, purpose, subjectType);
+    }
+
+    public ResourceRequest resourceRequest(com.elfmcys.ysm.model.domain.PublishedModelId modelId, String targetId,
+        String textureName) {
+        return resourceRequest(modelId, targetId, textureName,
+            com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.FULL, null);
+    }
+
+    public ResourceRequest resourceRequest(com.elfmcys.ysm.model.domain.PublishedModelId modelId, String targetId,
+        String textureName, com.elfmcys.ysm.model.resource.client.ModelResourcePurpose purpose, Class<?> subjectType) {
         return renderTargetManager.request(modelId, targetId, textureName, purpose, subjectType);
     }
 
@@ -395,24 +438,27 @@ public final class ClientModelService implements AutoCloseable {
         return renderTargetManager.findReady(request);
     }
 
+    public com.elfmcys.ysm.network.forge.ClientPlayerPreferences preferences() {
+        return preferences;
+    }
+
     public com.elfmcys.ysm.client.demand.ClientDemandCoordinator demands() {
         return demands;
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request) {
+    public ResourceLease getOrStartOffline(ResourceRequest request) {
         return getOrStartOffline(request, WorkPriority.BACKGROUND);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request,
-        WorkPriority priority) {
+    public ResourceLease getOrStartOffline(ResourceRequest request, WorkPriority priority) {
         return renderTargetManager.getOrStartOffline(request, priority);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request) {
+    public ResourceLease getOrStartCached(ResourceRequest request) {
         return getOrStartCached(request, WorkPriority.BACKGROUND);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkPriority priority) {
+    public ResourceLease getOrStartCached(ResourceRequest request, WorkPriority priority) {
         return renderTargetManager.getOrStartCached(request, priority);
     }
 
@@ -440,8 +486,9 @@ public final class ClientModelService implements AutoCloseable {
     /**
      * Ends current remote use and restores local projection, retaining the process catalog and service.
      *
-     * <p>Requires: the connection owner has already matched the exact departing session. This facade
-     * resets demand, audio, and catalog projection without independently rejecting a stale identity.
+     * <p>
+     * Requires: the connection owner has already matched the exact departing session. This facade resets demand, audio,
+     * and catalog projection without independently rejecting a stale identity.
      */
     public void disconnect(Object sessionOwner) {
         demands.reset();
@@ -454,7 +501,9 @@ public final class ClientModelService implements AutoCloseable {
     public void tick() {
         system.tickCatalog();
         system.tickServerRuntime();
+        preferences.tick();
         renderTargetManager.tick();
+        startupWarmup.tick();
         audioRuntime.maintain();
         if (com.elfmcys.ysm.util.ResourceDiagnostics.isEnabled() && ++resourceDiagnosticTicks % 20 == 0) {
             ExpressionEngineMetrics.pollCollectedLoaders();
@@ -472,30 +521,65 @@ public final class ClientModelService implements AutoCloseable {
     }
 
     /**
-     * Removes service publication, seals domain owners, then drains notification and resource workers.
+     * Ends an unpublished candidate or a controlled service domain and drains its owned workers. JVM termination does
+     * not invoke this operation or retire installed entities through this service.
      *
-     * <p>Execution: serialized with startup and other close calls. May block without a timeout; must not
-     * run on an owned worker or depend on further host ticks. Interrupt status is restored after draining.
+     * <p>
+     * Execution: admission is serialized with publication; cleanup runs outside that monitor on the host owner. May
+     * block without a timeout; must not run on an owned worker or depend on further host ticks. Interrupt status is
+     * restored after draining.
      *
-     * <p>Failure: cleanup continues across owners and propagates the first cause with later causes
-     * suppressed. A later close waits for this call to leave the monitor but does not retry its cleanup.
+     * <p>
+     * Failure: cleanup continues across owners and propagates the first cause with later causes suppressed. A later
+     * close waits for the first cleanup without retaining the publication monitor.
      */
     @Override
     public void close() {
+        final boolean closing;
         synchronized (ClientModelService.class) {
-            if (!closed.compareAndSet(false, true)) {
-                return;
-            }
+            closing = closed.compareAndSet(false, true);
+            if (closing)
+                closingThread = Thread.currentThread();
             if (INSTANCE == this) {
                 INSTANCE = null;
             }
+        }
+        if (!closing) {
+            awaitClose();
+            return;
+        }
+        try {
             closeResourcesUnchecked();
+        } finally {
+            closingThread = null;
+            closeCompleted.countDown();
+        }
+    }
+
+    private void awaitClose() {
+        if (Thread.currentThread() == closingThread)
+            return;
+        var interrupted = false;
+        try {
+            while (true) {
+                try {
+                    closeCompleted.await();
+                    return;
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted)
+                Thread.currentThread().interrupt();
         }
     }
 
     private void closeResourcesUnchecked() {
         Throwable failure = null;
+        failure = closeOwned(startupWarmup, failure);
         failure = closeOwned(demands, failure);
+        failure = closeOwned(preferences, failure);
         failure = closeOwned(audioRuntime, failure);
         failure = closeOwned(previewOperations, failure);
         failure = closeOwned(renderTargetManager, failure);
@@ -506,7 +590,7 @@ public final class ClientModelService implements AutoCloseable {
         } catch (Throwable closeFailure) {
             if (failure == null)
                 failure = closeFailure;
-            else
+            else if (failure != closeFailure)
                 failure.addSuppressed(closeFailure);
         }
         if (failure != null)
@@ -520,7 +604,8 @@ public final class ClientModelService implements AutoCloseable {
             } catch (Throwable closeFailure) {
                 if (failure == null)
                     return closeFailure;
-                failure.addSuppressed(closeFailure);
+                if (failure != closeFailure)
+                    failure.addSuppressed(closeFailure);
             }
         }
         return failure;

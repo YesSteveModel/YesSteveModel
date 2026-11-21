@@ -1,9 +1,10 @@
 package com.elfmcys.ysm.model.resource.client;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.electronwill.nightconfig.core.CommentedConfig;
 import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.expression.host.ExpressionBinding;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
@@ -91,39 +92,42 @@ class ClientModelRenderTargetManagerTest {
     }
 
     @Test
-    void intrinsicContentIdentitySelectsOneBuiltinBindingForEveryRequestedPurposeAndTarget() throws Exception {
+    void intrinsicRequestsShareTheResidentFullPurposeAndBuiltinBindingForEveryTarget() throws Exception {
         var manager = contextManager(null);
         var unsafe = UnsafeUtil.getUnsafe();
         var builtin = ExpressionBinding.standalone(dev.semaweave.compilation.BindingPlan.identity()
             .withRootSubjectType(net.minecraft.world.entity.LivingEntity.class));
         var ordinary = ExpressionBinding.standalone(dev.semaweave.compilation.BindingPlan.identity()
             .withRootSubjectType(net.minecraft.client.player.AbstractClientPlayer.class));
-        var bindings = new java.util.IdentityHashMap<Class<?>, ExpressionBinding>();
-        bindings.put(net.minecraft.world.entity.LivingEntity.class, builtin);
-        bindings.put(net.minecraft.client.player.AbstractClientPlayer.class, builtin);
+        var preview = ExpressionBinding.standalone(dev.semaweave.compilation.BindingPlan.identity()
+            .withRootSubjectType(com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity.FakePlayer.class));
         unsafe.putObject(manager,
-            unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("defaultSubjectBindings")),
-            bindings);
+            unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("defaultSubjectBinding")),
+            builtin);
         var ordinaryBindings = new java.util.IdentityHashMap<Class<?>, ExpressionBinding>();
         ordinaryBindings.put(net.minecraft.client.player.AbstractClientPlayer.class, ordinary);
+        ordinaryBindings.put(com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity.FakePlayer.class, preview);
         unsafe.putObject(manager,
             unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("subjectBindings")),
             ordinaryBindings);
         unsafe.putObject(manager,
             unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("bakeProfile")), PROFILE);
-        unsafe.putObject(manager,
-            unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("defaultModelId")), hash());
         for (var target : List.of("player", "projectile", "vehicle")) {
             for (var purpose : ModelResourcePurpose.values()) {
-                var request = manager.request(hash(), target, "main", purpose,
-                    com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity.FakePlayer.class);
+                var request = manager.request(com.elfmcys.ysm.model.domain.PublishedModelId.INTRINSIC_DEFAULT, target,
+                    "main", purpose, com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity.FakePlayer.class);
                 assertSame(builtin, request.expressionBinding());
-                assertEquals(purpose, request.purpose());
+                assertEquals(ModelResourcePurpose.FULL, request.purpose());
             }
         }
-        var other = new Hash256(new byte[Hash256.SIZE]);
+        assertSame(ordinary, manager.request(hash(), "player", "main").expressionBinding());
+        var ordinaryGui = manager.request(hash(), "player", "main", ModelResourcePurpose.GUI, null);
+        assertSame(preview, ordinaryGui.expressionBinding());
+        assertEquals(ModelResourcePurpose.GUI, ordinaryGui.purpose());
+        var other = ModelId.fromHash(new Hash256(new byte[Hash256.SIZE]));
         assertSame(ordinary, manager.request(other, "player", "main").expressionBinding());
-        var mismatched = new ResourceRequest(hash(), "player", "main", PROFILE, ordinary, ModelResourcePurpose.FULL);
+        var mismatched = new ResourceRequest(com.elfmcys.ysm.model.domain.PublishedModelId.INTRINSIC_DEFAULT, "player",
+            "main", PROFILE, ordinary, ModelResourcePurpose.FULL);
         var failure = assertThrows(IllegalArgumentException.class,
             () -> invoke(manager, "resolve", new Class<?>[] {ResourceRequest.class}, mismatched));
         assertEquals("Resource expressionBinding is not current", failure.getMessage());
@@ -185,122 +189,10 @@ class ClientModelRenderTargetManagerTest {
     }
 
     @Test
-    void readyAcquisitionCancellationClosesBeforeReturningAndRejectsLateReady() {
-        var lease = new TrackingLease(true);
-        var terminal = new CompletableFuture<AcquireResult>();
-        var acquisition = new ClientModelRenderTargetManager.ReadyAcquisition(request(""), lease, terminal);
-        var result = acquisition.result().toCompletableFuture();
-
-        acquisition.cancel();
-
-        assertTrue(result.isCompletedExceptionally());
-        assertEquals(1, lease.cancellations.get());
-        assertEquals(1, lease.closes.get());
-        assertTrue(terminal.complete(new AcquireResult.Ready(target())));
-        assertEquals(1, lease.closes.get());
-    }
-
-    @Test
-    void readyAcquisitionClosesEveryNonDeliveredTerminalBeforePublication() {
-        assertRejected(new AcquireResult.Pending(), null, true);
-        assertRejected(new AcquireResult.Failed(
-            new ResourceFailure(ResourceFailure.Kind.TRANSIENT, new IllegalStateException("failed"))), null, true);
-        assertRejected(new AcquireResult.Ready(target()), null, false);
-        assertRejected(null, new CancellationException("owner closed"), true);
-    }
-
-    @Test
-    void readyAcquisitionTransfersCurrentReadyLeaseWithoutClosingIt() {
-        var lease = new TrackingLease(true);
-        var terminal = new CompletableFuture<AcquireResult>();
-        var acquisition = new ClientModelRenderTargetManager.ReadyAcquisition(request(""), lease, terminal);
-        var result = acquisition.result().toCompletableFuture();
-
-        terminal.complete(new AcquireResult.Ready(target()));
-
-        assertSame(lease, result.join());
-        assertFalse(result.cancel(false));
-        assertEquals(0, lease.closes.get());
-        lease.close();
-        assertEquals(1, lease.closes.get());
-    }
-
-    @Test
-    void deferredReadyCancellationRejectsLateCachedLeaseWithoutStartingFallback() {
-        var lease = new TrackingLease(true);
-        var starts = new AtomicInteger();
-        var probe = new CompletableFuture<Optional<ResourceLease>>() {
-            @Override
-            public boolean cancel(boolean interrupt) {
-                return false;
-            }
-        };
-        var acquisition = new ClientModelRenderTargetManager.ReadyAcquisition(request(""), probe, () -> {
-            starts.incrementAndGet();
-            throw new AssertionError("Cancelled GUI must not start its fallback");
-        });
-
-        acquisition.cancel();
-        probe.complete(Optional.of(lease));
-
-        assertTrue(acquisition.result().toCompletableFuture().isCompletedExceptionally());
-        assertEquals(1, lease.closes.get());
-        assertEquals(0, starts.get());
-    }
-
-    @Test
-    void deferredReadyFallbackKeepsTheOriginalOwnerCancellation() {
-        var lease = new TrackingLease(true);
-        var terminal = new CompletableFuture<AcquireResult>();
-        var acquisition = new ClientModelRenderTargetManager.ReadyAcquisition(request(""),
-            CompletableFuture.completedFuture(Optional.empty()),
-            () -> new ClientModelRenderTargetManager.ReadyAcquisition(request(""), lease, terminal));
-
-        acquisition.cancel();
-        terminal.complete(new AcquireResult.Ready(target()));
-
-        assertTrue(acquisition.result().toCompletableFuture().isCompletedExceptionally());
-        assertEquals(1, lease.closes.get());
-        assertEquals(1, lease.cancellations.get());
-    }
-
-    @Test
-    void deferredReadyTransfersOnlyTheCachedCurrentLease() {
-        var lease = new TrackingLease(true, new AcquireResult.Ready(target()));
-        var starts = new AtomicInteger();
-        var acquisition = new ClientModelRenderTargetManager.ReadyAcquisition(request(""),
-            CompletableFuture.completedFuture(Optional.of(lease)), () -> {
-                starts.incrementAndGet();
-                throw new AssertionError("A ready player cache must not start GUI preparation");
-            });
-
-        assertSame(lease, acquisition.result().toCompletableFuture().join());
-        acquisition.cancel();
-
-        assertEquals(0, starts.get());
-        assertEquals(0, lease.cancellations.get());
-        assertEquals(0, lease.closes.get());
-        lease.close();
-    }
-
-    @Test
-    void deferredReadyClosesCachedLeaseThatBecameStale() {
-        var lease = new TrackingLease(false, new AcquireResult.Ready(target()));
-        var acquisition = new ClientModelRenderTargetManager.ReadyAcquisition(request(""),
-            CompletableFuture.completedFuture(Optional.of(lease)), () -> {
-                throw new AssertionError("An obsolete request must not start new GUI work");
-            });
-
-        assertTrue(acquisition.result().toCompletableFuture().isCompletedExceptionally());
-        assertEquals(1, lease.closes.get());
-    }
-
-    @Test
     void sessionRetirementCannotResumeAnOldGuiRequestUnderTheNextOwner() throws Exception {
         ClientConfig.init().setConfig(CommentedConfig.inMemory());
-        for (var fallback : List.of("getOrStartCachedExact", "getOrStartOfflineExact", "getOrStartReadyExact")) {
-            try (var cache = new ModelRenderTargetCache(scheduler(), ignored -> {
-            })) {
+        for (var fallback : List.of("getOrStartCachedExact", "getOrStartOfflineExact", "getOrStart")) {
+            try (var cache = new ModelRenderTargetCache(scheduler())) {
                 var manager = contextManager(cache);
                 var originalOwner = manager.beginSession();
                 var context = invoke(manager, "currentWorkContext", new Class<?>[0]);
@@ -310,25 +202,97 @@ class ClientModelRenderTargetManagerTest {
                 var pending = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
                 var probe = cache.getOrStartCached(gui, content(),
                     new RenderTargetKey("player", "", PROFILE, gui.expressionBinding(), ModelResourcePurpose.GUI),
-                    (ignored, dispatch) -> pending, (identity, key, request) -> true, originalOwner, WorkPriority.LOCAL_PLAYER);
-                var continuation = probe.thenApply(cached -> {
-                    assertTrue(cached.isEmpty());
-                    return invoke(manager, fallback, new Class<?>[] {ResourceRequest.class, context.getClass(), WorkPriority.class}, gui,
-                        context, WorkPriority.LOCAL_PLAYER);
-                });
-
+                    (ignored, dispatch) -> pending, (identity, key, request) -> true, originalOwner,
+                    WorkPriority.LOCAL_PLAYER);
                 manager.disconnect(originalOwner);
                 manager.beginSession();
                 cache.tick();
 
-                var failure = assertThrows(CompletionException.class, continuation::join, fallback);
-                assertTrue(failure.getCause() instanceof CancellationException, fallback);
-                assertEquals("Render-target work owner is no longer current", failure.getCause().getMessage());
+                var failure = assertThrows(CancellationException.class,
+                    () -> invoke(manager, fallback,
+                        new Class<?>[] {ResourceRequest.class, context.getClass(), WorkPriority.class}, gui, context,
+                        WorkPriority.LOCAL_PLAYER),
+                    fallback);
+                assertEquals("Render-target work owner is no longer current", failure.getMessage());
                 assertTrue(pending.isCancelled());
                 assertEquals(0, cache.loadingCount());
-                assertFalse(continuation.isCancelled());
+                probe.close();
             }
         }
+    }
+
+    @Test
+    void cancelledProbeDisposesItsLateCandidateWithoutStartingFallback() throws Exception {
+        var prepared = uncancellableLoad();
+        var starts = new AtomicInteger();
+        var closes = new AtomicInteger();
+        var result = continueLoad(prepared, outcome -> {
+            starts.incrementAndGet();
+            return CompletableFuture.completedFuture(outcome);
+        });
+        result.cancel(false);
+        prepared.complete(candidate(closes));
+        assertEquals(0, starts.get());
+        assertEquals(1, closes.get());
+    }
+
+    @Test
+    void cancelledContinuationDisposesLateCandidateWithoutConsumerProgress() throws Exception {
+        var loading = uncancellableLoad();
+        var closes = new AtomicInteger();
+        var result = continueLoad(
+            CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Failed(
+                new ResourceFailure(ResourceFailure.Kind.TRANSIENT, new java.io.IOException("cache absent")))),
+            ignored -> loading);
+        result.cancel(false);
+        loading.complete(candidate(closes));
+        assertEquals(1, closes.get());
+    }
+
+    @Test
+    void rejectedContinuationKeepsTheSourceResponsibleForItsCandidate() throws Exception {
+        var closes = new AtomicInteger();
+        var rejected = new IllegalStateException("continuation rejected");
+        var result = continueLoad(CompletableFuture.completedFuture(candidate(closes)), ignored -> {
+            throw rejected;
+        });
+        assertSame(rejected, assertThrows(CompletionException.class, result::join).getCause());
+        assertEquals(1, closes.get());
+    }
+
+    private static CompletableFuture<ModelRenderTargetLoader.LoadResult> uncancellableLoad() {
+        return new CompletableFuture<>() {
+            @Override
+            public boolean cancel(boolean interrupt) {
+                return false;
+            }
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private static CompletableFuture<ModelRenderTargetLoader.LoadResult> continueLoad(
+        CompletableFuture<ModelRenderTargetLoader.LoadResult> source, java.util.function.Function<
+            ModelRenderTargetLoader.LoadResult, CompletableFuture<ModelRenderTargetLoader.LoadResult>> continuation)
+        throws Exception {
+        return (CompletableFuture<ModelRenderTargetLoader.LoadResult>)invoke(contextManager(null), "continueLoad",
+            new Class<?>[] {CompletableFuture.class, java.util.function.Function.class,
+                java.util.function.Consumer.class},
+            source, continuation, (java.util.function.Consumer<ModelRenderTargetLoader.LoadResult>)outcome -> {
+                if (outcome instanceof ModelRenderTargetLoader.LoadResult.Ready ready)
+                    ready.candidate().close();
+            });
+    }
+
+    private static ModelRenderTargetLoader.LoadResult candidate(AtomicInteger closes) throws Exception {
+        var unsafe = UnsafeUtil.getUnsafe();
+        var target = (ModelRenderTarget)unsafe.allocateInstance(ModelRenderTarget.class);
+        unsafe.putObject(target, unsafe.objectFieldOffset(ModelRenderTarget.class.getDeclaredField("cleanable")),
+            (java.lang.ref.Cleaner.Cleanable)closes::incrementAndGet);
+        var factory =
+            ModelRenderTargetLoader.ModelCandidate.class.getDeclaredMethod("testing", ModelRenderTarget.class);
+        factory.setAccessible(true);
+        return new ModelRenderTargetLoader.LoadResult.Ready(
+            (ModelRenderTargetLoader.ModelCandidate)factory.invoke(null, target));
     }
 
     private static ClientModelRenderTargetManager contextManager(ModelRenderTargetCache cache) throws Exception {
@@ -338,7 +302,8 @@ class ClientModelRenderTargetManagerTest {
         unsafe.putObject(manager,
             unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("renderTargets")), cache);
         unsafe.putObject(manager,
-            unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("processOwner")), new Object());
+            unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("processOwner")),
+            new Object());
         return manager;
     }
 
@@ -364,7 +329,7 @@ class ClientModelRenderTargetManagerTest {
         var representation = (ModelRepresentation)unsafe.allocateInstance(ModelRepresentation.class);
         unsafe.putObject(representation,
             unsafe.objectFieldOffset(ModelRepresentation.class.getDeclaredField("identity")),
-            new ModelFileIdentity(hash(), hash()));
+            new ModelFileIdentity(hash(), Hash256.parse(hash().toString().substring(5))));
         return new ModelContent() {
             @Override
             public ModelRepresentation representation() {
@@ -376,25 +341,6 @@ class ClientModelRenderTargetManagerTest {
                 throw new AssertionError("A pending cache probe must not read chunks");
             }
         };
-    }
-
-    private static void assertRejected(AcquireResult outcome, Throwable failure, boolean current) {
-        var lease = new TrackingLease(current);
-        var terminal = new CompletableFuture<AcquireResult>();
-        var acquisition = new ClientModelRenderTargetManager.ReadyAcquisition(request(""), lease, terminal);
-        var result = acquisition.result().toCompletableFuture();
-        var closesAtCompletion = new AtomicInteger();
-        result.whenComplete((ignored, ignoredFailure) -> closesAtCompletion.set(lease.closes.get()));
-
-        if (failure == null) {
-            terminal.complete(outcome);
-        } else {
-            terminal.completeExceptionally(failure);
-        }
-
-        assertTrue(result.isCompletedExceptionally());
-        assertEquals(1, closesAtCompletion.get());
-        assertEquals(1, lease.closes.get());
     }
 
     private static ResourceRequest request(String requestedTexture) {
@@ -419,8 +365,9 @@ class ClientModelRenderTargetManagerTest {
         var info = InfoProto.newBuilder().setSettings(settings.build())
             .setMetadata(MetadataProto.newBuilder().setName("").setTips("")
                 .setLicense(LicenseProto.newBuilder().setType("").setDesc("").build()).build())
-            .setProperties(PropertiesProto.newBuilder().setModelId(ByteBuffer.wrap(new byte[Hash256.SIZE]))
-                .setFree(false).setOriginVer("").build())
+            .setProperties(PropertiesProto.newBuilder()
+                .setModelId("hash:" + java.util.HexFormat.of().formatHex(new byte[Hash256.SIZE])).setFree(false)
+                .setOriginVer("").build())
             .build();
         return ManifestProto.newBuilder().addRenderTargets(target.build())
             .setCommonAssets(CommonProto.newBuilder().setStringsBlobId(0).build()).setInfo(info).build();
@@ -430,59 +377,10 @@ class ClientModelRenderTargetManagerTest {
         return ImageProto.newBuilder().setBlobId(0).setFormat("").setWidth(0).setHeight(0).setFrameCount(0).build();
     }
 
-    private static Hash256 hash() {
+    private static ModelId hash() {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = 1;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
-    private static ModelRenderTarget target() {
-        try {
-            return (ModelRenderTarget)UnsafeUtil.getUnsafe().allocateInstance(ModelRenderTarget.class);
-        } catch (InstantiationException failure) {
-            throw new AssertionError(failure);
-        }
-    }
-
-    private static final class TrackingLease implements ResourceLease {
-        private final boolean current;
-        private final AcquireResult outcome;
-        private final AtomicInteger cancellations = new AtomicInteger();
-        private final AtomicInteger closes = new AtomicInteger();
-
-        private TrackingLease(boolean current) {
-            this(current, new AcquireResult.Pending());
-        }
-
-        private TrackingLease(boolean current, AcquireResult outcome) {
-            this.current = current;
-            this.outcome = outcome;
-        }
-
-        @Override
-        public ModelResourcePurpose purpose() {
-            return ModelResourcePurpose.FULL;
-        }
-
-        @Override
-        public AcquireResult poll() {
-            return outcome;
-        }
-
-        @Override
-        public boolean isCurrent(ResourceRequest request) {
-            return current;
-        }
-
-        @Override
-        public void cancelPending() {
-            cancellations.incrementAndGet();
-            close();
-        }
-
-        @Override
-        public void close() {
-            closes.incrementAndGet();
-        }
-    }
 }

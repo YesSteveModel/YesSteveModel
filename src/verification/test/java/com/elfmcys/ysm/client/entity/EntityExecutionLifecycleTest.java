@@ -3,7 +3,6 @@ package com.elfmcys.ysm.client.entity;
 import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
 import com.elfmcys.ysm.expression.aot.TestExpressionModules;
 import com.elfmcys.ysm.expression.host.InvocationInputs;
-import dev.semaweave.RoamingPayload;
 import dev.semaweave.RoamingRole;
 import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
@@ -17,11 +16,12 @@ class EntityExecutionLifecycleTest {
     @Test
     void guiReservationSealsReadsUntilTheExplicitJoinAndCannotAuthorizeAnotherOwner() throws Exception {
         try (var runtime = new EntityExpressionRuntime(); var other = new EntityExpressionRuntime()) {
-            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
-            var another = new EntityExecutionLifecycle(other, () -> {}, failure -> fail(failure));
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+            }, failure -> fail(failure));
+            var another = new EntityExecutionLifecycle(other, () -> {
+            }, failure -> fail(failure));
             var input = new EntityExpressionRuntime.InvocationInputs(
-                new InvocationInputs<net.minecraft.world.entity.Entity>() {}, (commands, provenance) -> () -> {},
-                () -> false);
+                new InvocationInputs<net.minecraft.world.entity.Entity>() {});
             var task = lifecycle.reserveGuiTask(true, () -> {
                 lifecycle.assertStateAccess();
                 lifecycle.assertSubjectAccess();
@@ -62,7 +62,8 @@ class EntityExecutionLifecycleTest {
     @Test
     void guiInternalEntryPreservesCandidateCallAndDrawReentryRulesEvenOnTheMainThread() {
         try (var runtime = new EntityExpressionRuntime()) {
-            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+            }, failure -> fail(failure));
             @SuppressWarnings("unchecked")
             var tasks = new EntityExecutionLifecycle.GuiTask<?>[1];
             var task = lifecycle.reserveGuiTask(true, () -> lifecycle.inGuiExecution(tasks[0], () -> {
@@ -93,7 +94,8 @@ class EntityExecutionLifecycleTest {
     @Test
     void rejectedAndNonGuiReservationsDoNotGrantExecution() throws Exception {
         try (var runtime = new EntityExpressionRuntime()) {
-            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+            }, failure -> fail(failure));
             assertThrows(IllegalStateException.class, () -> lifecycle.reserveGuiTask(false, () -> null));
             assertFalse(lifecycle.hasTask());
             var task = lifecycle.reserveGuiTask(true, () -> fail("Rejected task executed"));
@@ -104,8 +106,11 @@ class EntityExecutionLifecycleTest {
             assertThrows(IllegalStateException.class, task::join);
             var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
             var worker = new Thread(() -> {
-                try { runtime.prepareExecution(); }
-                catch (Throwable expected) { failure.set(expected); }
+                try {
+                    runtime.prepareExecution();
+                } catch (Throwable expected) {
+                    failure.set(expected);
+                }
             });
             worker.start();
             worker.join(5000);
@@ -122,7 +127,8 @@ class EntityExecutionLifecycleTest {
             var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
                 events.add("close");
                 throw cleanup;
-            }, failure -> {}, Runnable::run);
+            }, failure -> {
+            }, scheduler(Runnable::run));
             var tasks = new EntityExecutionLifecycle.GuiTask<?>[1];
             var task = lifecycle.reserveGuiTask(true, () -> lifecycle.inGuiExecution(tasks[0], () -> {
                 try {
@@ -130,14 +136,16 @@ class EntityExecutionLifecycleTest {
                     assertTrue(lifecycle.isEndingUse());
                     assertTrue(events.isEmpty());
                     throw primary;
-                } finally { events.add("execution-exit"); }
+                } finally {
+                    events.add("execution-exit");
+                }
             }));
             tasks[0] = task;
             task.run();
             assertEquals(List.of("execution-exit"), events);
             assertSame(primary, assertThrows(IllegalArgumentException.class, task::join));
             assertEquals(List.of("execution-exit", "close"), events);
-            assertArrayEquals(new Throwable[]{cleanup}, primary.getSuppressed());
+            assertArrayEquals(new Throwable[] {cleanup}, primary.getSuppressed());
             assertFalse(lifecycle.hasTask());
             assertEquals(0, runtime.generation());
         }
@@ -149,21 +157,26 @@ class EntityExecutionLifecycleTest {
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         try (var runtime = new EntityExpressionRuntime()) {
-            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+            }, failure -> fail(failure));
             var task = lifecycle.reserveGuiTask(true, () -> {
                 try {
                     entered.countDown();
                     assertTrue(release.await(5, TimeUnit.SECONDS));
                     return 31;
-                } catch (InterruptedException failure) { throw new AssertionError(failure); }
-                finally { events.add("execution-exit"); }
+                } catch (InterruptedException failure) {
+                    throw new AssertionError(failure);
+                } finally {
+                    events.add("execution-exit");
+                }
             });
             var worker = new Thread(task);
             worker.start();
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             var main = Thread.currentThread();
             var gate = new Thread(() -> {
-                while (main.getState() != Thread.State.WAITING) Thread.onSpinWait();
+                while (main.getState() != Thread.State.WAITING)
+                    Thread.onSpinWait();
                 release.countDown();
             });
             gate.start();
@@ -173,7 +186,10 @@ class EntityExecutionLifecycleTest {
             assertEquals(List.of("execution-exit"), events);
             gate.join(5000);
             worker.join(5000);
-        } finally { release.countDown(); Thread.interrupted(); }
+        } finally {
+            release.countDown();
+            Thread.interrupted();
+        }
     }
 
     @Test
@@ -185,20 +201,23 @@ class EntityExecutionLifecycleTest {
                 try (var runtime = new EntityExpressionRuntime()) {
                     var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
                         closed.incrementAndGet();
-                        if (failCleanup) throw fatal;
+                        if (failCleanup)
+                            throw fatal;
                     }, failure -> {
                         assertSame(primary, failure);
-                        if (!failCleanup) throw fatal;
+                        if (!failCleanup)
+                            throw fatal;
                     });
                     var tasks = new EntityExecutionLifecycle.GuiTask<?>[1];
                     var task = lifecycle.reserveGuiTask(true, () -> lifecycle.inGuiExecution(tasks[0], () -> {
-                        if (failCleanup) lifecycle.endInstallationUse();
+                        if (failCleanup)
+                            lifecycle.endInstallationUse();
                         throw primary;
                     }));
                     tasks[0] = task;
                     task.run();
                     assertSame(fatal, assertThrows(Error.class, task::join));
-                    assertArrayEquals(new Throwable[]{primary}, fatal.getSuppressed());
+                    assertArrayEquals(new Throwable[] {primary}, fatal.getSuppressed());
                     assertEquals(failCleanup ? 1 : 0, closed.get());
                     assertFalse(lifecycle.hasTask());
                     assertFalse(lifecycle.isEndingUse());
@@ -215,7 +234,7 @@ class EntityExecutionLifecycleTest {
             try (var module = TestExpressionModules.create(Set.of("value"));
                 var runtime = new EntityExpressionRuntime()) {
                 TestExpressionModules.replace(runtime, module, Map.of(), RoamingRole.PRODUCER);
-                runtime.initializeRoaming(new RoamingPayload(new java.util.TreeMap<>()));
+                runtime.initializeRoaming(com.elfmcys.ysm.expression.TestRoamingPayloads.empty());
                 var installation = runtime.snapshot().orElseThrow().installation();
                 var projection = new IllegalStateException("projection");
                 var closed = new java.util.concurrent.atomic.AtomicInteger();
@@ -224,14 +243,16 @@ class EntityExecutionLifecycleTest {
                     throw cleanup;
                 }, failure -> fail(failure));
                 var inputs = new EntityExpressionRuntime.InvocationInputs(
-                    new InvocationInputs<net.minecraft.world.entity.Entity>() {},
-                    (commands, provenance) -> () -> {}, () -> false);
+                    new InvocationInputs<net.minecraft.world.entity.Entity>() {});
                 var tasks = new EntityExecutionLifecycle.GuiTask<?>[1];
                 var task = lifecycle.reserveGuiTask(true, () -> lifecycle.inGuiExecution(tasks[0], () -> {
                     runtime.normalUpdate(inputs, evaluation -> {
-                        runtime.roamingState().orElseThrow().write("value", 7);
+                        runtime.roamingState().orElseThrow()
+                            .write((short)runtime.roamingState().orElseThrow().fieldNames().indexOf("value"), 7);
                         return null;
-                    }, delta -> { throw projection; });
+                    }, delta -> {
+                        throw projection;
+                    });
                     lifecycle.endInstallationUse();
                     return null;
                 }));
@@ -247,10 +268,10 @@ class EntityExecutionLifecycleTest {
                 var failure = assertThrows(Throwable.class, task::join);
                 if (cleanup instanceof OutOfMemoryError) {
                     assertSame(projection, failure);
-                    assertArrayEquals(new Throwable[]{cleanup}, projection.getSuppressed());
+                    assertArrayEquals(new Throwable[] {cleanup}, projection.getSuppressed());
                 } else {
                     assertSame(cleanup, failure);
-                    assertArrayEquals(new Throwable[]{projection}, cleanup.getSuppressed());
+                    assertArrayEquals(new Throwable[] {projection}, cleanup.getSuppressed());
                 }
                 assertEquals(1, closed.get());
                 assertFalse(lifecycle.hasTask());
@@ -264,7 +285,8 @@ class EntityExecutionLifecycleTest {
     void completedButUnjoinedTaskRemainsBusy() throws Exception {
         try (var runtime = new EntityExpressionRuntime()) {
             var queue = new ArrayList<Runnable>();
-            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure), queue::add);
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+            }, failure -> fail(failure), scheduler(queue::add));
             lifecycle.submit(() -> {
                 lifecycle.assertSubjectAccess();
                 lifecycle.assertStateAccess();
@@ -278,7 +300,9 @@ class EntityExecutionLifecycleTest {
             assertFalse(worker.isAlive());
             lifecycle.assertSubjectAccess();
             assertThrows(IllegalStateException.class, lifecycle::assertStateAccess);
-            assertTrue(lifecycle.tryInstallation(() -> { throw new AssertionError("Unjoined task was read"); }).isEmpty());
+            assertTrue(lifecycle.tryInstallation(() -> {
+                throw new AssertionError("Unjoined task was read");
+            }).isEmpty());
             assertThrows(IllegalStateException.class, runtime::clear);
             assertThrows(IllegalStateException.class, runtime::prepareExecution);
             lifecycle.awaitTask();
@@ -289,19 +313,27 @@ class EntityExecutionLifecycleTest {
     @Test
     void correspondingGetPublishesOrdinaryFieldsIncludingFinallyOnSuccessAndFailure() {
         for (boolean fail : List.of(false, true)) {
-            class Values { int result; final Nested nested = new Nested(); }
-            class Holder { final Values values = new Values(); }
+            class Values {
+                int result;
+                final Nested nested = new Nested();
+            }
+            class Holder {
+                final Values values = new Values();
+            }
             var holder = new Holder();
             var failures = new ArrayList<Throwable>();
             try (var runtime = new EntityExpressionRuntime()) {
-                var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failures::add,
-                    task -> new Thread(task).start());
+                var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+                }, failures::add, scheduler(task -> new Thread(task).start()));
                 lifecycle.submit(() -> {
                     try {
                         holder.values.result = 17;
-                        if (fail) throw new IllegalArgumentException("fixture failure");
+                        if (fail)
+                            throw new IllegalArgumentException("fixture failure");
                         return null;
-                    } finally { holder.values.nested.value = 29; }
+                    } finally {
+                        holder.values.nested.value = 29;
+                    }
                 });
                 // No worker-to-main signal is consumed before this get.
                 lifecycle.awaitTask();
@@ -312,7 +344,39 @@ class EntityExecutionLifecycleTest {
         }
     }
 
-    private static final class Nested { int value; }
+    static EntityExecutionLifecycle.Scheduler scheduler(java.util.concurrent.Executor executor) {
+        return new EntityExecutionLifecycle.Scheduler() {
+            @Override
+            public void execute(Runnable task) {
+                executor.execute(task);
+            }
+
+            @Override
+            public boolean tryTakeQueued(Runnable task) {
+                return false;
+            }
+        };
+    }
+
+    static final class QueuedScheduler implements EntityExecutionLifecycle.Scheduler {
+        final BlockingQueue<Runnable> tasks = new LinkedBlockingQueue<>();
+        int claims;
+
+        @Override
+        public void execute(Runnable task) {
+            tasks.add(task);
+        }
+
+        @Override
+        public boolean tryTakeQueued(Runnable task) {
+            claims++;
+            return tasks.remove(task);
+        }
+    }
+
+    private static final class Nested {
+        int value;
+    }
 
     @Test
     void endingUseAdoptsPendingLocalDeltaBeforeSealingTheInstallation() {
@@ -321,22 +385,24 @@ class EntityExecutionLifecycleTest {
                 try (var module = TestExpressionModules.create(Set.of("value"));
                     var runtime = new EntityExpressionRuntime()) {
                     TestExpressionModules.replace(runtime, module, Map.of(), RoamingRole.PRODUCER);
-                    runtime.initializeRoaming(new RoamingPayload(new java.util.TreeMap<>()));
+                    runtime.initializeRoaming(com.elfmcys.ysm.expression.TestRoamingPayloads.empty());
                     var installation = runtime.snapshot().orElseThrow().installation();
                     var retained = new java.util.HashMap<String, Float>();
                     var events = new ArrayList<String>();
                     var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
                         events.add("close");
                         runtime.clear();
-                    }, failure -> fail(failure), task -> new Thread(task).start());
+                    }, failure -> fail(failure), scheduler(task -> new Thread(task).start()));
                     var inputs = new EntityExpressionRuntime.InvocationInputs(
-                        new InvocationInputs<net.minecraft.world.entity.Entity>() {},
-                        (commands, provenance) -> () -> {}, () -> false);
+                        new InvocationInputs<net.minecraft.world.entity.Entity>() {});
                     java.util.function.Supplier<Object> update = () -> runtime.normalUpdate(inputs, evaluation -> {
-                        runtime.roamingState().orElseThrow().write("value", 7);
+                        runtime.roamingState().orElseThrow()
+                            .write((short)runtime.roamingState().orElseThrow().fieldNames().indexOf("value"), 7);
                         return null;
                     }, delta -> {
-                        assertTrue(installation.commit(() -> retained.putAll(delta.values())));
+                        assertTrue(
+                            installation.commit(() -> retained.putAll(com.elfmcys.ysm.expression.TestRoamingPayloads
+                                .named(delta, installation.roamingFields()))));
                         events.add("adopt");
                     });
                     if (asynchronous)
@@ -361,10 +427,9 @@ class EntityExecutionLifecycleTest {
 
     @Test
     void adoptionFailurePreservesTaskFailureAndStillSealsAndCleansUp() {
-        try (var module = TestExpressionModules.create(Set.of("value"));
-            var runtime = new EntityExpressionRuntime()) {
+        try (var module = TestExpressionModules.create(Set.of("value")); var runtime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(runtime, module, Map.of(), RoamingRole.PRODUCER);
-            runtime.initializeRoaming(new RoamingPayload(new java.util.TreeMap<>()));
+            runtime.initializeRoaming(com.elfmcys.ysm.expression.TestRoamingPayloads.empty());
             var installation = runtime.snapshot().orElseThrow().installation();
             var original = new IllegalArgumentException("task");
             var adoptionFailure = new IllegalStateException("adoption");
@@ -373,13 +438,15 @@ class EntityExecutionLifecycleTest {
             var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
                 events.add("close");
                 throw closeFailure;
-            }, failure -> { throw (RuntimeException)failure; }, task -> new Thread(task).start());
+            }, failure -> {
+                throw (RuntimeException)failure;
+            }, scheduler(task -> new Thread(task).start()));
             var inputs = new EntityExpressionRuntime.InvocationInputs(
-                new InvocationInputs<net.minecraft.world.entity.Entity>() {},
-                (commands, provenance) -> () -> {}, () -> false);
+                new InvocationInputs<net.minecraft.world.entity.Entity>() {});
             lifecycle.submit(() -> {
                 runtime.normalUpdate(inputs, evaluation -> {
-                    runtime.roamingState().orElseThrow().write("value", 7);
+                    runtime.roamingState().orElseThrow()
+                        .write((short)runtime.roamingState().orElseThrow().fieldNames().indexOf("value"), 7);
                     return null;
                 }, delta -> {
                     events.add("adopt");
@@ -403,19 +470,24 @@ class EntityExecutionLifecycleTest {
         var release = new CountDownLatch(1);
         try (var runtime = new EntityExpressionRuntime()) {
             var lifecycle = new EntityExecutionLifecycle(runtime, () -> events.add("close"), failure -> fail(failure),
-                task -> new Thread(task).start());
+                scheduler(task -> new Thread(task).start()));
             lifecycle.submit(() -> {
                 try {
                     entered.countDown();
                     assertTrue(release.await(5, TimeUnit.SECONDS));
+                    events.add("last-consumption");
                     return null;
-                } catch (InterruptedException e) { throw new AssertionError(e); }
-                finally { events.add("execution-exit"); }
+                } catch (InterruptedException e) {
+                    throw new AssertionError(e);
+                } finally {
+                    events.add("execution-exit");
+                }
             });
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             var main = Thread.currentThread();
             var gate = new Thread(() -> {
-                while (main.getState() != Thread.State.WAITING) Thread.onSpinWait();
+                while (main.getState() != Thread.State.WAITING)
+                    Thread.onSpinWait();
                 release.countDown();
             });
             gate.start();
@@ -424,9 +496,12 @@ class EntityExecutionLifecycleTest {
             events.add("retire-return");
             assertTrue(Thread.interrupted());
             gate.join(5000);
-            assertEquals(List.of("execution-exit", "close", "retire-return"), events);
+            assertEquals(List.of("last-consumption", "execution-exit", "close", "retire-return"), events);
             assertTrue(lifecycle.tryInstallation(() -> "revived").isEmpty());
-        } finally { release.countDown(); Thread.interrupted(); }
+        } finally {
+            release.countDown();
+            Thread.interrupted();
+        }
     }
 
     @Test
@@ -434,7 +509,7 @@ class EntityExecutionLifecycleTest {
         var closes = new ArrayList<String>();
         try (var runtime = new EntityExpressionRuntime()) {
             var lifecycle = new EntityExecutionLifecycle(runtime, () -> closes.add("close"), failure -> fail(failure),
-                task -> new Thread(task).start());
+                scheduler(task -> new Thread(task).start()));
             lifecycle.submit(() -> {
                 assertThrows(IllegalStateException.class, lifecycle::endUse);
                 assertThrows(IllegalStateException.class, lifecycle::retire);
@@ -456,8 +531,10 @@ class EntityExecutionLifecycleTest {
         var original = new IllegalArgumentException("draw");
         var closeFailure = new IllegalStateException("close");
         try (var runtime = new EntityExpressionRuntime()) {
-            var lifecycle = new EntityExecutionLifecycle(runtime, () -> { events.add("close"); throw closeFailure; },
-                failure -> fail(failure));
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+                events.add("close");
+                throw closeFailure;
+            }, failure -> fail(failure));
             assertSame(original, assertThrows(IllegalArgumentException.class, () -> lifecycle.inDraw(() -> {
                 lifecycle.retire();
                 assertTrue(lifecycle.isRetired());
@@ -465,14 +542,15 @@ class EntityExecutionLifecycleTest {
                 throw original;
             })));
             assertEquals(List.of("close"), events);
-            assertArrayEquals(new Throwable[]{closeFailure}, original.getSuppressed());
+            assertArrayEquals(new Throwable[] {closeFailure}, original.getSuppressed());
         }
     }
 
     @Test
     void candidateCannotReenterInstallation() {
         try (var runtime = new EntityExpressionRuntime()) {
-            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {}, failure -> fail(failure));
+            var lifecycle = new EntityExecutionLifecycle(runtime, () -> {
+            }, failure -> fail(failure));
             assertTrue(lifecycle.inCandidate(() -> lifecycle.tryInstallation(() -> "invalid").isEmpty()));
         }
     }

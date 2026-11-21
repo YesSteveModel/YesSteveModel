@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
@@ -42,11 +43,11 @@ class CatalogPublicationWireTest {
     private static final String ANIMATION = "ysm\0idle";
 
     @Test
-    void publicationPreservesEveryNamespaceAndTheIntrinsicDefaultAddress() {
-        for (var address : List.of("global:custom/model.mxc", "global:auth/model.mxc", "local:custom/model.mxc",
-            "local:auth/model.mxc", "builtin:other", "default")) {
-            var expected = new PublicationEntry(new ModelFileIdentity(hash(1), hash(11)), new HierarchyPath(address),
-                CatalogAccess.PUBLIC, true);
+    void publicationPreservesEveryOrdinaryNamespaceIncludingBuiltinDefault() {
+        for (var address : List.of("global:model.mxc", "global:model.mxc", "local:model.mxc", "local:model.mxc",
+            "builtin:other", "builtin:default")) {
+            var expected = new PublicationEntry(new ModelFileIdentity(ModelId.fromHash(hash(1)), hash(11)),
+                new HierarchyPath(address), CatalogAccess.PUBLIC, true);
             var receiver = new SessionCollectionPublication.Receiver(Map.of());
             var publication = completeFull(receiver, List.of(expected), Set.of(), Map.of());
             assertEquals(expected, publication.entries().get(expected.modelId()));
@@ -54,9 +55,9 @@ class CatalogPublicationWireTest {
     }
 
     @Test
-    void publicationRejectsOldAddressesAndTheNoncanonicalDefaultAlias() {
+    void publicationRejectsOldAddressesAndTheIntrinsicAddress() {
         for (var address : List.of("$YSM_GLOBAL/custom/model.mxc", "$YSM_LOCAL/custom/model.mxc",
-            "$YSM_BUILTIN/default", "builtin:default", "builtin:/other", "unknown:model")) {
+            "$YSM_BUILTIN/default", "default", "builtin:/other", "unknown:model")) {
             var value = publication(entry(1, 11, "model.mxc")).toBuilder().setHierarchyPath(address).build();
             var fragment = SessionFullFragmentProto.newBuilder().setTransferId(1).setSequence(0)
                 .setCatalog(CatalogCollectionOperationProto.newBuilder().setOpType(full()).addEntries(value).build())
@@ -159,7 +160,7 @@ class CatalogPublicationWireTest {
         baseline = completeFull(clearReceiver, List.of(entry), Set.of(), expected);
         assertPending(clearReceiver.acceptDelta(grantDelta(2, 0, false, clear()), baseline));
         assertInvalid(clearReceiver.acceptDelta(grantDelta(2, 1, true, GrantCollectionOperationProto.newBuilder()
-            .setOpType(remove()).addModelIds(ProtoBytes.wrap(entry.modelId())).build()), baseline));
+            .setOpType(remove()).addModelIds(entry.modelId().toString()).build()), baseline));
     }
 
     @Test
@@ -187,8 +188,8 @@ class CatalogPublicationWireTest {
         var fragments = List.of(catalogRemove(2, 0, false, first.modelId()), catalogAdd(2, 1, false, second),
             grantDelta(2, 2, false, clear()),
             grantDelta(2, 3, false,
-                GrantCollectionOperationProto.newBuilder().setOpType(add())
-                    .addModelIds(ProtoBytes.wrap(second.modelId())).build()),
+                GrantCollectionOperationProto
+                    .newBuilder().setOpType(add()).addModelIds(second.modelId().toString()).build()),
             packRemove(2, 4, false, "old/"), packAdd(2, 5, false, pack("new")),
             animationDelta(2, 6, false,
                 DefaultAnimationCollectionOperationProto.newBuilder()
@@ -206,7 +207,7 @@ class CatalogPublicationWireTest {
         assertEquals(SessionCollectionPublication.Status.DELTA, result.status());
         assertEquals(Set.of(second.modelId()), result.publication().entries().keySet());
         assertEquals(Set.of(second.modelId()), result.publication().grants());
-        assertEquals(List.of("local:custom/new"),
+        assertEquals(List.of("local:new"),
             result.publication().packs().stream().map(ModelPackDescriptor::hierarchy).toList());
         assertEquals(expected, result.publication().defaultAnimations());
     }
@@ -229,9 +230,9 @@ class CatalogPublicationWireTest {
 
     @Test
     void grantPublicationFramesAreNeverProtocolCompressed() throws Exception {
+        var identity = "o".repeat(32) + "/" + "n".repeat(32) + "@1.0.0+" + "a".repeat(122);
         var message = SessionDeltaFragmentProto.newBuilder().setTransferId(2).setSequence(0).setFinalFragment(true)
-            .setGrants(GrantCollectionOperationProto.newBuilder().setOpType(add()).addModelIds(ProtoBytes.wrap(hash(1)))
-                .build())
+            .setGrants(GrantCollectionOperationProto.newBuilder().setOpType(add()).addModelIds(identity).build())
             .build();
         try (var packet = new SessionPublicationPacket(List.of(message)); var frame = packet.buildFragment(0);
             var decoded = FrameCodec.decode(frame.bytes(), id -> ProtocolMessages.REGISTRY.find(id).isPresent())) {
@@ -243,7 +244,105 @@ class CatalogPublicationWireTest {
                 independent.getOneofFieldDescriptor(independent.getDescriptorForType().getOneofs().get(0)).getName());
             var grants = (DynamicMessage)field(independent, "grants");
             assertEquals(2, ((Descriptors.EnumValueDescriptor)field(grants, "op_type")).getNumber());
-            assertEquals(ByteString.copyFrom(hash(1).bytes()), repeatedField(grants, "model_ids", 0));
+            assertEquals(identity, repeatedField(grants, "model_ids", 0));
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(com.elfmcys.ysm.testutil.NativeLibraryExtension.class)
+    void encodedGrantRevocationRemovesTheGrantWithoutRetiringThePublication(
+        @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+        var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(directory.resolve("raw"));
+        var content = com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, directory.resolve("restricted.mxc"),
+            "restricted.mxc", 1, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
+            CatalogRootKind.MODELS);
+        try {
+            var modelId = ModelId.fromHash(hash(1));
+            assertEquals(modelId, content.modelId());
+            var original = com.elfmcys.ysm.model.service.ExportTestFixture.catalog(List.of(content)).catalog()
+                .byModelId().get(modelId);
+            var entry = original.entry();
+            var record = new com.elfmcys.ysm.model.catalog.snapshot.CatalogRecord(
+                new com.elfmcys.ysm.model.catalog.snapshot.CatalogEntry(modelId, entry.path(), CatalogAccess.AUTHORIZED,
+                    entry.presentation()),
+                original.location(), original.binding());
+            var catalog = new com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot(Map.of(modelId, record), List.of(),
+                com.elfmcys.ysm.model.domain.ModelScanReport.empty());
+            var containers = Map.of(content.representation().containerId(), record);
+            var selection = new com.elfmcys.ysm.model.session.server.state.Selection.IntrinsicDefault();
+            var granted = new com.elfmcys.ysm.model.session.server.ServerModelSession.AuthoritySnapshot(catalog,
+                containers, Set.of(modelId), selection, true);
+            var revoked = new com.elfmcys.ysm.model.session.server.ServerModelSession.AuthoritySnapshot(catalog,
+                containers, Set.of(), selection, true);
+            var receiver = new SessionCollectionPublication.Receiver(Map.of());
+            SessionCollectionPublication.Result result = null;
+            for (var message : SessionCollectionPublication.fullFragments(granted, 1, Map.of()))
+                result = receiver.acceptFull(wire(message, SessionFullFragmentProto::parseFrom), null);
+            assertEquals(SessionCollectionPublication.Status.FULL, result.status());
+            var baseline = result.publication();
+            assertEquals(Set.of(modelId), baseline.grants());
+            assertEquals(true, baseline.entries().get(modelId).runtimeContentAllowed());
+            var transition =
+                new com.elfmcys.ysm.model.session.server.ServerModelSession.CatalogTransition(granted, revoked);
+            for (var message : SessionCollectionPublication.deltaFragments(transition, 2))
+                result = receiver.acceptDelta(wire(message, SessionDeltaFragmentProto::parseFrom), baseline);
+            assertEquals(SessionCollectionPublication.Status.DELTA, result.status());
+            assertEquals(Set.of(), result.publication().grants());
+            assertEquals(Set.of(modelId), result.publication().entries().keySet());
+            assertFalse(result.publication().entries().get(modelId).runtimeContentAllowed());
+            assertEquals(Set.of(modelId), baseline.grants());
+        } finally {
+            content.representation().close();
+        }
+    }
+
+    @Test
+    void grantRemovalRequiresAKeyAndClearStillForbidsPayload() throws Exception {
+        var entry = entry(1, 11, "first");
+        for (var operation : List.of(GrantCollectionOperationProto.newBuilder().setOpType(remove()).build(),
+            clear().toBuilder().addModelIds(entry.modelId().toString()).build())) {
+            var receiver = new SessionCollectionPublication.Receiver(Map.of());
+            var baseline = completeFull(receiver, List.of(entry), Set.of(entry.modelId()), Map.of());
+            assertInvalid(receiver
+                .acceptDelta(wire(grantDelta(2, 0, true, operation), SessionDeltaFragmentProto::parseFrom), baseline));
+            assertEquals(Set.of(entry.modelId()), baseline.grants());
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(com.elfmcys.ysm.testutil.NativeLibraryExtension.class)
+    void animationRemoveUsesOnlyNaturalKeysAndKeepsTheRequiredDictionary() throws Exception {
+        var expected = Map.of(ANIMATION, hash(90));
+        var receiver = new SessionCollectionPublication.Receiver(expected);
+        var baseline = completeFull(receiver, expected);
+        var operation =
+            DefaultAnimationCollectionOperationProto.newBuilder().setOpType(remove()).addNames("ysm\0obsolete").build();
+        var result = receiver
+            .acceptDelta(wire(animationDelta(2, 0, true, operation), SessionDeltaFragmentProto::parseFrom), baseline);
+        assertEquals(SessionCollectionPublication.Status.DELTA, result.status());
+        assertEquals(expected, result.publication().defaultAnimations());
+        assertEquals(1, result.missingRemovals());
+        for (var invalid : List.of(
+            DefaultAnimationCollectionOperationProto.newBuilder().setOpType(remove()).build(),
+            operation
+                .toBuilder()
+                .addEntries(
+                    DefaultAnimationProto.newBuilder().setName(ANIMATION).setHash(ProtoBytes.wrap(hash(90))).build())
+                .build(),
+            DefaultAnimationCollectionOperationProto.newBuilder().setOpType(remove()).addNames(ANIMATION).build())) {
+            var next = new SessionCollectionPublication.Receiver(expected);
+            var original = completeFull(next, expected);
+            assertInvalid(next.acceptDelta(
+                wire(animationDelta(2, 0, true, invalid), SessionDeltaFragmentProto::parseFrom), original));
+            assertEquals(expected, original.defaultAnimations());
+        }
+    }
+
+    private static <T extends us.hebi.quickbuf.ProtoMessage<T>> T wire(T message,
+        com.elfmcys.ysm.network.protocol.ProtocolMessageSpec.Parser<T> parser) throws Exception {
+        try (var packet = new SessionPublicationPacket(List.of(message)); var frame = packet.buildFragment(0);
+            var decoded = FrameCodec.decode(frame.bytes(), id -> ProtocolMessages.REGISTRY.find(id).isPresent())) {
+            return com.elfmcys.ysm.network.ProtocolBuffer.parse(decoded.protobuf(), parser);
         }
     }
 
@@ -267,12 +366,12 @@ class CatalogPublicationWireTest {
     }
 
     private static RemotePublicationSnapshot completeFull(SessionCollectionPublication.Receiver receiver,
-        List<PublicationEntry> entries, Set<Hash256> grants, Map<String, Hash256> animations) {
+        List<PublicationEntry> entries, Set<ModelId> grants, Map<String, Hash256> animations) {
         return completeFull(receiver, entries, grants, List.of(), animations);
     }
 
     private static RemotePublicationSnapshot completeFull(SessionCollectionPublication.Receiver receiver,
-        List<PublicationEntry> entries, Set<Hash256> grants, List<ModelPackDescriptor> packs,
+        List<PublicationEntry> entries, Set<ModelId> grants, List<ModelPackDescriptor> packs,
         Map<String, Hash256> animations) {
         SessionCollectionPublication.Result result = null;
         for (var fragment : full(1, entries, grants, packs, animations)) {
@@ -283,12 +382,12 @@ class CatalogPublicationWireTest {
     }
 
     private static List<SessionFullFragmentProto> full(long transferId, List<PublicationEntry> entries,
-        Set<Hash256> grants, Map<String, Hash256> animations) {
+        Set<ModelId> grants, Map<String, Hash256> animations) {
         return full(transferId, entries, grants, List.of(), animations);
     }
 
     private static List<SessionFullFragmentProto> full(long transferId, List<PublicationEntry> entries,
-        Set<Hash256> grants, List<ModelPackDescriptor> packs, Map<String, Hash256> animations) {
+        Set<ModelId> grants, List<ModelPackDescriptor> packs, Map<String, Hash256> animations) {
         return List.of(catalogFull(transferId, 0, false, entries), grantFull(transferId, 1, false, grants),
             packFull(transferId, 2, false, packs), animationFull(transferId, 3, true, animations));
     }
@@ -302,9 +401,9 @@ class CatalogPublicationWireTest {
     }
 
     private static SessionFullFragmentProto grantFull(long transferId, int sequence, boolean terminal,
-        Set<Hash256> grants) {
+        Set<ModelId> grants) {
         var operation = GrantCollectionOperationProto.newBuilder().setOpType(full());
-        grants.stream().sorted().forEach(hash -> operation.addModelIds(ProtoBytes.wrap(hash)));
+        grants.stream().sorted().forEach(hash -> operation.addModelIds(hash.toString()));
         return SessionFullFragmentProto.newBuilder().setTransferId(transferId).setSequence(sequence)
             .setFinalFragment(terminal).setGrants(operation.build()).build();
     }
@@ -332,10 +431,10 @@ class CatalogPublicationWireTest {
     }
 
     private static SessionDeltaFragmentProto catalogRemove(long transferId, int sequence, boolean terminal,
-        Hash256 modelId) {
+        ModelId modelId) {
         return SessionDeltaFragmentProto.newBuilder().setTransferId(transferId).setSequence(sequence)
             .setFinalFragment(terminal).setCatalog(CatalogCollectionOperationProto.newBuilder().setOpType(remove())
-                .addModelIds(ProtoBytes.wrap(modelId)).build())
+                .addModelIds(modelId.toString()).build())
             .build();
     }
 
@@ -359,8 +458,8 @@ class CatalogPublicationWireTest {
         return SessionDeltaFragmentProto.newBuilder().setTransferId(transferId).setSequence(sequence)
             .setFinalFragment(terminal)
             .setPackPresentations(PackPresentationCollectionOperationProto.newBuilder().setOpType(remove())
-                .addHierarchyPaths("local:custom/"
-                    + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy))
+                .addHierarchyPaths(
+                    "local:" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy))
                 .build())
             .build();
     }
@@ -380,7 +479,7 @@ class CatalogPublicationWireTest {
     }
 
     private static CatalogPublicationProto publication(PublicationEntry entry) {
-        return CatalogPublicationProto.newBuilder().setModelId(ProtoBytes.wrap(entry.modelId()))
+        return CatalogPublicationProto.newBuilder().setModelId(entry.modelId().toString())
             .setContainerId(ProtoBytes.wrap(entry.containerId())).setHierarchyPath(entry.path().value())
             .setRuntimeContentAllowed(entry.runtimeContentAllowed())
             .setAccess(entry.access() == CatalogAccess.PUBLIC ? com.elfmcys.ysm.proto.network.CatalogAccess.PUBLIC
@@ -389,14 +488,13 @@ class CatalogPublicationWireTest {
     }
 
     private static PublicationEntry entry(int model, int container, String path) {
-        return new PublicationEntry(new ModelFileIdentity(hash(model), hash(container)),
-            new HierarchyPath("local:custom/" + path), CatalogAccess.PUBLIC, true);
+        return new PublicationEntry(new ModelFileIdentity(ModelId.fromHash(hash(model)), hash(container)),
+            new HierarchyPath("local:" + path), CatalogAccess.PUBLIC, true);
     }
 
     private static ModelPackDescriptor pack(String hierarchy) {
-        return new ModelPackDescriptor(CatalogRootKind.CUSTOM,
-            "local:custom" + (hierarchy.isEmpty() ? ""
-                : "/" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy)),
+        return new ModelPackDescriptor(CatalogRootKind.MODELS,
+            "local:" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy),
             hierarchy, "", Map.of(), null, "", 0);
     }
 

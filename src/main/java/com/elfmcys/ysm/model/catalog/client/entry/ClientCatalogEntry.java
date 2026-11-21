@@ -3,7 +3,7 @@ package com.elfmcys.ysm.model.catalog.client.entry;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogEntry;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
 
 import java.util.Objects;
@@ -19,7 +19,7 @@ public record ClientCatalogEntry(CatalogEntry entry, ModelContent content, Origi
         }
     }
 
-    public Hash256 modelHash() {
+    public ModelId modelHash() {
         return entry.modelId();
     }
 
@@ -44,6 +44,6 @@ public record ClientCatalogEntry(CatalogEntry entry, ModelContent content, Origi
     }
 
     public enum Origin {
-        BUILTIN, CUSTOM, AUTH, SERVER
+        BUILTIN, MODELS, SERVER
     }
 }

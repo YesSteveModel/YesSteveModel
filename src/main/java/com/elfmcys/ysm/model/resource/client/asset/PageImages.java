@@ -3,7 +3,7 @@ package com.elfmcys.ysm.model.resource.client.asset;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.client.texture.TextureHolder;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.natives.image.ImageSource;
 import org.jetbrains.annotations.Nullable;
@@ -15,14 +15,18 @@ import java.util.function.Supplier;
 /**
  * Slots own uses; acquisition and physical release keep their original owners.
  *
- * <p>Execution: page/slot access and host publication are render-owner confined. Only a claimed
- * Preparation may cross to its designated worker; its result must return to the render owner.
+ * <p>
+ * Execution: page/slot access and host publication are render-owner confined. Only a claimed Preparation may cross to
+ * its designated worker; its result must return to the render owner.
  *
- * <p>Ownership: construction takes the batch's close responsibility. Slots borrow acquired inputs
- * from that batch and hold independent resident uses. Claimed preparation has its own completion
- * obligation and must be published or closed even after this page ends.
+ * <p>
+ * Ownership: construction takes the batch's close responsibility. Slots borrow acquired inputs from that batch and hold
+ * independent resident uses. Claimed preparation has its own completion obligation and must be published or closed even
+ * after this page ends.
  *
- * <p>Seam: implements [page result handoff](docs/architecture/client-presentation/overview.md#页面需求与展示消费) and [page retirement](docs/architecture/client-presentation/overview.md#生命周期与失败).
+ * <p>
+ * Seam: implements [page result handoff](docs/architecture/client-presentation/overview.md#页面需求与展示消费) and [page
+ * retirement](docs/architecture/client-presentation/overview.md#生命周期与失败).
  */
 public final class PageImages implements ClientDemandCoordinator.PageAction {
     private final ClientAssetBatch batch;
@@ -40,11 +44,11 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
         this.owner = owner;
     }
 
-    public Image preview(Hash256 model) {
+    public Image preview(ModelId model) {
         return add(() -> batch.imageRequest(model, ModelAssetSelector.preview()));
     }
 
-    public Image presentation(Hash256 model, ModelAssetSelector.PresentationAsset asset, int index) {
+    public Image presentation(ModelId model, ModelAssetSelector.PresentationAsset asset, int index) {
         return add(() -> batch.imageRequest(model, ModelAssetSelector.presentation(asset, index)));
     }
 
@@ -61,8 +65,8 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
     }
 
     /**
-     * Advances acquisition without decoding or host publication. READY only checks resident use;
-     * ONLINE also submits this batch once. A closed page is a no-op. CPU work requires a separate claim.
+     * Advances acquisition without decoding or host publication. READY only checks resident use; ONLINE also submits
+     * this batch once. A closed page is a no-op. CPU work requires a separate claim.
      */
     public void advanceAcquisition(ModelResourceDemand.Mode allowed) {
         if (closed)
@@ -102,15 +106,26 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
             return;
         closed = true;
         Throwable failure = null;
-        try { batch.close(); } catch (Throwable error) { failure = error; }
+        try {
+            batch.close();
+        } catch (Throwable error) {
+            failure = error;
+        }
         for (var image : images) {
-            try { image.close(); } catch (Throwable error) {
-                if (failure == null) failure = error; else if (failure != error) failure.addSuppressed(error);
+            try {
+                image.close();
+            } catch (Throwable error) {
+                if (failure == null)
+                    failure = error;
+                else if (failure != error)
+                    failure.addSuppressed(error);
             }
         }
         images.clear();
-        if (failure instanceof Error error) throw error;
-        if (failure instanceof RuntimeException error) throw error;
+        if (failure instanceof Error error)
+            throw error;
+        if (failure instanceof RuntimeException error)
+            throw error;
     }
 
     /** A page-owned projection; loading, absence, and failure are distinct from host-texture readiness. */
@@ -202,8 +217,8 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
         }
 
         /**
-         * Claims at most one preparation for this content identity. A null result means no claim was
-         * obtained; it is not proof of absence. The caller owns a returned claim and must execute or close it.
+         * Claims at most one preparation for this content identity. A null result means no claim was obtained; it is
+         * not proof of absence. The caller owns a returned claim and must execute or close it.
          */
         public @Nullable ResidentImages.Preparation claimPreparation() {
             try {
@@ -215,8 +230,8 @@ public final class PageImages implements ClientDemandCoordinator.PageAction {
         }
 
         /**
-         * Consumes this slot's prepared result on the render owner, including closed-page rejection.
-         * Publication failure is recorded and propagated; the caller must not retry a consumed result.
+         * Consumes this slot's prepared result on the render owner, including closed-page rejection. Publication
+         * failure is recorded and propagated; the caller must not retry a consumed result.
          */
         public void publish(ResidentImages.Prepared image) {
             if (closed) {

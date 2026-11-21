@@ -286,19 +286,23 @@ class ClientRemotePreviewRepositoryTest {
     void remoteValidatedPersistenceInvalidatesServerBytesAndOptionalFailurePreservesThem() throws Exception {
         for (var persist : List.of(true, false)) {
             var owner = new AtomicReference<ServerResourceRuntime>();
+            var storeRef = new AtomicReference<com.elfmcys.ysm.model.storage.PreviewStore>();
             var root = temp.resolve(Boolean.toString(persist));
-            try (var fixture = new Fixture(root, id -> owner.get().invalidatePreview(id));
+            try (var fixture = new Fixture(root, id -> owner.get().invalidatePreview(storeRef.get(), id));
                 var runtime = new ServerResourceRuntime(fixture.previews, failure -> fail(failure))) {
+                storeRef.set(fixture.previews);
                 owner.set(runtime);
                 var request = fixture.request(false);
                 var id = request.content.representation().containerId();
                 var directory = Files.createDirectories(root.resolve("previews/previews"));
-                Files.write(directory.resolve(id + ".image"), BAD_MEDIA);
-                try (var previous = acquire(runtime, id)) {
+                var file = Files.write(directory.resolve(id + ".image"), BAD_MEDIA);
+                var indexed = TestPreviews.index(root.resolve("previews"), id, file);
+                try (var previous = acquire(runtime, request.content)) {
                     assertArrayEquals(BAD_MEDIA, copy(previous));
                     if (!persist) {
-                        Files.move(directory, root.resolve("previous-previews"));
-                        Files.writeString(directory, "A file blocks optional persistence");
+                        var staging = indexed.getParent().resolve("s");
+                        Files.delete(staging);
+                        Files.writeString(staging, "A file blocks optional persistence");
                     }
                     var expected = previewBytes();
                     try (var page = fixture.repository(request, Function.identity(), Runnable::run).openBatch()) {
@@ -307,7 +311,7 @@ class ClientRemotePreviewRepositoryTest {
                         request.transport.preview(0, 0, true, PresentationDelivery.DATA, expected);
                         assertInstanceOf(PreviewResult.Data.class, preview.join());
                     }
-                    try (var current = acquire(runtime, id)) {
+                    try (var current = acquire(runtime, request.content)) {
                         assertArrayEquals(persist ? expected : BAD_MEDIA, copy(current));
                         assertArrayEquals(BAD_MEDIA, copy(previous));
                     }
@@ -316,15 +320,16 @@ class ClientRemotePreviewRepositoryTest {
         }
     }
 
-    private static ServerResourceRuntime.BytesLease acquire(ServerResourceRuntime runtime, Hash256 id)
+    private static ServerResourceRuntime.BytesLease acquire(ServerResourceRuntime runtime, ModelContent content)
         throws Exception {
-        var result = runtime.acquirePreview(id);
+        var result = runtime.acquirePreview(content);
         var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!result.isDone() && System.nanoTime() < deadline) {
+        while (result.state() == ServerResourceRuntime.State.PENDING && System.nanoTime() < deadline) {
             runtime.tick();
             Thread.onSpinWait();
         }
-        return result.get(1, TimeUnit.SECONDS).orElseThrow();
+        assertEquals(ServerResourceRuntime.State.READY, result.state());
+        return result;
     }
 
     private static byte[] previewBytes() throws IOException {
@@ -378,7 +383,7 @@ class ClientRemotePreviewRepositoryTest {
 
         private Fixture(Path root, Consumer<Hash256> storedObserver) throws Exception {
             var parsed = parse("/assets/ysm/builtin/misc/1_alex/ysm.json", root.resolve("raw"), false);
-            var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("fixture"));
+            var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture"));
             standalone = ManagedContainer.openDirect(parsed, location);
             assertEquals(PreviewSource.UNSPECIFIED, standalone.modelFile().getThumbnailPreviewSource());
             final Path exported;
@@ -390,7 +395,8 @@ class ClientRemotePreviewRepositoryTest {
             catalogs = ClientCatalogScenarioHarness.open(root.resolve("catalog"), intrinsic, List.of());
             catalogs.manager().beginRemote();
             store = new RemoteModelStore(root.resolve("remote"));
-            previews = new PreviewStore(root.resolve("previews"), storedObserver);
+            previews = new PreviewStore(root.resolve("previews"), com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root.resolve("previews"))), storedObserver);
         }
 
         private Request request(boolean declaresEmbedded) throws Exception {
@@ -401,10 +407,10 @@ class ClientRemotePreviewRepositoryTest {
                 content = store.commitMetadataPrefix(source.representation().identity(), prefix);
             }
             contents.add(content);
-            var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("remote/fixture"));
+            var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("remote/fixture"));
             var record = new CatalogRecord(location, new CatalogContentBinding(content.modelId(), content));
             var entry = new PublicationEntry(content.representation().identity(),
-                new HierarchyPath("local:custom/remote/fixture"), CatalogAccess.PUBLIC, true);
+                new HierarchyPath("local:remote/fixture"), CatalogAccess.PUBLIC, true);
             var publication = new RemotePublicationSnapshot(List.of(entry), Set.of(), List.of(), Map.of());
             var activation = new ActivationSnapshot(publication,
                 Map.of(content.modelId(), new ActivationSnapshot.Ready(entry, record)));

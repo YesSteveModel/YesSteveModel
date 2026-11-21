@@ -1,71 +1,64 @@
 package com.elfmcys.ysm.network.protocol;
 
-import com.elfmcys.ysm.proto.network.AnimationStateProto;
-import com.elfmcys.ysm.proto.network.EffectStateProto;
-import com.elfmcys.ysm.proto.network.EffectStateSetProto;
-import com.elfmcys.ysm.proto.network.EntityRefProto;
-import com.elfmcys.ysm.proto.network.GameplayStateProto;
-import com.elfmcys.ysm.proto.network.ModelReferenceProto;
-import com.elfmcys.ysm.proto.network.ModelSelectionStateProto;
-import com.elfmcys.ysm.proto.network.MolangVariableProto;
-import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
-import com.elfmcys.ysm.proto.network.PlayerStateUpdateProto;
-import com.elfmcys.ysm.proto.network.RoamingStateProto;
-import com.elfmcys.ysm.proto.network.StateWriteMode;
-
-import java.nio.ByteBuffer;
+import com.elfmcys.ysm.proto.network.*;
 import org.junit.jupiter.api.Test;
-
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class PlayerStateValidatorTest {
     @Test
-    void acceptsBoundedFullReport() {
-        var report = baseReport()
-            .setGameplay(GameplayStateProto.newBuilder().setHealth(20).setMaxHealth(20).setFoodLevel(20).build())
-            .setAnimation(AnimationStateProto.newBuilder().setStopped(true).build())
-            .setRoaming(RoamingStateProto.newBuilder().setModelKey(0)
-                .addVariables(MolangVariableProto.newBuilder().setName("speed").setValue(1.0f).build()).build())
+    void flagsRequireTheirValueBodyAndAcceptDisabledFalse() {
+        var flags = PlayerFlagsProto.newBuilder().setEntityId(1);
+        assertFalse(PlayerStateValidator.validFlags(flags.build()));
+        flags.setState(PlayerFlagsStateProto.newBuilder().setDisabled(false).build());
+        assertTrue(PlayerStateValidator.validFlags(flags.build()));
+        assertFalse(PlayerStateValidator.validFlags(flags.setEntityId(-1).build()));
+    }
+
+    @Test
+    void numericBatchIsValidatedBeforeNarrowingAndAsAWhole() {
+        for (int id : new int[] {-1, 64, 65536})
+            assertThrows(IllegalArgumentException.class,
+                () -> SelectionCodec.read(RoamingStateProto.newBuilder().addIds(id).addValues(1F).build()));
+        assertThrows(IllegalArgumentException.class,
+            () -> SelectionCodec.read(RoamingStateProto.newBuilder().addIds(0).build()));
+        assertThrows(IllegalArgumentException.class,
+            () -> SelectionCodec.read(RoamingStateProto.newBuilder().addIds(0, 0).addValues(1F, 2F).build()));
+        assertFalse(
+            PlayerStateValidator.validRoaming(RoamingStateProto.newBuilder().addIds(0).addValues(Float.NaN).build()));
+    }
+
+    @Test
+    void emptySyncIsAnEventAndFiniteArgumentBudgetIsEnforced() {
+        var p = SelectionStateSyncProto.newBuilder().setEntityId(1).setIntentId(1);
+        assertTrue(PlayerStateValidator.validSync(p.setSync(SyncArgumentsProto.newBuilder().build()).build()));
+        assertFalse(PlayerStateValidator
+            .validSync(p.setSync(SyncArgumentsProto.newBuilder().addArguments(new float[17]).build()).build()));
+        assertFalse(PlayerStateValidator.validSync(
+            p.setSync(SyncArgumentsProto.newBuilder().addArguments(Float.POSITIVE_INFINITY).build()).build()));
+        assertFalse(
+            PlayerStateValidator.validSync(p.setIntentId(0).setSync(SyncArgumentsProto.newBuilder().build()).build()));
+        assertTrue(PlayerStateValidator
+            .validSync(p.setState(SelectionStateProto.newBuilder().setTextureId("").build()).build()));
+    }
+
+    @Test
+    void fullSelectionRequiresAllSectionsButDeltaDoesNot() {
+        var state = SelectionStateProto.newBuilder().setTextureId("unknown-local-texture")
+            .setAnimation(SelectionCodec.animation("unavailable")).setRoaming(RoamingStateProto.newBuilder().build())
             .build();
-
-        assertTrue(PlayerStateValidator.validReport(report));
+        assertTrue(PlayerStateValidator.validSelectionState(state, true));
+        assertFalse(PlayerStateValidator.validSelectionState(state.toBuilder().clearRoaming().build(), true));
+        assertTrue(
+            PlayerStateValidator.validSelectionState(SelectionStateProto.newBuilder().setTextureId("").build(), false));
     }
 
     @Test
-    void rejectsUnboundedOrSemanticallyInvalidValues() {
-        assertFalse(PlayerStateValidator.validReport(
-            baseReport().setGameplay(GameplayStateProto.newBuilder().setHealth(21).setMaxHealth(20).build()).build()));
-        assertFalse(PlayerStateValidator.validReport(
-            baseReport().setAnimation(AnimationStateProto.newBuilder().setAnimationId(" ").build()).build()));
-        assertFalse(PlayerStateValidator.validReport(baseReport()
-            .setRoaming(RoamingStateProto.newBuilder().setModelKey(0)
-                .addVariables(MolangVariableProto.newBuilder().setName("value").setValue(Float.NaN).build()).build())
-            .build()));
-
-        var effects = EffectStateSetProto.newBuilder()
-            .addEffects(EffectStateProto.newBuilder().setEffectId("minecraft:speed").setLevel(1).build())
-            .addEffects(EffectStateProto.newBuilder().setEffectId("minecraft:speed").setLevel(2).build()).build();
-        assertFalse(PlayerStateValidator.validReport(baseReport().setEffects(effects).build()));
-    }
-
-    @Test
-    void fullUpdateRequiresModelAndNeverAcceptsPlayerIdFromWire() {
-        var update = PlayerStateUpdateProto.newBuilder().setMode(StateWriteMode.FULL)
-            .setSubject(EntityRefProto.newBuilder().setEntityId(1).build());
-        assertFalse(PlayerStateValidator.validUpdate(update.build()));
-
-        update.setModel(ModelSelectionStateProto.newBuilder()
-            .setModel(ModelReferenceProto.newBuilder().setBuiltinDefault(true).build()).setTextureId("")
-            .setDisabled(false).build());
-        var valid = update.build();
-        assertTrue(PlayerStateValidator.validUpdate(valid));
-        var playerSubject = valid.subject().withPlayerId(ByteBuffer.wrap(new byte[PlayerId.SIZE]));
-        assertFalse(PlayerStateValidator.validUpdate(valid.withSubject(playerSubject)));
-    }
-
-    private static PlayerStateReportProto.Builder baseReport() {
-        return PlayerStateReportProto.newBuilder().setSubject(EntityRefProto.newBuilder().setEntityId(1).build())
-            .setMode(StateWriteMode.FULL);
+    void fullEntityStateAndEffectReplacementAreSeparateFromSelection() {
+        assertFalse(PlayerStateValidator.validEntityState(EntityStateProto.newBuilder().build(), false));
+        assertTrue(PlayerStateValidator.validEntityState(
+            EntityStateProto.newBuilder().setEffects(EffectStateSetProto.newBuilder().build()).build(), false));
+        assertFalse(PlayerStateValidator.validEntityState(
+            EntityStateProto.newBuilder().setGameplay(GameplayStateProto.newBuilder().setFoodLevel(21).build()).build(),
+            false));
     }
 }

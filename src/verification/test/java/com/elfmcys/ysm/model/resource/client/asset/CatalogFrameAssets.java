@@ -29,14 +29,16 @@ public final class CatalogFrameAssets implements AutoCloseable {
     public final ClientCatalogEntry entry;
     public final StandaloneImageTestHost host = new StandaloneImageTestHost();
     public final AtomicInteger decodes = new AtomicInteger();
-    public Runnable decoding = () -> {};
-    public Runnable registering = () -> {};
+    public Runnable decoding = () -> {
+    };
+    public Runnable registering = () -> {
+    };
 
     public CatalogFrameAssets(Path root) throws Exception {
         var intrinsic = parse("/assets/ysm/builtin/default/ysm.json", root.resolve("default"), true);
         var parsed = parse("/assets/ysm/builtin/wine_fox/22_elf/ysm.json", root.resolve("model"), false);
-        var sourceContent = ManagedContainer.openDirect(parsed,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("source")));
+        var sourceContent =
+            ManagedContainer.openDirect(parsed, new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("source")));
         Path model;
         var id = sourceContent.modelId();
         try (var preview = TestPreviews.blank()) {
@@ -45,23 +47,31 @@ public final class CatalogFrameAssets implements AutoCloseable {
             sourceContent.representation().close();
         }
         catalogs = ClientCatalogScenarioHarness.open(root.resolve("catalog"), intrinsic, List.of(model));
-        entry = catalogs.manager().snapshot().find(id).orElseThrow(() ->
-            new AssertionError("Local card source was not admitted: " + catalogs.manager().localState()));
-        repository = new ClientAssetRepository(catalogs.manager(), () -> (members, receiver) ->
-            CompletableFuture.failedFuture(new AssertionError("Local frame must not download")),
+        entry = catalogs.manager().snapshot().find(id).orElseThrow(
+            () -> new AssertionError("Local card source was not admitted: " + catalogs.manager().localState()));
+        repository = new ClientAssetRepository(catalogs.manager(),
+            () -> (members, receiver) -> CompletableFuture
+                .failedFuture(new AssertionError("Local frame must not download")),
             content -> content, null, Runnable::run, content -> new CompletableFuture<>(),
             content -> CompletableFuture.completedFuture(java.util.Optional.empty()), () -> null);
         var resident = new ResidentImages(new ResidentImages.Host() {
-            public CustomTexture create(PreviewStore.EncodedPreview encoded) { return host.create(encoded); }
+            public CustomTexture create(PreviewStore.EncodedPreview encoded) {
+                return host.create(encoded);
+            }
+
             public TextureHolder register(CustomTexture texture) {
                 var holder = host.register(texture);
                 registering.run();
                 return holder;
             }
+
             public CustomTextureManager.Registration observe(CustomTexture texture, Runnable invalidated) {
                 return host.observe(texture, invalidated);
             }
-            public void release(CustomTexture texture) { host.release(texture); }
+
+            public void release(CustomTexture texture) {
+                host.release(texture);
+            }
         }, source -> {
             decodes.incrementAndGet();
             decoding.run();
@@ -73,7 +83,9 @@ public final class CatalogFrameAssets implements AutoCloseable {
         images.set(repository, resident);
     }
 
-    public ClientAssetBatch batch() { return new ClientAssetBatch(repository.openBatch()); }
+    public ClientAssetBatch batch() {
+        return new ClientAssetBatch(repository.openBatch());
+    }
 
     private static Path parse(String resource, Path output, boolean builtin) throws Exception {
         var source = Path.of(CatalogFrameAssets.class.getResource(resource).toURI()).getParent();
@@ -84,7 +96,8 @@ public final class CatalogFrameAssets implements AutoCloseable {
         }
     }
 
-    @Override public void close() {
+    @Override
+    public void close() {
         catalogs.close();
         host.tick();
         host.tick();

@@ -1,37 +1,37 @@
 # ABI 维护规则
 
-[当前版本清单](current.md)列出五个全局 ABI 及其覆盖范围。模组发布号不能替代这些版本。
+[当前版本清单](current.md)列出了五个全局 ABI 及其覆盖范围。模组发布号不能替代这些 ABI 版本。
 
 ## 版本归约与迭代
 
-某域内任一组件发生兼容性变化时，统一迭代该域全局 ABI，再重建该域制品。不再分别维护 host、effect、lowering、engine、backend、normalizer 或私有组件格式的 ABI 计数器。一次变化跨越多个域时，分别迭代受影响的域；native 实现变化不自动要求清空几何或动画缓存。
+某个域内只要任一组件发生不兼容变更，就统一递增该域的全局 ABI，并重建对应派生物。宿主侧的 effect、lowering 与私有动画格式共用 `CACHE_ANIMATION`，Semaweave 则独立维护引擎制品 ABI。如果一次改动跨越多个域，分别递增受影响的域即可；native 实现变化本身不会自动要求清空几何或动画缓存。
 
 ## 缓存与表达式制品
 
-Geometry cache 使用 `geometry-<CACHE_GEOMETRY>`，动画 cache 使用 `animation-<CACHE_ANIMATION>/<实际引擎包名>`。完整 ABI 进入缓存目录、profile 和身份编码。目录隔离不替代内容、能力、registry、binding plan、backend source hash 和实际 Java linkage 检查。
+几何缓存与动画集分别使用完整的 `CACHE_GEOMETRY`、`CACHE_ANIMATION` 作为 Bake 索引的 `cacheVersion`。ABI、实际加载的引擎包名与精确输入都会进入索引身份，而磁盘物理路径只包含整数 ID。即使索引命中，也不能跳过内容完整性、平台能力、registry、binding plan、backend 源码 hash 与实际 Java 链接检查。
 
-动画 ABI 同时作为 Semaweave 的通用构建参数 `artifactAbi`。`buildExpressionRuntime` 读取 `AbiVersion.CACHE_ANIMATION`，重建并安装配套 engine/backend jars；`verifyBundledExpressionAbi` 拒绝 ABI 不符或构建 receipt 不一致的组合。Semaweave 不拥有另一份手工版本号。
+`AbiVersion.CACHE_ANIMATION` 负责给宿主动画与表达式契约做版本控制。Semaweave 的语义、runtime、codegen、backend、normalizer 与内部制品格式共用独立的制品 ABI（由 `ArtifactAbi.VERSION` 定义），不要求与宿主版本相等。当引擎制品变化影响到缓存语义或格式时，由维护者同步递增 `CACHE_ANIMATION`——这是一条维护约定，运行期、构建脚本和测试中不会额外设立联动校验。YSM 固定消费 `libs/` 目录下配套的引擎与后端 JAR，由打包验证检查构建收据一致性；依赖更新步骤见[构建指南](../build.md#表达式引擎依赖)。
 
-`ArtifactAbi.VERSION` 保留完整字符串；只能接收整数的 descriptor 和内部组件头使用数值投影 `major × 1000000 + minor × 1000 + patch`。宿主侧的 `ExpressionAbi` 从 `AbiVersion.CACHE_ANIMATION` 计算数值投影。投影要求 major ≤ 2000、minor/patch ≤ 999，不能替代完整字符串门禁。HostAbi、编译身份和组件指纹仍覆盖完整版本。
+`ArtifactAbi.VERSION` 保留完整版本字符串；对于只能接收整数的 descriptor 和内部组件头，使用数值编码 `major × 1000000 + minor × 1000 + patch`。宿主侧的 `ExpressionAbi` 也按相同方式从 `AbiVersion.CACHE_ANIMATION` 计算数值编码。该编码要求 `major ≤ 2000`、`minor` 与 `patch` 均 `≤ 999`，且不能替代完整字符串门禁。宿主 `HostAbi` 不额外设立独立的引擎版本门槛；引擎自身的编译身份和组件指纹仍按其内部契约覆盖完整版本。
 
-实际引擎包名自动进入动画缓存目录和身份。开发与打包重定位后的 bytecode 因而隔离，不需要再维护包名对应的版本号。细节见[派生物存储](../architecture/model-management/storage/derived-artifacts.md)和[Molang 运行时](../architecture/animation/implementation/molang-runtime.md)。
+实际加载的引擎包名会自动进入动画集的精确索引身份，从而天然隔离开发环境与打包重定位后的字节码，无需再为包名单独维护版本号。细节见[派生物存储](../architecture/model-management/storage/derived-artifacts.md)和[Molang 运行时](../architecture/animation/implementation/molang-runtime.md)。
 
 ## Native 符号门禁
 
-Native ABI 语法为 `[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+)?`。后缀只允许字母和数字；两侧保留大小写及数字原文，不归一化。将完整版本中的 `.`、`-` 替换为 `_`，再加前缀 `YSM_ABI_`。例如 `0.1.0-unstable` 对应 `YSM_ABI_0_1_0_unstable`。该语法使转换无碰撞。
+Native ABI 版本遵循语法 `[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+)?`，可选后缀只允许字母和数字，两侧都原样保留大小写和数字，不做归一化。导出符号名由完整版本中的 `.` 和 `-` 替换为 `_`，再加前缀 `YSM_ABI_` 得到（例如 `0.1.0-unstable` 对应 `YSM_ABI_0_1_0_unstable`），该语法可保证转换无碰撞。
 
-Native 库只导出当前版本的标记变量。Java 用 JNA 打开指定绝对路径，查询期望符号，再调用 `System.load` 执行一次性 JNI 注册。Java 不读取变量值，也不调用 ABI 探针。缺少符号、库加载失败或 JNI 注册失败均拒绝该库；不尝试历史符号或降级绑定。符号检查不能先于 OS 加载、依赖解析和静态构造。
+Native 动态库只导出当前版本的标记变量。Java 侧先通过 JNA 打开指定绝对路径的库、查找期望符号，确认存在后再调用 `System.load` 执行一次性 JNI 注册；整个过程不读取该变量的值，也不调用 ABI 探针函数。只要缺少符号、加载失败或 JNI 注册失败，就直接拒绝该库，绝不尝试兼容历史符号或降级绑定。注意，符号检查发生在动态库加载之后，无法先于操作系统加载、依赖解析和静态初始化执行。
 
-生产加载在 native holder thread 内完成。`System.load` 成功取得 JVM 引用后，Java 关闭临时 JNA 句柄。构建工具、测试、mock 和 benchmark 复用 `NativeRuntime.load`。`verifyNativeAbiDefinitions` 可检查 Java/native 的硬编码定义是否一致。加载与内存边界见[Native 运行边界](../architecture/native-runtime/implementation/runtime-capabilities.md)。
+生产环境的库加载在 native holder 线程中完成。`System.load` 成功建立 JVM 引用后，Java 会关闭临时的 JNA 句柄。构建工具、测试、mock 和 benchmark 统一复用 `NativeRuntime.load`。加载流程与内存边界见[Native 运行边界](../architecture/native-runtime/implementation/runtime-capabilities.md)。
 
-[设备分类入口](../architecture/native-runtime/implementation/runtime-capabilities.md#设备配置默认)也由同一全局 ABI 与生产 JNI 注册覆盖。分类未知或失败只决定保守配置默认，不放宽库的符号门禁。
+[设备分类入口](../architecture/native-runtime/implementation/runtime-capabilities.md#设备配置默认)同样受这一全局 ABI 与生产 JNI 注册保护。分类结果未知或失败只会退回保守的默认配置，不会放宽动态库的符号门禁。
 
 ## 开发版本的特殊门禁
 
-本节定义 Container、Schema、cache ABI 与 protocol 的开发标记与比较规则，落实[开发版本精确兼容](../product-decisions/decisions/model-compatibility.md#bcdevelopment-version-qualifiers-are-exact)：
+本节定义 Container、Schema、缓存 ABI 与通信协议中开发版本标记的比较规则，用于落实[开发版本精确兼容](../product-decisions/decisions/model-compatibility.md#bcdevelopment-version-qualifiers-are-exact)：
 
-- 任一侧 qualifier 包含 `unstable`、`dev`、`snapshot` 子串时，两个完整原始版本字符串应严格相等。
-- 标记检测忽略大小写，原始字符串比较区分大小写。不删除后缀，不归一化，不放行 patch 差异。
-- 只有两侧均无开发标记时，才使用对应域的稳定版策略。无效版本直接拒绝。
+- 只要任一侧的 qualifier 包含 `unstable`、`dev` 或 `snapshot` 子串，两侧的完整原始版本字符串就必须严格相等。
+- 检测开发标记时忽略大小写，但比较原始版本字符串时严格区分大小写：不剥离后缀，不做归一化，也不放行 patch 版本差异。
+- 只有两侧都不含开发标记时，才启用对应域的稳定版兼容策略；格式非法的版本号一律直接拒绝。
 
-Native 符号门禁始终要求完整版本严格相等。缓存保留完整 ABI namespace，不扫描或迁移旧目录；移除 `-unstable` 不会自动获得缓存复用资格。相同 ABI 也不能替代内容指纹与环境验证。网络仍要求[同一模组版本的同一构建](../product-decisions/decisions/session-failure.md#bcunstable-protocol-requires-matched-builds)。
+Native 符号门禁在任何情况下都要求完整版本严格相等。缓存索引按完整 ABI 字符串记录，既不扫描旧目录也不做迁移，因此移除 `-unstable` 后缀不会自动复用旧缓存；同样，ABI 相同也不能替代内容指纹与环境校验。网络会话层仍要求[同一模组版本的同一构建](../product-decisions/decisions/session-failure.md#bcunstable-protocol-requires-matched-builds)。

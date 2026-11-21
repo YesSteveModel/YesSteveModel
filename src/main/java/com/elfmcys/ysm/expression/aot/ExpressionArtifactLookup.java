@@ -34,7 +34,7 @@ public record ExpressionArtifactLookup(Fingerprint fingerprint, Hash256 containe
     ExpectedArtifactIdentity expected, ExpressionBinding expressionBinding, Fingerprint configFingerprint,
     Fingerprint eventCatalogFingerprint, Fingerprint productionLinkageFingerprint, ModelResourcePurpose purpose) {
 
-    private static final String DOMAIN = "ysm:expression-artifact-lookup:" + AbiVersion.CACHE_ANIMATION;
+    private static final String DOMAIN = "ysm:aot-only-lookup-v1:" + AbiVersion.CACHE_ANIMATION;
 
     public ExpressionArtifactLookup {
         Objects.requireNonNull(fingerprint, "fingerprint");
@@ -125,8 +125,7 @@ public record ExpressionArtifactLookup(Fingerprint fingerprint, Hash256 containe
                 text(output, context.stableId());
                 output.writeInt(context.abiVersion());
                 text(output, context.carrierBinaryName());
-                text(output, context.childAdapterId());
-                output.writeInt(context.childAdapterAbi());
+                field(output, context.childBindingsFingerprint().value().bytes().toByteArray());
                 field(output, context.fingerprint().value().bytes().toByteArray());
                 field(output, host.registry().fingerprint().value().bytes().toByteArray());
                 text(output, backend.stableId());
@@ -147,9 +146,8 @@ public record ExpressionArtifactLookup(Fingerprint fingerprint, Hash256 containe
             }
             var fingerprint =
                 Fingerprint.compute(ExpressionIdentityHash.SHA_256, ReadOnlyBytes.copyOf(bytes.toByteArray()));
-            var expected = ExpectedArtifactIdentity.fromVerifiedSource(fingerprint,
-                host.compilationPolicy().compilerLimits(), host.hostAbi(), host.registry(), options,
-                expressionBinding.bindingPlan(), backend, ExpressionIdentityHash.SHA_256);
+            var expected = ExpectedArtifactIdentity.fromVerifiedSource(fingerprint, host.hostAbi(), host.registry(),
+                options, expressionBinding.bindingPlan(), backend, ExpressionIdentityHash.SHA_256);
             return new ExpressionArtifactLookup(fingerprint, containerId, targetId, set, expected, expressionBinding,
                 configFingerprint, eventCatalog.fingerprint(), productionLinkage.fingerprint(), purpose);
         } catch (IOException impossible) {

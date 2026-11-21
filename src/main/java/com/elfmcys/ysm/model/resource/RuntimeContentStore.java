@@ -39,6 +39,8 @@ public final class RuntimeContentStore {
     public void tick() {
         for (CorruptionReport report; (report = reports.poll()) != null;) {
             if (report.content.markCorrupted()) {
+                if (report.content.storageBinding != null)
+                    report.content.storageBinding.reportCorruption(corruptionReporter);
                 corruptionReporter.accept(report.failure);
             }
         }

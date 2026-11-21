@@ -9,9 +9,8 @@ public final class PublicFailure {
 
     public static String summary(Throwable failure) {
         for (var cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver.Failure address)
-                return new com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver.Result(address.status(), null)
-                    .message();
+            if (cause instanceof com.elfmcys.ysm.model.catalog.source.ModelSelector.Failure address)
+                return new com.elfmcys.ysm.model.catalog.source.ModelSelector.Result(address.status(), null).message();
             if (cause instanceof AssetLoadException asset)
                 return asset.reason() == AssetLoadException.Reason.ACCESS ? "Source is inaccessible"
                     : "Content validation failed";

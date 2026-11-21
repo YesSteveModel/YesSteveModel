@@ -5,7 +5,7 @@ import com.elfmcys.ysm.client.animation.predicate.*;
 import com.elfmcys.ysm.client.controller.*;
 import com.elfmcys.ysm.client.entity.CustomFirstPersonArmEntity;
 import com.elfmcys.ysm.client.entity.IPreviewEntity;
-import com.elfmcys.ysm.model.resource.client.CommonAsset;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.model.resource.client.PlayerModelResources;
 import com.elfmcys.ysm.geckolib3.core.builder.Animation;
 import com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData;
@@ -34,10 +34,9 @@ public class FPArmControllerCollection {
             (name, entity, slot) -> new HybridAnimationController(entity, name, 0, new FPArmArmorPredicate(slot)));
     }
 
-    public static BiConsumer<CustomFirstPersonArmEntity, AnimationData> build(PlayerModelResources model,
-        CommonAsset assets) {
+    public static BiConsumer<CustomFirstPersonArmEntity, AnimationData> build(PlayerModelResources model) {
         COLLECTION.initialize(FPArmControllerCollection::init);
-        return COLLECTION.build(model, assets, model.fpArmAnimations());
+        return COLLECTION.build(model, model.fpArmAnimations());
     }
 
     private static void simple(String name, BiFunction<String, CustomFirstPersonArmEntity,
@@ -49,7 +48,7 @@ public class FPArmControllerCollection {
         IAnimationController<CustomFirstPersonArmEntity>> simpleFactory) {
         var controllerName = String.format("%s.%s", CATEGORY, name);
         ControllerDiscovery<CustomFirstPersonArmEntity, PlayerModelResources> discovery =
-            (model, asset, animations) -> (animatable, consumer) -> {
+            (model, animations) -> (animatable, consumer) -> {
                 consumer.accept(simpleFactory.apply(controllerName, animatable));
             };
         if (guiOnly) {
@@ -83,13 +82,12 @@ public class FPArmControllerCollection {
         static final Adapter INSTANCE = new Adapter();
 
         @Override
-        public Object2ReferenceMap<String, AnimationControllerData> getControllers(PlayerModelResources model,
-            CommonAsset assets) {
+        public Object2ReferenceMap<String, AnimationControllerData> getControllers(PlayerModelResources model) {
             return model.fpArmAnimationControllers();
         }
 
         @Override
-        public ConditionArmor getArmorCondition(PlayerModelResources model, CommonAsset assets) {
+        public ConditionArmor getArmorCondition(PlayerModelResources model) {
             return model.fpArmConditionManager().getArmor();
         }
     }

@@ -1,10 +1,11 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.format.parser.pojo.manifest.ModelManifest;
 import com.elfmcys.ysm.format.parser.pojo.manifest.metadata.ModelMetadata;
 import com.elfmcys.ysm.format.parser.pojo.manifest.settings.ConfigForms;
 import com.elfmcys.ysm.format.parser.pojo.manifest.settings.ExtraAnimationButton;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.proto.mixel.manifest.info.ConfigFormsProto;
 import org.junit.jupiter.api.Test;
 
@@ -53,7 +54,8 @@ class ModelInfoBuilderTest {
         source.properties.extraAnimationButtons.add(button);
         var builder = ModelInfoBuilder.buildInfo(true, source, (path, hashType, policy, consumer) -> {
         }, new com.elfmcys.ysm.expression.frontend.MolangFrontend());
-        ModelInfoBuilder.setProperties(builder, source.properties, "test", new Hash256(new byte[Hash256.SIZE]));
+        ModelInfoBuilder.setProperties(builder, source.properties, "test",
+            ModelId.fromHash(new Hash256(new byte[Hash256.SIZE])));
         var info = builder.build();
 
         return info.settings().extraAnimationButtons().get(0).configForms().get(0);

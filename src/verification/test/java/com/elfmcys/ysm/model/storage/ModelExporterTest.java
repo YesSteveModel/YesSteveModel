@@ -64,6 +64,10 @@ class ModelExporterTest {
                 var exported = open(output);
                 try {
                     assertEquals(originVer, exported.modelFile().getMetadata().originVer());
+                    assertEquals(originVer < com.elfmcys.ysm.format.schema.model.ModelOriginVersion.CURRENT,
+                        exported.modelFile().getMetadata().expressionOptions().divZeroFallback());
+                    assertEquals(source.modelFile().getMetadata().expressionOptions(),
+                        exported.modelFile().getMetadata().expressionOptions());
                     assertEquals(source.modelFile().getManifest().info().properties().originVer(),
                         exported.modelFile().getManifest().info().properties().originVer());
                 } finally {
@@ -115,7 +119,7 @@ class ModelExporterTest {
         }
 
         var inventory = assertInstanceOf(RootInventoryState.Complete.class,
-            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.CUSTOM, temp, false)));
+            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.MODELS, temp, false)));
         var observation = inventory.sources().values().stream()
             .filter(value -> value.absolutePath().equals(output.toAbsolutePath().normalize())).findFirst()
             .orElseThrow();
@@ -160,7 +164,7 @@ class ModelExporterTest {
     }
 
     private static ManagedContainer open(Path file) throws Exception {
-        return ManagedContainer.openDirect(file, new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("fixture")));
+        return ManagedContainer.openDirect(file, new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture")));
     }
 
     private static void assertStoredChunksEqual(ManagedContainer expected, ManagedContainer actual) throws Exception {

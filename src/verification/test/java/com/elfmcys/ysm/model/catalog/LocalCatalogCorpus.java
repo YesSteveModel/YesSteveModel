@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.catalog;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.format.schema.model.ModelFileIdentityReader;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
 import com.elfmcys.ysm.format.schema.model.ModelFileWriter;
@@ -195,7 +196,7 @@ final class LocalCatalogCorpus {
         result.put(defaultIdentity.modelId().toString(), expectedDefault(defaultIdentity));
         sources.entrySet().stream().sorted(Map.Entry.comparingByKey())
             .forEach(entry -> result.putIfAbsent(entry.getValue().identity().modelId().toString(),
-                inventory(entry.getValue().identity(), CatalogRootKind.CUSTOM, entry.getKey())));
+                inventory(entry.getValue().identity(), CatalogRootKind.MODELS, entry.getKey())));
         return result.values().stream().sorted(Comparator.comparing(InventoryEntry::modelId)).toList();
     }
 
@@ -221,8 +222,9 @@ final class LocalCatalogCorpus {
                     .setThumbnailSource(com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.GENERATED)
                     .setSettings(SettingsProto.newBuilder().setDefaultTexture("").setPreviewAnimation("")
                         .setDisablePreviewRotation(false).build())
-                    .setProperties(PropertiesProto.newBuilder().setModelId(ByteBuffer.wrap(modelId.bytes()))
-                        .setFree(false).setOriginVer("").build())
+                    .setProperties(PropertiesProto.newBuilder()
+                        .setModelId("hash:" + java.util.HexFormat.of().formatHex(modelId.bytes())).setFree(false)
+                        .setOriginVer("").build())
                     .setMetadata(MetadataProto.newBuilder().setName(displayName).setTips("")
                         .setLicense(LicenseProto.newBuilder().setType("").setDesc("").build()).build())
                     .build())

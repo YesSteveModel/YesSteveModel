@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.client.sound.instance;
 
-import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.api.client.audio.AudioBackend;
 import com.elfmcys.ysm.expression.host.*;
 import org.junit.jupiter.api.Test;
@@ -14,23 +13,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SoundInstanceManagerTest {
     @Test
-    void localSoundEffectKeepsTheAnimationScopeSelectedWhenStaged() throws Throwable {
-        verifyStagedSoundScope(false, false, false);
+    void localSoundEffectKeepsTheAnimationScopeSelectedWhenSelected() throws Throwable {
+        verifySelectedSoundScope(false, false, false);
     }
 
     @Test
-    void stopAllControllerAndExplicitGlobalEffectsKeepTheirStagedTargets() throws Throwable {
+    void stopAllControllerAndExplicitGlobalEffectsKeepTheirSelectedTargets() throws Throwable {
         for (var controllerScope : new boolean[] {false, true}) {
             for (var stopAll : new boolean[] {false, true}) {
                 for (var global : new boolean[] {false, true}) {
-                    verifyStagedSoundScope(controllerScope, stopAll, global);
+                    verifySelectedSoundScope(controllerScope, stopAll, global);
                 }
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    private static void verifyStagedSoundScope(boolean controllerScope, boolean stopAll, boolean global)
+    private static void verifySelectedSoundScope(boolean controllerScope, boolean stopAll, boolean global)
         throws Throwable {
         var firstAnimation = new AnimationExecutionState();
         var nextAnimation = new AnimationExecutionState();
@@ -49,15 +48,17 @@ class SoundInstanceManagerTest {
 
         var owner = TestComponentHolders.owner(null);
         TestComponentHolders.installProcessor(owner, net.minecraft.util.RandomSource.create(), globalSounds);
-        var model = new com.elfmcys.ysm.expression.host.builtin.ModelBuiltins(owner);
+        var model = new com.elfmcys.ysm.expression.host.builtin.EffectBuiltins(owner);
         var inputs = new InvocationInputs<net.minecraft.world.entity.Entity>() {
-            public net.minecraft.world.entity.Entity entity() { return null; }
+            public net.minecraft.world.entity.Entity entity() {
+                return null;
+            }
         };
-        var context =
-            MolangContext.logical(inputs, inputs, MolangContext.LogicalPhase.ACTION, inputs::prevalidateEffect,
-                com.elfmcys.ysm.expression.TestRoamingStates.create(null, dev.semaweave.RoamingRole.PRODUCER),
-                new InvocationProvenance("sound-owner", "local-scope", 1, 2, 3), () -> false, () -> true, 8);
-        EffectTransaction.execute(context, EffectSink.direct(), active -> {
+        var context = MolangContext.logical(inputs, inputs, MolangContext.LogicalPhase.ACTION,
+            com.elfmcys.ysm.expression.TestRoamingStates.create(null, dev.semaweave.RoamingRole.PRODUCER),
+            new InvocationProvenance("sound-owner", "local-scope", 1, 2, 3));
+        var active = context;
+        try {
             active.setControllerContext(firstController);
             active.setAnimationContext(controllerScope ? null : firstAnimation);
             active.bindExpression("local-scope", 1);
@@ -73,19 +74,20 @@ class SoundInstanceManagerTest {
             }
             active.setControllerContext(nextController);
             active.setAnimationContext(controllerScope ? null : nextAnimation);
-            return null;
-        });
+        } finally {
+            context.closeRound();
+        }
 
         org.junit.jupiter.api.Assertions.assertAll(
             () -> assertEquals(!global, firstPlayback.stopped,
-                "the staged local effect must stop its original sampling scope"),
-            () -> assertFalse(nextPlayback.stopped, "later sampling must not retarget the staged effect"),
+                "the selected local effect must stop its original sampling scope"),
+            () -> assertFalse(nextPlayback.stopped, "later sampling must not retarget the selected effect"),
             () -> assertEquals(global, globalPlayback.stopped,
                 "only an explicit global effect may stop the owner-global playback"));
     }
 
     @Test
-    void committedNamedZeroStopsWithoutStoppingAnonymousZeroOrAnotherOwner() throws Throwable {
+    void namedZeroStopsWithoutStoppingAnonymousZeroOrAnotherOwner() throws Throwable {
         var manager = new SoundInstanceManager();
         var otherOwner = new SoundInstanceManager();
         var anonymous = new FakePlayback();
@@ -93,31 +95,36 @@ class SoundInstanceManagerTest {
         var other = new FakePlayback();
         assertTrue(otherOwner.startResolved(ModelSoundId.string("0"), false, () -> other));
         var starts = new AtomicInteger();
-        var fixture = new com.elfmcys.ysm.expression.host.ControlledHostFixture();
         var invocation =
-            MolangContext.logical(new EntityView() {}, new RenderView() {}, MolangContext.LogicalPhase.ACTION, fixture,
+            MolangContext.logical(new EntityView() {}, new RenderView() {}, MolangContext.LogicalPhase.ACTION,
                 com.elfmcys.ysm.expression.TestRoamingStates.create(null, dev.semaweave.RoamingRole.PRODUCER),
-                new InvocationProvenance("sound-owner", "zero", 1, 2, 3), () -> false, () -> true, 8);
-        EffectTransaction.execute(invocation, EffectSink.direct(), context -> {
-            context.bindExpression("zero", 1); context.beginTopLevel(true);
+                new InvocationProvenance("sound-owner", "zero", 1, 2, 3));
+        var context = invocation;
+        try {
+            context.bindExpression("zero", 1);
+            context.beginTopLevel(true);
             try {
-                context.submit((PreparedEffect)() -> manager.startResolved(ModelSoundId.numeric(0), false, () -> {
-                    starts.incrementAndGet(); return anonymous;
-                }));
-                context.submit((PreparedEffect)() -> manager.startResolved(ModelSoundId.string("0"), false, () -> {
-                    starts.incrementAndGet(); return named;
-                }));
-                context.submit((PreparedEffect)() -> manager.stopPlayingSound(ModelSoundId.string("0")));
-            } finally { context.endTopLevel(); context.releaseExpression(); }
-            assertEquals(0, starts.get());
-            return null;
-        });
+                manager.startResolved(ModelSoundId.numeric(0), false, () -> {
+                    starts.incrementAndGet();
+                    return anonymous;
+                });
+                manager.startResolved(ModelSoundId.string("0"), false, () -> {
+                    starts.incrementAndGet();
+                    return named;
+                });
+                manager.stopPlayingSound(ModelSoundId.string("0"));
+            } finally {
+                context.endTopLevel();
+                context.releaseExpression();
+            }
+            assertEquals(2, starts.get());
+        } finally {
+            invocation.closeRound();
+        }
         assertEquals(2, starts.get());
         assertTrue(named.stopped);
         assertFalse(anonymous.stopped);
         assertFalse(other.stopped);
-        org.junit.jupiter.api.Assertions.assertThrows(ExecutionFailure.class,
-            () -> EffectTransaction.finish(invocation, EffectSink.direct(), true));
         assertEquals(2, starts.get());
         manager.stopAllPlayingSounds();
         assertEquals(AudioBackend.CancelReason.SCOPE_RETIRED, anonymous.reason);

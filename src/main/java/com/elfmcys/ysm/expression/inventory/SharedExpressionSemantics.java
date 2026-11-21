@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.expression.inventory;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.expression.host.ExpressionIdentityHash;
-import com.elfmcys.ysm.model.domain.Hash256;
 import dev.semaweave.identity.Fingerprint;
 import dev.semaweave.program.ReadOnlyBytes;
 
@@ -15,13 +15,13 @@ import java.util.Objects;
 public final class SharedExpressionSemantics {
     private static final String DOMAIN = "ysm:shared-expression-semantics:v1";
 
-    private final Hash256 modelId;
+    private final ModelId modelId;
     private final String targetId;
     private final Fingerprint configFingerprint;
     private final Fingerprint eventContractFingerprint;
     private final Fingerprint fingerprint;
 
-    private SharedExpressionSemantics(Hash256 modelId, String targetId, Fingerprint configFingerprint,
+    private SharedExpressionSemantics(ModelId modelId, String targetId, Fingerprint configFingerprint,
         Fingerprint eventContractFingerprint, Fingerprint fingerprint) {
         this.modelId = modelId;
         this.targetId = targetId;
@@ -30,7 +30,7 @@ public final class SharedExpressionSemantics {
         this.fingerprint = fingerprint;
     }
 
-    public static SharedExpressionSemantics create(Hash256 modelId, String targetId, Fingerprint configFingerprint,
+    public static SharedExpressionSemantics create(ModelId modelId, String targetId, Fingerprint configFingerprint,
         Fingerprint eventContractFingerprint) {
         Objects.requireNonNull(modelId, "modelId");
         Objects.requireNonNull(targetId, "targetId");
@@ -65,7 +65,7 @@ public final class SharedExpressionSemantics {
         }
     }
 
-    public Hash256 modelId() {
+    public ModelId modelId() {
         return modelId;
     }
 

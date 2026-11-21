@@ -1,28 +1,28 @@
 # 外部模型源
 
-通用外部模型源尚未实现：没有可用的 provider 注册、配置、目录获取、资产 binding、凭据或生产 transport。预留词汇与组合边界不能被文档或 UI 当作已支持功能。
+通用外部模型源目前尚未实现：还没有可用的 provider 注册机制、配置项、目录拉取、资产绑定、凭据管理或生产传输层。任何预留词汇和边界设计都不能在文档或界面中被当作已支持的功能。
 
-外部模型源与[独立 Backend](independent-backend.md)正交：Backend 是未来的玩家状态权威和可选模型服务；外部源只提供模型目录与资产，可以在 Local Only 或游戏服会话中独立存在，也不能授予游戏服权限。
+外部模型源与[独立 Backend](independent-backend.md)相互正交：Backend 是未来可选的远端玩家状态权威（并可顺带提供模型服务），而外部模型源只负责提供模型目录和资产，既可以在 Local Only 或游戏服会话下独立工作，也不会授予游戏服内的权限。
 
 ## 最小接入边界
 
-一个可用 provider 至少需要：
+一个可用的外部模型源 provider 至少要满足以下要求：
 
-- 稳定 source ID、source kind、明确优先级和独立 cursor；URL、镜像地址和显示名不得充当身份；
-- 产生不可变 catalog contribution，保留 namespace、path、descriptor 与逐 offer access policy；
-- 按 typed subject/selector 获取资产，并支持取消、关闭、限额与 stale-context 拒绝；
-- 以一次 provider context 原子绑定 catalog、cursor、凭据和 asset resolver，迟到结果不得跨刷新提交；
-- 将已验证资源接入现有 remote/cache 与 publication 语义，不直接修改全局 catalog 或 render cache；
-- 区分内容来源与状态授权，不能因能下载同一 hash 就获得使用许可。
+- 具备稳定的 source ID、来源类型、明确优先级和独立游标（cursor）；不能拿 URL、镜像地址或显示名称充当身份。
+- 产出不可变的目录贡献（catalog contribution），保留 namespace、路径、descriptor 以及逐条目的访问策略。
+- 支持按强类型的请求主体或选择器获取资产，并支持取消、关闭、限额控制以及拒绝来自过期上下文的请求。
+- 通过单次 provider context 原子绑定目录、游标、凭据与资产解析器，迟到返回的结果不得跨刷新周期提交。
+- 将校验通过的资源接入现有的远端缓存和发布语义，不得绕开流程直接改写全局目录或渲染缓存。
+- 严格区分内容获取与状态授权，不能因为客户端能下载到相同 hash 的模型就默认获得使用许可。
 
-模型源接口应保持 Java 领域化。Native 可以提供 archive、codec、hash 或图片处理能力，但不得持有 provider、凭据、catalog 或刷新状态。
+模型源接口保持在 Java 领域层。Native 侧可以提供归档读取、编解码、hash 或图像处理等底层能力，但不得持有 provider 实例、凭据、目录或刷新状态。
 
 ## 信任要求
 
-外部 descriptor 与资产一律视为不可信输入，必须执行与当前容器、schema 和资产传输相同的大小、结构、解码长度和内容 hash 校验。Provider 还需隔离凭据、来源配额、并发和磁盘预算；若允许 URL 获取，必须约束 scheme、redirect、DNS rebinding、内网地址和超时，避免把客户端变成任意网络代理。
+来自外部源的 descriptor 和资产一律按不可信输入处理，必须执行与当前容器、Schema 及资产传输一致的大小上限、结构完整性、解码长度和内容 hash 校验。Provider 还必须隔离各自的凭据、配额、并发数和磁盘预算；如果支持通过 URL 下载，必须限制协议 scheme、重定向策略、DNS rebinding、内网地址访问和超时，避免客户端被当成任意网络代理利用。
 
-缓存只能复用经过内容验证的对象。来源私有 metadata、授权结果和 cursor 不能因 hash 相同而跨来源共享；错误、取消和关闭必须只影响对应 provider context。
+缓存只复用经过完整内容校验的对象。来源私有的元数据、授权结论和游标不能因为内容 hash 相同而跨来源共享；错误、取消和关闭必须被隔离在对应的 provider context 内，不影响其他来源。
 
 ## 进入当前设计的条件
 
-只有同时完成 provider 生命周期、catalog contribution、asset resolver、缓存身份、凭据与安全策略、取消/关闭闭环和端到端验证后，才能把一种外部源加入当前来源表。仅增加枚举、配置项或空 contribution 不构成实现，也不得先用假 binding 占位。
+只有同时补齐 provider 生命周期、目录贡献、资产解析、缓存身份、凭据与安全策略、完整的取消与关闭清理流程以及端到端验证后，才能将某种外部源列入当前支持来源。仅仅增加枚举值、配置项或空壳 contribution 不算实现，也不允许先用假绑定占位。

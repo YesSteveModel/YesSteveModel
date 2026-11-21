@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.client.gui.button;
 
+import com.elfmcys.ysm.client.entity.EntityModelDemand;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
@@ -35,9 +36,13 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
         images = new PageImages(batches.get());
     }
 
-    public PageImages images() { return images; }
+    public PageImages images() {
+        return images;
+    }
 
-    void register(CatalogModelCardState card) { cards.add(card); }
+    void register(CatalogModelCardState card) {
+        cards.add(card);
+    }
 
     @Override
     public void advance(ModelResourceDemand.Mode allowed) {
@@ -54,8 +59,8 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
             previews.advanceAcquisition(allowed);
     }
 
-    public void prepare(List<CatalogModelButton> buttons, List<PackButton> packs, float partialTick,
-        int mouseX, int mouseY, long now) {
+    public void prepare(List<CatalogModelButton> buttons, List<PackButton> packs, float partialTick, int mouseX,
+        int mouseY, long now) {
         page.advance();
         if (closed || page.isClosed())
             return;
@@ -65,9 +70,17 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
             var jobs = plan(states, covers, ResponsiveExecutor.maximumPoolSize());
             var failure = GuiFrameTasks.execute(jobs, ResponsiveExecutor::execute);
             if (!page.isClosed()) {
-                try { images.refreshResidents(); } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+                try {
+                    images.refreshResidents();
+                } catch (Throwable error) {
+                    failure = GuiFrameTasks.append(failure, error);
+                }
                 if (previews != null && !page.eagerLoading()) {
-                    try { previews.refreshResidents(); } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+                    try {
+                        previews.refreshResidents();
+                    } catch (Throwable error) {
+                        failure = GuiFrameTasks.append(failure, error);
+                    }
                 }
             }
             if (failure instanceof Error error)
@@ -87,8 +100,9 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
         for (int index = 0; index < states.size(); index++) {
             var state = states.get(index);
             var scope = state.scope();
-            pending[covers.size() + index] = scope != null && scope.hasReadyInstallation()
-                || allowed != ModelResourceDemand.Mode.READY && state.images().stream().anyMatch(PageImages.Image::cpuReady);
+            pending[covers.size() + index] =
+                scope != null && scope.hasReadyInstallation() || allowed != ModelResourceDemand.Mode.READY
+                    && state.images().stream().anyMatch(PageImages.Image::cpuReady);
         }
         var admission = GuiFrameTasks.admit(pending, cursor, maximumPoolSize);
         cursor = admission.nextCursor();
@@ -100,7 +114,8 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
                 var cover = covers.get(index);
                 if (admission.admitted()[index] && cover != null) {
                     var job = new CardWork(null, List.of(cover), true, assigned);
-                    if (job.hasWork()) jobs.add(job);
+                    if (job.hasWork())
+                        jobs.add(job);
                 }
             }
             for (int index = 0; index < states.size(); index++) {
@@ -108,14 +123,23 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
                 var admitted = admission.admitted()[covers.size() + index];
                 if (admitted || state.renderTarget() != null) {
                     var job = new CardWork(state, state.images(), admitted, assigned);
-                    if (job.hasWork()) jobs.add(job);
+                    if (job.hasWork())
+                        jobs.add(job);
                 }
             }
         } catch (Throwable error) {
             failure = error;
             for (var job : jobs) {
-                try { job.reject(); } catch (Throwable cleanup) { failure = GuiFrameTasks.append(failure, cleanup); }
-                try { job.finish(); } catch (Throwable cleanup) { failure = GuiFrameTasks.append(failure, cleanup); }
+                try {
+                    job.reject();
+                } catch (Throwable cleanup) {
+                    failure = GuiFrameTasks.append(failure, cleanup);
+                }
+                try {
+                    job.finish();
+                } catch (Throwable cleanup) {
+                    failure = GuiFrameTasks.append(failure, cleanup);
+                }
             }
             throwFailure(failure);
         }
@@ -128,9 +152,17 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
             return;
         closed = true;
         Throwable failure = null;
-        try { images.close(); } catch (Throwable error) { failure = error; }
+        try {
+            images.close();
+        } catch (Throwable error) {
+            failure = error;
+        }
         if (previews != null) {
-            try { previews.close(); } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+            try {
+                previews.close();
+            } catch (Throwable error) {
+                failure = GuiFrameTasks.append(failure, error);
+            }
         }
         cards.clear();
         throwFailure(failure);
@@ -139,11 +171,9 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
     private final class CardWork implements GuiFrameTasks.Job {
         private final CatalogModelCardState state;
         private final List<ImageWork> imageWork = new ArrayList<>(3);
-        private ClientDemandCoordinator.EntityScope.ReadyInstallation ready;
-        private ClientDemandCoordinator.InstallationResult installation;
+        private EntityModelDemand.ReadyCandidate ready;
         private AnimatableEntity.GuiTask<Void> entityTask;
         private FutureTask<Void> imageTask;
-        private boolean rejected;
 
         private CardWork(CatalogModelCardState state, List<PageImages.Image> slots, boolean admitted,
             Set<ImageIdentity> assigned) {
@@ -172,10 +202,12 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
                                 prepareImages();
                                 if (ready != null) {
                                     var lease = ready.takeLease();
-                                    installation = execution.install(ready.request(), lease, ready.fallback(), false);
+                                    execution.install(ready.request(), lease, ready.fallback(), false,
+                                        ready.operation());
                                 }
                                 state.updatePreviewAnimations(state.frameInput());
-                                state.prepared(execution.update(state.frameInput().partialTick(), state.frameInput().context()));
+                                state.prepared(
+                                    execution.update(state.frameInput().partialTick(), state.frameInput().context()));
                             }
                         });
                         return null;
@@ -189,13 +221,23 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
                 if (hasWork() && state != null)
                     state.borrow();
             } catch (Throwable error) {
-                try { reject(); } catch (Throwable cleanup) { error = GuiFrameTasks.append(error, cleanup); }
-                try { finish(); } catch (Throwable cleanup) { error = GuiFrameTasks.append(error, cleanup); }
+                try {
+                    reject();
+                } catch (Throwable cleanup) {
+                    error = GuiFrameTasks.append(error, cleanup);
+                }
+                try {
+                    finish();
+                } catch (Throwable cleanup) {
+                    error = GuiFrameTasks.append(error, cleanup);
+                }
                 throwFailure(error);
             }
         }
 
-        private boolean hasWork() { return entityTask != null || imageTask != null; }
+        private boolean hasWork() {
+            return entityTask != null || imageTask != null;
+        }
 
         private void withPreparationCleanup(Runnable body) {
             Throwable failure = null;
@@ -205,32 +247,44 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
                 failure = error;
                 throw error;
             } finally {
-                try { closePreparations(); }
-                catch (RuntimeException | Error cleanup) {
+                try {
+                    closePreparations();
+                } catch (RuntimeException | Error cleanup) {
                     var combined = GuiFrameTasks.append(failure, cleanup);
-                    if (combined != failure) throwFailure(combined);
+                    if (combined != failure)
+                        throwFailure(combined);
                 }
             }
         }
 
         private void prepareImages() {
             for (var image : imageWork) {
-                try { image.prepared = image.preparation.prepare(); }
-                catch (Exception error) { image.failure = error; }
+                try {
+                    image.prepared = image.preparation.prepare();
+                } catch (Exception error) {
+                    image.failure = error;
+                }
             }
         }
 
         private void closePreparations() {
             Throwable failure = null;
             for (var image : imageWork) {
-                try { image.preparation.close(); } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+                try {
+                    image.preparation.close();
+                } catch (Throwable error) {
+                    failure = GuiFrameTasks.append(failure, error);
+                }
             }
             throwFailure(failure);
         }
 
         @Override
         public void run() {
-            if (entityTask != null) entityTask.run(); else imageTask.run();
+            if (entityTask != null)
+                entityTask.run();
+            else
+                imageTask.run();
         }
 
         @Override
@@ -242,18 +296,24 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
             boolean interrupted = false;
             try {
                 while (true) {
-                    try { imageTask.get(); return; }
-                    catch (InterruptedException ignored) { interrupted = true; }
-                    catch (ExecutionException error) { throwFailure(error.getCause()); return; }
+                    try {
+                        imageTask.get();
+                        return;
+                    } catch (InterruptedException ignored) {
+                        interrupted = true;
+                    } catch (ExecutionException error) {
+                        throwFailure(error.getCause());
+                        return;
+                    }
                 }
             } finally {
-                if (interrupted) Thread.currentThread().interrupt();
+                if (interrupted)
+                    Thread.currentThread().interrupt();
             }
         }
 
         @Override
         public void reject() {
-            rejected = true;
             if (entityTask != null)
                 entityTask.reject();
         }
@@ -269,9 +329,13 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
                 if (prepared == null)
                     continue;
                 try {
-                    if (page.isClosed() || state != null && state.closed()) prepared.close();
-                    else image.slot.publish(prepared);
-                } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+                    if (page.isClosed() || state != null && state.closed())
+                        prepared.close();
+                    else
+                        image.slot.publish(prepared);
+                } catch (Throwable error) {
+                    failure = GuiFrameTasks.append(failure, error);
+                }
             }
             throwFailure(failure);
         }
@@ -281,9 +345,10 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
             Throwable failure = null;
             if (ready != null) {
                 try {
-                    if (rejected || installation == null) ready.close();
-                    else ready.complete(installation);
-                } catch (Throwable error) { failure = error; }
+                    ready.close();
+                } catch (Throwable error) {
+                    failure = error;
+                }
             }
             for (var image : imageWork) {
                 try {
@@ -292,11 +357,21 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
                         image.prepared = null;
                         prepared.close();
                     }
-                } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
-                try { image.preparation.close(); } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+                } catch (Throwable error) {
+                    failure = GuiFrameTasks.append(failure, error);
+                }
+                try {
+                    image.preparation.close();
+                } catch (Throwable error) {
+                    failure = GuiFrameTasks.append(failure, error);
+                }
             }
             if (state != null) {
-                try { state.returned(); } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+                try {
+                    state.returned();
+                } catch (Throwable error) {
+                    failure = GuiFrameTasks.append(failure, error);
+                }
             }
             throwFailure(failure);
         }
@@ -315,8 +390,11 @@ public final class CatalogPageFrame implements ClientDemandCoordinator.PageActio
     }
 
     private static void throwFailure(Throwable failure) {
-        if (failure instanceof Error error) throw error;
-        if (failure instanceof RuntimeException error) throw error;
-        if (failure != null) throw new java.util.concurrent.CompletionException(failure);
+        if (failure instanceof Error error)
+            throw error;
+        if (failure instanceof RuntimeException error)
+            throw error;
+        if (failure != null)
+            throw new java.util.concurrent.CompletionException(failure);
     }
 }

@@ -91,11 +91,12 @@ tasks.register('verifyPackagedMixinPluginAbi', JavaExec) {
     mainClass = 'com.elfmcys.ysm.verification.PackagedMixinPluginAbiSmoke'
 }
 tasks.register('compilePackagedGameStubs', JavaCompile) {
+    dependsOn tasks.named('shadowJar')
     source = fileTree('src/verification/molang/packagedExpressionSmoke/java') {
         include 'net/**/*.java', 'com/elfmcys/ysm/YesSteveModel.java',
                 'com/elfmcys/ysm/client/entity/AnimatableEntity.java'
     }
-    classpath = files(packagedHostLibraries)
+    classpath = files(tasks.named('shadowJar').flatMap { it.archiveFile }, packagedHostLibraries)
     destinationDirectory = packagedGameStubs
     options.compilerArgs += ['-proc:none']
     options.release = 17
@@ -229,6 +230,102 @@ tasks.register('verifyExpressionArtifactWarmLoad') {
     dependsOn tasks.named('runExpressionArtifactWarmFixture')
 }
 
+def semanticMatrixWarmTasks = [false, true].collect { fallback ->
+    def suffix = fallback ? 'Fallback' : 'Direct'
+    def fixture = layout.buildDirectory.dir("verification/expression-semantic-matrix/${suffix}")
+    def cold = tasks.register("runExpressionSemantic${suffix}Cold", JavaExec) {
+        group = 'verification'
+        dependsOn tasks.named('testClasses')
+        classpath = sourceSets.test.runtimeClasspath
+        mainClass = 'com.elfmcys.ysm.expression.aot.ExpressionArtifactWarmProcessFixture'
+        doFirst {
+            delete fixture
+            environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+            args = [fixture.get().asFile.absolutePath, 'COLD', fallback.toString()]
+        }
+    }
+    tasks.register("verifyExpressionSemantic${suffix}Warm", JavaExec) {
+        group = 'verification'
+        dependsOn cold
+        classpath = sourceSets.test.runtimeClasspath
+        mainClass = 'com.elfmcys.ysm.expression.aot.ExpressionArtifactWarmProcessFixture'
+        doFirst {
+            environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+            args = [fixture.get().asFile.absolutePath, 'DISK', fallback.toString()]
+        }
+    }
+}
+
+tasks.register('verifyExpressionSemanticMatrix') {
+    group = 'verification'
+    description = 'Checks persistent/transient semantics and exact cold/disk identity with both division options.'
+    dependsOn semanticMatrixWarmTasks
+}
+
+def arrowSemanticSource = file('src/verification/molang/arrowSemanticMatrix/java')
+def arrowSemanticClass = 'com.elfmcys.ysm.verification.MolangArrowSemanticProcess'
+def arrowSemanticRoots = [:]
+def arrowSemanticWarmTasks = ['ordinary', 'packaged'].collect { mode ->
+    def suffix = mode.capitalize()
+    def classes = layout.buildDirectory.dir("arrow-semantic-matrix/${mode}-classes")
+    def matrixSource = arrowSemanticSource
+    if (mode == 'packaged') {
+        def relocated = tasks.register('preparePackagedArrowSemanticSource', Sync) {
+            from arrowSemanticSource
+            into layout.buildDirectory.dir('arrow-semantic-matrix/packaged-source')
+            filter { line -> line.replace('dev.semaweave.',
+                    'com.elfmcys.ysm.internal.expression.semaweave.') }
+        }
+        matrixSource = relocated
+    }
+    def compile = tasks.register("compile${suffix}ArrowSemanticMatrix", JavaCompile) {
+        dependsOn mode == 'packaged' ? tasks.named('compilePackagedGameStubs') : tasks.named('testClasses')
+        source(matrixSource)
+        classpath = mode == 'packaged'
+                ? files(packagedGameStubs, packagedHostLibraries, tasks.named('shadowJar').flatMap { it.archiveFile })
+                : sourceSets.test.runtimeClasspath
+        destinationDirectory = classes
+        options.compilerArgs += ['-proc:none']
+        options.release = 17
+        options.encoding = 'UTF-8'
+    }
+    def fixture = layout.buildDirectory.dir("verification/arrow-semantic-matrix/${mode}")
+    arrowSemanticRoots[mode] = fixture
+    def cold = tasks.register("run${suffix}ArrowSemanticCold", JavaExec) {
+        group = 'verification'
+        dependsOn compile
+        classpath = files(classes, mode == 'packaged'
+                ? files(packagedGameStubs, packagedHostLibraries, tasks.named('shadowJar').flatMap { it.archiveFile })
+                : sourceSets.test.runtimeClasspath)
+        mainClass = arrowSemanticClass
+        maxHeapSize = '1536m'
+        doFirst {
+            delete fixture
+            args = [fixture.get().asFile.absolutePath, 'COLD']
+        }
+    }
+    tasks.register("verify${suffix}ArrowSemanticWarm", JavaExec) {
+        group = 'verification'
+        dependsOn cold
+        classpath = cold.map { it.classpath }.get()
+        mainClass = arrowSemanticClass
+        maxHeapSize = '1536m'
+        doFirst { args = [fixture.get().asFile.absolutePath, 'DISK'] }
+    }
+}
+
+tasks.register('verifyMolangArrowSemanticMatrix') {
+    group = 'verification'
+    description = 'Compares arrow, grouping, loop and large-input values and traces across independent warm and packaged JVMs.'
+    dependsOn arrowSemanticWarmTasks
+    doLast {
+        def ordinary = arrowSemanticRoots.ordinary.get().file('observations.txt').asFile.getText('UTF-8')
+        def packaged = arrowSemanticRoots.packaged.get().file('observations.txt').asFile.getText('UTF-8')
+        if (ordinary != packaged)
+            throw new GradleException('Ordinary and packaged arrow semantic observations differ')
+    }
+}
+
 tasks.withType(JavaExec).matching { it.name in [
         'runExpressionArtifactColdFixture', 'runExpressionArtifactWarmFixture',
         'runWeddingControllerColdFixture', 'verifyWeddingControllerWarmLoad'
@@ -258,7 +355,7 @@ tasks.register('verifyWeddingControllerWarmLoad', JavaExec) {
 }
 
 tasks.named('check') {
-    dependsOn tasks.named('verifyExpressionArtifactWarmLoad')
+    dependsOn tasks.named('verifyExpressionSemanticMatrix')
 }
 
 tasks.register('verifyExpressionRuntimeBundle') {
@@ -319,7 +416,6 @@ tasks.register('verifyExpressionRuntimeBundle') {
                     'com/elfmcys/ysm/api/molang/DeclarationSchema.class',
                     'com/elfmcys/ysm/api/molang/MolangContextView.class',
                     'com/elfmcys/ysm/api/molang/MolangInputs.class',
-                    'com/elfmcys/ysm/api/molang/PreparedEffect.class',
                     'com/elfmcys/ysm/api/annotation/MolangFunction.class',
                     'com/elfmcys/ysm/api/annotation/YsmExtension.class',
                     'com/elfmcys/ysm/api/annotation/YsmEventHandler.class',
@@ -339,13 +435,21 @@ tasks.register('verifyExpressionRuntimeBundle') {
                     'dev/semaweave/', 'org/codehaus/janino/',
                     'org/codehaus/commons/compiler/', 'com/palantir/javapoet/',
                     'com/elfmcys/ysm/internal/expression/javapoet/',
-                    'org/objectweb/asm/', 'com/elfmcys/ysm/internal/expression/asm/'
+                    'org/objectweb/asm/', 'com/elfmcys/ysm/internal/expression/asm/',
+                    'it/unimi/dsi/fastutil/'
             ]
             def leaked = names.findAll { name -> forbidden.any { name.startsWith(it) } }.sort()
             if (!leaked.isEmpty()) {
                 throw new GradleException("Unexpected expression runtime classes: ${leaked.take(20)}")
             }
             def legacyRuntime = [
+                    'com/elfmcys/ysm/api/molang/EffectRequest.class',
+                    'com/elfmcys/ysm/api/molang/PreparedEffect.class',
+                    'com/elfmcys/ysm/expression/host/EffectBatch',
+                    'com/elfmcys/ysm/expression/host/EffectTransaction',
+                    'com/elfmcys/ysm/expression/host/EffectSink',
+                    'com/elfmcys/ysm/expression/host/EffectValidator',
+                    'com/elfmcys/ysm/expression/host/DeferredRequest.class',
                     'com/elfmcys/ysm/api/molang/MolangInvocationContext.class',
                     'com/elfmcys/ysm/api/molang/MolangContextLinkage.class',
                     'com/elfmcys/ysm/api/annotation/MolangVariable.class',
@@ -415,5 +519,14 @@ tasks.register('verifyExpressionRuntimeBundle') {
         } finally {
             zip.close()
         }
+    }
+}
+
+// Keep optional libraries in the child probe without changing the ordinary test runtime.
+tasks.named('test', Test) {
+    inputs.files(sourceSets.main.compileClasspath).withPropertyName('defaultProjectionClasspath')
+            .withNormalizer(ClasspathNormalizer)
+    doFirst {
+        systemProperty 'ysm.test.projectionClasspath', sourceSets.main.compileClasspath.asPath
     }
 }

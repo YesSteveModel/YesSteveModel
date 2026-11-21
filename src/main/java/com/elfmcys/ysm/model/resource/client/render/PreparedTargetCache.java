@@ -193,14 +193,15 @@ final class PreparedTargetCache<K, V extends AutoCloseable> implements AutoClose
         }
         Throwable cleanup = null;
         for (var pin : pins) {
-            pin.result.completeExceptionally(new CancellationException("preparation owner stopped"));
             try {
                 pin.close();
             } catch (Throwable failure) {
                 if (cleanup == null)
                     cleanup = failure;
-                else
+                else if (cleanup != failure)
                     cleanup.addSuppressed(failure);
+            } finally {
+                pin.result.completeExceptionally(new CancellationException("preparation owner stopped"));
             }
         }
         if (cleanup != null)

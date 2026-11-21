@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.resource.client.BakeProfile;
 import com.elfmcys.ysm.expression.host.HostAvailability;
 import com.elfmcys.ysm.expression.host.ExpressionHost;
@@ -39,25 +40,25 @@ public final class TestExpressionModules {
 
     private TestExpressionModules() {}
 
-    static dev.semaweave.compilation.ProgramRef reference(int id, dev.semaweave.ProgramShape shape,
-        dev.semaweave.compilation.ResourceGenerationToken generation) {
+    static dev.semaweave.compilation.ProgramRef reference(int id, dev.semaweave.ProgramShape shape) {
         try {
             var constructor = dev.semaweave.compilation.ProgramRef.class.getDeclaredConstructor(int.class, int.class,
-                dev.semaweave.ProgramShape.class, dev.semaweave.compilation.ResourceGenerationToken.class);
+                dev.semaweave.ProgramShape.class);
             constructor.setAccessible(true);
-            return constructor.newInstance(id, id, shape, generation);
+            return constructor.newInstance(id, id, shape);
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
-        }}
+        }
+    }
 
-    public static Hash256 consumerId() {
+    public static ModelId consumerId() {
         var bytes = new byte[32];
         bytes[0] = 1;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
     public static RenderTargetExpressionModule create() {
-        return create(null);
+        return create(Set.of());
     }
 
     public static RenderTargetExpressionModule create(Set<String> roamingNames) {
@@ -66,12 +67,36 @@ public final class TestExpressionModules {
 
     public static void replace(EntityExpressionRuntime runtime, RenderTargetExpressionModule module,
         Map<String, ? extends List<? extends EventProgram>> handlers) {
-        runtime.replace(module, handlers, linkage(module));
+        runtime.replace(store(module, handlers), linkage(module));
     }
 
     public static void replace(EntityExpressionRuntime runtime, RenderTargetExpressionModule module,
         Map<String, ? extends List<? extends EventProgram>> handlers, dev.semaweave.RoamingRole role) {
-        runtime.replace(module, handlers, linkage(module), role);
+        runtime.replace(store(module, handlers), linkage(module), role);
+    }
+
+    public static com.elfmcys.ysm.model.resource.client.AnimationStore store(RenderTargetExpressionModule module,
+        Map<String, ? extends List<? extends EventProgram>> handlers) {
+        return store(module, handlers, com.elfmcys.ysm.model.resource.client.AnimationStore.Index.eager(Map.of()));
+    }
+
+    public static com.elfmcys.ysm.model.resource.client.AnimationStore store(RenderTargetExpressionModule module,
+        Map<String, ? extends List<? extends EventProgram>> handlers,
+        com.elfmcys.ysm.model.resource.client.AnimationStore.Index index) {
+        return store(module, handlers, index, null);
+    }
+
+    public static com.elfmcys.ysm.model.resource.client.AnimationStore store(RenderTargetExpressionModule module,
+        Map<String, ? extends List<? extends EventProgram>> handlers,
+        com.elfmcys.ysm.model.resource.client.AnimationStore.Index index,
+        com.elfmcys.ysm.model.resource.client.AnimationStore.Index fallback) {
+        var store = new com.elfmcys.ysm.model.resource.client.AnimationStore(module,
+            module.interpreted() ? com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.GUI
+                : com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.FULL);
+        try (var preparation = store.prepare()) {
+            preparation.initialize(index, fallback, Map.of(), Map.of(), handlers);
+        }
+        return store;
     }
 
     static RuntimeLinkage<MolangContext> linkage(RenderTargetExpressionModule module) {
@@ -80,18 +105,8 @@ public final class TestExpressionModules {
             TestComponentHolders.providers(host, module.expressionBinding().bindingPlan()), RuntimeSymbolTable.empty());
         return new RuntimeLinkage<>() {
             @Override
-            public dev.semaweave.ContextType<MolangContext> contextType() {
-                return host.contextType();
-            }
-
-            @Override
             public RegistryRuntimeLinkage<MolangContext> registry() {
                 return registry;
-            }
-
-            @Override
-            public dev.semaweave.compilation.BakedConstantTable constants() {
-                return module.constants();
             }
 
             @Override
@@ -99,10 +114,6 @@ public final class TestExpressionModules {
                 return RuntimeDiagnostics.none();
             }
 
-            @Override
-            public ResourceLease<MolangContext> retainResource() {
-                return module.retain();
-            }
         };
     }
 
@@ -118,21 +129,17 @@ public final class TestExpressionModules {
         var identity = identity(localSalt, settings);
         var location = new com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation("test",
             "function/@sync", com.elfmcys.ysm.expression.inventory.ProgramRole.EVENT_SYNC, "sync:0");
-        var program =
-            reference(syncProgramId,
-            com.elfmcys.ysm.expression.inventory.ProgramRole.EVENT_SYNC.shape(), null);
-        return create(identity, null, Map.of(location, program));
+        var program = reference(syncProgramId, com.elfmcys.ysm.expression.inventory.ProgramRole.EVENT_SYNC.shape());
+        return create(identity, Set.of(), Map.of(location, program));
     }
 
     private static RenderTargetExpressionModule create(ExpressionArtifactIdentity identity, Set<String> roamingNames,
         Map<com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation,
             dev.semaweave.compilation.ProgramRef> programs) {
         var host = ExpressionHost.create(HostAvailability.none());
-        return new RenderTargetExpressionModule(identity, new Resource(identity, roamingNames), host,
-            new dev.semaweave.compilation.BakedConstantTable(java.util.List.of(),
-                dev.semaweave.program.ReadOnlyBytes.copyOf(new byte[0])),
-            emptyReport(), Map.of(), programs, Map.of(), ExpressionArtifactStore.Source.COLD,
-            MolangEventCatalog.production(), HostLinkage.production(host));
+        return new RenderTargetExpressionModule(identity, new Resource(identity, roamingNames), host, emptyReport(),
+            Map.of(), programs, Map.of(), ExpressionArtifactStore.Source.COLD, MolangEventCatalog.production(),
+            HostLinkage.production(host));
     }
 
     static dev.semaweave.compilation.CompilationReport emptyReport() {
@@ -167,8 +174,9 @@ public final class TestExpressionModules {
             var bytes = new byte[Hash256.SIZE];
             bytes[0] = 1;
             return ExpressionArtifactIdentity.create(expected,
-                new ModelFileIdentity(new Hash256(bytes), new Hash256(bytes)), "test", "test", new BakeProfile("test"),
-                expressionBinding, false, com.elfmcys.ysm.util.ProtoUtil.serializeToArray(settings));
+                new ModelFileIdentity(ModelId.fromHash(new Hash256(bytes)), new Hash256(bytes)), "test", "test",
+                new BakeProfile("test"), expressionBinding, false,
+                com.elfmcys.ysm.util.ProtoUtil.serializeToArray(settings));
         } catch (Exception failure) {
             throw new ExceptionInInitializerError(failure);
         }
@@ -181,11 +189,11 @@ public final class TestExpressionModules {
 
     private static final class Resource implements CompiledModuleResource<MolangContext> {
         private final ExpressionArtifactIdentity identity;
-        private final Set<String> roamingNames;
+        private final List<String> roamingFields;
 
         private Resource(ExpressionArtifactIdentity identity, Set<String> roamingNames) {
             this.identity = identity;
-            this.roamingNames = roamingNames;
+            this.roamingFields = roamingNames.stream().sorted().toList();
         }
 
         @Override
@@ -195,21 +203,13 @@ public final class TestExpressionModules {
 
         @Override
         public dev.semaweave.SubjectBinding bindSubject(Object subject) {
-            return new dev.semaweave.SubjectBinding() {
-                public Object subject() {
-                    return subject;
-                }
-
-                public dev.semaweave.compilation.ResourceGenerationToken generation() {
-                    return Resource.this.generation();
-                }
-            };
+            return new dev.semaweave.SubjectBinding() {};
         }
 
         @Override
         public dev.semaweave.compilation.ProgramRef bindProgram(dev.semaweave.ProgramId source,
             dev.semaweave.ProgramShape shape) {
-            return reference(source.value(), shape, generation());
+            return reference(source.value(), shape);
         }
 
         @Override
@@ -234,9 +234,13 @@ public final class TestExpressionModules {
         }
 
         @Override
+        public List<String> roamingFieldNames() {
+            return roamingFields;
+        }
+
+        @Override
         public dev.semaweave.CompiledRoamingState newRoamingState(dev.semaweave.RoamingRole role) {
-            return roamingNames == null ? com.elfmcys.ysm.expression.TestRoamingStates.create(generation(), role)
-                : com.elfmcys.ysm.expression.TestRoamingStates.create(generation(), role, roamingNames);
+            return com.elfmcys.ysm.expression.TestRoamingStates.create(generation(), role, roamingFields);
         }
 
         @Override

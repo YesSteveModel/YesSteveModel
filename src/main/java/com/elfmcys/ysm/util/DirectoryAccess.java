@@ -35,7 +35,9 @@ public final class DirectoryAccess implements AutoCloseable {
         return new DirectoryAccess(absolute, List.of(new Entry(absolute, identity)));
     }
 
-    public Path label() { return path; }
+    public Path label() {
+        return path;
+    }
 
     public Object identity() throws IOException {
         verify();
@@ -72,6 +74,23 @@ public final class DirectoryAccess implements AutoCloseable {
             directory.verify();
             return directory;
         }
+
+        /** Rechecks the observed directories once, then opens the target without querying its attributes. */
+        public FileChannel openRead(Path relative) throws IOException {
+            if (relative.isAbsolute() || relative.getNameCount() == 0)
+                throw new IOException("Expected a relative file path");
+            try (var directory = open()) {
+                var current = directory.path;
+                for (var i = 0; i < relative.getNameCount(); i++) {
+                    var name = relative.getName(i).toString();
+                    requireSegment(name);
+                    current = current.resolve(name);
+                    if (i + 1 < relative.getNameCount())
+                        checkedEntry(current, true);
+                }
+                return FileChannel.open(current, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+            }
+        }
     }
 
     public DirectoryAccess directory(String name, boolean create) throws IOException {
@@ -80,11 +99,13 @@ public final class DirectoryAccess implements AutoCloseable {
     }
 
     public DirectoryAccess directory(Path relative, boolean create) throws IOException {
-        if (relative.isAbsolute()) throw new IOException("Expected a relative directory path");
+        if (relative.isAbsolute())
+            throw new IOException("Expected a relative directory path");
         var names = new ArrayList<String>();
         for (var part : relative) {
             var name = part.toString();
-            if (name.isEmpty()) continue;
+            if (name.isEmpty())
+                continue;
             requireSegment(name);
             names.add(name);
         }
@@ -104,14 +125,20 @@ public final class DirectoryAccess implements AutoCloseable {
             var child = current.resolve(name);
             Object identity;
             try {
-                if (exclusive) Files.createDirectory(child);
+                if (exclusive)
+                    Files.createDirectory(child);
                 identity = readEntry(child, true);
             } catch (NoSuchFileException absent) {
-                if (!create) throw absent;
+                if (!create)
+                    throw absent;
                 // An existing prefix can contain a junction; reject it before creating its missing tail.
                 requireRealPath(current);
-                try { Files.createDirectory(child); }
-                catch (FileAlreadyExistsException raced) { if (exclusive) throw raced; }
+                try {
+                    Files.createDirectory(child);
+                } catch (FileAlreadyExistsException raced) {
+                    if (exclusive)
+                        throw raced;
+                }
                 identity = readEntry(child, true);
             }
             observed.add(new Entry(child, identity));
@@ -123,15 +150,23 @@ public final class DirectoryAccess implements AutoCloseable {
 
     public FileChannel file(String name, boolean write, boolean create, boolean exclusive) throws IOException {
         var child = child(name);
+        if (!write && !create)
+            return FileChannel.open(child, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+        if (create && exclusive)
+            return FileChannel.open(child, StandardOpenOption.READ, StandardOpenOption.WRITE,
+                StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS);
         try {
             checkedEntry(child, false);
         } catch (NoSuchFileException absent) {
-            if (!create) throw absent;
+            if (!create)
+                throw absent;
         }
         var options = new HashSet<OpenOption>();
         options.add(StandardOpenOption.READ);
-        if (write) options.add(StandardOpenOption.WRITE);
-        if (create) options.add(exclusive ? StandardOpenOption.CREATE_NEW : StandardOpenOption.CREATE);
+        if (write)
+            options.add(StandardOpenOption.WRITE);
+        if (create)
+            options.add(exclusive ? StandardOpenOption.CREATE_NEW : StandardOpenOption.CREATE);
         options.add(LinkOption.NOFOLLOW_LINKS);
         return FileChannel.open(child, options);
     }
@@ -146,7 +181,10 @@ public final class DirectoryAccess implements AutoCloseable {
         if (!checkedEntry(from, false).equals(expected))
             throw new IOException("Staged filesystem entry changed: " + from);
         var to = target.child(name);
-        try { checkedEntry(to, false); } catch (NoSuchFileException absent) {}
+        try {
+            checkedEntry(to, false);
+        } catch (NoSuchFileException absent) {
+        }
         Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     }
 
@@ -171,8 +209,8 @@ public final class DirectoryAccess implements AutoCloseable {
     }
 
     private static void requireSegment(String name) throws IOException {
-        if (name.isEmpty() || name.equals(".") || name.equals("..") || name.indexOf('/') >= 0
-            || name.indexOf('\\') >= 0 || name.indexOf(':') >= 0 || name.indexOf('\0') >= 0)
+        if (name.isEmpty() || name.equals(".") || name.equals("..") || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0
+            || name.indexOf(':') >= 0 || name.indexOf('\0') >= 0)
             throw new IOException("Invalid filesystem segment");
     }
 
@@ -190,16 +228,22 @@ public final class DirectoryAccess implements AutoCloseable {
     }
 
     private static void requireRealPath(Path path) throws IOException {
-        if (!path.equals(path.toRealPath())) throw new IOException("Linked filesystem path: " + path);
+        if (!path.equals(path.toRealPath()))
+            throw new IOException("Linked filesystem path: " + path);
     }
 
     private void requireOpen() throws ClosedChannelException {
-        if (closed) throw new ClosedChannelException();
+        if (closed)
+            throw new ClosedChannelException();
     }
 
-    @Override public void close() throws IOException { closed = true; }
+    @Override
+    public void close() throws IOException {
+        closed = true;
+    }
 
-    private record Entry(Path path, Object observation) {}
+    private record Entry(Path path, Object observation) {
+    }
 
     public static Path ensureDirectory(Path path) throws IOException {
         var absolute = path.toAbsolutePath().normalize();
@@ -207,7 +251,8 @@ public final class DirectoryAccess implements AutoCloseable {
             Files.readAttributes(absolute, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
         } catch (NoSuchFileException absent) {
             var parent = absolute.getParent();
-            if (parent == null) throw absent;
+            if (parent == null)
+                throw absent;
             ensureDirectory(parent);
             try {
                 Files.createDirectory(absolute);
@@ -230,12 +275,16 @@ public final class DirectoryAccess implements AutoCloseable {
             try {
                 Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
                 var real = current.toRealPath();
-                if (!Files.isDirectory(real)) throw new IOException("Not a directory: " + current);
-                for (var part : tail) real = real.resolve(part);
+                if (!Files.isDirectory(real))
+                    throw new IOException("Not a directory: " + current);
+                for (var part : tail)
+                    real = real.resolve(part);
                 return real.normalize();
             } catch (NoSuchFileException missing) {
-                if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) throw missing;
-                if (current.getParent() == null) throw missing;
+                if (Files.exists(current, LinkOption.NOFOLLOW_LINKS))
+                    throw missing;
+                if (current.getParent() == null)
+                    throw missing;
                 tail.addFirst(current.getFileName());
                 current = current.getParent();
             }

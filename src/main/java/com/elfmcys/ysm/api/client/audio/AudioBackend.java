@@ -18,14 +18,16 @@ import java.util.concurrent.CompletionStage;
  */
 public interface AudioBackend {
     /**
-     * Accepts or rejects one playback synchronously, without completing its terminal before returning.
-     * Acceptance selects this backend for the whole playback; backend failure does not fall back to another backend.
+     * Accepts or rejects one playback synchronously, without completing its terminal before returning. Acceptance
+     * selects this backend for the whole playback; backend failure does not fall back to another backend.
      *
-     * <p><b>Ownership:</b> Accepted transfers the restricted chunk capability and complete playback duty to
-     * the backend. The backend closes delivered chunks after their last borrow and seals new output before
-     * cancel returns. Rejected leaves capability closure with the caller and must retain no playback work.
+     * <p>
+     * <b>Ownership:</b> Accepted transfers complete playback duty and exclusive closure duty for delivered chunks to
+     * the backend. The caller can seal chunk access without revoking those chunks. Rejected or a thrown exception
+     * leaves capability closure with the caller; the backend must first end its work and close any chunks it received.
      *
-     * <p><b>Seam:</b> [audio backend acceptance](docs/architecture/model-management/audio/overview.md#后端接管与播放终态).
+     * <p>
+     * <b>Seam:</b> [audio backend acceptance](docs/architecture/model-management/audio/overview.md#后端接管与播放终态).
      *
      * @param request the non-null exact media, private chunk capability and initial control snapshot
      * @return a non-null Accepted with one playback owner, or Rejected with a reason
@@ -53,24 +55,44 @@ public interface AudioBackend {
         void control(Control control);
 
         /**
-         * Seals new output effects before returning. Repeated cancellation is harmless.
-         * The current SPI does not define when outstanding chunk borrows end relative to this return;
-         * see the [cancellation handoff gap](docs/status/known-issues/model-management.md#外部音频后端的取消交接).
+         * Seals new output effects before returning, without waiting for pending chunk results or backend workers.
+         * Repeated cancellation is harmless. The runtime seals new reads, restarts and result admission before this
+         * call, then cancels pending interests afterward; their callbacks may run synchronously during that cleanup.
+         * Outstanding borrows may finish afterward; the backend retains each delivered Chunk until its last borrow ends
+         * and then closes it.
          */
         void cancel(CancelReason reason);
 
-        /** Returns the exact playback's single terminal result. */
+        /**
+         * Returns the exact playback's single terminal result. Completion, including exceptional completion, means all
+         * accepted chunk requests and their result handling, backend work, and borrows have ended, and all
+         * backend-owned chunks and resources are released.
+         */
         CompletionStage<Terminal> terminal();
     }
 
     interface ChunkAccess extends AutoCloseable {
         int chunkCount();
 
+        /**
+         * Requests the next sequential chunk. Successful delivery transfers exclusive closure duty to the backend.
+         * Cancelling the returned future cancels an undelivered interest; it cannot revoke an already delivered chunk.
+         * A verified result admitted before access closure may finish delivery afterward. The backend must finish
+         * receiving or disposing of results from its accepted requests, including after playback cancellation.
+         */
         CompletionStage<Chunk> request(int index);
 
-        /** Starts the same media from the beginning after the current cursor reached EOF. */
+        /**
+         * Starts the same media from the beginning after the current cursor reached EOF and all requests and chunks
+         * have ended. The accepted media and access grant remain unchanged.
+         */
         ChunkAccess restart();
 
+        /**
+         * Seals new reads and restarts, cancels pending interests, and rejects results not yet admitted. Admission
+         * shares this closure's order; admitted results may finish notifying the backend afterward. Already delivered
+         * chunks remain valid until the backend closes them. Repeated closure is harmless.
+         */
         @Override
         void close();
     }
@@ -78,9 +100,14 @@ public interface AudioBackend {
     interface Chunk extends AutoCloseable {
         int index();
 
-        /** Borrowed read-only bytes valid until this chunk is closed. */
+        /**
+         * Borrows read-only bytes until this chunk is closed. The backend must retain this Chunk throughout every
+         * borrow; retaining only the ByteBuffer does not keep the underlying storage alive. Access closure and playback
+         * cancellation leave this lifetime unchanged.
+         */
         ByteBuffer data();
 
+        /** Releases this token after the backend's last byte borrow ends. Repeated closure is harmless. */
         @Override
         void close();
     }

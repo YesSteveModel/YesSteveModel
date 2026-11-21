@@ -18,22 +18,27 @@ import java.util.function.BooleanSupplier;
 /**
  * Acquires and validates bytes for descriptors of one content representation.
  *
- * <p>Requires: descriptors come from the matching validated container, and the content owner keeps
- * this source usable for the read. Descriptor validation does not prove that its bytes are available.
+ * <p>
+ * Requires: descriptors come from the matching validated container, and the content owner keeps this source usable for
+ * the read. Descriptor validation does not prove that its bytes are available.
  *
- * <p>Ownership: returned shared buffers retain their backing independently and must not be modified.
- * Source handles and read phases have separate close obligations; a metadata view does not own them.
+ * <p>
+ * Ownership: returned shared buffers retain their backing independently and must not be modified. Source handles and
+ * read phases have separate close obligations; a metadata view does not own them.
  *
- * <p>Failure: access, content, and cancellation failures remain distinct. A failed read is not an
- * empty payload and does not authorize deleting stored content. Concrete sources define their admission
- * and concurrent-use rules; implementations must not expose unverified bytes through a verified read.
+ * <p>
+ * Failure: access, content, and cancellation failures remain distinct. A failed read is not an empty payload and does
+ * not authorize deleting stored content. Concrete sources define their admission and concurrent-use rules;
+ * implementations must not expose unverified bytes through a verified read.
  *
- * <p>Seam: implements [per-chunk validation](docs/architecture/asset-pipeline/overview.md#分层验证与发布) after metadata admission.
+ * <p>
+ * Seam: implements [per-chunk validation](docs/architecture/asset-pipeline/overview.md#分层验证与发布) after metadata
+ * admission.
  */
 public interface ChunkDataSource {
     /**
-     * Opens a caller-owned lexical read phase. Close it after the last read; phase closure does not
-     * revoke already returned shared buffers. A failed phase must not be reused for another read.
+     * Opens a caller-owned lexical read phase. Close it after the last read; phase closure does not revoke already
+     * returned shared buffers. A failed phase must not be reused for another read.
      */
     default ReadPhase openReadPhase() throws IOException {
         return new ReadPhase() {
@@ -107,8 +112,8 @@ public interface ChunkDataSource {
     }
 
     /**
-     * Returns non-null shared decoded or direct media bytes after size/hash checks for this descriptor.
-     * Media payload validity still belongs to its decoder; consumers do not mutate the returned bytes.
+     * Returns non-null shared decoded or direct media bytes after size/hash checks for this descriptor. Media payload
+     * validity still belongs to its decoder; consumers do not mutate the returned bytes.
      */
     SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException;
 
@@ -133,9 +138,9 @@ public interface ChunkDataSource {
     }
 
     /**
-     * Returns one shared payload per chunk type; equivalent duplicates coalesce and conflicting
-     * descriptors fail. No partial map is returned on failure. The map belongs to the caller and its
-     * buffer values remain shared and read-only by contract.
+     * Returns one shared payload per chunk type; equivalent duplicates coalesce and conflicting descriptors fail. No
+     * partial map is returned on failure. The map belongs to the caller and its buffer values remain shared and
+     * read-only by contract.
      */
     default Map<String, SharedBuffer> readPayloads(BooleanSupplier cancelled,
         Collection<AssetContainerView.ChunkInfo> chunks, BufferType bufferType) throws IOException {

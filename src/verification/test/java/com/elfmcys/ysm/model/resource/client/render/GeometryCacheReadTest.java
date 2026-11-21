@@ -17,7 +17,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.*;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.resources.ResourceLocation;
@@ -45,42 +44,76 @@ class GeometryCacheReadTest {
                 var definition =
                     content.modelFile().requireRenderTarget("player").readDefinition(() -> false, content.chunks());
                 var geometry = ModelRenderTargetLoader.geoModel(definition, "main");
-                var shared = new AtomicSharedCache(root.resolve("geometry"));
+                var shared = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                    .track(new AtomicSharedCache(root.resolve("geometry")));
                 var cache = new BakedModelCache(root.resolve("geometry"), shared);
                 var textureHash = new byte[32];
                 var id = representation.containerId();
                 var expected = BakedModelCache.bakeHash(id, "main", textureHash);
-                var target = cache.path(id, expected);
-                Files.createDirectories(target.getParent());
                 var locators = new Locators();
-                try (var input = ArrayBuffer.move(ProtoUtil.serializeToArray(geometry));
-                    var pixels = NativeBuffer.allocate(64 * 64 * 4)) {
-                    for (int offset = 0; offset < pixels.size(); offset += 8)
-                        pixels.nio().putLong(offset, -1L);
-                    var baked = NativeBakedModel.bake(input, geometry.bones().size(), pixels, 64, 64, 29, false);
-                    try (var nativeModel = baked.bakedModel(); var serialized = nativeModel.serialize()) {
-                        try (var writer = new BakedModelWriter(); var channel =
-                            Files.newByteChannel(target, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
-                            writer.setData(expected.bytes(), geometry, serialized);
-                            writer.write(channel);
+                var index = shared.bakeIndex();
+                final Path target;
+                try (var staging = shared.reserve(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.BAKE)) {
+                    try (var input = ArrayBuffer.move(ProtoUtil.serializeToArray(geometry));
+                        var pixels = NativeBuffer.allocate(64 * 64 * 4)) {
+                        for (int offset = 0; offset < pixels.size(); offset += 8)
+                            pixels.nio().putLong(offset, -1L);
+                        var baked = NativeBakedModel.bake(input, geometry.bones().size(), pixels, 64, 64, 29, false);
+                        try (var nativeModel = baked.bakedModel(); var serialized = nativeModel.serialize()) {
+                            try (var writer = new BakedModelWriter()) {
+                                writer.setData(expected.bytes(), geometry, serialized);
+                                writer.write(staging.file());
+                            }
                         }
                     }
+                    target = staging.publish(file -> true, move -> {
+                        move.run();
+                        index.publish(cache.key(id, expected), staging.location());
+                    });
                 }
                 var valid = Files.readAllBytes(target);
                 CheckedAction ordinary = () -> {
                     try (var model = cache.loadOrBake(id, "main", textureHash, geometry, () -> {
                         throw new AssertionError("A warm hit must not produce geometry");
                     }, 29, false, false, false, locators)) {
-                        assertTrue(model.bakedModel().storageBytes().backing() > 0, "Missing geometry");
+                        var retained = model.bakedModel();
+                        assertThrows(IllegalStateException.class, retained::close);
+                        model.close();
+                        try (var serialized = retained.serialize()) {
+                            assertTrue(serialized.size() > 0, "Retiring a consumer destroyed warm geometry");
+                            assertTrue(retained.storageBytes().backing() > 0, "Missing geometry");
+                            assertEquals(serialized.size(), retained.storageBytes().serialization());
+                        }
                     }
                 };
                 CheckedAction cacheOnly = () -> {
                     try (var model = cache.loadExisting(id, "main", textureHash, locators)) {
+                        if (model == null)
+                            throw new IOException("Geometry cache missed");
                         assertTrue(model.bakedModel().storageBytes().backing() > 0, "Missing cache-only geometry");
                     }
                 };
                 var normal = observe(null, null, ordinary);
                 var offline = observe(null, null, cacheOnly);
+                if (Boolean.getBoolean("ysm.cacheReadProbe")) {
+                    for (var failure : List.of("missing", "access", "io", "interrupted", "closed", "close", "cancelled",
+                        "oom", "defect")) {
+                        com.elfmcys.ysm.testutil.CacheReadFaults.set(target, failure);
+                        try {
+                            switch (failure) {
+                                case "missing", "access", "io" ->
+                                    assertNull(cache.loadExisting(id, "main", textureHash, locators));
+                                case "cancelled" ->
+                                    assertThrows(java.util.concurrent.CancellationException.class, ordinary::run);
+                                case "oom" -> assertThrows(OutOfMemoryError.class, ordinary::run);
+                                case "defect" -> assertThrows(IllegalStateException.class, ordinary::run);
+                                default -> assertThrows(IOException.class, ordinary::run);
+                            }
+                        } finally {
+                            com.elfmcys.ysm.testutil.CacheReadFaults.set(target, null);
+                        }
+                    }
+                }
                 for (var sample : List.of(normal, offline))
                     assertAll("A hit must parse, acquire, hash and decode exactly once",
                         () -> assertEquals(1, sample.metadata), () -> assertEquals(1, sample.payload),
@@ -88,10 +121,15 @@ class GeometryCacheReadTest {
 
                 var differentTexture = textureHash.clone();
                 differentTexture[0] = 1;
-                var different = cache.path(id, BakedModelCache.bakeHash(id, "main", differentTexture));
-                Files.write(different, valid);
-                observe(null, null,
-                    () -> expectFailure(() -> cache.loadExisting(id, "main", differentTexture, locators)));
+                try (var other = shared.reserve(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.BAKE)) {
+                    other.file().writeBytes(valid);
+                    other.publish(file -> true, move -> {
+                        move.run();
+                        index.publish(cache.key(id, BakedModelCache.bakeHash(id, "main", differentTexture)),
+                            other.location());
+                    });
+                }
+                observe(null, null, () -> assertNull(cache.loadExisting(id, "main", differentTexture, locators)));
 
                 var corrupt = valid.clone();
                 corrupt[corrupt.length - 1] ^= 1;
@@ -142,25 +180,26 @@ class GeometryCacheReadTest {
                 var held = new CountDownLatch(1);
                 var release = new CountDownLatch(1);
                 var coldHash = BakedModelCache.bakeHash(id, "cold", textureHash);
-                var coldPath = cache.path(id, coldHash);
-                var holder =
-                    CompletableFuture.runAsync(() -> io(() -> shared.withKeyLock("baked", id + "/" + coldHash, () -> {
-                        held.countDown();
-                        try {
-                            if (!release.await(20, TimeUnit.SECONDS))
-                                throw new IOException("Derived storage barrier timed out");
-                        } catch (InterruptedException failure) {
-                            throw new IOException(failure);
-                        }
-                        return null;
-                    })));
+
+                var blocker = shared.derivedWork().submit(gate -> {
+                    held.countDown();
+                    try {
+                        if (!release.await(20, TimeUnit.SECONDS))
+                            throw new IOException("Derived storage barrier timed out");
+                    } catch (InterruptedException failure) {
+                        throw new IOException(failure);
+                    }
+                    gate.commit(() -> {
+                    });
+                });
                 assertTrue(held.await(5, TimeUnit.SECONDS), "The real same-key lock was not acquired");
                 try (var pixels = new com.mojang.blaze3d.platform.NativeImage(64, 64, false)) {
                     pixels.fillRect(0, 0, 64, 64, -1);
                     try (var cold = cache.loadOrBake(id, "cold", textureHash, geometry, () -> pixels, 29, false, false,
                         false, locators)) {
-                        assertFalse(Files.exists(coldPath), "Blocked storage committed before release");
-                        assertEquals(1, shared.derivedWork().snapshot().jobs(), "Cold geometry was not admitted");
+                        assertTrue(index.find(cache.key(id, coldHash)).isEmpty(),
+                            "Blocked storage committed before release");
+                        assertEquals(2, shared.derivedWork().snapshot().jobs(), "Cold geometry was not admitted");
                         var retained = cold.bakedModel();
                         cold.close();
                         try (var usable = retained.serialize()) {
@@ -169,7 +208,6 @@ class GeometryCacheReadTest {
                     }
                 } finally {
                     release.countDown();
-                    holder.get(5, TimeUnit.SECONDS);
                     shared.derivedWork().awaitIdle();
                 }
                 try (var reopened = cache.loadExisting(id, "cold", textureHash, locators)) {

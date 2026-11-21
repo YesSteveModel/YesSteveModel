@@ -17,17 +17,12 @@ import java.util.UUID;
 final class AssetDirectoryProbe {
     private AssetDirectoryProbe() {}
 
-    enum Operation {
+    private enum Operation {
         SELECT, LOCATION, CREATE, LIST, WRITE, READ, DELETE, ATOMIC_REPLACE, LOCK, IDENTITY
     }
 
-    @FunctionalInterface
-    interface Hook {
-        void before(Operation operation, Path path) throws IOException;
-    }
-
     static AssetPaths discover(Path game, Path config, Path builtin, Map<String, String> environment,
-        AssetDirectoryPlatform.Kind platform, AssetDirectoryPlatform.MacDirectories mac, Hook hook) {
+        AssetDirectoryPlatform.Kind platform, AssetDirectoryPlatform.MacDirectories mac) {
         var diagnostics = new ArrayList<AssetPaths.Diagnostic>();
         var gameRoot = game.toAbsolutePath().normalize();
         var candidates = new ArrayList<Candidate>();
@@ -83,7 +78,7 @@ final class AssetDirectoryProbe {
                 continue;
             }
             try {
-                var global = probe(candidate, gameRoot, hook, diagnostics);
+                var global = probe(candidate, gameRoot, diagnostics);
                 return new AssetPaths(gameRoot, config, builtin, global, diagnostics);
             } catch (ProbeFailure error) {
                 diagnostics
@@ -105,13 +100,12 @@ final class AssetDirectoryProbe {
         return value.normalize();
     }
 
-    private static AssetPaths.GlobalDirectories probe(Candidate candidate, Path game, Hook hook,
+    private static AssetPaths.GlobalDirectories probe(Candidate candidate, Path game,
         List<AssetPaths.Diagnostic> diagnostics) throws ProbeFailure {
-        var roots =
-            List.of(candidate.data, candidate.data.resolve("custom"), candidate.data.resolve("auth"), candidate.cache);
+        var roots = List.of(candidate.data, candidate.data.resolve("models"), candidate.cache);
         var observedRoots = new ArrayList<RootObservation>();
         for (var root : roots) {
-            run(Operation.LOCATION, root, hook, () -> {
+            run(Operation.LOCATION, root, () -> {
                 var realGame = DirectoryAccess.prospectiveRealPath(game);
                 if (root.startsWith(game) || DirectoryAccess.prospectiveRealPath(root).startsWith(realGame)) {
                     throw new IOException("Global directory is inside the game directory: " + root);
@@ -119,8 +113,8 @@ final class AssetDirectoryProbe {
             });
         }
         for (var root : roots) {
-            run(Operation.CREATE, root, hook, () -> DirectoryAccess.ensureDirectory(root));
-            run(Operation.LOCATION, root, hook, () -> {
+            run(Operation.CREATE, root, () -> DirectoryAccess.ensureDirectory(root));
+            run(Operation.LOCATION, root, () -> {
                 var real = root.toRealPath();
                 if (real.startsWith(DirectoryAccess.prospectiveRealPath(game))) {
                     throw new IOException("Global directory moved inside the game directory: " + root);
@@ -128,18 +122,17 @@ final class AssetDirectoryProbe {
                 var key = FileIdentity.read(real);
                 observedRoots.add(new RootObservation(root, real, key));
             });
-            probeDirectory(root, hook, diagnostics);
+            probeDirectory(root, diagnostics);
         }
         final CacheDirectoryGuard guard;
         try {
-            hook.before(Operation.IDENTITY, candidate.cache);
             guard = CacheDirectoryGuard.open(candidate.cache);
         } catch (IOException | RuntimeException error) {
             throw new ProbeFailure(Operation.IDENTITY, candidate.cache, error);
         }
-        probeSharedStorage(guard, hook, diagnostics);
+        probeSharedStorage(guard, diagnostics);
         for (var observed : observedRoots) {
-            run(Operation.IDENTITY, observed.logical, hook, () -> {
+            run(Operation.IDENTITY, observed.logical, () -> {
                 if (!observed.real.equals(observed.logical.toRealPath())
                     || !observed.key.equals(FileIdentity.read(observed.real))) {
                     throw new IOException("Global directory changed during startup: " + observed.logical);
@@ -149,8 +142,7 @@ final class AssetDirectoryProbe {
         return new AssetPaths.GlobalDirectories(candidate.data, guard.root(), guard);
     }
 
-    private static void probeDirectory(Path directory, Hook hook, List<AssetPaths.Diagnostic> diagnostics)
-        throws ProbeFailure {
+    private static void probeDirectory(Path directory, List<AssetPaths.Diagnostic> diagnostics) throws ProbeFailure {
         var temporary = directory.resolve(".ysm-probe-" + UUID.randomUUID());
         var bytes = UUID.randomUUID().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
         DirectoryAccess capability = null;
@@ -159,12 +151,11 @@ final class AssetDirectoryProbe {
         try {
             capability = DirectoryAccess.open(directory.toRealPath());
             var held = capability;
-            run(Operation.LIST, directory, hook, held::names);
-            hook.before(Operation.CREATE, temporary);
+            run(Operation.LIST, directory, held::names);
             try (var channel = held.file(temporary.getFileName().toString(), true, true, true)) {
                 ownedKey = held.fileIdentity(temporary.getFileName().toString());
-                run(Operation.WRITE, temporary, hook, () -> write(channel, bytes));
-                run(Operation.READ, temporary, hook, () -> check(channel, bytes));
+                run(Operation.WRITE, temporary, () -> write(channel, bytes));
+                run(Operation.READ, temporary, () -> check(channel, bytes));
             }
         } catch (ProbeFailure error) {
             failure = error;
@@ -175,7 +166,7 @@ final class AssetDirectoryProbe {
                 var expectedKey = ownedKey;
                 var held = capability;
                 try {
-                    run(Operation.DELETE, temporary, hook,
+                    run(Operation.DELETE, temporary,
                         () -> held.delete(temporary.getFileName().toString(), expectedKey, false));
                 } catch (ProbeFailure cleanup) {
                     diagnostics.add(new AssetPaths.Diagnostic("DELETE", temporary, cleanup.getCause().toString()));
@@ -195,8 +186,8 @@ final class AssetDirectoryProbe {
             throw failure;
     }
 
-    private static void probeSharedStorage(CacheDirectoryGuard guard, Hook hook,
-        List<AssetPaths.Diagnostic> diagnostics) throws ProbeFailure {
+    private static void probeSharedStorage(CacheDirectoryGuard guard, List<AssetPaths.Diagnostic> diagnostics)
+        throws ProbeFailure {
         var files = new ArrayList<OwnedProbe>();
         ProbeFailure failure = null;
         DirectoryAccess parent = null;
@@ -205,28 +196,24 @@ final class AssetDirectoryProbe {
         try {
             parent = guard.observe(guard.root().resolve(".guard"), false).acquire();
             var prefix = ".ysm-probe-" + UUID.randomUUID();
-            var target = create(guard, parent, prefix + "-target", oldBytes, files, hook);
-            var staging = create(guard, parent, prefix + "-staging", newBytes, files, hook);
-            run(Operation.ATOMIC_REPLACE, target.path(), hook, () -> {
+            var target = create(guard, parent, prefix + "-target", oldBytes, files);
+            var staging = create(guard, parent, prefix + "-staging", newBytes, files);
+            run(Operation.ATOMIC_REPLACE, target.path(), () -> {
                 target.verify();
                 staging.verify();
                 staging.parent.move(staging.name, staging.key, target.parent, target.name);
                 target.key = staging.key;
                 staging.key = null;
             });
-            run(Operation.READ, target.path(), hook, () -> {
+            run(Operation.READ, target.path(), () -> {
                 target.verify();
                 try (var channel = target.parent.file(target.name, false, false, false)) {
                     check(channel, newBytes);
                 }
             });
-            var lockFile = create(guard, parent, prefix + "-lock", new byte[0], files, hook);
-            run(Operation.LOCK, lockFile.path(), hook, () -> {
-                lockFile.verify();
-                try (var channel = lockFile.parent.file(lockFile.name, true, false, false);
-                    var lock = channel.tryLock()) {
-                    if (lock == null || !lock.isValid())
-                        throw new IOException("OS file lock unavailable");
+            run(Operation.LOCK, guard.root(), () -> {
+                try (var cancelled = com.elfmcys.ysm.natives.NativeCancellation.create()) {
+                    com.elfmcys.ysm.natives.storage.StorageProbe.check(guard.root(), cancelled);
                 }
             });
         } catch (ProbeFailure error) {
@@ -238,7 +225,7 @@ final class AssetDirectoryProbe {
                 if (file.key == null)
                     continue;
                 try {
-                    run(Operation.DELETE, file.path(), hook, () -> file.parent.delete(file.name, file.key, false));
+                    run(Operation.DELETE, file.path(), () -> file.parent.delete(file.name, file.key, false));
                 } catch (ProbeFailure cleanup) {
                     diagnostics.add(new AssetPaths.Diagnostic("DELETE", file.path(), cleanup.getCause().toString()));
                     if (failure == null)
@@ -258,15 +245,14 @@ final class AssetDirectoryProbe {
     }
 
     private static OwnedProbe create(CacheDirectoryGuard guard, DirectoryAccess parent, String name, byte[] bytes,
-        List<OwnedProbe> owned, Hook hook) throws ProbeFailure {
+        List<OwnedProbe> owned) throws ProbeFailure {
         var path = parent.label().resolve(name);
         try {
-            hook.before(Operation.CREATE, path);
             try (var channel = parent.file(name, true, true, true)) {
                 var created = new OwnedProbe(guard, parent, name, parent.fileIdentity(name));
                 owned.add(created);
-                run(Operation.WRITE, path, hook, () -> write(channel, bytes));
-                run(Operation.READ, path, hook, () -> check(channel, bytes));
+                run(Operation.WRITE, path, () -> write(channel, bytes));
+                run(Operation.READ, path, () -> check(channel, bytes));
                 return created;
             }
         } catch (IOException | RuntimeException error) {
@@ -294,9 +280,8 @@ final class AssetDirectoryProbe {
             throw new IOException("Probe content mismatch");
     }
 
-    private static void run(Operation operation, Path path, Hook hook, IoOperation action) throws ProbeFailure {
+    private static void run(Operation operation, Path path, IoOperation action) throws ProbeFailure {
         try {
-            hook.before(operation, path);
             action.run();
         } catch (IOException | RuntimeException error) {
             throw new ProbeFailure(operation, path, error);

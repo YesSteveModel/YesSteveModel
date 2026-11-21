@@ -12,28 +12,25 @@ import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
 
 public class ProjectileModelResources implements RenderTargetResources {
     private final GeoModel model;
-    private final AnimationStore animations;
-    private final Object2ReferenceMap<String, AnimationControllerData> controllers;
+    private final AnimationStore.View animations;
     private final BiConsumer<CustomProjectileEntity, AnimationData> controllerFactory;
 
-    public ProjectileModelResources(GeoModel model, AnimationStore animations,
-        Object2ReferenceMap<String, AnimationControllerData> controllers, CommonAsset assets) {
+    public ProjectileModelResources(GeoModel model, AnimationStore.View animations) {
         this.model = model;
         this.animations = animations;
-        this.controllers = controllers;
-        this.controllerFactory = ProjectileControllerCollection.build(this, assets);
+        this.controllerFactory = ProjectileControllerCollection.build(this);
     }
 
     public GeoModel model() {
         return model;
     }
 
-    public AnimationStore animations() {
+    public AnimationStore.View animations() {
         return animations;
     }
 
     public Object2ReferenceMap<String, AnimationControllerData> controllers() {
-        return controllers;
+        return animations.controllers();
     }
 
     public BiConsumer<CustomProjectileEntity, AnimationData> controllerFactory() {

@@ -12,12 +12,15 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * Converts one frozen raw source into a staged current container.
+ * Converts stable raw inputs or independently owned captures into a staged current container.
  *
- * <p>Execution: capture and conversion perform synchronous I/O. A capture must remain open and be
- * exclusively available to its compilation; the caller owns the output directory and staging lifetime.
+ * <p>
+ * Execution: capture and conversion perform synchronous I/O. A capture must remain open and be exclusively available to
+ * its compilation; the caller owns the output directory and staging lifetime.
  *
- * <p>Seam: implements [frozen conversion](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换); storage revalidation and publication remain with the receiving owner.
+ * <p>
+ * Seam: implements [frozen conversion](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换); storage revalidation
+ * and publication remain with the receiving owner.
  */
 public final class RawModelImporter {
     private final DefaultAnimationFilter defaultAnimations;
@@ -47,18 +50,38 @@ public final class RawModelImporter {
         }
     }
 
+    /** Borrows caller-owned short staging without creating an intermediate cache file. */
+    public RawCompileResult convert(CapturedModel captured,
+        com.elfmcys.ysm.model.storage.AtomicSharedCache.Staging output) {
+        var compiled = ModelParser.compile(captured.data().asVirtualFileSystem(), output.file(), output.path(),
+            defaultAnimations, captured.originVer());
+        if (!captured.modelId().equals(compiled.modelHash()) || !captured.diagnostics().equals(compiled.diagnostics()))
+            throw new IllegalStateException("Captured and compiled model facts do not match");
+        return compiled;
+    }
+
+    /** Borrows a stable VFS until the synchronous parse completes; no capture or preliminary parse occurs. */
+    public RawCompileResult convert(com.elfmcys.ysm.format.vfs.VirtualFileSystem source,
+        com.elfmcys.ysm.model.storage.AtomicSharedCache.Staging output) {
+        return ModelParser.compile(source, output.file(), output.path(), defaultAnimations,
+            com.elfmcys.ysm.format.schema.model.ModelOriginVersion.CURRENT_RELEASE);
+    }
+
     /**
      * Borrows captured and directory to write a fresh staging entry, checking scan/compile identity and diagnostics.
      *
-     * <p>Ensures: normal return transfers the completed staging path to the caller, not a published or
-     * revalidated storage object. The capture and directory remain caller-owned.
+     * <p>
+     * Ensures: normal return transfers the completed staging path to the caller, not a published or revalidated storage
+     * object. The capture and directory remain caller-owned.
      *
-     * <p>Failure: attempts to remove only this call's identified staging entry. I/O is reported as
-     * unchecked I/O failure; cleanup failure is retained. Existing source and committed objects are not replaced.
+     * <p>
+     * Failure: attempts to remove only this call's identified staging entry. I/O is reported as unchecked I/O failure;
+     * cleanup failure is retained. Existing source and committed objects are not replaced.
      */
     public RawCompileResult convert(CapturedModel captured, com.elfmcys.ysm.util.DirectoryAccess directory) {
         Objects.requireNonNull(captured, "captured");
-        var name = captured.modelId() + "-" + java.util.UUID.randomUUID() + ".mxc";
+        var name = com.elfmcys.ysm.model.storage.ModelHashing.blake3(captured.modelId().bytes()) + "-"
+            + java.util.UUID.randomUUID() + ".mxc";
         Object identity = null;
         try (var output = directory.file(name, true, true, true)) {
             identity = directory.fileIdentity(name);

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.dispatch;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.network.ProtocolBuffer;
 import com.elfmcys.ysm.network.frame.FrameCodec;
@@ -16,8 +17,7 @@ class MissingPreviewPacketTest {
     void compressibleCompleteQueryStillUsesOneFrame() {
         var entries = new java.util.ArrayList<MissingPreviewEntryProto>();
         for (var index = 0; index < 12; index++) {
-            entries.add(
-                entry(index + 1).toBuilder().setHierarchyPath("local:custom/fixture/" + "a".repeat(4_000)).build());
+            entries.add(entry(index + 1).toBuilder().setHierarchyPath("local:fixture/" + "a".repeat(4_000)).build());
         }
         var combined = MissingPreviewFragmentProto.newBuilder().setDataTransferId(1).setSequence(0)
             .setFinalFragment(true).addAllEntries(entries).build();
@@ -42,7 +42,7 @@ class MissingPreviewPacketTest {
             var bytes = new byte[320];
             random.nextBytes(bytes);
             entries.add(entry(index).toBuilder()
-                .setHierarchyPath("local:custom/fixture/" + java.util.HexFormat.of().formatHex(bytes)).build());
+                .setHierarchyPath("local:fixture/" + java.util.HexFormat.of().formatHex(bytes)).build());
         }
         try (var packet = new MissingPreviewPacket(1, entries, () -> {
         }, failure -> fail(failure))) {
@@ -98,7 +98,7 @@ class MissingPreviewPacketTest {
         var container = new byte[32];
         model[0] = (byte)marker;
         container[0] = (byte)(marker + 2);
-        return MissingPreviewEntryProto.newBuilder().setModelId(ByteBuffer.wrap(model))
-            .setContainerId(ByteBuffer.wrap(container)).setHierarchyPath("local:custom/fixture/" + marker).build();
+        return MissingPreviewEntryProto.newBuilder().setModelId("hash:" + java.util.HexFormat.of().formatHex(model))
+            .setContainerId(ByteBuffer.wrap(container)).setHierarchyPath("local:fixture/" + marker).build();
     }
 }

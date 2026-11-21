@@ -21,6 +21,7 @@ class NativeRuntimeMacDirectoriesTest {
         var directories = NativeRuntime.macUserDirectories();
         assertNotNull(directories.applicationSupport());
         assertTrue(directories.applicationSupport().isAbsolute());
-        if (directories.caches() != null) assertTrue(directories.caches().isAbsolute());
+        if (directories.caches() != null)
+            assertTrue(directories.caches().isAbsolute());
     }
 }

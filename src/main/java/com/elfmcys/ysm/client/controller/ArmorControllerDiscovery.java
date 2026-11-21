@@ -2,7 +2,7 @@ package com.elfmcys.ysm.client.controller;
 
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.client.entity.IPreviewEntity;
-import com.elfmcys.ysm.model.resource.client.CommonAsset;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.model.resource.client.PlayerModelResources;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -28,18 +28,18 @@ public class ArmorControllerDiscovery<T extends AnimatableEntity<?>>
     }
 
     @Override
-    public ControllerFactory<T> process(PlayerModelResources playerResources, CommonAsset assets,
-        com.elfmcys.ysm.model.resource.client.AnimationStore animations) {
+    public ControllerFactory<T> process(PlayerModelResources playerResources, AnimationStore.View animations) {
         List<Pair<String, EquipmentSlot>> slots = new ArrayList<>();
-        var condition = resourceAdapter.getArmorCondition(playerResources, assets);
-        var controllers = resourceAdapter.getControllers(playerResources, assets);
+        var condition = resourceAdapter.getArmorCondition(playerResources);
+        var controllers = resourceAdapter.getControllers(playerResources);
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             var controllerName = String.format("%s.%s_%s", category, name, slot.getName());
             if (controllers.containsKey(controllerName)) {
                 slots.add(Pair.of(controllerName, slot));
                 continue;
             }
-            if (assets.eventHandlers().containsKey(String.format("%s_ctrl_%s_%s", category, name, slot.getName()))) {
+            if (animations.eventHandlers()
+                .containsKey(String.format("%s_ctrl_%s_%s", category, name, slot.getName()))) {
                 slots.add(Pair.of(controllerName, slot));
                 continue;
             }

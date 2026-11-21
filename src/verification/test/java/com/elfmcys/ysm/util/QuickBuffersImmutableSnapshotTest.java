@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.util;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationFileProto;
@@ -59,14 +60,14 @@ class QuickBuffersImmutableSnapshotTest {
         var backing = new byte[] {9, 1, 2, 3, 8};
         var source = ByteBuffer.wrap(backing);
         source.position(1).limit(4);
-        var value = PropertiesProto.newBuilder().setModelId(source).setFree(false).setOriginVer("1.0").build();
+        var value = com.elfmcys.ysm.proto.network.MetadataPrefixFragmentProto.newBuilder().setPayload(source).build();
         var wire = ProtoUtil.serializeToArray(value);
 
         backing[1] = 7;
         source.position(3);
 
-        var first = value.modelId();
-        var second = value.modelId();
+        var first = value.payload();
+        var second = value.payload();
         assertTrue(first.isReadOnly());
         assertEquals(0, first.position());
         assertEquals(3, first.limit());
@@ -79,7 +80,8 @@ class QuickBuffersImmutableSnapshotTest {
 
     @Test
     void parseCopiesBytesBeforeTheInputOwnerAndCursorAreReleased() throws Exception {
-        var original = PropertiesProto.newBuilder().setModelId(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})).setFree(true)
+        var original = PropertiesProto.newBuilder()
+            .setModelId("hash:" + java.util.HexFormat.of().formatHex(new byte[] {1, 2, 3, 4})).setFree(true)
             .setOriginVer("2.0").build();
         var wire = ProtoUtil.serializeToArray(original);
         PropertiesProto parsed;
@@ -92,7 +94,7 @@ class QuickBuffersImmutableSnapshotTest {
 
         Arrays.fill(wire, (byte)0);
 
-        assertArrayEquals(new byte[] {1, 2, 3, 4}, ProtoBytes.copy(parsed.modelId()));
+        assertEquals("hash:01020304", parsed.modelId());
         assertEquals("2.0", parsed.originVer());
         assertTrue(parsed.free());
     }

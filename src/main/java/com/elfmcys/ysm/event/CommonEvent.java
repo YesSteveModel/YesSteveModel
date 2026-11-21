@@ -6,7 +6,6 @@ import com.elfmcys.ysm.capability.ModelInfoCapability;
 import com.elfmcys.ysm.capability.PlayerAnimatableCapability;
 import com.elfmcys.ysm.capability.ProjectileAnimatableCapability;
 import com.elfmcys.ysm.capability.ProjectileModelInfoCapability;
-import com.elfmcys.ysm.capability.StarModelsCapability;
 import com.elfmcys.ysm.capability.VehicleAnimatableCapability;
 import com.elfmcys.ysm.capability.VehicleModelInfoCapability;
 import com.elfmcys.ysm.model.ModelRuntime;
@@ -45,7 +44,6 @@ public final class CommonEvent {
         event.register(ProjectileModelInfoCapability.class);
         event.register(VehicleModelInfoCapability.class);
         event.register(AuthModelsCapability.class);
-        event.register(StarModelsCapability.class);
         if (FMLEnvironment.dist == Dist.CLIENT) {
             event.register(PlayerAnimatableCapability.class);
             event.register(ProjectileAnimatableCapability.class);

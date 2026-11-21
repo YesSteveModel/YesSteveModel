@@ -1,8 +1,10 @@
 package com.elfmcys.ysm.client.gui;
 
+import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.expression.host.ExpressionBinding;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.resource.client.*;
 import com.elfmcys.ysm.util.UnsafeUtil;
 import org.junit.jupiter.api.Test;
@@ -183,7 +185,7 @@ class PlayerModelNavigationTest {
             if (readyPurpose == null)
                 return null;
             try {
-                lease = new Lease(readyPurpose, model(request.modelId()));
+                lease = new Lease(readyPurpose, model(((PublishedModelId.Model)request.modelId()).hash()));
                 return lease;
             } catch (Exception error) {
                 throw new AssertionError(error);
@@ -273,13 +275,13 @@ class PlayerModelNavigationTest {
         }
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[32];
         bytes[0] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
-    private static ModelRenderTarget model(Hash256 hash) throws Exception {
+    private static ModelRenderTarget model(ModelId hash) throws Exception {
         var model = (ModelRenderTarget)UnsafeUtil.getUnsafe().allocateInstance(ModelRenderTarget.class);
         field(ModelRenderTarget.class, "modelHash").set(model, hash);
         return model;

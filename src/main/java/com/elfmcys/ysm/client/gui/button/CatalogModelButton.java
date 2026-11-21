@@ -1,7 +1,6 @@
 package com.elfmcys.ysm.client.gui.button;
 
 import com.elfmcys.ysm.YesSteveModel;
-import com.elfmcys.ysm.capability.StarModelsCapabilityProvider;
 import com.elfmcys.ysm.client.event.RegisterEntityRenderersEvent;
 import com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
@@ -10,7 +9,7 @@ import com.elfmcys.ysm.model.catalog.client.entry.CatalogModelMetadata;
 import com.elfmcys.ysm.model.catalog.client.entry.ClientCatalogEntry;
 import com.elfmcys.ysm.client.texture.TextureHolder;
 import com.elfmcys.ysm.config.ClientConfig;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.util.ModelIdUtil;
 import com.elfmcys.ysm.util.RenderUtil;
 import com.mojang.blaze3d.platform.Window;
@@ -61,7 +60,7 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
         this.state = new CatalogModelCardState(frame, page, entry, metadata, entity);
     }
 
-    public Hash256 modelHash() {
+    public ModelId modelHash() {
         return entry.modelHash();
     }
 
@@ -173,8 +172,8 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
         RenderSystem.enableScissor((int)(getX() * scale), (int)(window.getHeight() - ((getY() + height - 20) * scale)),
             (int)(width * scale), (int)((height - 20) * scale));
         try {
-            RenderUtil.renderPreparedModelInGui(getX() + width / 2.0F, getY() + height / 2.0F + 20.0F, 30.0F,
-                entity, RegisterEntityRenderersEvent.getPlayerRenderer(), state.frameInput(), state.prepared());
+            RenderUtil.renderPreparedModelInGui(getX() + width / 2.0F, getY() + height / 2.0F + 20.0F, 30.0F, entity,
+                RegisterEntityRenderersEvent.getPlayerRenderer(), state.frameInput(), state.prepared());
         } finally {
             RenderSystem.disableScissor();
         }
@@ -227,14 +226,8 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
         if (authorizationRequired.getAsBoolean()) {
             graphics.fillGradient(getX(), getY(), getX() + width, getY() + height, z, 0x9F222222, 0x9F222222);
         }
-        var player = Minecraft.getInstance().player;
-        if (player != null) {
-            player.getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).ifPresent(stars -> {
-                if (stars.containModel(entry.modelHash())) {
-                    graphics.blit(ICON, getX() + width - 14, getY(), z, 16, 0, 16, 16, 256, 256);
-                }
-            });
-        }
+        if (com.elfmcys.ysm.model.service.ClientModelService.instance().preferences().favourite(entry.modelHash()))
+            graphics.blit(ICON, getX() + width - 14, getY(), z, 16, 0, 16, 16, 256, 256);
     }
 
     private static Component name(CatalogModelMetadata metadata) {
@@ -244,7 +237,7 @@ public final class CatalogModelButton extends Button implements AutoCloseable {
 
     @FunctionalInterface
     public interface SelectionHandler {
-        void select(Hash256 hash, String path, String texture, @Nullable ModelRenderTarget renderTarget);
+        void select(ModelId hash, String path, String texture, @Nullable ModelRenderTarget renderTarget);
     }
 
     @FunctionalInterface

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.asset;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.format.parser.DefaultAnimationFilter;
 import com.elfmcys.ysm.format.parser.ModelParser;
@@ -10,7 +11,7 @@ import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogRecord;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.resource.client.remote.RemoteModelContent;
@@ -34,6 +35,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -44,7 +48,7 @@ class PageImagesTest {
     private static Path localModel;
     private static Path richModel;
     private static Path richReplacement;
-    private static Hash256 richModelId;
+    private static ModelId richModelId;
 
     @TempDir
     Path temp;
@@ -54,27 +58,28 @@ class PageImagesTest {
         intrinsic = parse("/assets/ysm/builtin/default/ysm.json", root.resolve("default"), true);
         model = parse("/assets/ysm/builtin/misc/1_alex/ysm.json", root.resolve("model"), false);
         var content =
-            ManagedContainer.openDirect(model, new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("source")));
+            ManagedContainer.openDirect(model, new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("source")));
         try (var preview = TestPreviews.blank()) {
             localModel = ModelExporter.export(content, preview, root.resolve("local.mxc"), null);
         } finally {
             content.representation().close();
         }
         var richSource = parse("/assets/ysm/builtin/wine_fox/22_elf/ysm.json", root.resolve("rich"), false);
-        var richContent = ManagedContainer.openDirect(richSource,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("rich")));
+        var richContent =
+            ManagedContainer.openDirect(richSource, new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("rich")));
         richModelId = richContent.modelId();
         try (var preview = TestPreviews.blank()) {
             richModel = ModelExporter.export(richContent, preview, root.resolve("rich.mxc"), null);
             var raw = java.nio.ByteBuffer.allocate(16 * 16 * 4);
             while (raw.hasRemaining())
                 raw.putInt(0x112141FF);
-            var rgba = new com.elfmcys.ysm.natives.image.Image(com.elfmcys.ysm.natives.image.Image.Format.RGBA,
-                16, 16, com.elfmcys.ysm.buffer.SharedArrayBuffer.copyOf(
-                    com.elfmcys.ysm.buffer.ArrayBuffer.borrow(raw.array())));
+            var rgba = new com.elfmcys.ysm.natives.image.Image(com.elfmcys.ysm.natives.image.Image.Format.RGBA, 16, 16,
+                com.elfmcys.ysm.buffer.SharedArrayBuffer
+                    .copyOf(com.elfmcys.ysm.buffer.ArrayBuffer.borrow(raw.array())));
             try (var pending = com.elfmcys.ysm.model.storage.PreviewStore.pending(rgba);
-                 var replacement = pending.verify(null, false)) {
-                richReplacement = ModelExporter.export(richContent, replacement, root.resolve("rich-replacement.mxc"), null);
+                var replacement = pending.verify(null, false)) {
+                richReplacement =
+                    ModelExporter.export(richContent, replacement, root.resolve("rich-replacement.mxc"), null);
             }
         } finally {
             richContent.representation().close();
@@ -240,6 +245,87 @@ class PageImagesTest {
     }
 
     @Test
+    void startedEagerDeliveryWaitsForTheBatchCloseDecision() throws Exception {
+        try (var fixture = new Fixture(temp, false); var batch = fixture.repository().openBatch();
+            var encoded = TestPreviews.blank()) {
+            fixture.ignoreCancellation = true;
+            fixture.localCallbackStarted = new CountDownLatch(1);
+            var result = batch.preview(fixture.id);
+            var completion = new FutureTask<>(() -> fixture.local.complete(encoded));
+            var worker = new Thread(completion, "eager-preview-delivery");
+            try {
+                synchronized (batch) {
+                    worker.start();
+                    assertTrue(fixture.localCallbackStarted.await(5, TimeUnit.SECONDS));
+                    awaitDeliveryBoundary(worker, completion, batch);
+                    assertFalse(result.isDone(), "An active close decision must precede eager delivery");
+                    batch.close();
+                    assertTrue(result.isCancelled());
+                }
+            } finally {
+                worker.join(5_000);
+                assertFalse(worker.isAlive(), "Delivery must finish after the close decision");
+            }
+            assertTrue(completion.get(5, TimeUnit.SECONDS));
+            assertThrows(IllegalStateException.class, encoded::bytes);
+        }
+    }
+
+    @Test
+    void closeBeforeEagerDeliveryReleasesOnlyTheBatchImageUse() throws Exception {
+        try (var fixture = new Fixture(temp, false); var batch = fixture.repository().openBatch();
+            var encoded = TestPreviews.blank(); var pixels = new com.elfmcys.ysm.model.storage.PreviewPixels.Owner()) {
+            fixture.ignoreCancellation = true;
+            encoded.preparePixels(pixels);
+            try (var consumer = encoded.acquire(); var retainedPixels = consumer.takePixels()) {
+                var result = batch.preview(fixture.id);
+                batch.close();
+                assertTrue(fixture.local.complete(encoded));
+                assertTrue(result.isCancelled());
+                assertThrows(IllegalStateException.class, encoded::bytes);
+                assertTrue(consumer.bytes().length > 0);
+                retainedPixels.borrow(data -> assertTrue(data.hasRemaining()));
+                batch.close();
+            }
+        }
+    }
+
+    @Test
+    void eagerDeliveryAllowsItsCompletionCallbackToCloseTheBatch() throws Exception {
+        try (var fixture = new Fixture(temp, false); var batch = fixture.repository().openBatch();
+            var encoded = TestPreviews.blank()) {
+            var result = batch.preview(fixture.id);
+            var closed = result.thenRun(batch::close);
+            assertTrue(fixture.local.complete(encoded));
+            closed.get(5, TimeUnit.SECONDS);
+            assertSame(encoded, assertInstanceOf(PreviewResult.Data.class, result.join()).image());
+            assertThrows(IllegalStateException.class, encoded::bytes);
+            batch.close();
+        }
+    }
+
+    @Test
+    void eagerDeliveryPreservesSynchronousAbsenceFailureAndCancellation() throws Exception {
+        try (var fixture = new Fixture(temp.resolve("absent"), false); var batch = fixture.repository().openBatch()) {
+            fixture.local.complete(null);
+            assertSame(PreviewResult.Absent.INSTANCE, batch.preview(fixture.id).join());
+        }
+        try (var fixture = new Fixture(temp.resolve("failed"), false); var batch = fixture.repository().openBatch()) {
+            var failure = new java.io.IOException("preview failed");
+            fixture.local.completeExceptionally(failure);
+            var result = batch.preview(fixture.id);
+            assertSame(failure, assertThrows(java.util.concurrent.CompletionException.class, result::join).getCause());
+        }
+        try (var fixture = new Fixture(temp.resolve("cancelled"), false); var batch = fixture.repository().openBatch();
+            var encoded = TestPreviews.blank()) {
+            var result = batch.preview(fixture.id);
+            assertTrue(result.cancel(false));
+            fixture.local.complete(encoded);
+            assertThrows(IllegalStateException.class, encoded::bytes);
+        }
+    }
+
+    @Test
     void closeAfterSubmissionPreventsALateProbeMissFromStartingTransfer() throws Exception {
         try (var fixture = new Fixture(temp, true); var page = fixture.page()) {
             var image = page.preview(fixture.id);
@@ -359,7 +445,7 @@ class PageImagesTest {
 
     @Test
     void explicitPublicationFailureStopsTheSlotUntilItsPageEnds() throws Exception {
-        for (boolean upload : new boolean[]{false, true}) {
+        for (boolean upload : new boolean[] {false, true}) {
             try (var fixture = new Fixture(temp.resolve("publication-" + upload), false)) {
                 var images = new ResidentImagesTest.Fixture();
                 images.host.reject = !upload;
@@ -395,7 +481,9 @@ class PageImagesTest {
     @Test
     void independentVersionAndMemberIncarnationRemainSeparateFromTheContentProof() throws Exception {
         try (var fixture = new Fixture(temp, true)) {
-            var store = new com.elfmcys.ysm.model.storage.PreviewStore(temp.resolve("previews"));
+            var store = new com.elfmcys.ysm.model.storage.PreviewStore(temp.resolve("previews"),
+                com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                    .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("previews"))));
             var repository = fixture.repository(store);
             try (var oldBatch = repository.openBatch()) {
                 var old = oldBatch.imageRequest(fixture.id, ModelAssetSelector.preview());
@@ -407,7 +495,8 @@ class PageImagesTest {
                         var current = batch.imageRequest(fixture.id, ModelAssetSelector.preview());
                         assertNotEquals(firstIdentity, current.identity());
                         assertTrue(current.current(null));
-                        assertTrue(old.current(encoded), "Only the operation's qualified replacement can rebase its version");
+                        assertTrue(old.current(encoded),
+                            "Only the operation's qualified replacement can rebase its version");
                         fixture.catalogs.manager().endRemote();
                         assertFalse(old.allowed());
                         assertFalse(current.allowed());
@@ -426,10 +515,12 @@ class PageImagesTest {
     void unpersistedPreviewRemainsUsableWithoutAliasingThePersistentLookupKey() throws Exception {
         try (var fixture = new Fixture(temp, true)) {
             var root = temp.resolve("refused-preview-store");
-            var store = new com.elfmcys.ysm.model.storage.PreviewStore(root,
-                new com.elfmcys.ysm.model.storage.AtomicSharedCache(root, replacement -> {
-                    throw new java.io.IOException("replacement refused");
-                }), ignored -> {});
+            var store =
+                new com.elfmcys.ysm.model.storage.PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                    .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root, replacement -> {
+                        throw new java.io.IOException("replacement refused");
+                    })), ignored -> {
+                    });
             var repository = fixture.repository(store);
             try (var batch = repository.openBatch(); var encoded = TestPreviews.blank()) {
                 var request = batch.imageRequest(fixture.id, ModelAssetSelector.preview());
@@ -442,7 +533,8 @@ class PageImagesTest {
                 }
                 assertNull(images.owner.lookup(request));
                 var delivered = new ImageRequest(ignored -> request.identity(encoded), request::allowed,
-                    ignored -> request.current(encoded), () -> CompletableFuture.completedFuture(new PreviewResult.Data(encoded)));
+                    ignored -> request.current(encoded),
+                    () -> CompletableFuture.completedFuture(new PreviewResult.Data(encoded)));
                 try (var use = images.owner.lookup(delivered)) {
                     assertNotNull(use.texture());
                 }
@@ -453,7 +545,9 @@ class PageImagesTest {
     @Test
     void declaredImagesKeepTheirMemberIndexAndDoNotFollowIndependentReplacements() throws Exception {
         try (var fixture = new Fixture(temp, false)) {
-            var store = new com.elfmcys.ysm.model.storage.PreviewStore(temp.resolve("previews"));
+            var store = new com.elfmcys.ysm.model.storage.PreviewStore(temp.resolve("previews"),
+                com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                    .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("previews"))));
             var repository = fixture.repository(store);
             try (var batch = repository.openBatch()) {
                 var preview = batch.imageRequest(fixture.id, ModelAssetSelector.preview());
@@ -480,8 +574,8 @@ class PageImagesTest {
             var member = new PublicationEntry(fixture.remote.representation().identity(), record.entry().path(),
                 CatalogAccess.PUBLIC, true);
             var publication = new RemotePublicationSnapshot(List.of(member), Set.of(), List.of(fixture.pack), Map.of());
-            var activation = new ActivationSnapshot(publication,
-                Map.of(fixture.id, new ActivationSnapshot.Ready(member, record)));
+            var activation =
+                new ActivationSnapshot(publication, Map.of(fixture.id, new ActivationSnapshot.Ready(member, record)));
             var session = new com.elfmcys.ysm.model.session.client.ClientModelSession(
                 com.elfmcys.ysm.network.session.SessionMode.AUTO, true,
                 com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot.empty());
@@ -530,8 +624,8 @@ class PageImagesTest {
             var denied = new PublicationEntry(fixture.remote.representation().identity(), record.entry().path(),
                 CatalogAccess.PUBLIC, false);
             var publication = new RemotePublicationSnapshot(List.of(denied), Set.of(), List.of(fixture.pack), Map.of());
-            fixture.catalogs.manager().publishSession(new ActivationSnapshot(publication,
-                Map.of(fixture.id, new ActivationSnapshot.Ready(denied, record))));
+            fixture.catalogs.manager().publishSession(
+                new ActivationSnapshot(publication, Map.of(fixture.id, new ActivationSnapshot.Ready(denied, record))));
             assertTrue(request.allowed());
             assertEquals(identity, request.identity());
             fixture.publishRemote();
@@ -541,39 +635,45 @@ class PageImagesTest {
 
     @Test
     void realFourImageSourcesHitThroughRepositoryBeforeReadDecodeConstructionAndHostWork() throws Exception {
-        try (var catalogs = ClientCatalogScenarioHarness.open(temp.resolve("rich-catalog"), intrinsic, List.of(richModel))) {
+        try (var catalogs =
+            ClientCatalogScenarioHarness.open(temp.resolve("rich-catalog"), intrinsic, List.of(richModel))) {
             var reads = new AtomicInteger();
             var downloads = new AtomicInteger();
             var exactCalls = new AtomicInteger();
             java.util.function.Function<com.elfmcys.ysm.model.catalog.content.ModelContent,
                 com.elfmcys.ysm.model.catalog.content.ModelContent> exact = source -> {
-                exactCalls.incrementAndGet();
-                return new com.elfmcys.ysm.model.catalog.content.ModelContent() {
-                    public com.elfmcys.ysm.model.domain.ModelRepresentation representation() { return source.representation(); }
-                    public com.elfmcys.ysm.format.schema.file.ChunkDataSource chunks() {
-                        return new com.elfmcys.ysm.format.schema.file.ChunkDataSource() {
-                            public com.elfmcys.ysm.buffer.SharedBuffer readPayload(
-                                com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
-                                com.elfmcys.ysm.buffer.BufferType type) throws java.io.IOException {
-                                reads.incrementAndGet();
-                                return source.chunks().readPayload(chunk, type);
-                            }
-                            public com.elfmcys.ysm.buffer.SharedBuffer readStoredVerified(
-                                com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
-                                com.elfmcys.ysm.buffer.BufferType type) throws java.io.IOException {
-                                reads.incrementAndGet();
-                                return source.chunks().readStoredVerified(chunk, type);
-                            }
-                        };
-                    }
+                    exactCalls.incrementAndGet();
+                    return new com.elfmcys.ysm.model.catalog.content.ModelContent() {
+                        public com.elfmcys.ysm.model.domain.ModelRepresentation representation() {
+                            return source.representation();
+                        }
+
+                        public com.elfmcys.ysm.format.schema.file.ChunkDataSource chunks() {
+                            return new com.elfmcys.ysm.format.schema.file.ChunkDataSource() {
+                                public com.elfmcys.ysm.buffer.SharedBuffer readPayload(
+                                    com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
+                                    com.elfmcys.ysm.buffer.BufferType type) throws java.io.IOException {
+                                    reads.incrementAndGet();
+                                    return source.chunks().readPayload(chunk, type);
+                                }
+
+                                public com.elfmcys.ysm.buffer.SharedBuffer readStoredVerified(
+                                    com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk,
+                                    com.elfmcys.ysm.buffer.BufferType type) throws java.io.IOException {
+                                    reads.incrementAndGet();
+                                    return source.chunks().readStoredVerified(chunk, type);
+                                }
+                            };
+                        }
+                    };
                 };
-            };
             var repository = new ClientAssetRepository(catalogs.manager(), () -> (members, receiver) -> {
                 downloads.incrementAndGet();
                 return CompletableFuture.failedFuture(new AssertionError("Local sources cannot download"));
             }, exact, null, Runnable::run, source -> {
                 try {
-                    return CompletableFuture.completedFuture(source.modelFile().thumbnailSource(() -> false, source.chunks()));
+                    return CompletableFuture
+                        .completedFuture(source.modelFile().thumbnailSource(() -> false, source.chunks()));
                 } catch (java.io.IOException failure) {
                     return CompletableFuture.failedFuture(failure);
                 }
@@ -582,7 +682,8 @@ class PageImagesTest {
             assertTrue(catalogs.manager().contains(id));
             var images = new ResidentImagesTest.Fixture();
             var codec = Boolean.getBoolean("ysm.previewDecodeProbe");
-            if (codec) com.elfmcys.ysm.model.storage.PreviewDecodeProbe.reset();
+            if (codec)
+                com.elfmcys.ysm.model.storage.PreviewDecodeProbe.reset();
             var first = new PageImages(new ClientAssetBatch(repository.openBatch()), images.owner);
             var second = new PageImages(new ClientAssetBatch(repository.openBatch()), images.owner);
             try (first; second) {
@@ -597,16 +698,19 @@ class PageImagesTest {
                 }
                 assertEquals(4, reads.get());
                 assertEquals(4, images.decodes);
-                if (codec) assertEquals(4, com.elfmcys.ysm.model.storage.PreviewDecodeProbe.count());
-                var before = new int[]{reads.get(), downloads.get(), images.decodes, images.host.constructions,
+                if (codec)
+                    assertEquals(4, com.elfmcys.ysm.model.storage.PreviewDecodeProbe.count());
+                var before = new int[] {reads.get(), downloads.get(), images.decodes, images.host.constructions,
                     images.host.registrations, images.host.uploads, exactCalls.get()};
                 var fresh = fourImages(second, id);
                 first.close();
                 second.advance(ModelResourceDemand.Mode.READY);
-                for (var image : fresh) assertNotNull(image.texture());
-                assertArrayEquals(before, new int[]{reads.get(), downloads.get(), images.decodes, images.host.constructions,
-                    images.host.registrations, images.host.uploads, exactCalls.get()});
-                if (codec) assertEquals(4, com.elfmcys.ysm.model.storage.PreviewDecodeProbe.count());
+                for (var image : fresh)
+                    assertNotNull(image.texture());
+                assertArrayEquals(before, new int[] {reads.get(), downloads.get(), images.decodes,
+                    images.host.constructions, images.host.registrations, images.host.uploads, exactCalls.get()});
+                if (codec)
+                    assertEquals(4, com.elfmcys.ysm.model.storage.PreviewDecodeProbe.count());
             }
             images.host.tick();
             images.host.tick();
@@ -616,12 +720,15 @@ class PageImagesTest {
 
     @Test
     void samePathRepresentationReplacementRevokesOldAccessButPreservesProvedImageContent() throws Exception {
-        try (var catalogs = ClientCatalogScenarioHarness.open(temp.resolve("replaced-path"), intrinsic, List.of(richModel))) {
+        try (var catalogs =
+            ClientCatalogScenarioHarness.open(temp.resolve("replaced-path"), intrinsic, List.of(richModel))) {
             var repository = new ClientAssetRepository(catalogs.manager(), () -> (members, receiver) -> {
                 throw new AssertionError("Identity inspection cannot download");
-            }, java.util.function.Function.identity(), null, Runnable::run,
-                source -> { throw new AssertionError("Identity inspection cannot load"); },
-                source -> { throw new AssertionError("Identity inspection cannot probe"); }, () -> null);
+            }, java.util.function.Function.identity(), null, Runnable::run, source -> {
+                throw new AssertionError("Identity inspection cannot load");
+            }, source -> {
+                throw new AssertionError("Identity inspection cannot probe");
+            }, () -> null);
             try (var before = repository.openBatch()) {
                 var old = before.imageRequest(richModelId,
                     ModelAssetSelector.presentation(ModelAssetSelector.PresentationAsset.GUI_FOREGROUND, 0));
@@ -636,7 +743,8 @@ class PageImagesTest {
                         ModelAssetSelector.presentation(ModelAssetSelector.PresentationAsset.GUI_FOREGROUND, 0));
                     assertTrue(replacement.allowed());
                     assertEquals(old.identity(), replacement.identity());
-                    assertNotEquals(oldPreview.identity(), after.imageRequest(richModelId, ModelAssetSelector.preview()).identity());
+                    assertNotEquals(oldPreview.identity(),
+                        after.imageRequest(richModelId, ModelAssetSelector.preview()).identity());
                 }
             }
         }
@@ -653,16 +761,29 @@ class PageImagesTest {
             assertFalse(independent.current(null));
             assertTrue(declared.allowed());
             try (var replacement = fixture.repository().openBatch()) {
-                assertNotEquals(identity, replacement.imageRequest(fixture.id, ModelAssetSelector.preview()).identity());
+                assertNotEquals(identity,
+                    replacement.imageRequest(fixture.id, ModelAssetSelector.preview()).identity());
             }
         }
     }
 
-    private static List<PageImages.Image> fourImages(PageImages page, Hash256 id) {
-        return List.of(page.preview(id),
-            page.presentation(id, ModelAssetSelector.PresentationAsset.GUI_FOREGROUND, 0),
+    private static List<PageImages.Image> fourImages(PageImages page, ModelId id) {
+        return List.of(page.preview(id), page.presentation(id, ModelAssetSelector.PresentationAsset.GUI_FOREGROUND, 0),
             page.presentation(id, ModelAssetSelector.PresentationAsset.GUI_BACKGROUND, 0),
             page.presentation(id, ModelAssetSelector.PresentationAsset.AUTHOR_AVATAR, 0));
+    }
+
+    private static void awaitDeliveryBoundary(Thread worker, FutureTask<?> completion, Object batch) {
+        var threads = java.lang.management.ManagementFactory.getThreadMXBean();
+        var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!completion.isDone()) {
+            var state = threads.getThreadInfo(worker.getId());
+            if (state != null && state.getThreadState() == Thread.State.BLOCKED && state.getLockInfo() != null
+                && state.getLockInfo().getIdentityHashCode() == System.identityHashCode(batch))
+                return;
+            assertTrue(System.nanoTime() < deadline, "Delivery must reach the batch decision or complete");
+            Thread.yield();
+        }
     }
 
     private static void assertClosed(PageImages.Image image) {
@@ -685,15 +806,29 @@ class PageImagesTest {
         private final ClientCatalogScenarioHarness catalogs;
         private final RemoteModelStore store;
         private final RemoteModelContent remote;
-        private final Hash256 id;
+        private final ModelId id;
         private final ModelPackDescriptor pack;
         private RuntimeException cancellationFailure;
+        private boolean ignoreCancellation;
+        private CountDownLatch localCallbackStarted;
         private final CompletableFuture<ImageSource> local = new CompletableFuture<>() {
             @Override
             public boolean cancel(boolean mayInterruptIfRunning) {
                 if (cancellationFailure != null)
                     throw cancellationFailure;
+                if (ignoreCancellation)
+                    return false;
                 return super.cancel(mayInterruptIfRunning);
+            }
+
+            @Override
+            public CompletableFuture<ImageSource>
+                whenComplete(java.util.function.BiConsumer<? super ImageSource, ? super Throwable> action) {
+                return super.whenComplete((source, failure) -> {
+                    if (localCallbackStarted != null)
+                        localCallbackStarted.countDown();
+                    action.accept(source, failure);
+                });
             }
         };
         private final CompletableFuture<Optional<ImageSource>> probe = new CompletableFuture<>();
@@ -710,7 +845,7 @@ class PageImagesTest {
                 useRemote ? List.of() : List.of(localModel));
             store = new RemoteModelStore(root.resolve("remote"));
             var source = ManagedContainer.openDirect(model,
-                new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("source")));
+                new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("source")));
             try {
                 id = source.modelId();
                 if (useRemote) {
@@ -724,10 +859,10 @@ class PageImagesTest {
             } finally {
                 source.representation().close();
             }
-            pack =
-                new ModelPackDescriptor(CatalogRootKind.CUSTOM, "local:custom/remote", "", "", Map.of(), id, "PNG", 12);
+            pack = new ModelPackDescriptor(CatalogRootKind.MODELS, "local:remote", "", "", Map.of(),
+                Hash256.parse(id.toString().substring(5)), "PNG", 12);
             if (useRemote) {
-                var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("remote/model"));
+                var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("remote/model"));
                 var record = new CatalogRecord(location, new CatalogContentBinding(id, remote));
                 var publication = new PublicationEntry(remote.representation().identity(), record.entry().path(),
                     CatalogAccess.PUBLIC, true);
@@ -744,7 +879,7 @@ class PageImagesTest {
         }
 
         private void publishRemote() {
-            var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("remote/model"));
+            var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("remote/model"));
             var record = new CatalogRecord(location, new CatalogContentBinding(id, remote));
             var publication = new PublicationEntry(remote.representation().identity(), record.entry().path(),
                 CatalogAccess.PUBLIC, true);

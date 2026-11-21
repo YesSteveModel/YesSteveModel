@@ -23,15 +23,18 @@ import java.util.function.BooleanSupplier;
 /**
  * One admitted playback's sequential capability for an exact representation and media item.
  *
- * <p><b>Invariant:</b> Each cursor requests indices from zero in order, with one pending request and
- * at most two delivered chunks. Captured content and fetcher identity cannot authorize another media item
- * or replacement connection. Restart creates a fresh cursor only after complete input consumption and release.
+ * <p>
+ * <b>Invariant:</b> Each cursor requests indices from zero in order, with one pending request and at most two delivered
+ * chunks. Captured content and fetcher identity cannot authorize another media item or replacement connection. Restart
+ * creates a fresh cursor only after complete input consumption and release.
  *
- * <p><b>Ownership:</b> A successful interest transfers one Chunk to its receiver. Cursor close cancels
- * pending interest but does not close chunks already delivered. Chunk close returns its window slot;
- * shared backing can remain alive through other references. Playback, target and transfer have separate ends.
+ * <p>
+ * <b>Ownership:</b> A successful interest transfers one Chunk to its receiver. Cursor close cancels pending interest
+ * but does not close chunks already delivered. Chunk close returns its window slot; shared backing can remain alive
+ * through other references. Playback, target and transfer have separate ends.
  *
- * <p><b>Seam:</b> [exact sequential audio reads](docs/architecture/model-management/audio/overview.md#接纳与读取).
+ * <p>
+ * <b>Seam:</b> [exact sequential audio reads](docs/architecture/model-management/audio/overview.md#接纳与读取).
  */
 public final class VerifiedChunkAccess implements AutoCloseable {
     private final ModelFileIdentity representation;
@@ -123,8 +126,8 @@ public final class VerifiedChunkAccess implements AutoCloseable {
     }
 
     /**
-     * Transfers this exhausted cursor's exact source capability into a fresh cursor for the next loop.
-     * The old cursor becomes closed. Restart does not repeat playback admission or change the fetcher.
+     * Transfers this exhausted cursor's exact source capability into a fresh cursor for the next loop. The old cursor
+     * becomes closed. Restart does not repeat playback admission or change the fetcher.
      *
      * @return the owned replacement cursor
      * @throws IllegalStateException if closed, input remains, a request is pending, or a chunk is still held

@@ -7,7 +7,7 @@ import com.elfmcys.ysm.format.parser.pojo.manifest.settings.ExtraAnimationButton
 import com.elfmcys.ysm.format.parser.pojo.manifest.settings.ExtraAnimationClassify;
 import com.elfmcys.ysm.format.parser.pojo.manifest.settings.ModelProperties;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.proto.mixel.common.ImageProto;
 import com.elfmcys.ysm.proto.mixel.common.StringPairProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.AuthorProto;
@@ -87,9 +87,9 @@ final class ModelInfoBuilder {
         return info;
     }
 
-    static void setProperties(InfoProto.Builder info, ModelProperties properties, String originVer, Hash256 modelHash) {
+    static void setProperties(InfoProto.Builder info, ModelProperties properties, String originVer, ModelId modelHash) {
         info.setProperties(PropertiesProto.newBuilder().setOriginVer(originVer).setFree(properties.free)
-            .setModelId(ByteBuffer.wrap(modelHash.bytes())).build());
+            .setModelId(modelHash.toString()).build());
     }
 
     static ModelSettingsProto modelSettings(ModelProperties properties) {

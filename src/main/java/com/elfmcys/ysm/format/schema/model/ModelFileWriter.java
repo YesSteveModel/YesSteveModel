@@ -5,7 +5,7 @@ import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.SharedNativeBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.schema.file.AssetFileWriter;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.natives.image.Image;
 import com.elfmcys.ysm.proto.mixel.manifest.ManifestProto;
 import com.elfmcys.ysm.util.ProtoBytes;
@@ -72,11 +72,12 @@ public class ModelFileWriter extends AssetFileWriter {
 
     private void setManifestProperties(ManifestProto manifest) throws IOException {
         var properties = manifest.info().properties();
-        if (properties.modelId().remaining() != Hash256.SIZE) {
-            throw new IOException("Manifest contains no valid full model hash");
+        try {
+            var modelId = ModelId.parse(properties.modelId());
+            setProperty(ModelFileConstant.PROP_MODEL_ID, modelId.toString());
+        } catch (IllegalArgumentException failure) {
+            throw new IOException("Manifest contains an invalid ModelId", failure);
         }
-        var hash = properties.modelId();
-        setProperty(ModelFileConstant.PROP_MODEL_ID, new Hash256(ProtoBytes.copy(hash)).toString());
         generateSummary(manifest);
     }
 

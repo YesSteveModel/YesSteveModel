@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.ModelRuntime;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogRecord;
@@ -64,7 +65,7 @@ final class SessionCollectionPublication {
             parts.add(FullPart.catalog(CatalogCollectionOperationProto.newBuilder().setOpType(full()).build()));
         }
         authority.grants().stream().sorted().forEach(hash -> parts.add(FullPart.grants(
-            GrantCollectionOperationProto.newBuilder().setOpType(full()).addModelIds(ProtoBytes.wrap(hash)).build())));
+            GrantCollectionOperationProto.newBuilder().setOpType(full()).addModelIds(hash.toString()).build())));
         if (authority.grants().isEmpty()) {
             parts.add(FullPart.grants(GrantCollectionOperationProto.newBuilder().setOpType(full()).build()));
         }
@@ -107,7 +108,7 @@ final class SessionCollectionPublication {
         previous.catalog().byModelId().keySet().stream()
             .filter(modelId -> !current.catalog().byModelId().containsKey(modelId)).sorted()
             .forEach(modelId -> parts.add(DeltaPart.catalog(CatalogCollectionOperationProto.newBuilder()
-                .setOpType(remove()).addModelIds(ProtoBytes.wrap(modelId)).build())));
+                .setOpType(remove()).addModelIds(modelId.toString()).build())));
         current.catalog().byModelId().entrySet().stream().sorted(Map.Entry.comparingByKey()).filter(value -> {
             var before = previous.catalog().byModelId().get(value.getKey());
             return before == null || !entry(before, previous).equals(entry(value.getValue(), current));
@@ -115,11 +116,11 @@ final class SessionCollectionPublication {
             .addEntries(publication(value.getValue(), current)).build())));
 
         previous.grants().stream().filter(value -> !current.grants().contains(value)).sorted()
-            .forEach(value -> parts.add(DeltaPart.grants(GrantCollectionOperationProto.newBuilder().setOpType(remove())
-                .addModelIds(ProtoBytes.wrap(value)).build())));
+            .forEach(value -> parts.add(DeltaPart.grants(
+                GrantCollectionOperationProto.newBuilder().setOpType(remove()).addModelIds(value.toString()).build())));
         current.grants().stream().filter(value -> !previous.grants().contains(value)).sorted()
-            .forEach(value -> parts.add(DeltaPart.grants(GrantCollectionOperationProto.newBuilder().setOpType(add())
-                .addModelIds(ProtoBytes.wrap(value)).build())));
+            .forEach(value -> parts.add(DeltaPart.grants(
+                GrantCollectionOperationProto.newBuilder().setOpType(add()).addModelIds(value.toString()).build())));
 
         var beforePacks = packsByHierarchy(previous.catalog().packs());
         var currentPacks = packsByHierarchy(current.catalog().packs());
@@ -168,21 +169,14 @@ final class SessionCollectionPublication {
                 .addEntries(publication(value.getValue(), authority)).build())));
         parts.add(DeltaPart.grants(GrantCollectionOperationProto.newBuilder().setOpType(clear()).build()));
         authority.grants().stream().filter(authority.catalog().byModelId()::containsKey).sorted()
-            .forEach(hash -> parts.add(DeltaPart.grants(GrantCollectionOperationProto.newBuilder().setOpType(add())
-                .addModelIds(ProtoBytes.wrap(hash)).build())));
+            .forEach(hash -> parts.add(DeltaPart.grants(
+                GrantCollectionOperationProto.newBuilder().setOpType(add()).addModelIds(hash.toString()).build())));
         requireDeltaCounts(parts);
         return wrapDelta(parts, transferId);
     }
 
     static CatalogSnapshot distributableCatalog(CatalogSnapshot catalog) {
-        var records = new LinkedHashMap<Hash256, CatalogRecord>();
-        catalog.byModelId().forEach((modelId, record) -> {
-            if (record.location().rootKind() != CatalogRootKind.BUILTIN
-                || !record.location().path().value().equals("default")) {
-                records.put(modelId, record);
-            }
-        });
-        return new CatalogSnapshot(records, catalog.packs(), catalog.report());
+        return new CatalogSnapshot(catalog.byModelId(), catalog.intrinsicDefault(), catalog.packs(), catalog.report());
     }
 
     static Map<String, Hash256> defaultAnimations() {
@@ -356,25 +350,26 @@ final class SessionCollectionPublication {
         for (var value : source.entries()) {
             entries.add(readPublication(value));
         }
-        var hashes = new ArrayList<Hash256>(source.modelIds().size());
+        var hashes = new ArrayList<ModelId>(source.modelIds().size());
         for (var value : source.modelIds()) {
-            hashes.add(hash(value, "catalog model id"));
+            hashes.add(modelId(value));
         }
         var keys =
             change == Change.REMOVE ? List.copyOf(hashes) : entries.stream().map(PublicationEntry::modelId).toList();
-        requireStrictOrder(keys, Hash256::compareTo, "catalog model ids");
+        requireStrictOrder(keys, ModelId::compareTo, "catalog model ids");
         return new Operation(CollectionKind.CATALOG, change, keys, List.copyOf(entries), List.of(), List.of());
     }
 
     private static Operation parseGrants(GrantCollectionOperationProto source, boolean fullTransfer)
         throws IOException {
         var change = change(source.opType(), fullTransfer);
-        requirePayload(change, source.modelIds().size(), 0);
-        var hashes = new ArrayList<Hash256>(source.modelIds().size());
+        var count = source.modelIds().size();
+        requirePayload(change, change == Change.REMOVE ? 0 : count, change == Change.REMOVE ? count : 0);
+        var hashes = new ArrayList<ModelId>(source.modelIds().size());
         for (var value : source.modelIds()) {
-            hashes.add(hash(value, "grant model id"));
+            hashes.add(modelId(value));
         }
-        requireStrictOrder(hashes, Hash256::compareTo, "grant model ids");
+        requireStrictOrder(hashes, ModelId::compareTo, "grant model ids");
         return new Operation(CollectionKind.GRANTS, change, List.copyOf(hashes), List.of(), List.of(), List.of());
     }
 
@@ -567,7 +562,7 @@ final class SessionCollectionPublication {
                         candidate.entries.clear();
                     } else if (operation.change() == Change.REMOVE) {
                         for (var key : operation.keys()) {
-                            if (candidate.entries.remove((Hash256)key) == null) {
+                            if (candidate.entries.remove((ModelId)key) == null) {
                                 missingRemovals++;
                             }
                         }
@@ -588,7 +583,7 @@ final class SessionCollectionPublication {
                         }
                     } else {
                         for (var key : operation.keys()) {
-                            candidate.grants.add((Hash256)key);
+                            candidate.grants.add((ModelId)key);
                         }
                     }
                 }
@@ -645,7 +640,7 @@ final class SessionCollectionPublication {
 
     private static int compareKey(CollectionKind collection, Object left, Object right) {
         return switch (collection) {
-            case CATALOG, GRANTS -> ((Hash256)left).compareTo((Hash256)right);
+            case CATALOG, GRANTS -> ((ModelId)left).compareTo((ModelId)right);
             case PACKS, ANIMATIONS -> compareUtf8((String)left, (String)right);
         };
     }
@@ -690,7 +685,7 @@ final class SessionCollectionPublication {
     private static CatalogPublicationProto publication(CatalogRecord record,
         ServerModelSession.AuthoritySnapshot authority) {
         var content = record.binding().content();
-        return CatalogPublicationProto.newBuilder().setModelId(ProtoBytes.wrap(record.entry().modelId()))
+        return CatalogPublicationProto.newBuilder().setModelId(record.entry().modelId().toString())
             .setContainerId(ProtoBytes.wrap(content.representation().containerId()))
             .setHierarchyPath(record.entry().path().value())
             .setAccess(
@@ -707,7 +702,7 @@ final class SessionCollectionPublication {
     }
 
     private static PublicationEntry readPublication(CatalogPublicationProto value) throws IOException {
-        var modelId = hash(value.modelId(), "catalog model id");
+        var modelId = modelId(value.modelId());
         var containerId = hash(value.containerId(), "catalog container id");
         final HierarchyPath path;
         try {
@@ -744,13 +739,21 @@ final class SessionCollectionPublication {
     private static String normalizedPackHierarchy(String value) throws IOException {
         try {
             var normalized =
-                new ModelPackDescriptor(CatalogRootKind.CUSTOM, value, "", "", Map.of(), null, "", 0).hierarchy();
+                new ModelPackDescriptor(CatalogRootKind.MODELS, value, "", "", Map.of(), null, "", 0).hierarchy();
             if (!normalized.equals(value)) {
                 throw new IOException("Pack hierarchy path is not canonical");
             }
             return normalized;
         } catch (IllegalArgumentException invalid) {
             throw new IOException("Invalid pack hierarchy path", invalid);
+        }
+    }
+
+    private static ModelId modelId(String value) throws IOException {
+        try {
+            return ModelId.parse(value);
+        } catch (IllegalArgumentException failure) {
+            throw new IOException("Invalid model identity", failure);
         }
     }
 
@@ -871,12 +874,12 @@ final class SessionCollectionPublication {
     }
 
     private static final class Candidate {
-        private final LinkedHashMap<Hash256, PublicationEntry> entries;
-        private final LinkedHashSet<Hash256> grants;
+        private final LinkedHashMap<ModelId, PublicationEntry> entries;
+        private final LinkedHashSet<ModelId> grants;
         private final LinkedHashMap<String, PackValue> packs;
         private final LinkedHashMap<String, Hash256> animations;
 
-        private Candidate(LinkedHashMap<Hash256, PublicationEntry> entries, LinkedHashSet<Hash256> grants,
+        private Candidate(LinkedHashMap<ModelId, PublicationEntry> entries, LinkedHashSet<ModelId> grants,
             LinkedHashMap<String, PackValue> packs, LinkedHashMap<String, Hash256> animations) {
             this.entries = entries;
             this.grants = grants;
@@ -944,7 +947,7 @@ final class SessionCollectionPublication {
         }
 
         private ModelPackDescriptor domain() {
-            return new ModelPackDescriptor(CatalogRootKind.CUSTOM, hierarchy, name, description, Map.of(), coverHash,
+            return new ModelPackDescriptor(CatalogRootKind.MODELS, hierarchy, name, description, Map.of(), coverHash,
                 coverFormat, coverSize);
         }
     }

@@ -7,16 +7,17 @@ import java.util.Objects;
 /**
  * Borrows a fixed byte range and the source's access permissions.
  *
- * <p>Requires: the owner keeps the allocation live and excludes reallocation, release, and
- * conflicting access throughout the borrow. A GC-managed source must itself remain reachable;
- * an anchor to its Storage does not retain its GC owner.
+ * <p>
+ * Requires: the owner keeps the allocation live and excludes reallocation, release, and conflicting access throughout
+ * the borrow. A GC-managed source must itself remain reachable; an anchor to its Storage does not retain its GC owner.
  *
- * <p>Ownership: this view retains the supplied anchor, not release authority.
- * The anchor cannot prevent explicit release, pool return, or reuse of the bytes.
- * All child slices share this anchor and the same lifetime limit.
+ * <p>
+ * Ownership: this view retains the supplied anchor, not release authority. The anchor cannot prevent explicit release,
+ * pool return, or reuse of the bytes. All child slices share this anchor and the same lifetime limit.
  *
- * <p>Seam: supplies bounded addresses for the
- * [synchronous borrow contract](docs/architecture/native-runtime/implementation/jni-and-memory.md#帧内借用).
+ * <p>
+ * Seam: supplies bounded addresses for the [synchronous borrow
+ * contract](docs/architecture/native-runtime/implementation/jni-and-memory.md#帧内借用).
  */
 public final class BorrowedNativeBuffer implements NativeBuffer {
     private final Object anchor;

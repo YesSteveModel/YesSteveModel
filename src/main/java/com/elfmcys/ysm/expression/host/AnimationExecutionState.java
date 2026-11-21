@@ -6,7 +6,8 @@ import com.elfmcys.ysm.client.sound.instance.SoundInstanceManager;
 public final class AnimationExecutionState {
     private final com.elfmcys.ysm.api.molang.MolangInputs.Target target = new Target(this);
 
-    private record Target(AnimationExecutionState state) implements com.elfmcys.ysm.api.molang.MolangInputs.Target {}
+    private record Target(AnimationExecutionState state) implements com.elfmcys.ysm.api.molang.MolangInputs.Target {
+    }
 
     public com.elfmcys.ysm.api.molang.MolangInputs.Animation input() {
         return new com.elfmcys.ysm.api.molang.MolangInputs.Animation(target, animTime);

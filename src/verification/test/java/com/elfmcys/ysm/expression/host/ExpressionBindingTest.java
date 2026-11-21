@@ -22,7 +22,6 @@ final class ExpressionBindingTest {
         var plan = binding.bindingPlan();
         assertSame(binding, host.expressionBinding());
         assertEquals("subjectOrNull", plan.subjectAccessor().orElseThrow().methodName());
-        assertEquals("validateInvocation", plan.invocationValidator().orElseThrow().methodName());
         for (var declaration : host.declarations())
             for (var member : declaration.members()) {
                 var guard = plan.guard(member.binding()).orElseThrow();
@@ -82,11 +81,14 @@ final class ExpressionBindingTest {
     }
 
     @Test
-    void noThirdPartyDeclarationsReuseTheBuiltinView() {
+    void builtinProjectionExcludesOptionalCoreFunctionsWithoutThirdPartyDeclarations() {
         var host = ExpressionHost.create(HostAvailability.all());
-        assertSame(host, host.builtinOnly());
+        var intrinsic = host.builtinOnly();
+        var optional = new dev.semaweave.SymbolKey("ctrl:parcool_state");
+        assertTrue(host.registry().function(optional).isPresent());
+        assertTrue(intrinsic.registry().function(optional).isEmpty());
+        assertSame(intrinsic, intrinsic.builtinOnly());
     }
 
-    public static final class RootSubject {
-    }
+    public static final class RootSubject {}
 }

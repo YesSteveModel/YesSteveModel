@@ -7,7 +7,7 @@ import com.elfmcys.ysm.client.gui.GuiModelFraming;
 import com.elfmcys.ysm.client.lang.LanguageManager;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.util.RenderUtil;
 import com.mojang.blaze3d.platform.Window;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -26,7 +26,7 @@ public final class CatalogTextureButton extends Button
     implements com.elfmcys.ysm.client.demand.ClientDemandCoordinator.CardDisplay, AutoCloseable {
     private static final int CARD_OVERLAY_Z = 3500;
 
-    private final Hash256 modelHash;
+    private final ModelId modelHash;
     private final String path;
     private final String texture;
     private final CustomGuiPlayerEntity entity;
@@ -38,7 +38,7 @@ public final class CatalogTextureButton extends Button
     private boolean closed;
     private boolean displaying;
 
-    public CatalogTextureButton(int x, int y, Hash256 modelHash, String path, String texture,
+    public CatalogTextureButton(int x, int y, ModelId modelHash, String path, String texture,
         CustomGuiPlayerEntity entity, com.elfmcys.ysm.client.demand.ClientDemandCoordinator.PageScope page,
         SelectionHandler selection) {
         super(x, y, 54, 102, Component.literal(texture), ignored -> {
@@ -165,6 +165,6 @@ public final class CatalogTextureButton extends Button
 
     @FunctionalInterface
     public interface SelectionHandler {
-        void select(Hash256 hash, String path, String texture, @Nullable ModelRenderTarget renderTarget);
+        void select(ModelId hash, String path, String texture, @Nullable ModelRenderTarget renderTarget);
     }
 }

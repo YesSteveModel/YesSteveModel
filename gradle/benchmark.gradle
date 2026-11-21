@@ -10,22 +10,14 @@ sourceSets {
     }
 }
 
-// The ownership workload reuses the independently checked JNI owner fixtures.
+// The scale and resource benchmarks reuse shared test helpers cleanly.
 sourceSets.benchmark.compileClasspath += sourceSets.test.output + sourceSets.test.runtimeClasspath
 sourceSets.benchmark.runtimeClasspath += sourceSets.test.output + sourceSets.test.runtimeClasspath
 tasks.named('compileBenchmarkJava') { dependsOn tasks.named('testClasses') }
 
-tasks.register('entityOwnershipProbeAgent', Jar) {
-    dependsOn tasks.named('benchmarkClasses')
-    archiveFileName = 'entity-ownership-probe-agent.jar'
-    destinationDirectory = layout.buildDirectory.dir('benchmark')
-    from(sourceSets.benchmark.output) { include 'com/elfmcys/ysm/client/entity/EntityOwnershipProbeAgent*.class' }
-    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.client.entity.EntityOwnershipProbeAgent' }
-}
-
 tasks.named('processBenchmarkResources') {
     from('src/verification/test/resources') {
-        include 'audio-playback/**', 'audio-fixtures/opus-long.ogg'
+        include 'audio-playback/**', 'audio-fixtures/opus-long.ogg', 'catalog-archives/**'
     }
 }
 
@@ -137,6 +129,22 @@ tasks.register('nativeImageBenchmarkAgent', Jar) {
     manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.benchmark.NativeImageAccessAgent' }
 }
 
+tasks.register('verifyRequiredDefaultResidency', Test) {
+    group = 'verification'
+    description = 'Consumes required default installations and complete audio with model disk and network reads denied.'
+    dependsOn tasks.named('testClasses'), tasks.named('nativeImageBenchmarkAgent')
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    filter { includeTestsMatching '*RequiredDefaultResidencyIntegrationTest' }
+    doFirst {
+        environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+        systemProperty 'ysm.requiredResidency', 'true'
+        jvmArgs "-javaagent:${tasks.named('nativeImageBenchmarkAgent').get().archiveFile.get().asFile.absolutePath}"
+    }
+}
+
 tasks.register('verifyDemandDiskReads', JavaExec) {
     group = 'verification'
     description = 'Checks actual file reads across page demand admission using production resource preparation.'
@@ -150,17 +158,6 @@ tasks.register('verifyDemandDiskReads', JavaExec) {
         args = [file(providers.gradleProperty('demandDiskReadOutput')
                 .getOrElse('build/reports/demand-disk-reads')).absolutePath]
     }
-}
-
-tasks.register('guiPurposeInputAgent', Jar) {
-    group = 'verification'
-    dependsOn tasks.named('benchmarkClasses')
-    archiveFileName = 'gui-purpose-input-agent.jar'
-    destinationDirectory = layout.buildDirectory.dir('benchmark')
-    from(sourceSets.benchmark.output) {
-        include 'com/elfmcys/ysm/model/resource/client/render/GuiPurposeInputAgent*.class'
-    }
-    manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.model.resource.client.render.GuiPurposeInputAgent' }
 }
 
 tasks.register('geometryReadAgent', Jar) {
@@ -192,12 +189,15 @@ tasks.register('verifyReadHandles', Test) {
     classpath = sourceSets.test.runtimeClasspath
     useJUnitPlatform()
     maxParallelForks = 1
+    systemProperty 'ysm.cacheReadProbe', 'true'
     filter {
         ['ChannelReadPhaseTest', 'FileChunkBatchTest', 'AnimationSetArtifactTest', 'RuntimeContentStoreTest',
            'DirectoryAccessTest', 'RawModelImporterTest', 'ModelParserTest', 'RawModelSourceTest',
            'ChunkImageSourceTest', 'ManagedContainerResidencyTest',
          'RemoteModelStoreTest', 'PreviewStoreTest', 'GeometryCacheReadTest', 'AtomicSharedCacheTest',
-         'ConvertedCacheCoordinatorTest'].each { includeTestsMatching "*${it}" }
+         'CacheRootCoordinatorTest', 'CacheReadFailureTest', 'ExpressionArtifactPipelineTest',
+         'CatalogReconcilerTest', 'CatalogSourceReuseTest', 'SourceReuseObservationTest', 'LegacyContainerHeaderTest',
+         'NativeArchiveIntegrationTest', 'AssetContainerReaderTest', 'AssetContainerZstdTest'].each { includeTestsMatching "*${it}" }
     }
     doFirst {
         def output = file(providers.gradleProperty('readHandleOutput').getOrElse('build/reports/read-handles.json'))
@@ -293,5 +293,25 @@ tasks.register('verifyPreviewHandoff', Test) {
     doFirst {
         jvmArgs "-javaagent:${tasks.named('previewDecodeAgent').get().archiveFile.get().asFile.absolutePath}",
             "-javaagent:${tasks.named('nativeImageBenchmarkAgent').get().archiveFile.get().asFile.absolutePath}"
+    }
+}
+
+tasks.register('serverScaleLoad', JavaExec) {
+    group = 'verification'
+    description = 'Runs the headless Netty EmbeddedChannel scale load harness (100/200/300 players).'
+    dependsOn tasks.named('benchmarkClasses')
+    javaLauncher = benchmarkLauncher
+    classpath = sourceSets.benchmark.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.benchmark.ServerScaleLoadHarness'
+    doFirst {
+        environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+        def cli = ['--players', providers.gradleProperty('scalePlayers').getOrElse('100'),
+                   '--duration-sec', providers.gradleProperty('scaleDurationSec').getOrElse('10'),
+                   '--slow-ratio', providers.gradleProperty('scaleSlowRatio').getOrElse('0.1'),
+                   '--reload-interval-ms', providers.gradleProperty('scaleReloadIntervalMs').getOrElse('2000')]
+        if (providers.gradleProperty('scaleOutput').isPresent()) {
+            cli.addAll(['--output', file(providers.gradleProperty('scaleOutput').get()).absolutePath])
+        }
+        args = cli
     }
 }

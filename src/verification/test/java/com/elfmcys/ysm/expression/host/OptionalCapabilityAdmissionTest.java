@@ -59,8 +59,7 @@ final class OptionalCapabilityAdmissionTest {
 
         var result = admission.finish();
         var host = ExpressionHost.create(result.availability());
-        assertTrue(host.registry()
-            .variable(new dev.semaweave.SymbolKey("ctrl:has_sophisticated_backpack")).isEmpty());
+        assertTrue(host.registry().variable(new dev.semaweave.SymbolKey("ctrl:has_sophisticated_backpack")).isEmpty());
         var subject = (ArmorStand)UnsafeUtil.getUnsafe().allocateInstance(ArmorStand.class);
         var holder = BuiltinDeclarations.createComponents(TestComponentHolders.owner(subject), host);
 
@@ -74,6 +73,22 @@ final class OptionalCapabilityAdmissionTest {
     void numericBuildVersionRemainsNewerThanTheSupportedBaseRelease() {
         assertTrue(OptionalCapability.SOPHISTICATED_BACKPACKS.supportsVersion("3.24.25.1566-forge", false));
         assertFalse(OptionalCapability.SOPHISTICATED_BACKPACKS.supportsVersion("3.24.25-rc1", false));
+    }
+
+    @Test
+    void restoredOptionalSymbolsRequireTheirQualifiedCapability() {
+        var absent = ExpressionHost.create(HostAvailability.none());
+        var present = ExpressionHost.create(new HostAvailability(
+            Set.of(OptionalCapability.CREATE, OptionalCapability.SWEM, OptionalCapability.IRONS_SPELLBOOKS)));
+        for (var name : List.of("ctrl:create_hanging_skyhook", "ctrl:swem_is_ride", "ctrl:swem_state",
+            "ctrl:iss_animation")) {
+            var key = new dev.semaweave.SymbolKey(name);
+            assertTrue(absent.registry().function(key).isEmpty(), name);
+            assertTrue(present.registry().function(key).isPresent(), name);
+            assertTrue(present.builtinOnly().registry().function(key).isEmpty(), name);
+        }
+        assertFalse(OptionalCapability.CREATE.supportsVersion("5.1.0", false));
+        assertTrue(OptionalCapability.CREATE.supportsVersion("6.0.0", false));
     }
 
     @Test

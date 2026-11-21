@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.expression.aot.ExpressionArtifactStore;
@@ -11,10 +12,9 @@ import com.elfmcys.ysm.expression.host.HostAvailability;
 import com.elfmcys.ysm.format.parser.ModelParser;
 import com.elfmcys.ysm.format.vfs.Directory;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
-import com.elfmcys.ysm.geckolib3.file.AnimationControllerFile;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.resource.client.AcquireResult;
@@ -36,7 +36,6 @@ import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.util.UnsafeUtil;
 import com.elfmcys.ysm.util.FifoHashMap;
-import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.player.AbstractClientPlayer;
 import org.junit.jupiter.api.BeforeAll;
@@ -65,18 +64,21 @@ class RenderTargetStateIdentityTest {
         var profile = new BakeProfile("one");
         var a = new RenderTargetKey("player", "a", profile, binding);
         var b = new RenderTargetKey("player", "b", profile, binding);
-        var content = new ModelFileIdentity(hash(1), hash(2));
+        var content = new ModelFileIdentity(hash(1), Hash256.parse(hash(2).toString().substring(5)));
         var preparation = new Object();
         var state = new ModelRenderTarget.StateIdentity(content, a.stateKey(), preparation);
         assertTrue(state.isCompatible(new ModelRenderTarget.StateIdentity(content, b.stateKey(), preparation)));
         assertFalse(state.isCompatible(new ModelRenderTarget.StateIdentity(content, a.stateKey(), new Object())));
-        assertFalse(state.isCompatible(
-            new ModelRenderTarget.StateIdentity(new ModelFileIdentity(hash(1), hash(3)), a.stateKey(), preparation)));
+        assertFalse(state.isCompatible(new ModelRenderTarget.StateIdentity(
+            new ModelFileIdentity(hash(1), Hash256.parse(hash(3).toString().substring(5))), a.stateKey(),
+            preparation)));
         var otherBinding = ExpressionHost.create(HostAvailability.all()).expressionBinding(AbstractClientPlayer.class);
         for (var key : List.of(new RenderTargetKey("vehicle", "a", profile, binding),
             new RenderTargetKey("player", "a", new BakeProfile("two"), binding),
             new RenderTargetKey("player", "a", profile, otherBinding),
-            new RenderTargetKey("player", "a", profile, binding, ModelResourcePurpose.GUI))) {
+            new RenderTargetKey("player", "a", profile, binding, ModelResourcePurpose.GUI),
+            new RenderTargetKey("player", "a", profile, binding, ModelResourcePurpose.FULL,
+                com.elfmcys.ysm.model.domain.PublishedModelId.Role.INTRINSIC_DEFAULT))) {
             assertFalse(state.isCompatible(new ModelRenderTarget.StateIdentity(content, key.stateKey(), preparation)));
         }
     }
@@ -92,9 +94,9 @@ class RenderTargetStateIdentityTest {
             new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
         var cacheRoot = root.resolve("cache");
         var sharedCache = track(new AtomicSharedCache(cacheRoot));
-        var factory =
-            new RenderTargetExpressionModuleFactory(track(new ExpressionArtifactStore(cacheRoot, sharedCache)),
-                ExpressionHost.create(HostAvailability.all()), new ExpressionEngineMetrics());
+        var factory = new RenderTargetExpressionModuleFactory(
+            track(new ExpressionArtifactStore(cacheRoot, sharedCache)), new AnimationInputStore(cacheRoot, sharedCache),
+            ExpressionHost.create(HostAvailability.all()), new ExpressionEngineMetrics());
         var scheduler = new ClientResourceScheduler(2);
         var loader = new ModelRenderTargetLoader(new BakedModelCache(cacheRoot, sharedCache), factory, scheduler,
             new DefaultAnimationRuntime());
@@ -115,18 +117,23 @@ class RenderTargetStateIdentityTest {
                 second = ((AcquireResult.Ready)leaseB.poll()).target();
                 assertNotSame(first, second);
                 assertTrue(first.isStateCompatible(second));
-                assertSame(first.expressions(), second.expressions());
-                assertSame(first.armExpressions(), second.armExpressions());
+                assertSame(first.animationStore(), second.animationStore());
+                assertSame(first.armAnimationStore(), second.armAnimationStore());
                 try (var hot = cache.findReady(request(content, b), content, b, (id, key, req) -> true).orElseThrow()) {
                     assertSame(second, ((AcquireResult.Ready)hot.poll()).target());
                 }
             }
             cache.close();
             first.close();
-            loader.close();
             var animations = second.playerResources().animations();
             assertFalse(animations.isEmpty());
-            assertNotNull(animations.get(animations.keySet().iterator().next()));
+            loader.close();
+            try (var batch = animations.openReadPhase()) {
+                second.close();
+                assertThrows(IllegalStateException.class, animations::openReadPhase);
+                assertNotNull(batch.view().get(animations.keySet().iterator().next()));
+            }
+            assertThrows(IllegalStateException.class, animations::openReadPhase);
             assertFalse(second.isStateCompatible(first));
         } finally {
             cache.close();
@@ -169,25 +176,20 @@ class RenderTargetStateIdentityTest {
         var variants = new FifoHashMap<>(new String[] {request.selectedTexture()}, new PlayerModelVariant[] {
             new PlayerModelVariant(UnrenderedGeometry.create(), arm == null ? null : UnrenderedGeometry.create())});
         var failures = ModelResourceFailures.none();
-        var animations = AnimationStore.consumerView((AnimationStore)property(main, "animations"), failures::animation);
-        var armAnimations = arm == null ? new AnimationStore()
-            : AnimationStore.consumerView((AnimationStore)property(arm, "animations"), failures::animation);
-        var mainControllers = (Map<String, AnimationControllerFile>)property(main, "controllers");
-        var armControllers = arm == null ? Map.<String, AnimationControllerFile>of()
-            : (Map<String, AnimationControllerFile>)property(arm, "controllers");
-        var targetData = new PlayerModelData(variants, animations, armAnimations, List.copyOf(mainControllers.values()),
-            List.copyOf(armControllers.values()));
+        var store = (AnimationStore)property(main, "animationStore");
+        var armStore = arm == null ? null : (AnimationStore)property(arm, "animationStore");
+        var animations = store.view(failures::animation);
+        var armAnimations = armStore == null ? AnimationStore.emptyView() : armStore.view(failures::animation);
+        var targetData = new PlayerModelData(variants, animations, armAnimations);
         var sounds = ((TargetSoundResources)property(prepared, "sounds")).acquire();
         var bound = new java.util.LinkedHashMap<String, com.elfmcys.ysm.model.resource.client.SoundSource>();
         request.view().getCommon().sounds().forEach((name, media) -> bound.put(name, sounds.bind(media)));
-        var assets = new CommonAssetData(bound, sounds, Map.of(), Map.of());
-        var stateIdentity =
-            new ModelRenderTarget.StateIdentity(request.representation().identity(), request.stateKey(), prepared);
-        var input = new ModelRenderTargetBuildInput(request.targetId(), targetData, assets,
-            (RenderTargetExpressionModule)property(main, "module"), request.view().getMetadata(),
-            arm == null ? null : assets, arm == null ? null : (RenderTargetExpressionModule)property(arm, "module"),
-            (AutoCloseable)pin, (Map<String, DefaultAnimationRuntime.Source>)property(prepared, "defaultSources"),
-            stateIdentity);
+        var assets = new CommonAssetData(bound, sounds);
+        var stateIdentity = new ModelRenderTarget.StateIdentity(request.representation().identity(), request.stateKey(),
+            property(prepared, "identityToken"));
+        var input = new ModelRenderTargetBuildInput(request.targetId(), targetData, assets, store,
+            request.view().getMetadata(), arm == null ? null : assets, armStore, (AutoCloseable)pin,
+            (Map<String, DefaultAnimationRuntime.Source>)property(prepared, "defaultSources"), stateIdentity);
         return ModelRenderTargetLoader.ModelCandidate
             .testing(ModelRenderTargetAssembler.build(request.representation().modelId(), input));
     }
@@ -237,9 +239,9 @@ class RenderTargetStateIdentityTest {
             key.expressionBinding(), key.purpose());
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 }

@@ -4,16 +4,15 @@
  * <p>
  * Public static functions need no component or constructor. Member declarations implement {@code EntityComponent<E>};
  * inherited generic methods are resolved against the declaring owner, and their exact {@code MolangContextView<E>}
- * subject must match its component subject. Optional/defaulted or bounded typed-varargs
- * functions take {@code int argc} immediately after context; defaults form a contiguous scalar suffix and do not change
- * supplied argc.
+ * subject must match its component subject. Optional/defaulted or bounded typed-varargs functions take {@code int argc}
+ * immediately after context; defaults form a contiguous scalar suffix and do not change supplied argc.
  *
  * <p>
  * Parameters are boolean, int, float or String. boolean maps to BOOL and int/float to F32. A symbol may name same-owner
  * overloads with distinct normalized parameter signatures; int and float are not distinct signatures. A group shares
- * subject, effect and return contract. Float and primitive float function results use missing for non-finite
- * values; boxed scalar null is missing. Finite signed zero and primitive false remain present. String null becomes the
- * empty string, whose content determines presence.
+ * subject, effect and return contract. Float and primitive float function results use missing for non-finite values;
+ * boxed scalar null is missing. Finite signed zero and primitive false remain present. String null becomes the empty
+ * string, whose content determines presence.
  *
  * <p>
  * Composite results are public non-generic flat records, FloatList, List&lt;String&gt; or List&lt;R&gt;. Record fields

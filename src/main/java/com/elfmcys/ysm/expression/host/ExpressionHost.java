@@ -44,6 +44,7 @@ import java.util.TreeMap;
 /** The single frozen registry, context ABI and provider linkage authority for YSM. */
 public final class ExpressionHost {
     public static final int ABI_VERSION = ExpressionAbi.ANIMATION_NUMBER;
+    public static final dev.semaweave.CustomType ENTITY = new dev.semaweave.CustomType(new SymbolKey("ysm:entity"));
     public static final StructType VECTOR = new StructType(new SymbolKey("ysm:vector3"));
     public static final ListType FLOAT_LIST = new ListType(BuiltinType.F32, "ysm:float-list");
     public static final ListType EVENT_F32_ARGUMENTS = FLOAT_LIST;
@@ -87,7 +88,7 @@ public final class ExpressionHost {
     }
 
     public static ExpressionHost create(HostAvailability availability, ExecutionLimits executionLimits) {
-        return create(availability, ExpressionPolicy.create(ExpressionPolicy.COMPILER_LIMITS, executionLimits));
+        return create(availability, ExpressionPolicy.create(executionLimits));
     }
 
     public static ExpressionHost create(HostAvailability availability, CompilationPolicy policy) {
@@ -100,14 +101,31 @@ public final class ExpressionHost {
         Objects.requireNonNull(policy, "policy");
         var executionLimits = policy.executionLimits();
         var hash = ExpressionIdentityHash.SHA_256;
-        var contextType = ContextTypes.create("ysm:invocation-context", ABI_VERSION, MolangContext.class, hash);
-        var builder = ExpressionRegistry.builder(contextType, hash, policy.compilerLimits());
+        var child = new dev.semaweave.ChildContextBinding(ENTITY,
+            staticBinding(MolangContext.class, "derive",
+                MethodType.methodType(dev.semaweave.ChildContext.class, MolangContext.class,
+                    net.minecraft.world.entity.Entity.class, dev.semaweave.SubjectBindingFactory.class,
+                    dev.semaweave.ExecutionFrame.class)),
+            true);
+        var contextType =
+            ContextTypes.create("ysm:invocation-context", ABI_VERSION, MolangContext.class, List.of(child), hash);
+        var builder = ExpressionRegistry.builder(contextType, hash);
         var manifest = new ArrayList<ManifestEntry>();
 
+        builder.registerType(new dev.semaweave.registry.ReferenceTypeDescriptor(ENTITY, ABI_VERSION,
+            net.minecraft.world.entity.Entity.class));
         registerVector(builder);
         registerEventArguments(builder, manifest);
         registerScalarConversions(builder, manifest);
         LinkedDeclaration.register(builder, manifest, declarations);
+        for (var declaration : MathDeclarations.ALL) {
+            var descriptor = declaration.operation().<MolangContext>declaration(declaration.key());
+            builder.registerFunction(descriptor);
+            manifest.add(new ManifestEntry(declaration.key().canonical(), "INVOKE", "FIXED", descriptor.minArgs(),
+                descriptor.maxArgs(), descriptor.parameterTypes().stream().map(ValueType::stableId).toList(), List.of(),
+                "", BuiltinType.F32.stableId(), "LEFT_TO_RIGHT_EAGER", List.of(), "LOCAL_UNSET", "Published", true, "",
+                declaration.operation().name()));
+        }
         manifest.sort(Comparator.comparing(ManifestEntry::stableId).thenComparing(ManifestEntry::accessKind));
 
         var registry = builder.freeze();
@@ -119,7 +137,10 @@ public final class ExpressionHost {
             stableManifest, hostAbi, builtinOnly);
     }
 
-    /** Projects the already admitted builtin source without repeating qualification or linkage. */
+    /**
+     * Projects trusted builtin declarations whose metadata has no external mod dependency. Qualification and linkage
+     * are not repeated; Java implementation dependencies are not isolated.
+     */
     public ExpressionHost builtinOnly() {
         return builtinOnly;
     }
@@ -175,15 +196,18 @@ public final class ExpressionHost {
 
     private ExpressionBinding createBinding() {
         var builder = BindingPlan.builder()
-            .invocationValidator(
-                LinkedDeclaration.binding(MolangContext.class, "validateInvocation", void.class, MolangContext.class))
             .subjectAccessor(
-                LinkedDeclaration.binding(MolangContext.class, "subjectOrNull", Object.class, MolangContext.class));
+                LinkedDeclaration.binding(MolangContext.class, "subjectOrNull", Object.class, MolangContext.class))
+            .rootContextAccessor(LinkedDeclaration.binding(MolangContext.class, "origin", MolangContext.class,
+                dev.semaweave.ExecutionFrame.class))
+            .rootBindingAccessor(LinkedDeclaration.binding(MolangContext.class, "originBinding",
+                dev.semaweave.SubjectBinding.class, dev.semaweave.ExecutionFrame.class));
         for (var declaration : declarations)
             for (var member : declaration.members()) {
                 builder.guard(member.binding(), member.binding(),
-                    dev.semaweave.registry.DeclarationEffect.valueOf(member.schema().effect()), member.subject());
-                member.contextFreeTarget().ifPresent(target -> builder.contextFreeCall(member.binding(), target));
+                    dev.semaweave.registry.DeclarationEffect.valueOf(member.schema().effect()), member.subject(),
+                    member.schema().scope().equals("SUBJECT") ? dev.semaweave.compilation.InvocationScope.CURRENT
+                        : dev.semaweave.compilation.InvocationScope.ROOT);
             }
         var plan = builder.build();
         plan.validate(registry);
@@ -256,16 +280,10 @@ public final class ExpressionHost {
         appendField(canonical, HostCompatibility.SHA256);
         var engineAbi = EngineAbi.current();
         appendField(canonical, engineAbi.packageName());
-        appendField(canonical, Integer.toString(engineAbi.version()));
         appendField(canonical, registry.fingerprint().algorithm().stableId());
         appendField(canonical, Integer.toString(registry.fingerprint().algorithm().abiVersion()));
         appendField(canonical, registry.fingerprint().value().toString());
-        appendField(canonical, Integer.toString(executionLimits.maxLoopIterations()));
         appendField(canonical, Integer.toString(executionLimits.maxUserFunctionDepth()));
-        appendField(canonical, Integer.toString(executionLimits.maxProviderCalls()));
-        appendField(canonical, Integer.toString(executionLimits.maxControlTransfers()));
-        appendField(canonical, Integer.toString(executionLimits.maxArgumentScratch()));
-        appendField(canonical, Integer.toString(EffectBatch.DEFAULT_MAX_COMMANDS));
         for (var entry : manifest) {
             appendField(canonical, entry.stableId());
             appendField(canonical, entry.accessKind());

@@ -11,15 +11,18 @@ import java.util.function.Consumer;
 /**
  * A lexical owner of one admitted channel; callbacks only borrow its cursor.
  *
- * <p>Execution: concurrent reads serialize channel I/O. Admission and close are ordered separately;
- * close seals new borrowers but does not await callbacks already admitted. The last borrower after
- * sealing performs physical close. Callbacks must not export the channel or use it asynchronously.
+ * <p>
+ * Execution: concurrent reads serialize channel I/O. Admission and close are ordered separately; close seals new
+ * borrowers but does not await callbacks already admitted. The last borrower after sealing performs physical close.
+ * Callbacks must not export the channel or use it asynchronously.
  *
- * <p>Failure: reader or validation failure seals the phase. Physical close failure has its own channel
- * and must not be recovered as a payload miss.
+ * <p>
+ * Failure: reader or validation failure seals the phase. Physical close failure has its own channel and must not be
+ * recovered as a payload miss.
  *
- * <p>Seam: maintains the source-use window for
- * [validated content reads](docs/architecture/asset-pipeline/implementation/container-and-validation.md#metadata-与内容取得).
+ * <p>
+ * Seam: maintains the source-use window for [validated content
+ * reads](docs/architecture/asset-pipeline/implementation/container-and-validation.md#metadata-与内容取得).
  */
 public final class ChannelReadPhase implements AutoCloseable {
     private final SeekableByteChannel channel;
@@ -36,8 +39,8 @@ public final class ChannelReadPhase implements AutoCloseable {
     }
 
     /**
-     * Opens and validates one channel, taking its close responsibility. Validation failure closes
-     * the newly opened channel before propagation; neither callback may retain the borrowed cursor.
+     * Opens and validates one channel, taking its close responsibility. Validation failure closes the newly opened
+     * channel before propagation; neither callback may retain the borrowed cursor.
      */
     public static ChannelReadPhase open(FileChunkDataSource.ChannelOpener opener, Validator validator)
         throws IOException {
@@ -66,9 +69,10 @@ public final class ChannelReadPhase implements AutoCloseable {
     /**
      * Runs reader between source validations while exclusively borrowing the channel cursor.
      *
-     * <p>Ownership: normal return transfers the result to the caller. If a produced result cannot be
-     * returned, discard receives it. The callback owns partial resources that it has not returned.
-     * Reader and discard run inline; discard must release the result without throwing.
+     * <p>
+     * Ownership: normal return transfers the result to the caller. If a produced result cannot be returned, discard
+     * receives it. The callback owns partial resources that it has not returned. Reader and discard run inline; discard
+     * must release the result without throwing.
      *
      * @throws java.nio.channels.ClosedChannelException if the phase was sealed before admission
      */
@@ -156,7 +160,7 @@ public final class ChannelReadPhase implements AutoCloseable {
 
     /** Physical close failure cannot be recovered as an ordinary payload miss. */
     public static final class CloseFailure extends IOException {
-        private CloseFailure(Throwable cause) {
+        public CloseFailure(Throwable cause) {
             super("Failed to close a read channel", cause);
         }
     }

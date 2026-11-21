@@ -4,7 +4,7 @@ import com.elfmcys.ysm.client.animation.condition.ConditionArmor;
 import com.elfmcys.ysm.client.animation.predicate.*;
 import com.elfmcys.ysm.client.controller.*;
 import com.elfmcys.ysm.client.entity.CustomProjectileEntity;
-import com.elfmcys.ysm.model.resource.client.CommonAsset;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.model.resource.client.ProjectileModelResources;
 import com.elfmcys.ysm.geckolib3.core.builder.Animation;
 import com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData;
@@ -35,16 +35,15 @@ public class ProjectileControllerCollection {
             anim != null ? new ParallelPredicate(anim) : EmptyPredicate.INSTANCE, true));
     }
 
-    public static BiConsumer<CustomProjectileEntity, AnimationData> build(ProjectileModelResources model,
-        CommonAsset assets) {
+    public static BiConsumer<CustomProjectileEntity, AnimationData> build(ProjectileModelResources model) {
         COLLECTION.initialize(ProjectileControllerCollection::init);
-        return COLLECTION.build(model, assets, model.animations());
+        return COLLECTION.build(model, model.animations());
     }
 
     private static ControllerDiscovery<CustomProjectileEntity, ProjectileModelResources> simple(String name,
         BiFunction<String, CustomProjectileEntity, IAnimationController<CustomProjectileEntity>> simpleFactory) {
         var controllerName = String.format("%s.%s", CATEGORY, name);
-        return COLLECTION.add((model, container, animations) -> (animatable, consumer) -> {
+        return COLLECTION.add((model, animations) -> (animatable, consumer) -> {
             consumer.accept(simpleFactory.apply(controllerName, animatable));
         });
     }
@@ -67,13 +66,12 @@ public class ProjectileControllerCollection {
         static final Adapter INSTANCE = new Adapter();
 
         @Override
-        public Object2ReferenceMap<String, AnimationControllerData> getControllers(ProjectileModelResources model,
-            CommonAsset assets) {
+        public Object2ReferenceMap<String, AnimationControllerData> getControllers(ProjectileModelResources model) {
             return model.controllers();
         }
 
         @Override
-        public ConditionArmor getArmorCondition(ProjectileModelResources model, CommonAsset assets) {
+        public ConditionArmor getArmorCondition(ProjectileModelResources model) {
             return null;
         }
     }

@@ -2,6 +2,8 @@ package com.elfmcys.ysm.client.entity;
 
 import java.io.UncheckedIOException;
 import java.io.IOException;
+
+import com.elfmcys.ysm.geckolib3.geo.animated.GeoModelState;
 import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.expression.host.builtin.PositionComponent;
 import com.elfmcys.ysm.util.ResourceDiagnostics;
@@ -11,7 +13,6 @@ import com.elfmcys.ysm.client.event.ClientTickEvent;
 import com.elfmcys.ysm.client.sound.instance.AudioPlaybackFactory;
 import com.elfmcys.ysm.geckolib3.core.AnimationState;
 import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
-import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule;
 import com.elfmcys.ysm.expression.aot.TransientExpressionSession;
 import com.elfmcys.ysm.expression.host.EventArguments;
 import com.elfmcys.ysm.expression.host.ExecutionFailure;
@@ -27,6 +28,7 @@ import com.elfmcys.ysm.client.animation.debug.DebugSource;
 import com.elfmcys.ysm.geckolib3.core.processor.AnimationProcessor;
 import com.elfmcys.ysm.geckolib3.core.processor.BoneView;
 import com.elfmcys.ysm.geckolib3.core.util.RateLimiter;
+import com.elfmcys.ysm.util.CleanupFailures;
 import com.elfmcys.ysm.geckolib3.geo.GeoRenderData;
 import com.elfmcys.ysm.geckolib3.geo.RenderContext;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
@@ -59,7 +61,7 @@ import com.elfmcys.ysm.model.resource.client.ResourceRequest;
 import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
 import com.elfmcys.ysm.expression.aot.UserFunctionProgram;
 import com.elfmcys.ysm.geckolib3.core.processor.DebugInfo;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.RenderTargetIds;
 import com.elfmcys.ysm.util.Closeable;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -72,17 +74,22 @@ import java.util.concurrent.CancellationException;
 /**
  * Owns one subject's mutable animation state and its current resource installation.
  *
- * <p>Invariant: each owner has one execution authority. An outstanding task keeps that authority
- * until the corresponding wait or GUI join completes, including task cleanup.
+ * <p>
+ * Invariant: each owner has one execution authority. An outstanding task keeps that authority until the corresponding
+ * wait or GUI join completes, including task cleanup.
  *
- * <p>Execution: public lifecycle operations run on the render thread. Worker execution uses the
- * owner's reserved window. A GUI permit grants only its exact task's internal installation and
- * evaluation operations. Callbacks must not reenter public lifecycle operations.
- * Owner confinement does not make the live entity, level, or optional host APIs immutable or safe for concurrent access.
+ * <p>
+ * Execution: public lifecycle operations run on the render thread. Worker execution uses the owner's reserved window. A
+ * GUI permit grants only its exact task's internal installation and evaluation operations. Callbacks must not reenter
+ * public lifecycle operations. Owner confinement does not make the live entity, level, or optional host APIs immutable
+ * or safe for concurrent access.
  *
- * <p>Ownership: resource getters and render data borrow the current installation; they do not transfer its lease.
+ * <p>
+ * Ownership: resource getters and render data borrow the current installation; they do not transfer its lease.
  *
- * <p>Seam: establishes [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接) and depends on [complete installation and replacement](docs/architecture/animation/entity-lifecycle.md#模型使用与完整安装).
+ * <p>
+ * Seam: establishes [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接)
+ * and depends on [complete installation and replacement](docs/architecture/animation/entity-lifecycle.md#模型使用与完整安装).
  */
 public abstract class AnimatableEntity<TEntity extends Entity>
     implements com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Installation {
@@ -96,7 +103,9 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     private final EntityExpressionRuntime expressionRuntime = new EntityExpressionRuntime();
     private final EntityModelBinding modelBinding;
     private final EntityExecutionLifecycle lifecycle;
-    private com.elfmcys.ysm.client.demand.ClientDemandCoordinator.EntityScope demandScope;
+    // Main-thread registration survives reset and retirement until the invocation's complete drain.
+    private boolean invocationRetained;
+    private com.elfmcys.ysm.client.entity.EntityModelDemand demandScope;
     private PhysicsManager alterPhysicsManager;
 
     public enum InstallationRelation {
@@ -129,6 +138,19 @@ public abstract class AnimatableEntity<TEntity extends Entity>
      * 存储 Coded 动画控制器的动画播放状态，用于一些 molang 判断
      */
     protected Map<String, AnimationState> codedAnimationStates = Maps.newHashMap();
+    private final com.elfmcys.ysm.expression.host.SubjectSample.Draft subjectSampleDraft =
+        new com.elfmcys.ysm.expression.host.SubjectSample.Draft();
+    private final boolean worldSubjectSamplePublisher;
+
+    /** Exact producer write target; borrowed only in this owner's installation and component windows. */
+    public final com.elfmcys.ysm.expression.host.SubjectSample.Draft subjectSampleDraft() {
+        return subjectSampleDraft;
+    }
+
+    /** Called once during construction; role selection must depend only on the supplied subject. */
+    protected boolean worldSubjectSamplePublisher(TEntity subject) {
+        return false;
+    }
 
     protected AnimatableEntity(TEntity entity) {
         this(entity, false);
@@ -140,6 +162,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     AnimatableEntity(TEntity entity, boolean asyncUpdate, EntityModelBinding modelBinding) {
         this.entity = Objects.requireNonNull(entity, "entity");
+        worldSubjectSamplePublisher = worldSubjectSamplePublisher(entity);
         this.modelBinding = Objects.requireNonNull(modelBinding, "modelBinding");
         this.lifecycle = new EntityExecutionLifecycle(expressionRuntime, this::clearEndedUse, this::handleAsyncFailure);
         expressionRuntime.projectionAvailability(lifecycle::canAdoptProjection);
@@ -179,16 +202,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         try {
             cleanup.run();
         } catch (RuntimeException | Error failure) {
-            if (primary == null)
-                return failure;
-            if ((failure instanceof VirtualMachineError && !(failure instanceof OutOfMemoryError)
-                || failure instanceof ThreadDeath)
-                && !(primary instanceof VirtualMachineError || primary instanceof ThreadDeath)) {
-                failure.addSuppressed(primary);
-                return failure;
-            }
-            if (failure != primary)
-                primary.addSuppressed(failure);
+            return CleanupFailures.merge(primary, failure);
         }
         return primary;
     }
@@ -221,8 +235,9 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     /**
      * Permanently revokes this owner's assignment and ends its current use.
      *
-     * <p>Execution: joins an outstanding ordinary task before cleanup. An active draw borrow delays
-     * resource cleanup until the borrow ends, but does not delay revocation.
+     * <p>
+     * Execution: joins an outstanding ordinary task before cleanup. An active draw borrow delays resource cleanup until
+     * the borrow ends, but does not delay revocation.
      */
     public final void retire() {
         lifecycle.rejectCandidateMutation();
@@ -230,10 +245,17 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             lifecycle.retire();
         } finally {
             modelBinding.revokeAssignment();
+            onEntityRetired();
         }
     }
 
+    protected void onEntityRetired() {}
+
     private void clearEndedUse() {
+        subjectSampleDraft.clear();
+        if (worldSubjectSamplePublisher)
+            ((com.elfmcys.ysm.expression.host.SubjectSampleAccess)entity)
+                .ysm$subjectSample(com.elfmcys.ysm.expression.host.SubjectSample.MISSING);
         var failure = attemptCleanup(null, this::closeDemandScope);
         failure = attemptCleanup(failure, this::clearOutputs);
         failure = attemptCleanup(failure, this::clearInstalledRuntime);
@@ -242,7 +264,14 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     private void clearInstalledRuntime() {
-        var failure = attemptCleanup(null, expressionRuntime::clear);
+        var retired = animationSession;
+        animationSession = null;
+        localProjection = null;
+        var failure = attemptCleanup(null, () -> {
+            if (retired != null)
+                retired.close();
+        });
+        failure = attemptCleanup(failure, expressionRuntime::clear);
         failure = attemptCleanup(failure, () -> resetAnimationClock(true));
         failure = attemptCleanup(failure, () -> {
             try {
@@ -273,7 +302,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     public final AnimationData getAnimationData() {
         lifecycle.assertStateAccess();
-        return requireInstallation().animations;
+        return requireSession().animations;
     }
 
     public abstract ResourceLocation getTextureLocation();
@@ -285,19 +314,21 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     @Nullable
     public abstract Animation getAnimation(String name);
 
-    private AnimationStore readAnimationSource;
+    private AnimationSession animationSession;
+
+    private AnimationStore.View readAnimationSource;
     private AnimationStore.ReadBatch animationReads;
     private boolean animationReadScope;
 
-    protected AnimationStore animationSource() {
+    protected AnimationStore.View animationSource() {
         return null;
     }
 
-    protected final Animation readAnimation(AnimationStore source, String name) {
+    protected final Animation readAnimation(AnimationStore.View source, String name) {
         return animationReadView(source).get(name);
     }
 
-    public final AnimationStore animationResolutionSource() {
+    public final AnimationStore.View animationResolutionSource() {
         return animationSource();
     }
 
@@ -307,12 +338,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             : animationReadView(source).resolve(name);
     }
 
-    private AnimationStore animationReadView(AnimationStore source) {
+    private AnimationStore.View animationReadView(AnimationStore.View source) {
         if (!animationReadScope || readAnimationSource != source)
             return source;
         if (animationReads == null) {
             try {
-                animationReads = source.openReadPhase();
+                animationReads = expressionRuntime.openAnimationReadPhase(source);
             } catch (IOException failure) {
                 throw new UncheckedIOException(failure);
             }
@@ -355,8 +386,9 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     /**
      * Returns the borrowed live subject, without granting access to owner-private animation state.
      *
-     * <p>Execution: a stable world subject remains readable on the main thread during ordinary work.
-     * A reserved GUI task excludes public subject access until join.
+     * <p>
+     * Execution: a stable world subject remains readable on the main thread during ordinary work. A reserved GUI task
+     * excludes public subject access until join.
      *
      * @return the subject; the caller does not own its lifetime or obtain a host-input snapshot
      */
@@ -405,9 +437,10 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     /**
      * Prepares the ordinary level pose after joining prior owner work.
      *
-     * <p>Ownership: the result borrows the current installation and mutable pose output. A later
-     * owner update or ended use can invalidate that output. The caller must use consumePrepared()
-     * to qualify consumption; a non-null return does not reserve later draw access.
+     * <p>
+     * Ownership: the result borrows the current installation and mutable pose output. A later owner update or ended use
+     * can invalidate that output. The caller must use consumePrepared() to qualify consumption; a non-null return does
+     * not reserve later draw access.
      *
      * @return the prepared pose, or null when no consumable pose is available for this update
      */
@@ -422,7 +455,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     protected GeoRenderData update(float partialTicks, RenderContext context) {
         RenderSystem.assertOnRenderThread();
         lifecycle.rejectRecursiveCall();
-        waitForAsyncUpdate();
+        waitForRenderUpdate();
         checkModelUpdate();
         prepareEvaluation();
         var resolved = resolveRenderContext(context);
@@ -454,12 +487,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             tickAnimation(event);
             var data = getRenderData(context);
             if (!context.immutable() || !currentFrameExtracted || !data.modelState.isValid()
-                || data.modelState.getModel() != installation.geoModel.getModel() || !context.equals(data.ctx)
+                || data.modelState.getModel() != requireSession().geoModel.getModel() || !context.equals(data.ctx)
                 || partialTicks != data.partialTicks) {
                 currentFrameExtracted = false;
                 data.installation = null;
                 try {
-                    data.modelState.extract(installation.geoModel);
+                    data.modelState.extract(requireSession().geoModel);
                 } catch (RuntimeException failure) {
                     throw new FailedExtract(installation, event, failure);
                 }
@@ -478,7 +511,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     protected boolean updateAnimationOnly(float partialTicks, RenderContext context) {
         RenderSystem.assertOnRenderThread();
         lifecycle.rejectRecursiveCall();
-        waitForAsyncUpdate();
+        waitForRenderUpdate();
         checkModelUpdate();
         prepareEvaluation();
         try {
@@ -524,6 +557,17 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             renderData = renderDataPool.computeIfAbsent(context, c -> new GeoRenderData());
         }
         return renderData;
+    }
+
+    /** Borrows the matching previous output during this owner's serialized animation evaluation. */
+    public final @Nullable GeoModelState getModelState() {
+        lifecycle.assertStateAccess();
+        var data = mainRenderData;
+        var installation = modelBinding.resourceHolder();
+        if (data == null || installation == null || data.installation != installation || !data.modelState.isValid()
+            || data.modelState.getModel() != requireSession().geoModel.getModel())
+            return null;
+        return data.modelState;
     }
 
     private AnimationEvent<AnimatableEntity<TEntity>> createAnimationEvent(float partialTicks, RenderContext context) {
@@ -592,9 +636,10 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     protected void tickAnimation(@NotNull AnimationEvent<AnimatableEntity<TEntity>> animationEvent) {
+        var installation = requireInstallation();
         var source = animationSource();
         if (source == null || animationReadScope && readAnimationSource == source) {
-            tickAnimationNow(animationEvent);
+            publishSubjectSample(installation, tickAnimationNow(animationEvent));
             return;
         }
         var previousSource = readAnimationSource;
@@ -604,8 +649,9 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         animationReads = null;
         animationReadScope = true;
         Throwable primaryFailure = null;
+        com.elfmcys.ysm.expression.host.SubjectSample completed;
         try {
-            tickAnimationNow(animationEvent);
+            completed = tickAnimationNow(animationEvent);
         } catch (RuntimeException | Error failure) {
             primaryFailure = failure;
             throw failure;
@@ -625,10 +671,19 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                 }
             }
         }
+        publishSubjectSample(installation, completed);
     }
 
-    private void tickAnimationNow(AnimationEvent<AnimatableEntity<TEntity>> animationEvent) {
+    private void publishSubjectSample(ResourceHolder installation,
+        @Nullable com.elfmcys.ysm.expression.host.SubjectSample completed) {
+        if (worldSubjectSamplePublisher && completed != null && isCurrent(installation))
+            ((com.elfmcys.ysm.expression.host.SubjectSampleAccess)entity).ysm$subjectSample(completed);
+    }
+
+    private @Nullable com.elfmcys.ysm.expression.host.SubjectSample
+        tickAnimationNow(AnimationEvent<AnimatableEntity<TEntity>> animationEvent) {
         var installation = requireInstallation();
+        com.elfmcys.ysm.expression.host.SubjectSample completed = null;
         var frameTime = animationEvent.renderTicks;
         var ctx = animationEvent.getRenderContext();
         var mutableRender = !ctx.immutable();
@@ -657,12 +712,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                 currentFrameExtracted = false;
                 try {
                     var inputs = getAnimationProcessor().invocationInputs(animationEvent);
-                    expressionRuntime.animationPassProjected(inputs, shouldTick, evaluation -> {
-                        installation.components.evaluate(animationEvent, () -> true, () -> {
+                    completed = expressionRuntime.animationPassProjected(inputs, shouldTick, evaluation -> {
+                        requireSession().components.evaluate(animationEvent, () -> true, () -> {
                             if (shouldTick) {
                                 currentFrameTicked = true;
                                 advanceComponentTime(installation, animationEvent);
                             }
+                            evaluation.captureSubjectSample(subjectSampleDraft.freeze());
                             getPhysicsManager(animationEvent).update(this.seekTime);
                             getAnimationProcessor().processTransientTasks(evaluation, true);
                             if (shouldTick)
@@ -676,12 +732,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                             codeAnimation(animationEvent, true);
                             evaluation.dispatchPendingDeferred();
                         });
-                        return null;
+                        return shouldTick && evaluation.failure().isEmpty() ? evaluation.subjectSample() : null;
                     }, localProjection);
                 } catch (RuntimeException failure) {
                     if (!containsComponentFailure(failure)) {
                         if (failure instanceof CancellationException)
-                            return;
+                            return null;
                         throw failure;
                     }
                     throw new FailedUse(this, installation, animationEvent, failure);
@@ -692,11 +748,12 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             }
             lastFrameUpdated = shouldUpdate;
         }
+        return completed;
     }
 
     private void advanceComponentTime(ResourceHolder installation, AnimationEvent<?> event) {
         var firstOwnerSample = !sampledMainTimeline;
-        var firstComponentSample = !installation.componentsSampled;
+        var firstComponentSample = !requireSession().componentsSampled;
         int currentTick =
             firstOwnerSample ? event.getEntityTickCount() : Math.max(sampledEntityTick, event.getEntityTickCount());
         int previousTick = firstOwnerSample ? currentTick : sampledEntityTick;
@@ -705,16 +762,16 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         sampledMainTimeline = true;
         sampledEntityTick = currentTick;
         sampledAnimationTime = currentTime;
-        installation.componentsSampled = true;
+        requireSession().componentsSampled = true;
         if (firstOwnerSample || currentTick > previousTick)
             stateTracker.tick(previousTick, currentTick);
         if (firstComponentSample || currentTick > previousTick)
-            installation.components.tick(firstComponentSample ? currentTick : previousTick, currentTick,
+            requireSession().components.tick(firstComponentSample ? currentTick : previousTick, currentTick,
                 () -> true);
         if (firstOwnerSample || currentTime > previousTime)
             stateTracker.update(previousTime, currentTime, event.getPartialTick());
         if (firstComponentSample || currentTime > previousTime)
-            installation.components.update(firstComponentSample ? currentTime : previousTime, currentTime,
+            requireSession().components.update(firstComponentSample ? currentTime : previousTime, currentTime,
                 event.getPartialTick(), () -> true);
     }
 
@@ -725,7 +782,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     @SuppressWarnings("unchecked")
     public final AnimationProcessor<TEntity> getAnimationProcessor() {
-        return (AnimationProcessor<TEntity>)requireInstallation().processor;
+        return (AnimationProcessor<TEntity>)requireSession().processor;
     }
 
     public final EntityExpressionRuntime getExpressionRuntime() {
@@ -737,7 +794,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     public final <T> Optional<T> exactComponent(Class<T> type) {
         var installed = modelBinding.resourceHolder();
-        return lifecycle.isEndingUse() || installed == null ? Optional.empty() : installed.components.exact(type);
+        return lifecycle.isEndingUse() || installed == null ? Optional.empty()
+            : requireSession().components.exact(type);
     }
 
     private <R> R invokeInstalled(Supplier<R> action, R unavailable) {
@@ -793,14 +851,14 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     protected final void handleExpressionFailure(ExecutionFailure failure) {
-        if ((failure.reason() == ExecutionFailure.Reason.STALE_GENERATION
-            || failure.reason() == ExecutionFailure.Reason.CANCELLATION) && (!isAssigned() || lifecycle.isEndingUse()))
+        if ((failure.reason() == ExecutionFailure.Reason.STALE_GENERATION)
+            && (!isAssigned() || lifecycle.isEndingUse()))
             return;
-        if (failure.reason() != ExecutionFailure.Reason.NON_NULL_RETURN
+        if (failure.reason() != ExecutionFailure.Reason.INSTANCE_EXECUTION
             || expressionRuntime.generation() != failure.provenance().entityGeneration())
             throw failure;
         clearOutputs();
-        modelBinding.failExpression(failure, fallbackRenderTargetId(), this::prepareInstallation);
+        modelBinding.failExpression(failure, fallbackRenderTargetId(), lifecycle::endInstallationUse);
     }
 
     protected abstract void prepareAnimationControllers(ModelRenderTarget target, AnimationData animations);
@@ -815,91 +873,106 @@ public abstract class AnimatableEntity<TEntity extends Entity>
      * 设置模型
      */
     private ResourceHolder prepareInstallation(ResourceLease lease, boolean intrinsicDefault) {
-        if (!(lease.poll() instanceof AcquireResult.Ready ready)) {
+        if (!(lease.poll() instanceof AcquireResult.Ready ready))
             throw new IllegalArgumentException("Installation requires a Ready lease");
-        }
         return lifecycle.inCandidate(() -> {
-            var next = new ResourceHolder(lease);
+            ResourceHolder next = null;
             try {
                 var previous = modelBinding.resourceHolder();
-                var module = expressions(ready.target());
+                var previousSession = animationSession;
+                var store = animationStore(ready.target());
                 var geometry = Objects.requireNonNull(
                     resolveGeoModel(ready.target(), intrinsicDefault ? "" : requestedTextureName()),
                     "candidate geometry");
-                var compatible = previous != null && previous.model.isStateCompatible(ready.target())
-                    && previous.components.owner() == this && expressionRuntime.module().orElse(null) == module
-                    && !lifecycle.isEndingUse();
+                var compatible = previous != null && previousSession != null && modelBinding.usageMatchesOperation()
+                    && previous.model.isStateCompatible(ready.target()) && previousSession.components.owner() == this
+                    && previousSession.store == store && !lifecycle.isEndingUse();
                 if (compatible) {
-                    next.ownsState = false;
-                    next.geoModel = previous.geoModel;
-                    next.animations = previous.animations;
-                    next.processor = previous.processor;
-                    next.components = previous.components;
-                    next.componentsSampled = previous.componentsSampled;
-                    var bindGeometry = next.geoModel.prepareModelBinding(geometry);
-                    var bindResources = next.processor.prepareResourceBinding(assets(ready.target()).eventHandlers(),
-                        next.animations, name -> resolveControllerData(ready.target(), name));
-                    next.abortSharedStateActivation = lifecycle::endInstallationUse;
-                    next.activation = (publication, qualified) -> lifecycle.inCall(() -> {
-                        if (!isRunRequired() || !isCurrent(previous) || !qualified.getAsBoolean())
+                    var binding = new ResourceHolder(lease);
+                    next = binding;
+                    var bindGeometry = previousSession.geoModel.prepareModelBinding(geometry);
+                    var bindResources = previousSession.processor.prepareResourceBinding(store.eventHandlers(),
+                        previousSession.animations, name -> resolveControllerData(ready.target(), name));
+                    binding.abortSharedStateActivation = lifecycle::endInstallationUse;
+                    binding.activation = (publication, qualified) -> lifecycle.inCall(() -> {
+                        if (!isRunRequired() || !isCurrent(previous) || animationSession != previousSession
+                            || !qualified.getAsBoolean())
                             throw new CancellationException("Candidate owner no longer runs");
                         clearOutputs();
-                        next.sharedStateActivationStarted = true;
-                        next.components.setRenderTarget(ready.target(),
+                        binding.sharedStateActivationStarted = true;
+                        previousSession.components.setRenderTarget(ready.target(),
                             () -> isCurrent(previous) && qualified.getAsBoolean());
                         bindGeometry.run();
                         bindResources.run();
-                        previous.ownsState = false;
-                        next.ownsState = true;
                         publication.run();
                         return null;
                     });
                 } else {
-                    next.geoModel = new AnimatedGeoModel(geometry);
-                    next.animations = new AnimationData();
+                    var candidate = new FullInstallationCandidate(lease);
+                    next = candidate;
+                    var session = new AnimationSession(store);
+                    candidate.session = session;
+                    session.geoModel = new AnimatedGeoModel(geometry);
+                    session.animations = new AnimationData();
                     var processor = new AnimationProcessor<TEntity>(this);
-                    next.processor = processor;
-                    next.components = module.prepareComponents(this, null);
-                    next.components.setRenderTarget(ready.target(), () -> isRunRequired() && !lifecycle.isEndingUse());
-                    if (previous != null && previous.components != null) {
-                        var history = previous.components.exact(PositionComponent.class);
-                        next.components.exact(PositionComponent.class)
+                    session.processor = processor;
+                    session.components = store.prepareComponents(this, null);
+                    session.components.setRenderTarget(ready.target(),
+                        () -> isRunRequired() && !lifecycle.isEndingUse());
+                    if (previousSession != null && previousSession.components != null) {
+                        var history = previousSession.components.exact(PositionComponent.class);
+                        session.components.exact(PositionComponent.class)
                             .ifPresent(position -> history.ifPresent(position::copyHistoryFrom));
                     }
-                    next.expressions = expressionRuntime.prepare(module, assets(ready.target()).eventHandlers(),
-                        next.components, roamingRole());
-                    var commitRole = prepareRoleInstallation(ready.target(), next.expressions);
-                    prepareAnimationControllers(ready.target(), next.animations);
-                    processor.loadModel(next.geoModel, assets(ready.target()).eventHandlers(), next.animations,
+                    session.expressions = expressionRuntime.prepare(store, session.components, roamingRole());
+                    var commitRole = prepareRoleInstallation(ready.target(), session.expressions);
+                    prepareAnimationControllers(ready.target(), session.animations);
+                    processor.loadModel(session.geoModel, store.eventHandlers(), session.animations,
                         name -> resolveControllerData(ready.target(), name));
                     next.activation = (publication, qualified) -> {
                         if (!isRunRequired() || !qualified.getAsBoolean())
                             throw new CancellationException("Candidate owner no longer runs");
                         clearOutputs();
-                        expressionRuntime.install(next.expressions, () -> {
-                            next.ownsState = true;
-                            resetAnimationClock(false);
-                            if (commitRole != null)
-                                commitRole.run();
-                            publication.run();
+                        expressionRuntime.install(session.expressions, () -> {
+                            try {
+                                resetAnimationClock(false);
+                                if (commitRole != null)
+                                    commitRole.run();
+                                publication.run();
+                                animationSession = session;
+                                candidate.session = null;
+                                session.expressions = null;
+                            } catch (RuntimeException | Error failure) {
+                                try {
+                                    session.close();
+                                } catch (RuntimeException | Error cleanup) {
+                                    throwCleanupFailure(CleanupFailures.merge(failure, cleanup));
+                                }
+                                throw failure;
+                            }
+                        }, () -> {
+                            if (previousSession != null)
+                                previousSession.close();
                         });
-                        next.expressions = null;
                     };
                 }
+                if (!isRunRequired() || lifecycle.isEndingUse())
+                    throw new CancellationException("Candidate owner no longer runs");
                 return next;
             } catch (RuntimeException | Error failure) {
                 try {
-                    next.close();
+                    if (next != null)
+                        next.close();
                 } catch (RuntimeException | Error closeFailure) {
-                    failure.addSuppressed(closeFailure);
+                    throwCleanupFailure(CleanupFailures.merge(failure, closeFailure));
                 }
                 throw failure;
             }
         });
     }
 
-    protected RenderTargetExpressionModule expressions(ModelRenderTarget target) {
-        return target.expressions();
+    protected AnimationStore animationStore(ModelRenderTarget target) {
+        return target.animationStore();
     }
 
     protected com.elfmcys.ysm.model.resource.client.CommonAsset assets(ModelRenderTarget target) {
@@ -926,7 +999,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     public final AnimatedGeoModel getLoadedGeoModel() {
         lifecycle.assertStateAccess();
         var current = modelBinding.resourceHolder();
-        return current == null || lifecycle.isEndingUse() ? null : current.geoModel;
+        return current == null || lifecycle.isEndingUse() ? null : requireSession().geoModel;
     }
 
     public final boolean hasInstalledModel() {
@@ -1008,8 +1081,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
     public final boolean canEvaluate() {
         lifecycle.assertStateAccess();
-        return isRunRequired() && !lifecycle.isEndingUse() && modelBinding.permitsCurrentUse()
-            && (fallbackRenderTargetId() != null || requestedRenderTargetId() != null);
+        return isRunRequired() && !lifecycle.isEndingUse() && modelBinding.permitsCurrentUse();
     }
 
     public final InstallationRelation getInstallationRelation() {
@@ -1050,7 +1122,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         return installed == null || lifecycle.isEndingUse() ? null : installed.model;
     }
 
-    public final Hash256 getModelHash() {
+    public final ModelId getModelHash() {
         return modelBinding.modelHash();
     }
 
@@ -1061,9 +1133,9 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final @Nullable String getInstalledModelId() {
-        var target = getModelRenderTarget();
-        return target == null ? null : ClientModelService.current()
-            .map(service -> service.displayPath(target.modelHash())).orElseGet(() -> target.modelHash().toString());
+        var modelId = modelBinding.installedModelId();
+        return modelId == null ? null
+            : ClientModelService.current().map(service -> service.displayPath(modelId)).orElseGet(modelId::toString);
     }
 
     public final String getRequestedTextureName() {
@@ -1076,12 +1148,17 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         return installedFailure != null ? installedFailure : demandScope == null ? null : demandScope.failure();
     }
 
-    protected final void updateModelHash(Hash256 hash) {
+    protected final void updateModelHash(ModelId hash) {
         rejectCandidateMutation();
         waitForAsyncUpdate();
         if (lifecycle.isRetired())
             throw new IllegalStateException("Retired entity cannot be assigned");
         modelBinding.updateModelHash(hash, requestedRenderTargetId(), requestedTextureName());
+        registerDemandIfAvailable();
+    }
+
+    protected final void requestBuiltinDefault() {
+        modelBinding.requestBuiltinDefault();
         registerDemandIfAvailable();
     }
 
@@ -1131,7 +1208,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         lifecycle.rejectRecursiveCall();
         waitForAsyncUpdate();
         if (!isRunRequired()) {
-            if (demandScope != null || modelBinding.resourceHolder() != null || expressionRuntime.module().isPresent())
+            if (demandScope != null || modelBinding.resourceHolder() != null || expressionRuntime.store().isPresent())
                 lifecycle.endUse();
             return;
         }
@@ -1144,7 +1221,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         registerDemandIfAvailable();
     }
 
-    public final com.elfmcys.ysm.client.demand.ClientDemandCoordinator.EntityScope demandScope() {
+    public final com.elfmcys.ysm.client.entity.EntityModelDemand demandScope() {
         registerDemandIfAvailable();
         return java.util.Objects.requireNonNull(demandScope, "Client demand owner is unavailable");
     }
@@ -1178,13 +1255,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         });
         var input = modelBinding.assignment(requestedRenderTargetId(), requestedTextureName(), fallbackRenderTargetId(),
             resourceDemandMode(), resourcePurpose(), resourceSubjectType());
-        if (input.request() == null && input.fallback() == null && modelBinding.resourceHolder() != null)
+        if (modelBinding.resourceHolder() != null && !modelBinding.permitsCurrentUse())
             lifecycle.tryInstallation(() -> {
                 lifecycle.endUse();
                 return true;
             });
         return new com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Assignment(input.request(), input.fallback(),
-            input.mode(), isRunRequired());
+            input.mode(), isRunRequired(), input.operation());
     }
 
     @Override
@@ -1203,6 +1280,26 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         return !lifecycle.isEndingUse() && modelBinding.matchesSelection(target);
     }
 
+    public final void selectModel(ModelId hash, String texture, Object operation) {
+        rejectNewUse();
+        waitForAsyncUpdate();
+        modelBinding.select(hash, requestedRenderTargetId(), texture, operation);
+        registerDemandIfAvailable();
+    }
+
+    public final Object selectionOperation() {
+        return modelBinding.selectionOperation();
+    }
+
+    public final boolean installedForSelection(Object operation) {
+        lifecycle.assertStateAccess();
+        return !lifecycle.isEndingUse() && modelBinding.installedForSelection(operation);
+    }
+
+    protected final String selectedTexture() {
+        return modelBinding.selectedTexture();
+    }
+
     @Override
     public final Throwable failure(ResourceRequest request) {
         lifecycle.assertStateAccess();
@@ -1212,15 +1309,19 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     /**
      * Attempts installation in the current idle window without waiting for a task.
      *
-     * <p>Ensures: INSTALLED means that publication committed. A later observer failure does not undo publication.
+     * <p>
+     * Ensures: INSTALLED means that publication committed. A later observer failure does not undo publication.
      *
-     * <p>Failure: BUSY leaves the lease with the caller, including when a task finished but remains unjoined.
-     * An entered attempt can return STALE or REJECTED. Required-default installation failures retain their exceptional boundary.
+     * <p>
+     * Failure: BUSY leaves the lease with the caller, including when a task finished but remains unjoined. An entered
+     * attempt can return STALE or REJECTED. Required-default installation failures retain their exceptional boundary.
      *
-     * <p>Ownership: every entered attempt consumes the lease, including rejection and failure.
-     * The installed holder owns the lease after publication; otherwise the attempt closes the lease.
+     * <p>
+     * Ownership: every entered attempt consumes the lease, including rejection and failure. The installed holder owns
+     * the lease after publication; otherwise the attempt closes the lease.
      *
-     * <p>Seam: implements [installation publication](docs/architecture/animation/entity-lifecycle.md#安装发布结果).
+     * <p>
+     * Seam: implements [installation publication](docs/architecture/animation/entity-lifecycle.md#安装发布结果).
      *
      * @param request the exact selected request to accept
      * @param lease the caller-owned lease for this attempt
@@ -1230,6 +1331,15 @@ public abstract class AnimatableEntity<TEntity extends Entity>
      */
     @Override
     public final com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult
+        install(ResourceRequest request, ResourceLease lease, boolean fallback, boolean full, Object operation) {
+        if (selectionOperation() != operation) {
+            lease.close();
+            return com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult.STALE;
+        }
+        return install(request, lease, fallback, full);
+    }
+
+    public final com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult
         install(ResourceRequest request, ResourceLease lease, boolean fallback, boolean full) {
         return lifecycle.tryInstallation(() -> {
             var current = assignment();
@@ -1237,14 +1347,19 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                 lease.close();
                 return com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult.STALE;
             }
-            return modelBinding.accept(request, lease, fallback, full, this::prepareInstallation);
+            var result = modelBinding.accept(request, lease, fallback, full, this::prepareInstallation);
+            if (result == com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult.INSTALLED
+                && demandScope != null)
+                demandScope.reportInstalledUse(modelBinding.installedRequest());
+            return result;
         }).orElse(com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult.BUSY);
     }
 
     protected final void installReadyForPreview(ResourceRequest request, ResourceLease lease) {
         lifecycle.rejectRecursiveCall();
         waitForAsyncUpdate();
-        updateModelHash(request.modelId());
+        updateModelHash(request.modelId() instanceof com.elfmcys.ysm.model.domain.PublishedModelId.Model model
+            ? model.hash() : null);
         modelBinding.installReadyForPreview(request, lease, this::prepareInstallation);
     }
 
@@ -1319,10 +1434,19 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     private EntityExpressionRuntime.ProjectionSink localProjection;
 
     protected EntityExpressionRuntime.ProjectionSink prepareLocalProjection() {
-        return (delta, finalWindow) -> { onNormalRoamingChanges(delta); return true; };
+        return (delta, finalWindow) -> {
+            onNormalRoamingChanges(delta);
+            return true;
+        };
     }
 
+    /** Completes ordered owner inputs before ordinary animation can borrow this installation. */
+    protected void prepareStateInputs() {}
+
     private void prepareEvaluation() {
+        if (!canEvaluate())
+            return;
+        prepareStateInputs();
         if (!canEvaluate())
             return;
         expressionRuntime.prepareExecution();
@@ -1339,20 +1463,28 @@ public abstract class AnimatableEntity<TEntity extends Entity>
      *
      * @return a current observation, not a reservation for a later operation
      */
-    public final boolean hasPendingUpdate() { return lifecycle.hasTask(); }
+    public final boolean hasPendingUpdate() {
+        return lifecycle.hasTask();
+    }
 
-    protected final void assertExecutionStateAccess() { lifecycle.assertStateAccess(); }
+    protected final void assertExecutionStateAccess() {
+        lifecycle.assertStateAccess();
+    }
 
-    protected final void assertPublicMutationAccess() { lifecycle.rejectCandidateMutation(); }
+    protected final void assertPublicMutationAccess() {
+        lifecycle.rejectCandidateMutation();
+    }
 
     /**
      * Seals a GUI owner for one task before an executor accepts that task.
      *
-     * <p>Requires: the caller is on the main thread and the GUI owner is active, idle, and has no task.
-     * The operation must use only the supplied permit's internal operations on this owner.
+     * <p>
+     * Requires: the caller is on the main thread and the GUI owner is active, idle, and has no task. The operation must
+     * use only the supplied permit's internal operations on this owner.
      *
-     * <p>Execution: the operation runs inline in GuiTask.run(), at most once, on the selected execution thread.
-     * The owner remains sealed after completion until explicit join. Rejection is only for a task that never started.
+     * <p>
+     * Execution: the operation runs inline in GuiTask.run(), at most once, on the selected execution thread. The owner
+     * remains sealed after completion until explicit join. Rejection is only for a task that never started.
      *
      * @param operation the synchronous operation that borrows the exact task permit
      * @return the task whose run, rejection, and join obligations belong to the caller
@@ -1362,17 +1494,28 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         Objects.requireNonNull(operation, "operation");
         if (resourcePurpose() != com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.GUI)
             throw new IllegalStateException("Only a GUI entity can reserve GUI execution");
+        var previousInstallation = modelBinding.resourceHolder();
         var execution = new GuiExecution(assignment());
         var task = lifecycle.reserveGuiTask(true, () -> operation.apply(execution));
         execution.task = task;
-        return new GuiTask<>(task, () -> finishProjections(true));
+        return new GuiTask<>(task, () -> {
+            finishProjections(true);
+            if (modelBinding.resourceHolder() != previousInstallation && demandScope != null) {
+                var failure =
+                    attemptCleanup(null, () -> demandScope.reportInstalledUse(modelBinding.installedRequest()));
+                failure =
+                    attemptCleanup(failure, () -> demandScope.observeInstallation(modelBinding.installedRequest()));
+                throwCleanupFailure(failure);
+            }
+        });
     }
 
     /**
      * Grants internal access only while this permit's exact task executes.
      *
-     * <p>Ownership: the callback must not retain this permit for later use or use it for another owner.
-     * The permit grants neither public lifecycle access nor draw access, even when the task runs on the main thread.
+     * <p>
+     * Ownership: the callback must not retain this permit for later use or use it for another owner. The permit grants
+     * neither public lifecycle access nor draw access, even when the task runs on the main thread.
      */
     public final class GuiExecution {
         private final com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Assignment assignment;
@@ -1385,15 +1528,22 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         /**
          * Applies the captured GUI assignment inside this exact task's installation window.
          *
-         * <p>Ownership: the operation consumes the lease on every entered path. A permit or thread violation
-         * occurs before entry and leaves the supplied lease with the caller.
+         * <p>
+         * Ownership: the operation consumes the lease on every entered path. A permit or thread violation occurs before
+         * entry and leaves the supplied lease with the caller.
          *
          * @return INSTALLED after publication, or STALE or REJECTED after consuming the lease
          */
-        public com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult install(
-            ResourceRequest request, ResourceLease lease, boolean fallback, boolean full) {
+        public com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult install(ResourceRequest request,
+            ResourceLease lease, boolean fallback, boolean full) {
+            return install(request, lease, fallback, full, assignment.operation());
+        }
+
+        public com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult install(ResourceRequest request,
+            ResourceLease lease, boolean fallback, boolean full, Object operation) {
             return lifecycle.inGuiExecution(task, () -> {
-                if (!assignment.permitted()
+                if (!isRunRequired() || lifecycle.isEndingUse() || assignment.operation() != operation
+                    || modelBinding.selectionOperation() != operation || !assignment.permitted()
                     || !request.equals(fallback ? assignment.fallback() : assignment.request())) {
                     lease.close();
                     return com.elfmcys.ysm.client.demand.ClientDemandCoordinator.InstallationResult.STALE;
@@ -1405,11 +1555,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         /**
          * Prepares CPU pose output while this exact GUI task owns the entity.
          *
-         * <p>Failure: allocation failure invalidates this extraction and returns null. Other failures
-         * follow the task's exceptional completion. This operation does not submit a host draw.
+         * <p>
+         * Failure: allocation failure invalidates this extraction and returns null. Other failures follow the task's
+         * exceptional completion. This operation does not submit a host draw.
          *
-         * <p>Ownership: the returned pose borrows this installation's output. The consumer must join
-         * the task before draw consumption and must not retain the pose across a later owner update or ended use.
+         * <p>
+         * Ownership: the returned pose borrows this installation's output. The consumer must join the task before draw
+         * consumption and must not retain the pose across a later owner update or ended use.
          *
          * @return the prepared pose, or null when this task produced no consumable pose
          */
@@ -1430,9 +1582,9 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     /**
      * Carries one sealed GUI execution and its explicit authority-return operation.
      *
-     * <p>Execution: run() executes once at most. The caller must reject an unaccepted, unstarted task,
-     * or join an accepted task on the main thread. Completion alone does not return owner access.
-     * A callback must not join its own task.
+     * <p>
+     * Execution: run() executes once at most. The caller must reject an unaccepted, unstarted task, or join an accepted
+     * task on the main thread. Completion alone does not return owner access. A callback must not join its own task.
      */
     public static final class GuiTask<R> implements Runnable {
         private final EntityExecutionLifecycle.GuiTask<R> task;
@@ -1444,15 +1596,21 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         }
 
         @Override
-        public void run() { task.run(); }
+        public void run() {
+            task.run();
+        }
 
-        public void reject() { task.reject(); }
+        public void reject() {
+            task.reject();
+        }
 
         /**
          * Waits for the complete task and returns execution authority before adopting final projections.
          *
-         * <p>Failure: task and cleanup failures leave the task joined; combined GUI failures preserve fatal-error priority.
-         * Interruptions do not abandon the wait; the method restores the interrupt flag after the terminal handoff.
+         * <p>
+         * Failure: task and cleanup failures leave the task joined; combined GUI failures preserve fatal-error
+         * priority. Interruptions do not abandon the wait; the method restores the interrupt flag after the terminal
+         * handoff.
          *
          * @return the callback result after the task and its cleanup complete
          */
@@ -1469,8 +1627,10 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                 } catch (RuntimeException | Error failure) {
                     var combined = EntityExecutionLifecycle.appendGuiFailure(primary, failure);
                     if (combined != primary) {
-                        if (combined instanceof RuntimeException runtime) throw runtime;
-                        if (combined instanceof Error error) throw error;
+                        if (combined instanceof RuntimeException runtime)
+                            throw runtime;
+                        if (combined instanceof Error error)
+                            throw error;
                     }
                 }
             }
@@ -1478,17 +1638,38 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     /** Stable installation routing; this identity does not grant access to its mutable state. */
-    public final Object projectionIdentity() { return modelBinding.resourceHolder(); }
+    public final Object projectionIdentity() {
+        return modelBinding.resourceHolder();
+    }
 
     public final boolean canAdoptProjection(Object identity) {
         return lifecycle.canAdoptProjection() && identity != null && identity == modelBinding.resourceHolder()
             && canEvaluate();
     }
 
+    /**
+     * Retains this owner once for the open world invocation, before submission or synchronous projection adoption.
+     *
+     * <p>
+     * Requires: the caller uses the main thread inside an open invocation. Registration lasts through all task and
+     * final projection handoffs, including reset and retirement.
+     */
+    public final void retainForAnimationInvocation() {
+        if (!invocationRetained) {
+            AnimationParallelTicker.retainForFinalProjection(this);
+            invocationRetained = true;
+        }
+    }
+
+    /** Requires the coordinator's main-thread drain of all tasks and final projections to have completed. */
+    public final void releaseAnimationInvocation() {
+        invocationRetained = false;
+    }
+
     public final void finishProjections(boolean finalWindow) {
         lifecycle.assertMainThread();
-        if (!finalWindow)
-            AnimationParallelTicker.retainForFinalProjection(this);
+        if (!finalWindow && AnimationParallelTicker.isInvocationActive())
+            retainForAnimationInvocation();
         if (!lifecycle.hasTask())
             expressionRuntime.adoptProjections(finalWindow);
     }
@@ -1496,9 +1677,10 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     /**
      * Starts this invocation's owner update, or updates synchronously outside an invocation.
      *
-     * <p>Execution: the main-thread caller first joins prior work and prepares the owner before submission.
-     * Successful submission transfers private-state access until waitForAsyncUpdate() completes.
-     * Submission failure propagates without leaving a pending task.
+     * <p>
+     * Execution: the main-thread caller first joins prior work and prepares the owner before submission. Successful
+     * submission transfers private-state access until waitForAsyncUpdate() completes. Submission failure propagates
+     * without leaving a pending task.
      *
      * @param partialTicks the frame interpolation fraction supplied by the host
      */
@@ -1513,19 +1695,37 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         if (!canEvaluate())
             return;
         prepareEvaluation();
+        if (!canEvaluate())
+            return;
         lifecycle.submit(() -> computePose(partialTicks, RenderContext.levelImmutable()));
     }
 
     /**
      * Joins ordinary work before returning private-state access and adopting eligible projections.
      *
-     * <p>Execution: the main-thread call can block. Task completion includes the task's finally blocks.
-     * Interruptions do not release the owner early; the method restores the interrupt flag after the wait.
-     * A reserved GUI task requires GuiTask.join() instead.
+     * <p>
+     * Execution: the main-thread call can block. Task completion includes the task's finally blocks. Interruptions do
+     * not release the owner early; the method restores the interrupt flag after the wait. A reserved GUI task requires
+     * GuiTask.join() instead.
      */
     public final void waitForAsyncUpdate() {
+        waitForUpdate(false);
+    }
+
+    /**
+     * Joins ordinary animation for an entity render, executing the original task if it is still queued. All task and
+     * projection handoff obligations remain the same as {@link #waitForAsyncUpdate()}.
+     */
+    public final void waitForRenderUpdate() {
+        waitForUpdate(true);
+    }
+
+    private void waitForUpdate(boolean forRender) {
         try {
-            lifecycle.awaitTask();
+            if (forRender)
+                lifecycle.awaitTaskForRender();
+            else
+                lifecycle.awaitTask();
         } finally {
             if (!lifecycle.hasTask())
                 finishProjections(!AnimationParallelTicker.isInvocationActive());
@@ -1597,13 +1797,13 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     private static final class FailedUse extends RuntimeException {
         private final ResourceHolder installation;
 
-        private FailedUse(AnimatableEntity<?> owner, ResourceHolder installation,
-            AnimationEvent<?> event, RuntimeException cause) {
+        private FailedUse(AnimatableEntity<?> owner, ResourceHolder installation, AnimationEvent<?> event,
+            RuntimeException cause) {
             super("Component lifecycle failed: owner=" + owner.getClass().getName() + "@"
-                + Integer.toHexString(System.identityHashCode(owner)) + " request="
-                + installation.model.modelHash() + " target=" + installation.model.modelHash() + "/"
-                + installation.model.renderTargetId() + " context=" + event.getRenderContext() + " tick="
-                + event.getEntityTickCount() + " time=" + event.renderTicks, cause);
+                + Integer.toHexString(System.identityHashCode(owner)) + " request=" + installation.model.modelHash()
+                + " target=" + installation.model.modelHash() + "/" + installation.model.renderTargetId() + " context="
+                + event.getRenderContext() + " tick=" + event.getEntityTickCount() + " time=" + event.renderTicks,
+                cause);
             this.installation = installation;
         }
     }
@@ -1617,19 +1817,59 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     @Nullable
     public final UserFunctionProgram getCompiledUserFunction(String name) {
         var target = getModelRenderTarget();
-        return target == null ? null : assets(target).userFunctions().get(name);
+        return target == null ? null : requireSession().store.functions().get(name);
     }
 
-    static final class ResourceHolder implements Closeable {
-        private final ResourceLease lease;
-        public final ModelRenderTarget model;
+    private AnimationSession requireSession() {
+        requireInstallation();
+        return Objects.requireNonNull(animationSession, "Entity has no animation session");
+    }
+
+    private static final class AnimationSession implements AutoCloseable {
+        private AnimationStore store;
         private AnimatedGeoModel geoModel;
         private AnimationData animations;
         private AnimationProcessor<?> processor;
         private ComponentScope components;
         private boolean componentsSampled;
         private EntityExpressionRuntime.PreparedInstallation expressions;
-        private boolean ownsState = true;
+
+        private AnimationSession(AnimationStore store) {
+            this.store = store;
+        }
+
+        @Override
+        public void close() {
+            var failure = attemptCleanup(null, () -> {
+                if (processor != null)
+                    processor.clearModel();
+            });
+            failure = attemptCleanup(failure, () -> {
+                if (animations != null)
+                    animations.reset();
+            });
+            failure = attemptCleanup(failure, () -> {
+                if (components != null)
+                    components.invalidate();
+            });
+            failure = attemptCleanup(failure, () -> {
+                if (expressions != null)
+                    expressions.close();
+            });
+            expressions = null;
+            processor = null;
+            animations = null;
+            components = null;
+            geoModel = null;
+            store = null;
+            throwCleanupFailure(failure);
+        }
+    }
+
+    /** A replaceable target binding. Only a full candidate owns unpublished private state. */
+    static class ResourceHolder implements Closeable {
+        private ResourceLease lease;
+        public ModelRenderTarget model;
         private boolean closed;
         private boolean sharedStateActivationStarted;
         private Runnable abortSharedStateActivation;
@@ -1637,9 +1877,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
 
         ResourceHolder(ResourceLease lease) {
             this.lease = lease;
-            if (!(lease.poll() instanceof AcquireResult.Ready ready)) {
+            if (!(lease.poll() instanceof AcquireResult.Ready ready))
                 throw new IllegalArgumentException("Installation requires a Ready lease");
-            }
             model = ready.target();
         }
 
@@ -1654,7 +1893,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         }
 
         boolean sharedStateActivationStarted() {
-            return sharedStateActivationStarted && !ownsState;
+            return sharedStateActivationStarted;
         }
 
         void abortSharedStateActivation() {
@@ -1667,29 +1906,40 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             if (closed)
                 return;
             closed = true;
+            var previous = lease;
+            lease = null;
+            model = null;
+            activation = null;
+            abortSharedStateActivation = null;
+            if (previous != null)
+                previous.close();
+        }
+    }
+
+    private static final class FullInstallationCandidate extends ResourceHolder {
+        private AnimationSession session;
+
+        private FullInstallationCandidate(ResourceLease lease) {
+            super(lease);
+        }
+
+        @Override
+        public void close() {
+            var retired = session;
+            session = null;
+            Throwable failure = null;
             try {
-                if (expressions != null)
-                    expressions.close();
-            } finally {
-                try {
-                    if (ownsState) {
-                        try {
-                            if (processor != null)
-                                processor.clearModel();
-                        } finally {
-                            try {
-                                if (animations != null)
-                                    animations.reset();
-                            } finally {
-                                if (components != null)
-                                    components.invalidate();
-                            }
-                        }
-                    }
-                } finally {
-                    lease.close();
-                }
+                if (retired != null)
+                    retired.close();
+            } catch (RuntimeException | Error cleanup) {
+                failure = cleanup;
             }
+            try {
+                super.close();
+            } catch (RuntimeException | Error cleanup) {
+                failure = CleanupFailures.merge(failure, cleanup);
+            }
+            throwCleanupFailure(failure);
         }
     }
 

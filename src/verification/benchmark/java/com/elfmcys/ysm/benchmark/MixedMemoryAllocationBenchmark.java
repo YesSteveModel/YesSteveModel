@@ -32,7 +32,8 @@ public class MixedMemoryAllocationBenchmark {
     private final long[] addresses = new long[SLOTS];
     private final ByteBuffer[] buffers = new ByteBuffer[SLOTS];
 
-    private record Operation(int slot, int bytes) {}
+    private record Operation(int slot, int bytes) {
+    }
 
     @Setup(Level.Trial)
     public void setup() {
@@ -64,7 +65,7 @@ public class MixedMemoryAllocationBenchmark {
                     checksum ^= address;
                     if (verify) {
                         sizes[slot] = operation.bytes;
-                        markers[slot] = (byte) i;
+                        markers[slot] = (byte)i;
                         MemoryAllocationBenchmark.verify(address, sizes[slot], markers[slot]);
                     }
                 } else {

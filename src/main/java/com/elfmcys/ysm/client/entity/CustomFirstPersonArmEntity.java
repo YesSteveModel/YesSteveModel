@@ -15,7 +15,6 @@ import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
 import com.elfmcys.ysm.geckolib3.geo.RenderContext;
 import com.elfmcys.ysm.model.domain.RenderTargetIds;
-import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.ResourceLocation;
@@ -34,7 +33,8 @@ public class CustomFirstPersonArmEntity extends AnimatableEntity<LocalPlayer> {
         super(player, false);
         this.mainModelEntity = mainModelEntity;
         if (mainModelEntity.isAssigned())
-            updateModelHash(mainModelEntity.getModelHash());
+            selectModel(mainModelEntity.getModelHash(), mainModelEntity.getRequestedTextureName(),
+                mainModelEntity.selectionOperation());
     }
 
     @Override
@@ -143,14 +143,15 @@ public class CustomFirstPersonArmEntity extends AnimatableEntity<LocalPlayer> {
     protected void refreshAssignment() {
         if (isAssigned()) {
             if (mainModelEntity.isAssigned())
-                updateModelHash(mainModelEntity.getModelHash());
+                selectModel(mainModelEntity.getModelHash(), mainModelEntity.getRequestedTextureName(),
+                    mainModelEntity.selectionOperation());
             else
                 revokeAssignment();
         }
     }
 
     @Override
-    protected AnimationStore animationSource() {
+    protected AnimationStore.View animationSource() {
         return getModelRenderTarget().playerResources().fpArmAnimations();
     }
 
@@ -213,8 +214,8 @@ public class CustomFirstPersonArmEntity extends AnimatableEntity<LocalPlayer> {
     }
 
     @Override
-    protected RenderTargetExpressionModule expressions(com.elfmcys.ysm.model.resource.client.ModelRenderTarget target) {
-        return target.armExpressions();
+    protected AnimationStore animationStore(com.elfmcys.ysm.model.resource.client.ModelRenderTarget target) {
+        return target.armAnimationStore();
     }
 
     @Override

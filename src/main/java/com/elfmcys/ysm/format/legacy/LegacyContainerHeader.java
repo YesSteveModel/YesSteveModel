@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.format.legacy;
 
-import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -14,7 +13,7 @@ public final class LegacyContainerHeader {
     private LegacyContainerHeader() {}
 
     public static Version probe(Path source) throws IOException {
-        try (var input = new BufferedInputStream(Files.newInputStream(source))) {
+        try (var input = Files.newInputStream(source)) {
             var prefix = input.readNBytes(8);
             if (prefix.length == 8 && startsWith(prefix, RAW_MAGIC)) {
                 var version = ByteBuffer.wrap(prefix, RAW_MAGIC.length, Integer.BYTES).getInt();
@@ -25,6 +24,19 @@ public final class LegacyContainerHeader {
                 };
             }
             return startsWith(prefix, V3_MAGIC) ? Version.V3_ENCRYPTED : Version.UNSUPPORTED;
+        }
+    }
+
+    /** Reads the stored envelope digest only; this is a change hint, not bundle validation. */
+    public static byte[] rawDigest(Path source) throws IOException {
+        try (var input = Files.newInputStream(source)) {
+            var header = input.readNBytes(24);
+            if (header.length != 24 || !startsWith(header, RAW_MAGIC))
+                throw new IOException("Invalid legacy raw header");
+            var version = ByteBuffer.wrap(header, 4, 4).getInt();
+            if (version != 1 && version != 2)
+                throw new IOException("Unsupported legacy raw version");
+            return java.util.Arrays.copyOfRange(header, 8, 24);
         }
     }
 

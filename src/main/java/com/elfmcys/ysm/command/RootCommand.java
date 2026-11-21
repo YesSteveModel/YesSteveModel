@@ -20,8 +20,8 @@ public class RootCommand {
         root.then(ExportCommand.get());
         root.then(ExportCommand.getAll());
         root.then(PlayAnimationCommand.get());
-        root.then(MolangCommand.get());
         root.then(PingCommand.get());
+        root.then(CacheCommand.get());
         dispatcher.register(root);
     }
 

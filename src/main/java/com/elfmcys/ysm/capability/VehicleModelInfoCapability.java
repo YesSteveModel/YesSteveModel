@@ -1,15 +1,15 @@
 package com.elfmcys.ysm.capability;
 
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import it.unimi.dsi.fastutil.objects.Object2FloatOpenHashMap;
 import net.minecraft.nbt.CompoundTag;
 
 public class VehicleModelInfoCapability {
-    private Hash256 modelHash;
+    private PublishedModelId modelHash;
     private boolean initialized = false;
     private Object2FloatOpenHashMap<String> molangVarsServerBound = new Object2FloatOpenHashMap<>();
 
-    public void update(Hash256 modelHash, Object2FloatOpenHashMap<String> molangVarsServerBound) {
+    public void update(PublishedModelId modelHash, Object2FloatOpenHashMap<String> molangVarsServerBound) {
         this.modelHash = modelHash;
         this.initialized = true;
         this.molangVarsServerBound = molangVarsServerBound;
@@ -21,7 +21,7 @@ public class VehicleModelInfoCapability {
         this.molangVarsServerBound = source.molangVarsServerBound;
     }
 
-    public Hash256 getOwnerModelHash() {
+    public PublishedModelId getOwnerModelId() {
         return modelHash;
     }
 
@@ -35,7 +35,7 @@ public class VehicleModelInfoCapability {
 
     public CompoundTag serializeNBT() {
         CompoundTag tag = new CompoundTag();
-        tag.putString("owner_model_hash", modelHash == null ? "" : modelHash.toString());
+        tag.putString("owner_model_id", modelHash == null ? "" : modelHash.toString());
         tag.putBoolean("initialized", initialized);
 
         CompoundTag varsTag = new CompoundTag();
@@ -48,9 +48,9 @@ public class VehicleModelInfoCapability {
     }
 
     public void deserializeNBT(CompoundTag nbt) {
-        var stored = nbt.getString("owner_model_hash");
+        var stored = nbt.getString("owner_model_id");
         try {
-            this.modelHash = stored.isEmpty() ? null : Hash256.parse(stored);
+            this.modelHash = stored.isEmpty() ? null : PublishedModelId.parse(stored);
         } catch (IllegalArgumentException ignored) {
             this.modelHash = null;
         }

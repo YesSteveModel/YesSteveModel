@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.protocol;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.expression.aot.TestExpressionModules;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,7 @@ final class ExpressionProtocolTest {
                         module.sharedSemantics(TestExpressionModules.consumerId())));
             assertFalse(ExpressionProtocol.matches(
                 ExpressionProtocol.identity(module.sharedSemantics(TestExpressionModules.consumerId())).toBuilder()
-                    .setModelId(java.nio.ByteBuffer.wrap(new byte[32])).build(),
+                    .setModelId("hash:" + java.util.HexFormat.of().formatHex(new byte[32])).build(),
                 module.sharedSemantics(TestExpressionModules.consumerId())));
             assertFalse(
                 ExpressionProtocol

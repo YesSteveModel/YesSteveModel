@@ -19,48 +19,48 @@
 
 ## DD.default-model-is-reliability-baseline
 
-- Claim: 普通严重错误按目标降级：humanoid 使用内置 default，projectile/vehicle 恢复宿主；默认内容在启动期建立可靠基线。
-- Rationale: 可变或未取得的外部内容不能承担兜底。默认内容由模组随 jar 提供并每次启动全量建立，付出确定的初始化成本以免在故障现场再次依赖内容加载；投射物与载具保留各自宿主表现，不套用默认人形。默认自身失败适用共享的指定例外，不能扩展为普通内容失败许可。
+- Claim: 普通严重错误按目标类别降级：humanoid 使用内置 default，projectile 与 vehicle 恢复宿主；默认内容在启动期就应建立可靠基线。
+- Rationale: 外部内容可能变动，也可能尚未取得，无法承担兜底职责。因此默认内容随模组 jar 提供，并在每次启动时全量准备完毕，付出确定的启动开销以免在故障现场再次依赖外部加载；投射物与载具则保留各自的宿主表现，不套用默认人形。默认内容自身的失败适用共享的指定例外，不能扩展为普通内容失败许可。
 
 ### BC.severe-model-failure-selects-default
 
-- Claim: 普通模型的严重错误阻断 humanoid 目标的模型逻辑或渲染时，受影响的使用进入默认模型降级；这不授权改写玩家的玩法状态或服务端权威选择。
+- Claim: 当普通模型的严重错误阻断 humanoid 目标的模型逻辑或渲染时，受影响的实体降级为默认模型；这一降级不授权改写玩家的玩法状态或服务端权威选择。
 
 ### BC.unavailable-replacement-restores-host
 
-- Claim: Projectile、vehicle 渲染失败直接撤销其视觉替换并恢复宿主绘制，恢复不得重复绘制、破坏其他内容或改写玩法状态。
+- Claim: 当 projectile 或 vehicle 渲染失败时，直接撤销其视觉替换并恢复宿主绘制；恢复过程不得重复绘制、破坏其他内容或改写玩法状态。
 
 ### BC.default-startup-is-required
 
-- Claim: 每次启动以模组 jar 内嵌资源作为默认模型的唯一内容来源。物化过程允许读写磁盘及复用有效派生缓存，不要求每次重新编译。初始化完成前仍须完成本侧职责所需的全部默认内容物化与可用性验证。阻断性错误属于默认初始化失败，不能发布未完成兜底。
+- Claim: 每次启动均以模组 jar 内嵌资源作为默认模型的唯一内容来源。准备过程允许读写磁盘并复用有效的派生缓存，不要求每次都重新编译，但在初始化完成前，必须完成本侧职责所需的全部默认内容准备与可用性验证。遇到阻断性错误属于默认初始化失败，不得发布尚未准备完成的兜底。
 
 ### BC.client-default-startup-closure
 
-- Claim: 客户端在 startup 完成全部默认可用 render target 及其所需内容，不能把首次内容取得或准备留到运行期故障现场。
+- Claim: 客户端必须在启动阶段准备好全部默认可用的 render target 及其所需内容，不能把首次获取或准备留到运行期故障现场。
 
 ### BC.server-default-startup-closure
 
-- Claim: 服务端在 startup 完成其职责所需的默认只读内容，不承担仅供客户端呈现且服务端没有消费者的派生资源成本。
+- Claim: 服务端在启动阶段只需准备好自身职责所需的默认只读内容，不承担仅供客户端呈现且服务端没有消费方的派生资源开销。
 
 ### BC.default-independent-of-ordinary-lifecycle
 
-- Claim: 普通模型热加载、目录切换、网络中断和缓存回收不得替换、修改或撤走默认模型资产；实体各自的动画播放状态不属于这些只读资产。
+- Claim: 普通模型热加载、目录切换、网络中断和缓存回收都不得替换、修改或撤走默认模型资产；各实体自身的动画播放状态不属于这些只读资产。
 
 ### BC.default-has-no-disk-dependency
 
-- Claim: 默认内容物化完成后，默认模型的加载与绑定不得依赖磁盘，所需内容应已驻留。初始化完成后，进程存续期间不因磁盘和网络不可用而丢失默认内容。
+- Claim: 默认内容准备完成后，默认模型的加载与绑定不得再依赖磁盘，所需内容必须已常驻内存。初始化完成后，在进程存续期间不会因磁盘或网络不可用而丢失默认内容。
 
 ### BC.default-fallback-failure-is-exceptional
 
 - Constraints: [CON.default-failure-exception](../shared.md#condefault-failure-exception)
 - Decision: [DD.default-model-is-reliability-baseline](model-fallback.md#dddefault-model-is-reliability-baseline)
-- Claim: Humanoid 回退 `default` 失败时不要求继续恢复宿主；默认兜底的内容与执行路径失败必须在开发期严格排除，并尽量在 startup 提前暴露，运行期仍发生时按默认基线例外处理。
+- Claim: Humanoid 回退 `default` 失败时，不要求继续恢复宿主。默认兜底的内容与执行路径错误必须在开发期严格排除，并尽量在启动阶段提前暴露；如果运行期仍发生此类故障，则按默认基线例外处理。
 
 ## DD.degraded-presentation-can-recover
 
-- Claim: 普通降级保留恢复自定义表现的机会，不永久停用后续替换。
-- Rationale: 切模或与失败相关的条件变化可能消除故障；重新尝试应有收益依据，不能让已知失败持续消耗主循环。
+- Claim: 普通降级保留恢复自定义表现的机会，不会永久停用后续替换。
+- Rationale: 切换模型或与失败相关的条件发生变化后，故障可能已经消除；但重新尝试必须有明确的新依据，不能让已知失败持续消耗主循环资源。
 
 ### BC.degraded-replacement-can-recover
 
-- Claim: 普通降级后，只有显式 retry/reload，或与失败相关的内容、权限、连接或宿主能力发生变化，才恢复昂贵尝试的资格；单纯切走再切回、时间经过或逐帧观察都不构成新依据。条件未变化时不得反复执行已知失败的昂贵工作。重试服从当前访问权限，失败时保留已建立的默认模型或宿主表现，不保证恢复成功，也不得阻塞或拖慢游戏主循环。
+- Claim: 普通降级后，只有显式触发 retry 或 reload，或者与失败相关的内容、权限、连接或宿主能力发生变化，才恢复发起昂贵重试的资格；单纯切走再切回、时间流逝或逐帧检查都不构成新依据。条件未变化时，不得反复执行已知会失败的昂贵工作。重试仍服从当前访问权限，再次失败时保留已建立的默认模型或宿主表现，既不保证恢复成功，也不得阻塞或拖慢游戏主循环。

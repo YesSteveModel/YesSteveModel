@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.capability.ProjectileModelInfoCapability;
 import com.elfmcys.ysm.capability.VehicleModelInfoCapability;
 import com.elfmcys.ysm.model.domain.Hash256;
@@ -15,13 +17,13 @@ class MinecraftStateHandlerTest {
     void mapsProjectileAndVehicleStateWithoutNbt() {
         var hashBytes = new byte[Hash256.SIZE];
         hashBytes[0] = 42;
-        var hash = new Hash256(hashBytes);
+        var hash = ModelId.fromHash(new Hash256(hashBytes));
         var variables = new Object2FloatOpenHashMap<String>();
         variables.put("query.test", 1.5F);
         var projectile = new ProjectileModelInfoCapability();
-        projectile.init(hash, variables);
+        projectile.init(PublishedModelId.model(hash), variables);
         var vehicle = new VehicleModelInfoCapability();
-        vehicle.update(hash, variables);
+        vehicle.update(PublishedModelId.model(hash), variables);
 
         var projectileMessage = MinecraftStateHandler.projectile(7, projectile);
         var vehicleMessage = MinecraftStateHandler.vehicle(9, vehicle);
@@ -30,8 +32,8 @@ class MinecraftStateHandlerTest {
         assertEquals(9, vehicleMessage.entity().entityId());
         assertTrue(!projectileMessage.entity().hasPlayerId());
         assertTrue(!vehicleMessage.entity().hasPlayerId());
-        assertTrue(ProtoBytes.equals(hash, projectileMessage.model().modelHash()));
-        assertTrue(ProtoBytes.equals(hash, vehicleMessage.model().modelHash()));
+        assertEquals(hash.toString(), projectileMessage.model().modelId());
+        assertEquals(hash.toString(), vehicleMessage.model().modelId());
         assertEquals("query.test", projectileMessage.molangVariables().get(0).name());
         assertEquals(1.5F, vehicleMessage.molangVariables().get(0).value_());
     }

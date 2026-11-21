@@ -7,7 +7,9 @@ public record MolangInputs(float partialTick, float renderTickDelta, @Nullable C
     @Nullable Animation animation) {
     public interface Target {}
 
-    public record Controller(Target target, boolean allAnimationsFinished, boolean anyAnimationFinished) {}
+    public record Controller(Target target, boolean allAnimationsFinished, boolean anyAnimationFinished) {
+    }
 
-    public record Animation(Target target, float time) {}
+    public record Animation(Target target, float time) {
+    }
 }

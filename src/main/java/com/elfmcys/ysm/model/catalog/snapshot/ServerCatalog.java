@@ -4,7 +4,8 @@ import com.elfmcys.ysm.model.catalog.content.ContentBinding;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.domain.ModelScanReport;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
@@ -23,8 +24,8 @@ public final class ServerCatalog {
         this.catalog = Objects.requireNonNull(catalog, "catalog");
     }
 
-    public Map<Hash256, ManagedContainer> models() {
-        var result = new LinkedHashMap<Hash256, ManagedContainer>();
+    public Map<ModelId, ManagedContainer> models() {
+        var result = new LinkedHashMap<ModelId, ManagedContainer>();
         catalog.byModelId()
             .forEach((modelId, record) -> result.put(modelId, (ManagedContainer)record.binding().content()));
         return Map.copyOf(result);
@@ -38,7 +39,11 @@ public final class ServerCatalog {
         return catalog.report();
     }
 
-    public Optional<ManagedContainer> find(Hash256 modelId) {
+    public Optional<ManagedContainer> find(ModelId modelId) {
+        return catalog.binding(modelId).map(ContentBinding::content).map(ManagedContainer.class::cast);
+    }
+
+    public Optional<ManagedContainer> find(PublishedModelId modelId) {
         return catalog.binding(modelId).map(ContentBinding::content).map(ManagedContainer.class::cast);
     }
 
@@ -50,15 +55,12 @@ public final class ServerCatalog {
         return resolvePath(path).found().flatMap(this::find);
     }
 
-    public com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver.Result resolvePath(String path) {
-        return com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver.resolve(path, catalog.byLocation());
+    public com.elfmcys.ysm.model.catalog.source.ModelSelector.Result resolvePath(String path) {
+        return com.elfmcys.ysm.model.catalog.source.ModelSelector.resolve(path, catalog.byLocation());
     }
 
     public Optional<ManagedContainer> defaultModel() {
-        return catalog.byLocation().entrySet().stream()
-            .filter(entry -> entry.getKey().rootKind() == CatalogRootKind.BUILTIN
-                && entry.getKey().path().value().equals("default"))
-            .findFirst().flatMap(entry -> find(entry.getValue()));
+        return find(PublishedModelId.INTRINSIC_DEFAULT);
     }
 
     public CatalogSnapshot catalog() {

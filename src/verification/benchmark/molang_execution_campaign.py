@@ -29,7 +29,7 @@ def main():
     shared += [(method, 'mixed', count) for method in
                ['consecutiveExpressions', 'completeObservation', 'completeLogicalRound']
                for count in [1, 16, 256]]
-    extra = [(method, distribution, 1) for method in ['contextFreeCall', 'transientPrimitive']
+    extra = [(method, distribution, 1) for method in ['ordinaryIdentityCall', 'transientPrimitive']
              for distribution in ['finite', 'missing', 'mixed']]
     extra += [('deniedSubject', 'mixed', 1)]
     schedule = [('pilot', name, 0, ('primitive', 'mixed', 1)) for name in ['legacy', 'candidate']]

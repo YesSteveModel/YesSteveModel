@@ -5,7 +5,7 @@ import com.elfmcys.ysm.capability.ProjectileModelInfoCapability;
 import com.elfmcys.ysm.capability.VehicleModelInfoCapability;
 import com.elfmcys.ysm.client.event.EntityLoadEvent;
 import com.elfmcys.ysm.util.StringPool;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.network.protocol.ModelReferenceCodec;
 import com.elfmcys.ysm.proto.network.EntityRefProto;
 import com.elfmcys.ysm.proto.network.MolangVariableProto;
@@ -26,7 +26,7 @@ public final class MinecraftStateHandler {
     public static ProjectileModelStateProto projectile(int entityId, ProjectileModelInfoCapability capability) {
         var message =
             ProjectileModelStateProto.newBuilder().setEntity(EntityRefProto.newBuilder().setEntityId(entityId).build())
-                .setModel(ModelReferenceCodec.create(capability.getOwnerModelHash(), null));
+                .setModel(ModelReferenceCodec.create(capability.getOwnerModelId()));
         addVariables(message::addMolangVariables, capability.getMolangVarsServerBound());
         return message.build();
     }
@@ -34,7 +34,7 @@ public final class MinecraftStateHandler {
     public static VehicleModelStateProto vehicle(int entityId, VehicleModelInfoCapability capability) {
         var message =
             VehicleModelStateProto.newBuilder().setEntity(EntityRefProto.newBuilder().setEntityId(entityId).build())
-                .setModel(ModelReferenceCodec.create(capability.getOwnerModelHash(), null));
+                .setModel(ModelReferenceCodec.create(capability.getOwnerModelId()));
         addVariables(message::addMolangVariables, capability.getMolangVarsServerBound());
         return message.build();
     }
@@ -84,7 +84,7 @@ public final class MinecraftStateHandler {
 
     @OnlyIn(Dist.CLIENT)
     @SuppressWarnings("DataFlowIssue")
-    private static void applyProjectile(Entity entity, Hash256 modelHash, Int2FloatOpenHashMap variables) {
+    private static void applyProjectile(Entity entity, ModelId modelHash, Int2FloatOpenHashMap variables) {
         entity.getCapability(ClientLazyCapabilityProvider.CAP).ifPresent(capability -> {
             var animatable = capability.getProjectileAnimatableCapabilityProvider().initialize();
             animatable.init(modelHash);
@@ -93,9 +93,10 @@ public final class MinecraftStateHandler {
     }
 
     @OnlyIn(Dist.CLIENT)
-    private static void applyVehicle(Entity entity, Hash256 modelHash, Int2FloatOpenHashMap variables) {
-        com.elfmcys.ysm.network.NetworkHandler.traceNetwork("vehicle-model-apply", "vehicleId=" + entity.getId(),
-            "modelKey=" + modelHash.roamingHash(), "variables=" + variables.size());
+    private static void applyVehicle(Entity entity, ModelId modelHash, Int2FloatOpenHashMap variables) {
+        if (com.elfmcys.ysm.network.NetworkDiagnostics.isEnabled())
+            com.elfmcys.ysm.network.NetworkDiagnostics.trace("vehicle-model-apply", "vehicleId=" + entity.getId(),
+                "modelId=" + modelHash, "variables=" + variables.size());
         entity.getCapability(ClientLazyCapabilityProvider.CAP).ifPresent(capability -> {
             var animatable = capability.getVehicleAnimatableCapabilityProvider().initialize();
             animatable.init(modelHash);

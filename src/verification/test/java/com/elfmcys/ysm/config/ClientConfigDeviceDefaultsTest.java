@@ -12,7 +12,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class ClientConfigDeviceDefaultsTest {
-    @TempDir Path directory;
+    @TempDir
+    Path directory;
 
     @ParameterizedTest
     @EnumSource(NativeRuntime.DeviceQuality.class)
@@ -21,16 +22,18 @@ class ClientConfigDeviceDefaultsTest {
         int retained = eager ? 30 : 10;
         for (var mode = 0; mode < 6; mode++) {
             var config = CommentedConfig.inMemory();
-            if (mode == 1 || mode == 3 || mode == 5) config.set("general.ModelScreenEagerLoading", !eager);
-            if (mode == 2 || mode == 3 || mode == 5) config.set("general.ModelRetentionCount", 17);
-            if (mode == 4 || mode == 5) config.set("general.UnusedModelRenderTargetLimit", 99);
+            if (mode == 1 || mode == 3 || mode == 5)
+                config.set("general.ModelScreenEagerLoading", !eager);
+            if (mode == 2 || mode == 3 || mode == 5)
+                config.set("general.ModelRetentionCount", 17);
+            if (mode == 4 || mode == 5)
+                config.set("general.UnusedModelRenderTargetLimit", 99);
             var builder = new ForgeConfigSpec.Builder();
             ClientConfig.init(builder, quality);
             builder.build().setConfig(config);
             assertEquals(mode == 1 || mode == 3 || mode == 5 ? !eager : eager,
                 ClientConfig.MODEL_SCREEN_EAGER_LOADING.get());
-            assertEquals(mode == 2 || mode == 3 || mode == 5 ? 17 : retained,
-                ClientConfig.MODEL_RETENTION_COUNT.get());
+            assertEquals(mode == 2 || mode == 3 || mode == 5 ? 17 : retained, ClientConfig.MODEL_RETENTION_COUNT.get());
         }
     }
 

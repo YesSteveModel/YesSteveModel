@@ -34,7 +34,7 @@ MECHANISM_PATHS = {
     "AN": "complexity-map/java-animation-and-integration/mechanisms.md",
     "NR": "complexity-map/native-capabilities/mechanisms.md",
 }
-EXPECTED_MECHANISMS = {"AP": 9, "MN": 24, "AN": 14, "NR": 17}
+EXPECTED_MECHANISMS = {"AP": 9, "MN": 27, "AN": 14, "NR": 17}
 HEADING_RE = re.compile(r"^## (?P<title>.+?)\s*$", re.MULTILINE)
 MECHANISM_RE = re.compile(r"^\|\s*((?:AP|MN|AN|NR)-\d{2})\b", re.MULTILINE)
 NAMESPACE_RE = re.compile(r"^(AP|MN|AN|NR)-")

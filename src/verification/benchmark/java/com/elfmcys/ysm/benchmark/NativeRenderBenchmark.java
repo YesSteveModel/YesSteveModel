@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.benchmark;
 
-import com.elfmcys.ysm.buffer.BorrowedNativeBuffer;
+import com.elfmcys.ysm.accessor.ReservedVertexRange;
 import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.accessor.VertexBufferAccessor;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
@@ -73,8 +73,7 @@ public class NativeRenderBenchmark {
                 throw new IllegalStateException("invalid publication");
             var expectedCount = state.getTotalVertexCount();
             var before = sink.vertices;
-            var rendered =
-                NativeRenderer.render(sink, pose, state, expectedCount, 0x00F000F0, 0, -1, RenderContextType.LEVEL);
+            var rendered = NativeRenderer.render(sink, pose, state, 0x00F000F0, 0, -1, RenderContextType.LEVEL);
             // A failed render can clear publication counts, so the oracle must precede it.
             if (!rendered || !state.isValid() || sink.vertices - before != expectedCount)
                 throw new IllegalStateException("render failed or incomplete output");
@@ -207,10 +206,10 @@ public class NativeRenderBenchmark {
         }
 
         @Override
-        public BorrowedNativeBuffer ysm$reserve(int count) {
+        public ReservedVertexRange ysm$reserve(int count) {
             if ((long)count * 36 > buffer.size())
                 throw new IllegalStateException("capacity");
-            return buffer.borrow();
+            return new ReservedVertexRange(buffer.ptr(), count * 36, buffer);
         }
 
         @Override

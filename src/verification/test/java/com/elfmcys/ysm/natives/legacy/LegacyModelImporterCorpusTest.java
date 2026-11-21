@@ -40,8 +40,11 @@ class LegacyModelImporterCorpusTest {
         }
         assertFalse(sources.isEmpty(), "configured corpus must contain models");
         var cache = temporary.resolve("cache");
+        var shared = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cache));
+        var scope = com.elfmcys.ysm.model.storage.ConvertedScope.of(temporary, "test-version");
         var resolver = new ModelSourceResolver(new RawModelImporter(DefaultAnimationFilter.keepAll()),
-            new ConvertedSourceIndexStore(cache, "test-version"), new ConvertedObjectStore(cache));
+            new ConvertedSourceIndexStore(scope, shared), new ConvertedObjectStore(shared));
         var ordinal = 0;
         for (var source : sources) {
             final ModelSourceResolver.Resolution routed;
@@ -66,7 +69,7 @@ class LegacyModelImporterCorpusTest {
     }
 
     private static SourceObservation observation(Path root, Path source, int ordinal) throws Exception {
-        var rootIdentity = new CatalogRootIdentity(CatalogRootKind.CUSTOM, root);
+        var rootIdentity = new CatalogRootIdentity(CatalogRootKind.MODELS, root);
         var target = source.toRealPath();
         var stamp = SourceStamp.captureFile(target);
         var sourceKind = switch (LegacyContainerHeader.probe(source)) {
@@ -75,7 +78,7 @@ class LegacyModelImporterCorpusTest {
             case UNSUPPORTED -> ModelSourceKind.UNSUPPORTED_YSM;
         };
         return new SourceObservation(
-            new ModelSourceKey(rootIdentity, new ModelPath("corpus/" + ordinal + ".ysm"), sourceKind), source, target, stamp,
-            Files.size(source));
+            new ModelSourceKey(rootIdentity, new ModelPath("corpus/" + ordinal + ".ysm"), sourceKind), source, target,
+            stamp, Files.size(source));
     }
 }

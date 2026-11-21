@@ -20,6 +20,7 @@
     ]
   },
   "properties": {
+    "origin_ver": "2.6.5",
     "extra_animation": {
       "extra0": "变形",
       "extra1": "打招呼",

@@ -11,7 +11,6 @@ import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.junit.jupiter.api.Test;
 
 import java.lang.ref.Reference;
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,24 +31,25 @@ final class ExpressionEngineMetricsTest {
             ResourceDiagnostics.setEnabled(false);
             var ignoredProbe = registerTemporaryLoader(metrics);
             metrics.changeActive(EngineMetrics.Owner.RESOURCES, 1);
-            awaitCollection(ignoredProbe);
             ExpressionEngineMetrics.pollCollectedLoaders();
             assertTrue(capture.messages.isEmpty());
+            Reference.reachabilityFence(ignoredProbe);
 
             ResourceDiagnostics.setEnabled(true);
             var trackedProbe = registerTemporaryLoader(metrics);
             assertTrue(capture.messages.stream().anyMatch(message -> message.contains("Molang loader track:")));
             metrics.changeActive(EngineMetrics.Owner.RESOURCES, -1);
-            assertTrue(capture.messages.stream().anyMatch(message -> message.contains("kind=RESOURCES delta=-1 active=0")));
+            assertTrue(
+                capture.messages.stream().anyMatch(message -> message.contains("kind=RESOURCES delta=-1 active=0")));
             // The monitor retains the opaque probe, never its loader.
-            for (var attempt = 0; attempt < 50 && !trackedProbe.get().collected(); attempt++) {
+            for (var attempt = 0; attempt < 50 && !trackedProbe.collected(); attempt++) {
                 System.gc();
                 Thread.sleep(20);
             }
-            assertTrue(trackedProbe.get().collected());
+            assertTrue(trackedProbe.collected());
             ExpressionEngineMetrics.pollCollectedLoaders();
             assertTrue(capture.messages.stream().anyMatch(message -> message.contains("Molang loader collected:")));
-            awaitCollection(trackedProbe);
+            Reference.reachabilityFence(trackedProbe);
             Reference.reachabilityFence(metrics);
         } finally {
             ResourceDiagnostics.setEnabled(previousEnabled);
@@ -59,21 +59,12 @@ final class ExpressionEngineMetricsTest {
         }
     }
 
-    private static WeakReference<LoaderCollectionProbe> registerTemporaryLoader(ExpressionEngineMetrics metrics)
-        throws Exception {
+    private static LoaderCollectionProbe registerTemporaryLoader(ExpressionEngineMetrics metrics) throws Exception {
         var constructor = LoaderCollectionProbe.class.getDeclaredConstructor(ClassLoader.class);
         constructor.setAccessible(true);
         var probe = constructor.newInstance(new ClassLoader() {});
         metrics.trackLoader(probe);
-        return new WeakReference<>(probe);
-    }
-
-    private static void awaitCollection(WeakReference<?> reference) throws InterruptedException {
-        for (var attempt = 0; attempt < 50 && reference.get() != null; attempt++) {
-            System.gc();
-            Thread.sleep(20);
-        }
-        assertNull(reference.get());
+        return probe;
     }
 
     private static final class Capture extends AbstractAppender {

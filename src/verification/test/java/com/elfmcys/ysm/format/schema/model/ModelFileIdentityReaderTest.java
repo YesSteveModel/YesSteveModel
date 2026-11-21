@@ -1,11 +1,12 @@
 package com.elfmcys.ysm.format.schema.model;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
 import com.elfmcys.ysm.format.container.AssetContainerWriter;
 import com.elfmcys.ysm.format.schema.file.AssetFileWriter;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.proto.mixel.common.ImageProto;
 import com.elfmcys.ysm.proto.mixel.common.SoundProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.AuthorProto;
@@ -300,7 +301,7 @@ class ModelFileIdentityReaderTest {
         }
     }
 
-    private Path writeAlignedModel(String name, Hash256 modelId, ManifestProto manifest) throws Exception {
+    private Path writeAlignedModel(String name, ModelId modelId, ManifestProto manifest) throws Exception {
         var output = new ByteArrayOutputStream();
         try (var data = ArrayBuffer.allocate(manifest.getSerializedSize()); var writer = new AssetContainerWriter();
             var channel = Channels.newChannel(output)) {
@@ -321,7 +322,7 @@ class ModelFileIdentityReaderTest {
         }
     }
 
-    private Path writePreviousVersion(String name, Hash256 modelId, ManifestProto manifest) throws Exception {
+    private Path writePreviousVersion(String name, ModelId modelId, ManifestProto manifest) throws Exception {
         try (var writer = new VersionedModelWriter(modelId, manifest, "0.3.0-unstable")) {
             return write(name, writer);
         }
@@ -335,8 +336,8 @@ class ModelFileIdentityReaderTest {
         return Files.write(temp.resolve(name), output.toByteArray());
     }
 
-    private static ManifestProto manifest(Hash256 modelId) {
-        return manifest(ByteBuffer.wrap(modelId.bytes()));
+    private static ManifestProto manifest(ModelId modelId) {
+        return manifest(ByteBuffer.wrap(java.util.HexFormat.of().parseHex(modelId.toString().substring(5))));
     }
 
     private static ManifestProto manifest(ByteBuffer modelId) {
@@ -346,7 +347,10 @@ class ModelFileIdentityReaderTest {
                     .setDisablePreviewRotation(false).build())
                 .setMetadata(MetadataProto.newBuilder().setName("").setTips("")
                     .setLicense(LicenseProto.newBuilder().setType("").setDesc("").build()).build())
-                .setProperties(PropertiesProto.newBuilder().setModelId(modelId).setFree(false).setOriginVer("").build())
+                .setProperties(PropertiesProto.newBuilder()
+                    .setModelId(
+                        "hash:" + java.util.HexFormat.of().formatHex(com.elfmcys.ysm.util.ProtoBytes.copy(modelId)))
+                    .setFree(false).setOriginVer("").build())
                 .build())
             .build();
     }
@@ -366,10 +370,10 @@ class ModelFileIdentityReaderTest {
         return ImageProto.newBuilder().setBlobId(0).setFormat("").setWidth(0).setHeight(0).setFrameCount(0).build();
     }
 
-    private static Hash256 hash(int seed) {
+    private static ModelId hash(int seed) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)seed;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
     private static final class TestModelWriter extends AssetFileWriter {
@@ -385,7 +389,7 @@ class ModelFileIdentityReaderTest {
     }
 
     private static final class VersionedModelWriter extends AssetFileWriter {
-        private VersionedModelWriter(Hash256 modelId, ManifestProto manifest, String version) throws IOException {
+        private VersionedModelWriter(ModelId modelId, ManifestProto manifest, String version) throws IOException {
             setSchemaId(ModelFileConstant.SCHEMA_ID);
             setProperty(ModelFileConstant.PROP_VERSION, version);
             setProperty(ModelFileConstant.PROP_VENDOR, "Example Mod(example) v9.8.7");
@@ -396,7 +400,7 @@ class ModelFileIdentityReaderTest {
     }
 
     private static final class InvalidLayoutWriter extends AssetFileWriter {
-        private InvalidLayoutWriter(Hash256 modelId, InvalidLayout mode) throws IOException {
+        private InvalidLayoutWriter(ModelId modelId, InvalidLayout mode) throws IOException {
             setSchemaId(ModelFileConstant.SCHEMA_ID);
             setProperty(ModelFileConstant.PROP_VERSION, ModelFileConstant.CURRENT_VERSION.toString());
             setProperty(ModelFileConstant.PROP_VENDOR, "test");

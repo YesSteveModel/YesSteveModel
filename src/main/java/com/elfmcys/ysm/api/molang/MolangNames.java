@@ -29,14 +29,14 @@ public final class MolangNames {
 
     public static String identifier(String value) {
         String canonical = value.toLowerCase(Locale.ROOT);
-        if (!canonical.matches("[a-z_][a-z0-9_]{0,127}")) {
+        if (!canonical.matches("[a-z_][a-z0-9_]*")) {
             throw new IllegalArgumentException("invalid Molang identifier: " + value);
         }
         return canonical;
     }
 
     public static String namespace(String value) {
-        if (!value.matches("[a-z][a-z0-9_]{1,63}") || RESERVED_ROOTS.contains(value)) {
+        if (!value.matches("[a-z][a-z0-9_]+") || RESERVED_ROOTS.contains(value)) {
             throw new IllegalArgumentException("invalid or reserved Molang mod id: " + value);
         }
         return value;

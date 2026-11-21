@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity;
 import com.elfmcys.ysm.expression.host.ExpressionBinding;
@@ -9,7 +10,7 @@ import com.elfmcys.ysm.model.catalog.client.ClientCatalogManager;
 import com.elfmcys.ysm.model.catalog.client.entry.ClientCatalogEntry;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.RenderTargetIds;
 import com.elfmcys.ysm.model.resource.RuntimeContentStore;
@@ -31,7 +32,6 @@ import com.elfmcys.ysm.proto.mixel.manifest.ManifestProto;
 import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetProto;
 import java.time.Duration;
 import java.util.LinkedHashMap;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -40,28 +40,30 @@ import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.world.entity.LivingEntity;
 
 /**
  * Resolves current model uses and owns client render-target preparation across process and session work.
  *
- * <p><b>Invariant:</b> New acquisition and audio playback use current catalog policy. Exact content
- * identity, expression binding, purpose and storage provenance determine reuse; a matching model ID
- * alone does not establish a reusable target. Content activation does not imply host Ready publication.
+ * <p>
+ * <b>Invariant:</b> New acquisition and audio playback use current catalog policy. Exact content identity, expression
+ * binding, purpose and storage provenance determine reuse; a matching model ID alone does not establish a reusable
+ * target. Content activation does not imply host Ready publication.
  *
- * <p><b>Ownership:</b> Each successful lease reception transfers an independent interest to its caller.
- * Session retirement cancels that session's pending work; existing Ready leases and independent playback
- * follow their own owners. The required default initialization must finish before ordinary acquisition.
+ * <p>
+ * <b>Ownership:</b> Each successful lease reception transfers an independent interest to its caller. Session retirement
+ * cancels that session's pending work; existing Ready leases and independent playback follow their own owners. The
+ * required default initialization must finish before ordinary acquisition.
  *
- * <p><b>Seam:</b> [client target acquisition](docs/architecture/model-management/client-resources/overview.md#seam-contract).
+ * <p>
+ * <b>Seam:</b> [client target
+ * acquisition](docs/architecture/model-management/client-resources/overview.md#seam-contract).
  */
 public final class ClientModelRenderTargetManager implements AutoCloseable {
     private final ClientCatalogManager catalogs;
@@ -77,12 +79,11 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     private final ModelFailureNotificationAggregator notifications;
     private final RenderTargetLeaseOwnership leaseOwnership = new RenderTargetLeaseOwnership();
     private final RuntimeContentStore contentStore;
-    private final Map<Class<?>, ExpressionBinding> subjectBindings = new IdentityHashMap<>();
-    private final Map<Class<?>, ExpressionBinding> defaultSubjectBindings = new IdentityHashMap<>();
+    private final Map<Class<?>, ExpressionBinding> subjectBindings;
+    private final ExpressionBinding defaultSubjectBinding;
 
     private volatile CompletableFuture<Void> defaultInitialization;
     private volatile ModelRenderTarget defaultRenderTarget;
-    private volatile Hash256 defaultModelId;
     private SessionOwner sessionOwner;
     private boolean closed;
 
@@ -105,6 +106,12 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         this.requiredExecutor = resourceScheduler.dispatch(WorkPriority.LOCAL_PLAYER);
         this.hostExecutor = Objects.requireNonNull(hostExecutor, "hostExecutor");
         this.contentStore = Objects.requireNonNull(contentStore, "contentStore");
+        // The loader already owns the frozen declarations; publish every supported specialization with this owner.
+        subjectBindings =
+            Map.of(LivingEntity.class, loader.expressionBinding(false, LivingEntity.class), AbstractClientPlayer.class,
+                loader.expressionBinding(false, AbstractClientPlayer.class), CustomGuiPlayerEntity.FakePlayer.class,
+                loader.expressionBinding(false, CustomGuiPlayerEntity.FakePlayer.class));
+        defaultSubjectBinding = loader.expressionBinding(true, LivingEntity.class);
         renderTargets = new ModelRenderTargetCache(resourceScheduler);
         notifications = new ModelFailureNotificationAggregator(notificationTimer);
     }
@@ -155,15 +162,23 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         sessionOwner.remoteFetcher = Objects.requireNonNull(fetcher, "fetcher");
     }
 
-    public ResourceRequest request(Hash256 modelId, String targetId, String textureName) {
+    public ResourceRequest request(ModelId modelId, String targetId, String textureName) {
         return request(modelId, targetId, textureName, ModelResourcePurpose.FULL, null);
     }
 
-    public ResourceRequest request(Hash256 modelId, String targetId, String textureName, ModelResourcePurpose purpose,
+    public ResourceRequest request(ModelId modelId, String targetId, String textureName, ModelResourcePurpose purpose,
         Class<?> subjectType) {
-        boolean defaultModel = modelId.equals(defaultModelId);
+        return request(PublishedModelId.model(modelId), targetId, textureName, purpose, subjectType);
+    }
+
+    /** Intrinsic requests always select the resident FULL baseline, including preview callers. */
+    public ResourceRequest request(PublishedModelId modelId, String targetId, String textureName,
+        ModelResourcePurpose purpose, Class<?> subjectType) {
+        boolean defaultModel = modelId.isIntrinsicDefault();
         if (defaultModel) {
+            // Intrinsic previews consume the same resident baseline as entity fallback.
             subjectType = LivingEntity.class;
+            purpose = ModelResourcePurpose.FULL;
         } else if (purpose.isGui())
             subjectType = CustomGuiPlayerEntity.FakePlayer.class;
         else if (subjectType == null && targetId.equals(RenderTargetIds.PLAYER))
@@ -172,14 +187,13 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
             subjectBinding(defaultModel, subjectType), purpose);
     }
 
-    private synchronized ExpressionBinding subjectBinding(boolean defaultModel, Class<?> subjectType) {
+    private ExpressionBinding subjectBinding(boolean defaultModel, Class<?> subjectType) {
         if (subjectType == null)
             return loader.expressionBinding(defaultModel);
         if (subjectType != LivingEntity.class && subjectType != AbstractClientPlayer.class
             && subjectType != CustomGuiPlayerEntity.FakePlayer.class)
             throw new IllegalArgumentException("Unsupported model subject specialization: " + subjectType);
-        var bindings = defaultModel ? defaultSubjectBindings : subjectBindings;
-        return bindings.computeIfAbsent(subjectType, type -> loader.expressionBinding(defaultModel, type));
+        return defaultModel ? defaultSubjectBinding : subjectBindings.get(subjectType);
     }
 
     public ResourceRequest defaultRequest(String targetId) {
@@ -187,11 +201,11 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     }
 
     public ResourceRequest defaultRequest(String targetId, ModelResourcePurpose purpose, Class<?> subjectType) {
-        var renderTarget = defaultRenderTarget();
-        var entry = catalogs.snapshot().find(renderTarget.modelHash()).orElseThrow();
+        defaultRenderTarget();
+        var entry = catalogs.snapshot().find(PublishedModelId.INTRINSIC_DEFAULT).orElseThrow();
         var resolvedTarget =
             entry.displayRepresentation().view().getRenderTarget(targetId) == null ? RenderTargetIds.PLAYER : targetId;
-        return request(renderTarget.modelHash(), resolvedTarget, "", purpose, subjectType);
+        return request(PublishedModelId.INTRINSIC_DEFAULT, resolvedTarget, "", purpose, subjectType);
     }
 
     public ResourceLease getOrStart(ResourceRequest request) {
@@ -209,35 +223,9 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
             throw new IllegalStateException("Current content policy denies new model use");
         }
         var resolved = resolve(request);
+        if (request.modelId().isIntrinsicDefault())
+            return requiredReady(request, resolved);
         return getOrStart(request, resolved, context.owner(), context.fetcher(), priority);
-    }
-
-    public ReadyAcquisition getOrStartReady(ResourceRequest request) {
-        return getOrStartReady(request, WorkPriority.BACKGROUND);
-    }
-
-    /**
-     * Starts an acquisition that transfers a lease only after Ready publication and current-use qualification.
-     * GUI requests can first probe the derived cache. A returned acquisition is not an installed target.
-     *
-     * @param request the non-null receiving use
-     * @param priority the non-null scheduling priority, independent of access permission
-     * @return the cancellation and ownership owner; its successful result transfers one open Ready lease
-     * @throws IllegalStateException if required default resources or the captured work owner are unavailable
-     */
-    public ReadyAcquisition getOrStartReady(ResourceRequest request, WorkPriority priority) {
-        var context = currentWorkContext();
-        if (request.purpose().isGui())
-            return new ReadyAcquisition(request, getOrStartCached(request, context, priority),
-                () -> getOrStartReadyExact(request, context, priority));
-        return getOrStartReadyExact(request, context, priority);
-    }
-
-    private ReadyAcquisition getOrStartReadyExact(ResourceRequest request, WorkContext context, WorkPriority priority) {
-        var lease = getOrStart(request, context, priority);
-        var outcome = lease.poll();
-        return new ReadyAcquisition(request, lease, outcome instanceof AcquireResult.Ready
-            ? CompletableFuture.completedFuture(outcome) : renderTargets.terminal(lease));
     }
 
     public Optional<ResourceLease> findReady(ResourceRequest request) {
@@ -245,36 +233,35 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         if (!permitsAcquisition(request))
             return Optional.empty();
         var resolved = resolve(request);
-        return renderTargets.findReady(request, contentStore.exact(resolved.entry().content()), resolved.key(),
-            this::isCurrent);
+        return renderTargets.findReady(request, runtimeContent(resolved), resolved.key(), this::isCurrent);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request) {
+    public ResourceLease getOrStartOffline(ResourceRequest request) {
         return getOrStartOffline(request, WorkPriority.BACKGROUND);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request,
-        WorkPriority priority) {
+    public ResourceLease getOrStartOffline(ResourceRequest request, WorkPriority priority) {
         var context = currentWorkContext();
         return getOrStartOfflineExact(request, context, priority);
     }
 
-    private synchronized CompletableFuture<Optional<ResourceLease>> getOrStartOfflineExact(ResourceRequest request,
-        WorkContext context, WorkPriority priority) {
+    private synchronized ResourceLease getOrStartOfflineExact(ResourceRequest request, WorkContext context,
+        WorkPriority priority) {
         requireCurrentWorkContext(context);
         requireAvailable();
         if (!permitsAcquisition(request))
-            return CompletableFuture.completedFuture(Optional.empty());
+            return ResourceLease.missing(request);
         var resolved = resolve(request);
+        if (request.modelId().isIntrinsicDefault())
+            return requiredReady(request, resolved);
         var workOwner = context.owner();
         var entry = resolved.entry();
         if (entry.hasLocalSource()) {
             var lease = getOrStart(request, resolved, workOwner, context.fetcher(), priority);
-            return CompletableFuture.completedFuture(Optional.of(lease));
+            return lease;
         }
         if (!(entry.content() instanceof RemoteModelContent remote)) {
-            return CompletableFuture
-                .failedFuture(new IllegalStateException("Remote catalog entry has no remote model content"));
+            throw new IllegalStateException("Remote catalog entry has no remote model content");
         }
         return renderTargets.getOrStartOffline(request, entry.content(), resolved.key(),
             (cancelled, dispatch) -> loadOffline(cancelled, dispatch, resolved, remote), this::isCurrent, workOwner,
@@ -292,47 +279,80 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         });
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request) {
+    public ResourceLease getOrStartCached(ResourceRequest request) {
         return getOrStartCached(request, WorkPriority.BACKGROUND);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkPriority priority) {
+    public ResourceLease getOrStartCached(ResourceRequest request, WorkPriority priority) {
         return getOrStartCached(request, currentWorkContext(), priority);
     }
 
-    private CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkContext context,
-        WorkPriority priority) {
+    private ResourceLease getOrStartCached(ResourceRequest request, WorkContext context, WorkPriority priority) {
         return getOrStartCachedExact(request, context, priority);
     }
 
-    private synchronized CompletableFuture<Optional<ResourceLease>> getOrStartCachedExact(ResourceRequest request,
-        WorkContext context, WorkPriority priority) {
+    private synchronized ResourceLease getOrStartCachedExact(ResourceRequest request, WorkContext context,
+        WorkPriority priority) {
         requireCurrentWorkContext(context);
         requireAvailable();
         if (!permitsAcquisition(request))
-            return CompletableFuture.completedFuture(Optional.empty());
+            return ResourceLease.missing(request);
         var resolved = resolve(request);
         var entry = resolved.entry();
-        var content = contentStore.exact(entry.content());
+        var content = runtimeContent(resolved);
         var ready = renderTargets.findReady(request, content, resolved.key(), this::isCurrent);
         if (ready.isPresent())
-            return CompletableFuture.completedFuture(ready);
+            return ready.orElseThrow();
+        if (request.modelId().isIntrinsicDefault())
+            throw new IllegalStateException("Required intrinsic resource was not retained: " + request);
         if (!loader.mayHaveCachedArtifacts(content, resolved.key()))
-            return CompletableFuture.completedFuture(Optional.empty());
+            return ResourceLease.missing(request);
         ModelRenderTargetCache.Loader cachedLoader;
         if (entry.content() instanceof RemoteModelContent remote) {
             cachedLoader = (cancelled, dispatch) -> loadOffline(cancelled, dispatch, resolved, remote, true);
         } else {
             var startedAt = System.nanoTime();
-            cachedLoader = (cancelled, dispatch) -> loader
-                .loadAsync(cancelled, dispatch, content, resolved.key(), entry.modelHash().equals(defaultModelId), true,
-                    resourceFailures(entry.content(), entry))
-                .thenApply(outcome -> traceLoad(outcome, startedAt, entry.modelHash(),
-                    catalogs.displayPath(entry.modelHash()), resolved.key().targetId(),
-                    resolved.key().selectedTexture(), entry.origin().name().toLowerCase(Locale.ROOT)));
+            cachedLoader = (cancelled, dispatch) -> {
+                var loading = loader.loadAsync(cancelled, dispatch, content, resolved.key(), false, true,
+                    resourceFailures(entry.content(), entry));
+                loading.thenAccept(outcome -> traceLoad(outcome, startedAt, entry.modelHash(), entry.displayPath(),
+                    resolved.key().targetId(), resolved.key().selectedTexture(),
+                    entry.origin().name().toLowerCase(Locale.ROOT)));
+                return loading;
+            };
         }
         return renderTargets.getOrStartCached(request, content, resolved.key(), cachedLoader, this::isCurrent,
             context.owner(), priority);
+    }
+
+    /**
+     * Acquires a GUI use for the exact published content, or a fixed input use when it is unpublished. The caller owns
+     * the returned lease from acceptance; preparation and late candidates remain here.
+     */
+    public synchronized ResourceLease acquirePreview(ModelContent content) {
+        var request = request(content.modelId(), RenderTargetIds.PLAYER, "", ModelResourcePurpose.GUI, null);
+        var published = catalogs.snapshot().find(content.modelId()).map(ClientCatalogEntry::content)
+            .filter(current -> current.representation().identity().equals(content.representation().identity()));
+        return published.isPresent() ? getOrStart(request) : acquireDetachedPreview(content, null);
+    }
+
+    /**
+     * Acquires fixed, verified input for export or management preview generation. Only exact existing Ready may be
+     * reused; new work has no Catalog publication or ordinary session-fetcher authority.
+     */
+    public synchronized ResourceLease acquireDetachedPreview(ModelContent content, RemoteChunkFetcher fetcher) {
+        requireAvailable();
+        var request = request(content.modelId(), RenderTargetIds.PLAYER, "", ModelResourcePurpose.GUI, null);
+        var published = catalogs.snapshot().find(content.modelId()).map(ClientCatalogEntry::content)
+            .filter(current -> current.representation().identity().equals(content.representation().identity()));
+        if (published.isPresent() && permitsAcquisition(request)) {
+            var ready = findReady(request);
+            if (ready.isPresent())
+                return ready.orElseThrow();
+        }
+        var key = resolveEffectiveKey(content.representation().view().getManifest(), request);
+        return renderTargets.getOrStartDetached(request, content, key, (cancelled, dispatch) -> loadContent(cancelled,
+            dispatch, content, key, fetcher, ModelResourceFailures.none()), processOwner, WorkPriority.BACKGROUND);
     }
 
     public void disconnect(Object owner) {
@@ -364,6 +384,8 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     }
 
     public void reportActiveUse(ResourceRequest request) {
+        if (request.modelId().isIntrinsicDefault())
+            return;
         var resolved = resolve(request);
         var texturePrefix = resolved.key().targetId() + "/" + resolved.key().selectedTexture() + "/";
         var animationPrefix = resolved.key().targetId() + "/";
@@ -376,10 +398,11 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     }
 
     /**
-     * Admits a new playback and captures an independent exact-media reading capability.
-     * The admitted capability does not depend on the originating target lease staying open.
+     * Admits a new playback and captures an independent exact-media reading capability. The admitted capability does
+     * not depend on the originating target lease staying open.
      *
-     * <p><b>Seam:</b> [playback admission](docs/architecture/model-management/audio/overview.md#接纳与读取).
+     * <p>
+     * <b>Seam:</b> [playback admission](docs/architecture/model-management/audio/overview.md#接纳与读取).
      *
      * @param source the non-null verified media source with its retained first chunk
      * @return an owned sequential capability bound to this representation and the captured fetcher
@@ -389,56 +412,127 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     public VerifiedChunkAccess resolveSound(SoundSource source) throws AssetLoadException {
         Objects.requireNonNull(source, "source");
         requireAvailable();
-        if (!catalogs.snapshot().permitsRuntimeContent(source.representation().modelId())) {
+        if (!catalogs.snapshot().permitsRuntimeContent(source.modelId())) {
             throw AssetLoadException.access("Current content policy denies new audio playback");
         }
-        var entry = catalogs.snapshot().find(source.representation().modelId())
+        var entry = catalogs.snapshot().find(source.modelId())
             .orElseThrow(() -> AssetLoadException.access("Model audio is no longer accessible"));
         if (!entry.content().representation().identity().equals(source.representation())) {
             throw AssetLoadException.access("Model audio representation is no longer current");
         }
         var context = currentWorkContext();
-        return VerifiedChunkAccess.create(source, contentStore.exact(entry.content()), context.fetcher(), workers,
-            hostExecutor);
+        return VerifiedChunkAccess.create(source,
+            source.modelId().isIntrinsicDefault() ? entry.content() : contentStore.exact(entry.content()),
+            source.modelId().isIntrinsicDefault() ? null : context.fetcher(), workers, hostExecutor);
     }
 
     private CompletableFuture<ModelRenderTargetLoader.LoadResult> load(BooleanSupplier cancelled, Dispatch dispatch,
         ResolvedResource resolved, RemoteChunkFetcher fetcher) {
+        var content = runtimeContent(resolved);
+        if (resolved.key().purpose().isGui() && loader.mayHaveCachedArtifacts(content, resolved.key())) {
+            CompletableFuture<ModelRenderTargetLoader.LoadResult> probe;
+            if (resolved.entry().content() instanceof RemoteModelContent remote)
+                probe = loadOffline(cancelled, dispatch, resolved, remote, true);
+            else
+                probe = loader.loadAsync(cancelled, dispatch, content, resolved.key(), false, true,
+                    resourceFailures(resolved.entry().content(), resolved.entry()));
+            return continueLoad(probe, outcome -> {
+                if (outcome instanceof ModelRenderTargetLoader.LoadResult.Ready
+                    || ((ModelRenderTargetLoader.LoadResult.Failed)outcome).failure().isMemoryFailure()
+                    || cancelled.getAsBoolean())
+                    return CompletableFuture.completedFuture(outcome);
+                return loadOnline(cancelled, dispatch, resolved, content, fetcher);
+            }, ClientModelRenderTargetManager::discardLoad);
+        }
+        return loadOnline(cancelled, dispatch, resolved, content, fetcher);
+    }
+
+    private CompletableFuture<ModelRenderTargetLoader.LoadResult> loadOnline(BooleanSupplier cancelled,
+        Dispatch dispatch, ResolvedResource resolved, ModelContent content, RemoteChunkFetcher fetcher) {
         var entry = resolved.entry();
         var key = resolved.key();
-        var content = contentStore.exact(entry.content());
         var startedAt = System.nanoTime();
-        if (content instanceof RemoteModelContent remote) {
-            return remote.loadRenderTargetAsync(cancelled, key.targetId(), key.selectedTexture(), fetcher, dispatch,
-                prepared -> loader
-                    .loadAsync(cancelled, dispatch, prepared, key, entry.modelHash().equals(defaultModelId),
-                        resourceFailures(entry.content(), entry))
-                    .thenApply(outcome -> traceLoad(outcome, startedAt, entry.modelHash(),
-                        catalogs.displayPath(entry.modelHash()), key.targetId(), key.selectedTexture(),
-                        entry.origin().name().toLowerCase(Locale.ROOT))),
-                outcome -> {
-                    if (outcome instanceof ModelRenderTargetLoader.LoadResult.Ready ready)
-                        ready.candidate().close();
-                }).handle((outcome, failure) -> {
-                    if (failure != null) {
-                        var cause = unwrap(failure);
-                        if (cause instanceof Error fatal)
-                            throw fatal;
-                        if (cause instanceof RejectedExecutionException) {
-                            cause = AssetLoadException.access("Remote model worker admission failed", cause);
-                        } else if (!(cause instanceof AssetLoadException)
-                            && !(cause instanceof CancellationException)) {
-                            cause = AssetLoadException.content("Failed to prepare remote model activation", cause);
-                        }
-                        return ModelRenderTargetLoader.failure(cause);
-                    }
-                    return outcome;
-                });
-        }
-        return loader.loadAsync(cancelled, dispatch, content, key, entry.modelHash().equals(defaultModelId),
-            resourceFailures(entry.content(), entry)).thenApply(
-                outcome -> traceLoad(outcome, startedAt, entry.modelHash(), catalogs.displayPath(entry.modelHash()),
-                    key.targetId(), key.selectedTexture(), entry.origin().name().toLowerCase(Locale.ROOT)));
+        var loading = loadContent(cancelled, dispatch, content, key, fetcher, resourceFailures(entry.content(), entry));
+        loading.thenAccept(outcome -> traceLoad(outcome, startedAt, entry.modelHash(), entry.displayPath(),
+            key.targetId(), key.selectedTexture(), entry.origin().name().toLowerCase(Locale.ROOT)));
+        return loading;
+    }
+
+    private CompletableFuture<ModelRenderTargetLoader.LoadResult> loadContent(BooleanSupplier cancelled,
+        Dispatch dispatch, ModelContent content, RenderTargetKey key, RemoteChunkFetcher fetcher,
+        ModelResourceFailures resourceFailures) {
+        if (!(content instanceof RemoteModelContent remote))
+            return loader.loadAsync(cancelled, dispatch, content, key, false, resourceFailures);
+        var loading = remote.loadRenderTargetAsync(cancelled, key.targetId(), key.selectedTexture(), fetcher, dispatch,
+            prepared -> loader.loadAsync(cancelled, dispatch, prepared, key, false, resourceFailures),
+            ClientModelRenderTargetManager::discardLoad);
+        var result = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
+        result.whenComplete((ignored, failure) -> {
+            if (result.isCancelled())
+                loading.cancel(false);
+        });
+        loading.whenComplete((outcome, failure) -> {
+            if (failure == null) {
+                if (!result.complete(outcome))
+                    discardLoad(outcome);
+                return;
+            }
+            var cause = unwrap(failure);
+            if (cause instanceof Error) {
+                result.completeExceptionally(cause);
+                return;
+            }
+            if (cause instanceof RejectedExecutionException)
+                cause = AssetLoadException.access("Remote model worker admission failed", cause);
+            else if (!(cause instanceof AssetLoadException) && !(cause instanceof CancellationException))
+                cause = AssetLoadException.content("Failed to prepare remote model activation", cause);
+            result.complete(ModelRenderTargetLoader.failure(cause));
+        });
+        return result;
+    }
+
+    private static <T> CompletableFuture<ModelRenderTargetLoader.LoadResult> continueLoad(CompletableFuture<T> input,
+        java.util.function.Function<T, CompletableFuture<ModelRenderTargetLoader.LoadResult>> next,
+        java.util.function.Consumer<T> discard) {
+        var result = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
+        result.whenComplete((ignored, failure) -> {
+            if (result.isCancelled())
+                input.cancel(false);
+        });
+        input.whenComplete((value, failure) -> {
+            if (failure != null) {
+                result.completeExceptionally(failure);
+                return;
+            }
+            if (result.isCancelled()) {
+                discard.accept(value);
+                return;
+            }
+            final CompletableFuture<ModelRenderTargetLoader.LoadResult> loading;
+            try {
+                loading = next.apply(value);
+            } catch (Throwable rejected) {
+                discard.accept(value);
+                result.completeExceptionally(rejected);
+                return;
+            }
+            result.whenComplete((ignored, error) -> {
+                if (result.isCancelled())
+                    loading.cancel(false);
+            });
+            loading.whenComplete((outcome, error) -> {
+                if (error != null)
+                    result.completeExceptionally(error);
+                else if (!result.complete(outcome))
+                    discardLoad(outcome);
+            });
+        });
+        return result;
+    }
+
+    private static void discardLoad(ModelRenderTargetLoader.LoadResult result) {
+        if (result instanceof ModelRenderTargetLoader.LoadResult.Ready ready)
+            ready.candidate().close();
     }
 
     private CompletableFuture<ModelRenderTargetLoader.LoadResult> loadOffline(BooleanSupplier cancelled,
@@ -448,33 +542,55 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
 
     private CompletableFuture<ModelRenderTargetLoader.LoadResult> loadOffline(BooleanSupplier cancelled,
         Dispatch dispatch, ResolvedResource resolved, RemoteModelContent remote, boolean cacheOnly) {
-        return CompletableFuture
-            .supplyAsync(() -> cacheOnly ? Optional.of(remote.cachedOnlyView()) : remote.openCached(cancelled),
-                dispatch)
-            .thenCompose(cached -> {
-                if (cached.isEmpty()) {
-                    var unavailable =
-                        cancelled.getAsBoolean() ? new CancellationException("Offline model load was cancelled")
-                            : AssetLoadException.access("Remote model is not fully cached");
-                    return CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Failed(
-                        new ResourceFailure(ResourceFailure.Kind.TRANSIENT, unavailable)));
+        final ModelContent.PreparationInputs inputs;
+        try {
+            inputs = remote.retainPreparationInputs();
+        } catch (java.io.IOException failure) {
+            return CompletableFuture.completedFuture(ModelRenderTargetLoader
+                .failure(AssetLoadException.access("Failed to retain remote model inputs", failure)));
+        }
+        var retained = (RemoteModelContent)inputs.content();
+        var opening = new CompletableFuture<Optional<ModelContent>>();
+        var result = continueLoad(opening, cached -> {
+            if (cached.isEmpty()) {
+                var unavailable =
+                    cancelled.getAsBoolean() ? new CancellationException("Offline model load was cancelled")
+                        : AssetLoadException.access("Remote model is not fully cached");
+                return CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Failed(
+                    new ResourceFailure(ResourceFailure.Kind.TRANSIENT, unavailable)));
+            }
+            return loader.loadAsync(cancelled, dispatch, cached.orElseThrow(), resolved.key(), false, cacheOnly,
+                ModelResourceFailures.none());
+        }, ignored -> {
+        });
+        try {
+            var queued = dispatch.enqueue(() -> {
+                try {
+                    if (!opening.isDone())
+                        opening.complete(
+                            cacheOnly ? Optional.of(retained.cachedOnlyView()) : retained.openCached(cancelled));
+                } catch (Throwable failure) {
+                    opening.completeExceptionally(failure);
+                } finally {
+                    inputs.close();
                 }
-                return loader
-                    .loadAsync(cancelled, dispatch, cached.orElseThrow(), resolved.key(),
-                        resolved.entry().modelHash().equals(defaultModelId), cacheOnly, ModelResourceFailures.none())
-                    .thenApply(
-                        outcome -> outcome instanceof ModelRenderTargetLoader.LoadResult.Failed failed
-                            ? new ModelRenderTargetLoader.LoadResult.Failed(
-                                new ResourceFailure(ResourceFailure.Kind.TRANSIENT, failed.failure().cause()))
-                            : outcome);
             });
+            result.whenComplete((ignored, failure) -> {
+                if (result.isCancelled() && queued.withdraw())
+                    inputs.close();
+            });
+        } catch (Throwable failure) {
+            inputs.close();
+            opening.completeExceptionally(failure);
+        }
+        return result;
     }
 
     private CompletableFuture<Void> initializeDefault(ClientCatalogManager.LocalCatalogState state) {
         var startedAt = System.nanoTime();
-        var defaultHandle = state.models().values().stream().filter(this::isDefault).findFirst()
-            .orElseThrow(() -> new IllegalStateException("Builtin default model was not found"));
-        defaultModelId = defaultHandle.representation().modelId();
+        var defaultHandle = (ManagedContainer)Objects
+            .requireNonNull(state.snapshot().intrinsicDefault(), "Required intrinsic default was not found").binding()
+            .content();
         var defaultLoads = defaultHandle.view().getRenderTargets().stream().flatMap(target -> target.getTextureNames()
             .stream().map(texture -> loadDefaultTarget(defaultHandle, target.id(), texture))).toList();
         return CompletableFuture.allOf(defaultLoads.toArray(CompletableFuture[]::new)).thenRun(() -> {
@@ -492,7 +608,8 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         var selected = loaded.stream().filter(load -> load.targetId().equals(RenderTargetIds.PLAYER))
             .filter(load -> load.texture()
                 .equals(resolveEffectiveKey(handle.representation().view().getManifest(),
-                    request(handle.representation().modelId(), load.targetId(), "")).selectedTexture()))
+                    request(PublishedModelId.INTRINSIC_DEFAULT, load.targetId(), "", ModelResourcePurpose.FULL, null))
+                    .selectedTexture()))
             .findFirst()
             .orElseThrow(() -> new IllegalStateException("Builtin default model contains no player render target"));
         var sources = new LinkedHashMap<String, DefaultAnimationRuntime.Source>();
@@ -520,10 +637,9 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
 
     private CompletableFuture<ResourceLease> loadRequiredBuiltinTarget(ManagedContainer handle, String targetId,
         String texture) {
-        var entry = catalogs.snapshot().find(handle.representation().modelId()).orElseThrow();
-        var request = request(handle.representation().modelId(), targetId, texture);
+        var request = request(PublishedModelId.INTRINSIC_DEFAULT, targetId, texture, ModelResourcePurpose.FULL, null);
         var key = resolveEffectiveKey(handle.representation().view().getManifest(), request);
-        var content = contentStore.exact(entry.content());
+        var content = handle;
         var startedAt = System.nanoTime();
         var lease = renderTargets.getOrStartRequiredAsync(request, content, key,
             (cancelled, dispatch) -> loader
@@ -545,7 +661,7 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     }
 
     private static ModelRenderTargetLoader.LoadResult traceLoad(ModelRenderTargetLoader.LoadResult result,
-        long startedAt, Hash256 hash, String path, String targetId, String texture, String source) {
+        long startedAt, ModelId hash, String path, String targetId, String texture, String source) {
         var elapsed = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
         if (result instanceof ModelRenderTargetLoader.LoadResult.Ready) {
             YesSteveModel.LOGGER.debug(
@@ -600,12 +716,12 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     private void resourceFailed(ClientCatalogEntry entry, ModelFailureRegistry.Stage stage, String resource,
         Throwable error) {
         YesSteveModel.LOGGER.debug("Model lazy resource failed hash={} path={} stage={} resource={}", entry.modelHash(),
-            catalogs.displayPath(entry.modelHash()), stage, resource, error);
+            entry.displayPath(), stage, resource, error);
     }
 
     private ResourceLease getOrStart(ResourceRequest request, ResolvedResource resolved, Object workOwner,
         RemoteChunkFetcher fetcher, WorkPriority priority) {
-        var content = contentStore.exact(resolved.entry().content());
+        var content = runtimeContent(resolved);
         return renderTargets.getOrStart(request, content, resolved.key(),
             (cancelled, dispatch) -> load(cancelled, dispatch, resolved, fetcher), this::isCurrent, workOwner,
             priority);
@@ -627,7 +743,7 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         if (!bakeProfile.equals(request.bakeProfile())) {
             throw new IllegalArgumentException("Unsupported bake profile: " + request.bakeProfile().key());
         }
-        if (!subjectBinding(request.modelId().equals(defaultModelId),
+        if (!subjectBinding(request.modelId().isIntrinsicDefault(),
             request.expressionBinding().bindingPlan().rootSubjectType().orElse(null))
             .equals(request.expressionBinding())) {
             throw new IllegalArgumentException("Resource expressionBinding is not current");
@@ -665,16 +781,16 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         var requested = request.requestedTexture();
         if (requested != null && !requested.isBlank() && containsTexture(target, requested)) {
             return new RenderTargetKey(request.targetId(), requested, request.bakeProfile(),
-                request.expressionBinding(), request.purpose());
+                request.expressionBinding(), request.purpose(), request.modelId().role());
         }
         var configured = manifest.info().settings().defaultTexture().orElse("");
         if (!configured.isBlank() && containsTexture(target, configured)) {
             return new RenderTargetKey(request.targetId(), configured, request.bakeProfile(),
-                request.expressionBinding(), request.purpose());
+                request.expressionBinding(), request.purpose(), request.modelId().role());
         }
         for (var texture : target.textures().object2ObjectEntrySet()) {
             return new RenderTargetKey(request.targetId(), texture.getKey(), request.bakeProfile(),
-                request.expressionBinding(), request.purpose());
+                request.expressionBinding(), request.purpose(), request.modelId().role());
         }
         throw new IllegalArgumentException("Render target has no texture: " + request.targetId());
     }
@@ -688,14 +804,19 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
         return false;
     }
 
-    private boolean isDefault(ManagedContainer handle) {
-        return handle.location().rootKind() == CatalogRootKind.BUILTIN
-            && handle.location().path().value().equals("default");
+    private ModelContent runtimeContent(ResolvedResource resolved) {
+        return resolved.key().role() == PublishedModelId.Role.INTRINSIC_DEFAULT ? resolved.entry().content()
+            : contentStore.exact(resolved.entry().content());
+    }
+
+    private ResourceLease requiredReady(ResourceRequest request, ResolvedResource resolved) {
+        return renderTargets.findReady(request, runtimeContent(resolved), resolved.key(), this::isCurrent)
+            .orElseThrow(() -> new IllegalStateException("Required intrinsic resource was not retained: " + request));
     }
 
     private void requireAvailable() {
         var initialization = defaultInitialization;
-        if (initialization == null || !initialization.isDone() || initialization.isCompletedExceptionally()) {
+        if (closed || initialization == null || !initialization.isDone() || initialization.isCompletedExceptionally()) {
             throw new IllegalStateException("Builtin default resources are not ready");
         }
     }
@@ -739,154 +860,6 @@ public final class ClientModelRenderTargetManager implements AutoCloseable {
     }
 
     private record WorkContext(Object owner, RemoteChunkFetcher fetcher) {
-    }
-
-    /**
-     * Linearizes cancellation, terminal disposition and transfer of one Ready lease.
-     *
-     * <p><b>Ownership:</b> Before successful result delivery, this object owns the lease and closes rejected
-     * or failed results. Success transfers closure to the result receiver. Cancel after that transfer has
-     * no effect on the receiver's lease; cancel before transfer seals reception and releases its interest.
-     * The result stage can complete inline and does not promise a particular callback thread.
-     */
-    public static final class ReadyAcquisition {
-        private final ResourceRequest request;
-        private ResourceLease lease;
-        private CompletableFuture<Optional<ResourceLease>> probe;
-        private ReadyAcquisition delegate;
-        private final CompletableFuture<ResourceLease> result = new CompletableFuture<>();
-        private boolean ownsLease = true;
-
-        public ReadyAcquisition(ResourceRequest request, ResourceLease lease,
-            CompletableFuture<AcquireResult> terminal) {
-            this.request = Objects.requireNonNull(request, "request");
-            this.lease = Objects.requireNonNull(lease, "lease");
-            Objects.requireNonNull(terminal, "terminal");
-            terminal.whenComplete(this::settle);
-        }
-
-        ReadyAcquisition(ResourceRequest request, CompletableFuture<Optional<ResourceLease>> probe,
-            Supplier<ReadyAcquisition> fallback) {
-            this.request = Objects.requireNonNull(request, "request");
-            this.probe = Objects.requireNonNull(probe, "probe");
-            probe.whenComplete((ready, failure) -> {
-                synchronized (this) {
-                    if (!ownsLease) {
-                        if (ready != null)
-                            ready.ifPresent(ResourceLease::close);
-                    } else if (failure != null)
-                        settle(null, failure);
-                    else if (ready.isPresent()) {
-                        lease = ready.get();
-                        try {
-                            settle(lease.poll(), null);
-                        } catch (Throwable rejected) {
-                            settle(null, rejected);
-                        }
-                    } else {
-                        try {
-                            delegate = fallback.get();
-                            delegate.result().whenComplete((next, rejected) -> {
-                                synchronized (this) {
-                                    if (!ownsLease) {
-                                        if (next != null)
-                                            next.close();
-                                    } else {
-                                        lease = next;
-                                        try {
-                                            settle(next == null ? null : next.poll(), rejected);
-                                        } catch (Throwable failed) {
-                                            settle(null, failed);
-                                        }
-                                    }
-                                }
-                            });
-                        } catch (Throwable rejected) {
-                            settle(null, rejected);
-                        }
-                    }
-                }
-            });
-        }
-
-        public CompletionStage<ResourceLease> result() {
-            return result.minimalCompletionStage();
-        }
-
-        public void cancel() {
-            synchronized (this) {
-                if (!ownsLease)
-                    return;
-                ownsLease = false;
-            }
-            // A delegated completion may hold its own lock while delivering into this owner.
-            var failure = cancelLease(new CancellationException("Render-target acquisition was cancelled"));
-            result.completeExceptionally(failure);
-        }
-
-        private synchronized void settle(AcquireResult outcome, Throwable failure) {
-            if (!ownsLease) {
-                return;
-            }
-            ownsLease = false;
-            if (failure != null) {
-                result.completeExceptionally(closeLease(unwrap(failure)));
-                return;
-            }
-            if (outcome instanceof AcquireResult.Ready) {
-                try {
-                    if (lease.isCurrent(request)) {
-                        if (!result.complete(lease)) {
-                            var rejection = closeLease(null);
-                            if (rejection != null) {
-                                YesSteveModel.LOGGER.warn("Failed to close a rejected render-target lease", rejection);
-                            }
-                        }
-                        return;
-                    }
-                } catch (Throwable currentFailure) {
-                    result.completeExceptionally(closeLease(currentFailure));
-                    return;
-                }
-            }
-            var cause = outcome instanceof AcquireResult.Failed failed ? failed.failure().cause()
-                : new CancellationException("Model render target was no longer current");
-            result.completeExceptionally(closeLease(cause));
-        }
-
-        private Throwable cancelLease(Throwable failure) {
-            try {
-                if (probe != null)
-                    probe.cancel(false);
-                if (delegate != null)
-                    delegate.cancel();
-                if (lease != null)
-                    lease.cancelPending();
-            } catch (Throwable closeFailure) {
-                return append(failure, closeFailure);
-            }
-            return failure;
-        }
-
-        private Throwable closeLease(Throwable failure) {
-            try {
-                if (lease != null)
-                    lease.close();
-            } catch (Throwable closeFailure) {
-                return append(failure, closeFailure);
-            }
-            return failure;
-        }
-
-        private static Throwable append(Throwable failure, Throwable next) {
-            if (failure == null) {
-                return next;
-            }
-            if (failure != next) {
-                failure.addSuppressed(next);
-            }
-            return failure;
-        }
     }
 
     private static final class SessionOwner {

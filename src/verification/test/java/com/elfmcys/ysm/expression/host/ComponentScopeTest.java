@@ -1,13 +1,15 @@
 package com.elfmcys.ysm.expression.host;
 
-import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.client.compat.bettercombat.BetterCombatBuiltinComponent;
 import com.elfmcys.ysm.client.compat.carryon.CarryOnBuiltinComponent;
+import com.elfmcys.ysm.client.compat.curios.CuriosBuiltins;
 import com.elfmcys.ysm.client.compat.immersivemelodies.ImmersiveMelodiesBuiltinComponent;
-import com.elfmcys.ysm.expression.host.builtin.ModelBuiltins;
-import com.elfmcys.ysm.expression.host.builtin.ControlBuiltins;
-import com.elfmcys.ysm.expression.host.builtin.CuriosBuiltins;
+import com.elfmcys.ysm.expression.host.builtin.ControllerPredicateBuiltins;
+import com.elfmcys.ysm.expression.host.builtin.LivingBuiltins;
+import com.elfmcys.ysm.expression.host.builtin.ModBuiltins;
+import com.elfmcys.ysm.expression.host.builtin.MovementBuiltins;
 import com.elfmcys.ysm.expression.host.builtin.PositionComponent;
+import com.elfmcys.ysm.expression.host.builtin.WorldBuiltins;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -43,6 +45,7 @@ import com.elfmcys.ysm.geckolib3.geo.RenderContext;
 import com.elfmcys.ysm.geckolib3.model.provider.data.EntityModelData;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -108,8 +111,8 @@ final class ComponentScopeTest {
             a.schema().members().stream().map(DeclarationSchema.Member::symbol).sorted().toList());
         assertEquals(List.of("query:counter_b"),
             b.schema().members().stream().map(DeclarationSchema.Member::symbol).toList());
-        var host = ExpressionHost.createFrozen(HostAvailability.none(), ExpressionPolicy.COMPILATION,
-            declarations, declarations);
+        var host = ExpressionHost.createFrozen(HostAvailability.none(), ExpressionPolicy.COMPILATION, declarations,
+            declarations);
         for (String symbol : List.of("query:counter_a", "ysm:counter_a", "query:counter_b"))
             assertTrue(host.registry().function(new dev.semaweave.SymbolKey(symbol)).isPresent(), symbol);
 
@@ -155,21 +158,21 @@ final class ComponentScopeTest {
             String name = names.get(index);
             String symbol = index == 0 ? "counter_a" : "counter_b";
             String secondNamespace = index == 0 ? """
-                @BuiltinFunction(namespace="ysm", value="counter_a")
+                @BuiltinFunction(value="counter_a", alwaysOrigin = true, namespace="ysm")
                 public int ysm(MolangContextView<Entity> context) { return next(context); }
                 """ : "";
             String source = """
                 package com.elfmcys.ysm.expression.host;
                 import com.elfmcys.ysm.api.molang.MolangContextView;
                 import com.elfmcys.ysm.client.entity.AnimatableEntity;
-                import com.elfmcys.ysm.expression.host.builtin.*;
+                import com.elfmcys.ysm.expression.annotation.*;
                 import net.minecraft.world.entity.Entity;
                 @BuiltinComponent("query")
                 public final class %s implements EntityComponent<Entity> {
                     private final Entity subject;
                     private int counter;
                     public %s(AnimatableEntity<Entity> owner) { subject = owner.getEntity(); }
-                    @BuiltinFunction("%s")
+                    @BuiltinFunction(value = "%s", alwaysOrigin = true)
                     public int query(MolangContextView<Entity> context) { return next(context); }
                     %s
                     private int next(MolangContextView<Entity> context) {
@@ -284,9 +287,10 @@ final class ComponentScopeTest {
             context.bindExpression("component", 0);
             context.beginTopLevel(false);
             try {
-                // Ingress reads use their call-local partial tick after the render borrow has ended.
-                float local = position.inputHorizontal(context);
-                assertTrue(Math.abs(local - position.inputHorizontal()) > 0.1f);
+                assertTrue(Float.isNaN(MovementBuiltins.inputHorizontal(context)));
+                holder.evaluate(event(owner, .25f), () -> true,
+                    () -> context.captureSubjectInputs(holder.captureSubjectSample()));
+                assertEquals(horizontal[0], MovementBuiltins.inputHorizontal(context));
             } finally {
                 context.endTopLevel();
                 context.releaseExpression();
@@ -494,14 +498,17 @@ final class ComponentScopeTest {
             context.bindExpression("component", 0);
             context.beginTopLevel(false);
             try {
+                holder.evaluate(event(holder.owner(), 1), () -> true,
+                    () -> context.captureSubjectInputs(holder.captureSubjectSample()));
                 assertEquals(Float.valueOf(0), position.position(context, 0));
-                assertEquals(Float.valueOf(-0.0f), position.position(context, 1));
+                assertEquals(0f, position.position(context, 1));
                 assertEquals(Float.valueOf(4), position.position(context, 2));
-                assertNull(position.position(context, 3));
+                assertTrue(Float.isNaN(position.position(context, 3)));
                 assertTrue(Float.isNaN(position.positionDelta(context, -1)));
                 assertEquals(Float.valueOf(0), position.positionDelta(context, 0));
-                assertNull(ControlBuiltins.hold(context, 2, "mainhand", "", false));
-                assertEquals("", new ModelBuiltins(TestComponentHolders.owner((Entity)entity)).modVersion(context, "missing_test_mod"));
+                assertNull(ControllerPredicateBuiltins.hold(context, 2, "mainhand", "", false));
+                assertEquals("", new ModBuiltins(TestComponentHolders.owner((Entity)entity)).modVersion(context,
+                    "missing_test_mod"));
             } finally {
                 context.endTopLevel();
                 context.releaseExpression();
@@ -514,12 +521,14 @@ final class ComponentScopeTest {
             context.bindExpression("component", 0);
             context.beginTopLevel(false);
             try {
-                assertNull(ControlBuiltins.armor(context, 2, "not_a_slot", "", false));
-                assertNull(ControlBuiltins.hold(context, 2, "head", "", false));
-                assertEquals(Boolean.FALSE, ControlBuiltins.armor(context, 2, "head", "", false));
-                assertEquals(Boolean.FALSE, ControlBuiltins.hold(context, 2, "mainhand", "", false));
-                assertNull(ControlBuiltins.isItemNameAny(context, 2, "not_a_slot", "item"));
-                assertNull(ControlBuiltins.relativeBlockHasAnyTag(context, 4, 6, 0, 0, "tag"));
+                assertNull(ControllerPredicateBuiltins.armor(context, 2, "not_a_slot", "", false));
+                assertNull(ControllerPredicateBuiltins.hold(context, 2, "head", "", false));
+                assertEquals(Boolean.FALSE, ControllerPredicateBuiltins.armor(context, 2, "head", "", false));
+                assertEquals(Boolean.FALSE, ControllerPredicateBuiltins.hold(context, 2, "mainhand", "", false));
+                assertNull(ControllerPredicateBuiltins.hold(context, 2, "mainhand", "#invalid id", false));
+                assertNull(ControllerPredicateBuiltins.armor(context, 2, "head", "#invalid id", false));
+                assertNull(LivingBuiltins.isItemNameAny(context, 2, "not_a_slot", "item"));
+                assertNull(WorldBuiltins.relativeBlockHasAnyTag(context, 4, 6, 0, 0, "tag"));
             } finally {
                 context.endTopLevel();
                 context.releaseExpression();
@@ -542,6 +551,70 @@ final class ComponentScopeTest {
             }
         }
         holder.invalidate();
+    }
+
+    @Test
+    void finiteWorldSamplesCanProduceExplicitNullableSpeedAndPositionResults() throws Exception {
+        var entity = allocate(TestEntity.class);
+        var owner = TestComponentHolders.owner(entity);
+        var holder = BuiltinDeclarations.createComponents(owner, ExpressionHost.create(HostAvailability.none()));
+        var position = holder.exact(PositionComponent.class).orElseThrow();
+        var context = readContext((Entity)entity);
+        try {
+            setPosition(entity, 0, 0, 0);
+            holder.evaluate(event(owner, 1), () -> true, () -> {
+                holder.update(0, 0, 1, () -> true);
+                context.captureSubjectInputs(holder.captureSubjectSample());
+            });
+            setPosition(entity, 1e100, -1e100, 1e100);
+            holder.evaluate(event(owner, 1), () -> true, () -> {
+                holder.update(0, 1, 1, () -> true);
+                context.captureSubjectInputs(holder.captureSubjectSample());
+            });
+            assertTrue(Float.isInfinite(position.positionDelta(context, 0)));
+            assertTrue(Float.isInfinite(MovementBuiltins.trackedGroundSpeed(context)));
+            assertTrue(Float.isInfinite(position.verticalSpeed(context)));
+            for (String name : List.of("positionDelta", "trackedGroundSpeed", "verticalSpeed")) {
+                Class<?> declaration =
+                    name.equals("trackedGroundSpeed") ? MovementBuiltins.class : PositionComponent.class;
+                var method =
+                    name.equals("positionDelta")
+                        ? PositionComponent.class.getMethod(name, com.elfmcys.ysm.api.molang.MolangContextView.class,
+                            float.class)
+                        : declaration.getMethod(name, com.elfmcys.ysm.api.molang.MolangContextView.class);
+                var publication = name.equals("positionDelta")
+                    ? ProviderContractAudit.invoke(method, position, "INVOKE", "finite-double-overflow", context, 0f)
+                    : ProviderContractAudit.invoke(method, position, "INVOKE", "finite-double-overflow", context);
+                assertTrue(publication.scalarMissing());
+                publication.verifyUnchanged();
+            }
+            setPosition(entity, -Double.MAX_VALUE, 0, -Double.MAX_VALUE);
+            holder.evaluate(event(owner, 1), () -> true, () -> {
+                holder.update(1, 2, 1, () -> true);
+                context.captureSubjectInputs(holder.captureSubjectSample());
+            });
+            setPosition(entity, Double.MAX_VALUE, 0, Double.MAX_VALUE);
+            holder.evaluate(event(owner, 1), () -> true, () -> {
+                holder.update(2, 3, 1, () -> true);
+                context.captureSubjectInputs(holder.captureSubjectSample());
+            });
+            for (String name : List.of("inputHorizontal", "inputVertical")) {
+                var method = MovementBuiltins.class.getMethod(name, com.elfmcys.ysm.api.molang.MolangContextView.class);
+                context.bindExpression("direction-overflow", 0);
+                context.beginTopLevel(false);
+                try {
+                    var publication = ProviderContractAudit.invoke(method, position, "INVOKE",
+                        "finite-double-displacement-overflow", context);
+                    assertTrue(Float.isFinite((Float)publication.value()), name);
+                } finally {
+                    context.endTopLevel();
+                    context.releaseExpression();
+                }
+            }
+        } finally {
+            context.closeRound();
+            holder.invalidate();
+        }
     }
 
     @Test
@@ -588,29 +661,21 @@ final class ComponentScopeTest {
             var linkage = dev.semaweave.RegistryRuntimeLinkage.<MolangContext>create(holder.providers(host, plan),
                 dev.semaweave.RuntimeSymbolTable.empty());
             try (var instance = resource.newInstance(new dev.semaweave.RuntimeLinkage<MolangContext>() {
-                public dev.semaweave.ContextType<MolangContext> contextType() {
-                    return host.contextType();
-                }
-
                 public dev.semaweave.RegistryRuntimeLinkage<MolangContext> registry() {
                     return linkage;
-                }
-
-                public dev.semaweave.compilation.BakedConstantTable constants() {
-                    return artifact.constants();
                 }
 
                 public dev.semaweave.RuntimeDiagnostics diagnostics() {
                     return dev.semaweave.RuntimeDiagnostics.none();
                 }
 
-                public dev.semaweave.ResourceLease<MolangContext> retainResource() {
-                    return resource.retain();
-                }
             })) {
                 var subject = instance.bindSubject(entity);
                 var context = readContext((Entity)entity);
                 context.configureLimits(host.executionLimits());
+                context.bindOrigin(subject);
+                holder.evaluate(event(owner, 1), () -> true,
+                    () -> context.captureSubjectInputs(holder.captureSubjectSample()));
                 try {
                     for (int index = 0; index < axes.length; index++) {
                         var id = resource.programs().requireId(keys[index]);
@@ -634,19 +699,118 @@ final class ComponentScopeTest {
         }
     }
 
+    @Test
+    void compiledDebugOutputPreservesMixedArgumentsAndSkipsDisabledArguments() throws Throwable {
+        var entity = allocate(TestEntity.class);
+        setPosition(entity, 0, 0, 0);
+        var owner = TestComponentHolders.owner(entity);
+        var host = ExpressionHost.create(HostAvailability.none());
+        var holder = BuiltinDeclarations.createComponents(owner, host);
+        var messages = new ArrayList<String>();
+        var debug = new com.elfmcys.ysm.client.animation.debug.DebugSource() {
+            @Override
+            public void print(String message, Object... arguments) {
+                messages.add(String.format(message, arguments));
+            }
+
+            @Override
+            public void print(net.minecraft.network.chat.Component message) {
+                messages.add(message.getString());
+            }
+        };
+        var codec = dev.semaweave.program.PortableProgramCodecs.v1();
+        var hash = ExpressionIdentityHash.SHA_256;
+        var builder = dev.semaweave.compilation.CompilationUnit.builder(host.compilationPolicy(), codec, hash);
+        var keys = new dev.semaweave.ProgramKey[2];
+        var sources = List.of("{q.debug_output('x', 1, true); return 0;}",
+            "{t.n=0; q.debug_output('x', (t.n=1), true); return t.n;}");
+        var signature = new dev.semaweave.TopLevelEntrySignature(dev.semaweave.ProgramShape.F32,
+            new dev.semaweave.EntryResult.Value(dev.semaweave.BuiltinType.F32), List.of(),
+            List.of(new dev.semaweave.LocalName("n")));
+        for (int index = 0; index < keys.length; index++) {
+            keys[index] =
+                new dev.semaweave.ProgramKey(dev.semaweave.program.ReadOnlyBytes.copyOf(new byte[] {(byte)index}));
+            var program = new com.elfmcys.ysm.expression.frontend.MolangFrontend()
+                .compile(sources.get(index), com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceMode.EXPRESSION,
+                    new com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceLocation("debug-output/" + index))
+                .program();
+            builder.addProgram(new dev.semaweave.compilation.ProgramSource(keys[index], program, signature,
+                java.util.Optional.empty(), new dev.semaweave.compilation.DiagnosticLocation("debug-output/" + index),
+                dev.semaweave.EntryPermissions.ACTION));
+        }
+        var unit = builder.build();
+        var plan = host.expressionBinding().bindingPlan();
+        var backend = new dev.semaweave.backend.janino.JaninoJavaCompilerBackend();
+        var artifact = new dev.semaweave.compilation.DefaultExpressionAotCompiler<MolangContext>(backend).compile(
+            dev.semaweave.compilation.TaskContext.NONE, unit, host.hostAbi(), host.registry(),
+            dev.semaweave.compilation.CompilerOptions.DEFAULT, plan, hash);
+        var identity = dev.semaweave.compilation.ExpectedArtifactIdentity.create(unit, host.hostAbi(), host.registry(),
+            dev.semaweave.compilation.CompilerOptions.DEFAULT, plan, backend.descriptor(), hash);
+        try (var resource = dev.semaweave.compilation.ModuleLoaders.<MolangContext>standard().load(artifact, identity,
+            host.registry(), host.registry().visibilityRoot(), hash)) {
+            var linkage = dev.semaweave.RegistryRuntimeLinkage.<MolangContext>create(holder.providers(host, plan),
+                dev.semaweave.RuntimeSymbolTable.empty());
+            try (var instance = resource.newInstance(new dev.semaweave.RuntimeLinkage<MolangContext>() {
+                public dev.semaweave.RegistryRuntimeLinkage<MolangContext> registry() {
+                    return linkage;
+                }
+
+                public dev.semaweave.RuntimeDiagnostics diagnostics() {
+                    return dev.semaweave.RuntimeDiagnostics.none();
+                }
+            })) {
+                var subject = instance.bindSubject(entity);
+                var inputs = new InvocationInputs<TestEntity>() {
+                    public TestEntity entity() {
+                        return entity;
+                    }
+                };
+                var context = MolangContext.logical(entity, inputs, MolangContext.LogicalPhase.ACTION,
+                    com.elfmcys.ysm.expression.TestRoamingStates.create(null, dev.semaweave.RoamingRole.PRODUCER),
+                    new InvocationProvenance("debug-output", "test", 0, 1, 1));
+                context.configureLimits(host.executionLimits());
+                context.bindOrigin(subject);
+                try {
+                    for (int index = 0; index < 3; index++) {
+                        boolean enabled = index != 1;
+                        int programIndex = index == 0 ? 0 : 1;
+                        var id = resource.programs().requireId(keys[programIndex]);
+                        context.bindExpression("debug-output/" + index, id.value());
+                        float expected = index == 2 ? 1f : 0f;
+                        try {
+                            var event = new AnimationEvent<>(owner, 0, 0, 0, RenderContext.levelImmutable(),
+                                new EntityModelData(), enabled ? debug : null);
+                            holder.evaluate(event, () -> true, () -> {
+                                var program = instance.bindProgram(id, dev.semaweave.ProgramShape.F32);
+                                float value =
+                                    assertDoesNotThrow(() -> instance.executeFloat(program, context, subject, context));
+                                assertEquals(expected, value);
+                            });
+                        } finally {
+                            context.releaseExpression();
+                        }
+                    }
+                    assertEquals(List.of("x1.0true", "x1.0true"), messages);
+                    assertNull(context.firstFailure());
+                } finally {
+                    context.closeRound();
+                }
+            }
+        } finally {
+            holder.invalidate();
+        }
+    }
+
     private static <E extends Entity> MolangContext<E> readContext(E entity) {
         var inputs = new InvocationInputs<E>() {
             public E entity() {
                 return entity;
             }
 
-            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {
-                throw new AssertionError(command);
-            }
         };
-        return MolangContext.observation(entity, inputs, new ControlledHostFixture(),
+        return MolangContext.observation(entity, inputs,
             com.elfmcys.ysm.expression.TestRoamingStates.create(null, dev.semaweave.RoamingRole.PRODUCER),
-            new InvocationProvenance("result-domain", "declaration", 0, 1, 1), () -> false, () -> true);
+            new InvocationProvenance("result-domain", "declaration", 0, 1, 1));
     }
 
     private static final List<String> calls = new ArrayList<>();

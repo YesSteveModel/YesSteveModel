@@ -3,7 +3,8 @@ package com.elfmcys.ysm.command.sub;
 import com.elfmcys.ysm.capability.AuthModelsCapabilityProvider;
 import com.elfmcys.ysm.capability.ModelInfoCapabilityProvider;
 import com.elfmcys.ysm.event.CommandRegistry;
-import com.elfmcys.ysm.model.catalog.source.AccessPolicy;
+import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
+import com.elfmcys.ysm.command.ModelSelectorArgument;
 import com.elfmcys.ysm.model.domain.ModelScanWarning;
 import com.elfmcys.ysm.model.service.ServerModelService;
 import com.elfmcys.ysm.model.session.server.state.Selection;
@@ -26,7 +27,6 @@ public final class ModelCommand {
     private static final String TARGETS = "targets";
     private static final String MODEL_PATH = "model_path";
     private static final String TEXTURE = "texture";
-    private static final String IGNORE_AUTH = "ignore_auth";
 
     private ModelCommand() {}
 
@@ -38,11 +38,11 @@ public final class ModelCommand {
             .executes(ModelCommand::genPreview));
         model.then(Commands.literal("disable").then(Commands.argument(TARGETS, EntityArgument.players())
             .then(Commands.argument("value", BoolArgumentType.bool()).executes(ModelCommand::disable))));
-        var set = Commands.literal("set").then(Commands.argument(TARGETS, EntityArgument.players()).then(Commands
-            .argument(MODEL_PATH, StringArgumentType.string()).suggests(CommandRegistry.ALL_MODELS)
-            .then(Commands.argument(TEXTURE, StringArgumentType.string()).suggests(CommandRegistry.ALL_TEXTURES)
-                .executes(context -> set(context, false)).then(Commands.argument(IGNORE_AUTH, BoolArgumentType.bool())
-                    .executes(context -> set(context, BoolArgumentType.getBool(context, IGNORE_AUTH)))))));
+        var set = Commands.literal("set")
+            .then(Commands.argument(TARGETS, EntityArgument.players())
+                .then(Commands.argument(MODEL_PATH, ModelSelectorArgument.selector())
+                    .suggests(CommandRegistry.ALL_MODELS).then(Commands.argument(TEXTURE, StringArgumentType.string())
+                        .suggests(CommandRegistry.ALL_TEXTURES).executes(ModelCommand::set))));
         model.then(set);
         return model;
     }
@@ -57,8 +57,7 @@ public final class ModelCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    private static int set(CommandContext<CommandSourceStack> context, boolean ignoreAuth)
-        throws CommandSyntaxException {
+    private static int set(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         var path = StringArgumentType.getString(context, MODEL_PATH);
         var catalog = ServerModelService.instance().catalog().orElseThrow();
         var resolution = catalog.resolvePath(path);
@@ -85,14 +84,16 @@ public final class ModelCommand {
         for (var player : targets) {
             player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(
                 selection -> player.getCapability(AuthModelsCapabilityProvider.AUTH_MODELS_CAP).ifPresent(auth -> {
-                    if (!ignoreAuth && handle.location().rootKind().accessPolicy() == AccessPolicy.SESSION_AUTHORIZED
+                    if (!resolution.found().orElseThrow().isIntrinsicDefault()
+                        && catalog.catalog().byModelId().get(hash).entry().access() == CatalogAccess.AUTHORIZED
                         && !auth.containModel(hash)) {
                         context.getSource().sendFailure(
                             Component.literal(player.getScoreboardName() + " is not authorized for " + path));
                         return;
                     }
                     if (!SessionProtocolHandler.applyCommandSelection(player, selection,
-                        new Selection.Model(hash, selectedTexture), ignoreAuth)) {
+                        resolution.found().orElseThrow().isIntrinsicDefault() ? new Selection.IntrinsicDefault()
+                            : new Selection.Model(hash, selectedTexture))) {
                         context.getSource().sendFailure(
                             Component.literal(player.getScoreboardName() + " rejected the model selection"));
                         return;

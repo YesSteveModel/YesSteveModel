@@ -10,10 +10,7 @@ import java.util.RandomAccess;
 public final class EventArguments extends AbstractFloatList implements RandomAccess {
     private final float[] values;
 
-    private EventArguments(float[] ownedValues, int maximum) {
-        if (ownedValues.length > maximum) {
-            throw new IllegalArgumentException("event arguments exceed catalog bound " + maximum);
-        }
+    private EventArguments(float[] ownedValues) {
         for (float value : ownedValues) {
             if (!Float.isFinite(value)) {
                 throw new IllegalArgumentException("event argument must be finite");
@@ -23,22 +20,28 @@ public final class EventArguments extends AbstractFloatList implements RandomAcc
     }
 
     public static EventArguments sync(float... values) {
-        return new EventArguments(values.clone(), MolangEventCatalog.SYNC_MAX_ARGUMENTS);
+        return checkedSync(values.clone());
     }
 
     public static EventArguments sync(FloatList values) {
-        return new EventArguments(Objects.requireNonNull(values).toFloatArray(), MolangEventCatalog.SYNC_MAX_ARGUMENTS);
+        return checkedSync(Objects.requireNonNull(values).toFloatArray());
     }
 
     public static EventArguments deferredFloats(float... values) {
-        return new EventArguments(values.clone(), MolangEventCatalog.DEFER_MAX_ARGUMENTS);
+        return new EventArguments(values.clone());
     }
 
     public static EventArguments deferred(float delay, float[] payload) {
-        var values = new float[payload.length + 1];
+        var values = new float[Math.incrementExact(payload.length)];
         values[0] = delay;
         System.arraycopy(payload, 0, values, 1, payload.length);
-        return new EventArguments(values, MolangEventCatalog.DEFER_MAX_ARGUMENTS);
+        return new EventArguments(values);
+    }
+
+    private static EventArguments checkedSync(float[] values) {
+        if (values.length > MolangEventCatalog.SYNC_MAX_ARGUMENTS)
+            throw new IllegalArgumentException("sync arguments exceed protocol bound");
+        return new EventArguments(values);
     }
 
     @Override

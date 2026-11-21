@@ -16,4 +16,14 @@ public final class TestPreviews {
     public static PreviewStore.EncodedPreview blank() throws IOException {
         return PreviewStore.decode(BLANK_PNG);
     }
+
+    /** Publishes an independent fixture file, including deliberately invalid or missing media. */
+    public static java.nio.file.Path index(java.nio.file.Path cacheRoot, com.elfmcys.ysm.model.domain.Hash256 id,
+        java.nio.file.Path file) throws IOException {
+        var target = TestCacheFiles.path(cacheRoot,
+            com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.PREVIEW, id.toString(), false);
+        if (java.nio.file.Files.exists(file))
+            java.nio.file.Files.copy(file, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        return target;
+    }
 }

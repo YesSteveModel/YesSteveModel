@@ -215,7 +215,8 @@ public final class MolangExtensions {
                     stage = "INITIALIZATION";
                     Class.forName(c.schema.owner(), true, c.source.loader());
                     published.add(declaration);
-                    if (c.source == builtinSource)
+                    if (c.source == builtinSource && c.schema.dependencies().stream()
+                        .allMatch(d -> Set.of("minecraft", "forge", "ysm").contains(d.modId())))
                         publishedBuiltins.add(declaration);
                 } catch (ReflectiveOperationException | IOException | RuntimeException | LinkageError failure) {
                     diagnostics.add(c.schema.owner() + " [mod=" + c.verifiedModId + "]: " + stage + ": " + failure);
@@ -227,8 +228,8 @@ public final class MolangExtensions {
                 if (candidates.stream().noneMatch(c -> c.resource.equals(resource)))
                     diagnostics.add(resource + ": QUALIFICATION: submission has no discovered owning source");
             try {
-                ExpressionHost host = ExpressionHost.createFrozen(availability, policy,
-                    List.copyOf(published), List.copyOf(publishedBuiltins));
+                ExpressionHost host = ExpressionHost.createFrozen(availability, policy, List.copyOf(published),
+                    List.copyOf(publishedBuiltins));
                 state = State.FROZEN;
                 return new Admission(host, List.copyOf(rejected), diagnostics);
             } finally {
@@ -259,7 +260,8 @@ public final class MolangExtensions {
         return admit(availability, sources, ExpressionPolicy.COMPILATION);
     }
 
-    static Admission admit(HostAvailability availability, List<Source> sources, dev.semaweave.CompilationPolicy policy) {
+    static Admission admit(HostAvailability availability, List<Source> sources,
+        dev.semaweave.CompilationPolicy policy) {
         Collector collector = new Collector();
         collector.collectBuiltins();
         sources.forEach(collector::collect);

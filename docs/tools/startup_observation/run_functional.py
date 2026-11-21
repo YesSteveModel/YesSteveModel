@@ -64,9 +64,9 @@ def main():
             replace(helper, 'var value = ready.target();',
                     'var value = ready.target();\n'
                     '                    YesSteveModel.LOGGER.info("[startup-consumption] required-set target={} texture={} set={} generation={} ready=true",\n'
-                    '                            target.id(), texture, value.expressions().identity().set().id(), value.expressions().generationId());\n'
+                    '                            target.id(), texture, value.animationStore().metadata().set().id(), value.animationStore().metadata().generationId());\n'
                     '                    if (value.playerResources() != null) YesSteveModel.LOGGER.info("[startup-consumption] required-set target={} texture={} set={} generation={} ready=true",\n'
-                    '                            target.id(), texture, value.armExpressions().identity().set().id(), value.armExpressions().generationId());')
+                    '                            target.id(), texture, value.armAnimationStore().metadata().set().id(), value.armAnimationStore().metadata().generationId());')
         else:
             replace(setup, OBSERVED_STARTUP_CALL,
                     'com.elfmcys.ysm.verification.StartupConsumption.requiredFailure(system, builtinCapabilities.availability());')

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
@@ -166,7 +167,7 @@ class ClientPresentationActionContractTest {
         session.onServerHello(com.elfmcys.ysm.network.protocol.ProtocolVersion.CURRENT, false);
         session.publishFull(new com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot(
             List.of(new com.elfmcys.ysm.model.session.client.state.PublicationEntry(identity(),
-                new com.elfmcys.ysm.model.domain.HierarchyPath("local:custom/fixture"),
+                new com.elfmcys.ysm.model.domain.HierarchyPath("local:fixture"),
                 com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess.PUBLIC, true)),
             java.util.Set.of(), List.of(), Map.of()));
         return session;
@@ -198,7 +199,7 @@ class ClientPresentationActionContractTest {
         assertEquals(1, request.previews().size());
         assertEquals(0,
             request.previews().get(0).getSerializedSize()
-                - PreviewMemberProto.newBuilder().setSlot(0).setModelId(ByteBuffer.wrap(identity().modelId().bytes()))
+                - PreviewMemberProto.newBuilder().setSlot(0).setModelId(identity().modelId().toString())
                     .setContainerId(ByteBuffer.wrap(identity().containerId().bytes())).build().getSerializedSize());
         assertEquals(1, request.icons().size());
         assertEquals(1, request.packCovers().size());
@@ -331,14 +332,13 @@ class ClientPresentationActionContractTest {
     }
 
     private static ModelPackDescriptor pack(String hierarchy, int size) {
-        return new ModelPackDescriptor(CatalogRootKind.CUSTOM,
-            "local:custom" + (hierarchy.isEmpty() ? ""
-                : "/" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy)),
-            "", "", Map.of(), hash(hierarchy.hashCode()), "png", size);
+        return new ModelPackDescriptor(CatalogRootKind.MODELS,
+            "local:" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy), "", "",
+            Map.of(), hash(hierarchy.hashCode()), "png", size);
     }
 
     private static ModelFileIdentity identity() {
-        return new ModelFileIdentity(hash(1), hash(2));
+        return new ModelFileIdentity(ModelId.fromHash(hash(1)), hash(2));
     }
 
     private static Hash256 hash(int value) {

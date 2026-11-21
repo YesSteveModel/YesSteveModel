@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.session.client.ClientModelSession;
 import com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot;
@@ -29,24 +31,23 @@ class ClientSessionRuntimeConnectionTest {
     void previewNoticeUsesOnlyTheExactConnectionAndRetiresOldObservation() throws Exception {
         var connection = new Connection(PacketFlow.CLIENTBOUND);
         var unrelated = new Connection(PacketFlow.CLIENTBOUND);
-        var identity =
-            new com.elfmcys.ysm.model.domain.ModelFileIdentity(new com.elfmcys.ysm.model.domain.Hash256(new byte[32]),
-                new com.elfmcys.ysm.model.domain.Hash256(new byte[32]));
+        var identity = new com.elfmcys.ysm.model.domain.ModelFileIdentity(ModelId.fromHash(new Hash256(new byte[32])),
+            new Hash256(new byte[32]));
         var session = session();
         session.onServerHello(ProtocolVersion.CURRENT, false);
         session
             .publishFull(new RemotePublicationSnapshot(
                 List.of(new com.elfmcys.ysm.model.session.client.state.PublicationEntry(identity,
-                    new com.elfmcys.ysm.model.domain.HierarchyPath("local:custom/fixture"),
+                    new com.elfmcys.ysm.model.domain.HierarchyPath("local:fixture"),
                     com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess.PUBLIC, true)),
                 Set.of(), List.of(), Map.of()));
         currentField().set(null, connectionState(connection, session, ignored -> {
         }));
         var token = session.observePreview(identity).orElseThrow();
         assertTrue(session.completePreviewAbsent(token));
-        var message = com.elfmcys.ysm.proto.network.PreviewAvailableProto.newBuilder()
-            .setModelId(java.nio.ByteBuffer.wrap(identity.modelId().bytes()))
-            .setContainerId(java.nio.ByteBuffer.wrap(identity.containerId().bytes())).build();
+        var message =
+            com.elfmcys.ysm.proto.network.PreviewAvailableProto.newBuilder().setModelId(identity.modelId().toString())
+                .setContainerId(java.nio.ByteBuffer.wrap(identity.containerId().bytes())).build();
         ClientSessionRuntime.acceptPreviewAvailable(unrelated, message);
         assertTrue(session.previewAbsent(identity));
         ClientSessionRuntime.acceptPreviewAvailable(connection, message);
@@ -89,12 +90,14 @@ class ClientSessionRuntimeConnectionTest {
         currentField().set(null, ownerB);
         ((AutoCloseable)ownerA).close();
         var result =
-            fetcher.fetch(List.of(new com.elfmcys.ysm.model.resource.client.remote.RemotePresentationFetcher.Preview(0,
-                new com.elfmcys.ysm.model.domain.ModelFileIdentity(
-                    new com.elfmcys.ysm.model.domain.Hash256(new byte[32]),
-                    new com.elfmcys.ysm.model.domain.Hash256(new byte[32])))),
-                (member, outcome) -> {
-                });
+            fetcher
+                .fetch(
+                    List.of(
+                        new com.elfmcys.ysm.model.resource.client.remote.RemotePresentationFetcher.Preview(0,
+                            new com.elfmcys.ysm.model.domain.ModelFileIdentity(
+                                ModelId.fromHash(new Hash256(new byte[32])), new Hash256(new byte[32])))),
+                    (member, outcome) -> {
+                    });
         assertTrue(result.isCancelled());
         assertEquals(0, requests.get());
     }

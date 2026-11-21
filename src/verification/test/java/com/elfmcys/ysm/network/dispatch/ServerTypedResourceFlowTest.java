@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.dispatch;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.parser.ModelParser;
@@ -91,7 +92,7 @@ class ServerTypedResourceFlowTest {
         try (var vfs = new Directory(source)) {
             var parsed = ModelParser.parseBuiltinDefault(vfs, Files.createDirectories(fixtureRoot.resolve("model")));
             fixtureWithoutPreview = parsed;
-            var location = new CatalogLocation(CatalogRootKind.AUTH, new ModelPath("fixture"));
+            var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture"));
             var content = ManagedContainer.openDirect(parsed, location);
             try {
                 fixture = ModelExporter.export(content, TestPreviews.blank(),
@@ -104,7 +105,10 @@ class ServerTypedResourceFlowTest {
 
     @BeforeEach
     void openContent() throws Exception {
-        previews = new PreviewStore(testRoot.resolve("preview-cache"), id -> runtime.invalidatePreview(id));
+        previews = new PreviewStore(testRoot.resolve("preview-cache"),
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(testRoot.resolve("preview-cache"))),
+            id -> runtime.invalidatePreview(previews, id));
         runtime = new ServerResourceRuntime(previews, ignored -> {
         });
         var file = Files.copy(fixture, testRoot.resolve("model.mxc"));
@@ -112,10 +116,12 @@ class ServerTypedResourceFlowTest {
         try (var channel = FileChannel.open(file, StandardOpenOption.READ)) {
             identity = ModelFileIdentityReader.read(channel);
         }
-        var location = new CatalogLocation(CatalogRootKind.AUTH, new ModelPath("fixture"));
+        var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture"));
         content = ManagedContainer.openIndexed(new CatalogIndexEntry(identity, location, file));
         var record = new CatalogRecord(location, new CatalogContentBinding(identity.modelId(), content));
-        catalog = new CatalogSnapshot(Map.of(identity.modelId(), record), List.of(), ModelScanReport.empty());
+        catalog = com.elfmcys.ysm.model.session.server.RestrictedModelPolicy.classify(
+            new CatalogSnapshot(Map.of(identity.modelId(), record), List.of(), ModelScanReport.empty()),
+            com.elfmcys.ysm.model.session.server.RestrictedModelPolicy.parse(List.of("path:*")));
     }
 
     @AfterEach
@@ -125,7 +131,7 @@ class ServerTypedResourceFlowTest {
 
     @Test
     void invalidIndependentMediaIsSentAsDataWhileManagementStillObservesAMiss() throws Exception {
-        var location = new CatalogLocation(CatalogRootKind.AUTH, new ModelPath("missing"));
+        var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("missing"));
         var missing = ManagedContainer.openDirect(fixtureWithoutPreview, location);
         try {
             var identity = missing.representation().identity();
@@ -134,12 +140,17 @@ class ServerTypedResourceFlowTest {
                     new CatalogRecord(location, new CatalogContentBinding(identity.modelId(), missing))),
                 List.of(), ModelScanReport.empty()));
             var root = testRoot.resolve("preview-cache");
-            var path = Files.createDirectories(root.resolve("previews")).resolve(identity.containerId() + ".image");
+            var legacyPath =
+                Files.createDirectories(root.resolve("previews")).resolve(identity.containerId() + ".image");
+            var path = TestPreviews.index(testRoot.resolve("preview-cache"), identity.containerId(), legacyPath);
             Files.write(path, new byte[] {1, 2, 3});
             var failures = new ArrayList<ResourceTransferFailureProto>();
             var port = new RecordingPort();
-            try (var worker = new ResourceDispatchWorker(1, 8, 0); var transfers =
-                new ServerAssetTransfers(owner, worker, port, () -> false, failures::add, runtime, previews)) {
+            try (var work = new ServerPreviewWork(); var worker = new ResourceDispatchWorker(1, 8, 0);
+                var transfers = new ServerAssetTransfers(owner, worker, port, () -> false, failures::add, runtime,
+                    previews, new ServerAssetTransfers.Management(work, () -> false, ignored -> {
+                    }, ignored -> {
+                    }))) {
                 assertTrue(transfers.accept(previewRequest(1, identity)));
                 awaitQueued(worker, owner, transfers);
                 drain(worker, owner, transfers);
@@ -170,8 +181,9 @@ class ServerTypedResourceFlowTest {
         try {
             var identity = missing.representation().identity();
             var owner = active(catalogFor(missing));
-            var path = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
+            var legacyPath = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
                 .resolve(identity.containerId() + ".image");
+            var path = TestPreviews.index(testRoot.resolve("preview-cache"), identity.containerId(), legacyPath);
             var failures = new ArrayList<ResourceTransferFailureProto>();
             var port = new RecordingPort();
             try (var worker = new ResourceDispatchWorker(1, 8, 0);
@@ -195,7 +207,6 @@ class ServerTypedResourceFlowTest {
                     assertEquals(com.elfmcys.ysm.proto.network.PresentationDelivery.DATA, part.delivery());
                 }
                 assertTrue(failures.isEmpty());
-                assertEquals(0, transfers.activeCount());
             }
         } finally {
             missing.representation().close();
@@ -207,8 +218,9 @@ class ServerTypedResourceFlowTest {
         var missing = standaloneContent();
         try {
             var identity = missing.representation().identity();
-            var path = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
+            var legacyPath = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
                 .resolve(identity.containerId() + ".image");
+            var path = TestPreviews.index(testRoot.resolve("preview-cache"), identity.containerId(), legacyPath);
             Files.write(path, new byte[] {3, 2, 1});
             var reads = useControlledReads();
             var owner = active(catalogFor(missing));
@@ -222,7 +234,7 @@ class ServerTypedResourceFlowTest {
                 assertEquals(1, reads.pending());
                 reads.runNext();
                 runtime.tick();
-                runtime.invalidatePreview(identity.containerId());
+                runtime.invalidatePreview(previews, identity.containerId());
                 assertTrue(transfers.cancel(1));
                 transfers.tick();
                 runtime.tick();
@@ -237,7 +249,6 @@ class ServerTypedResourceFlowTest {
                     assertEquals(com.elfmcys.ysm.proto.network.PresentationDelivery.DATA, part.delivery());
                 }
                 assertTrue(failures.isEmpty());
-                assertEquals(0, transfers.activeCount());
             }
         } finally {
             missing.representation().close();
@@ -245,12 +256,13 @@ class ServerTypedResourceFlowTest {
     }
 
     @Test
-    void closingAfterReadDeliveryDiscardsTheLateEventAndStopsTheNextRead() throws Exception {
+    void closingAfterReadDeliveryNeedsNoConsumerTickAndStopsTheNextRead() throws Exception {
         var missing = standaloneContent();
         try {
             var identity = missing.representation().identity();
-            var path = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
+            var legacyPath = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
                 .resolve(identity.containerId() + ".image");
+            var path = TestPreviews.index(testRoot.resolve("preview-cache"), identity.containerId(), legacyPath);
             Files.write(path, new byte[] {1});
             var reads = useControlledReads();
             var owner = active(catalogFor(missing));
@@ -262,13 +274,11 @@ class ServerTypedResourceFlowTest {
                 runtime.tick();
                 reads.runNext();
                 runtime.tick();
-                runtime.invalidatePreview(identity.containerId());
+                runtime.invalidatePreview(previews, identity.containerId());
                 transfers.close();
-                transfers.tick();
                 runtime.tick();
                 assertEquals(0, reads.pending());
                 assertEquals(0, worker.queued(owner));
-                assertEquals(0, transfers.activeCount());
                 assertTrue(port.frames.isEmpty());
                 assertTrue(failures.isEmpty());
             }
@@ -282,8 +292,9 @@ class ServerTypedResourceFlowTest {
         var missing = standaloneContent();
         try {
             var identity = missing.representation().identity();
-            var path = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
+            var legacyPath = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
                 .resolve(identity.containerId() + ".image");
+            var path = TestPreviews.index(testRoot.resolve("preview-cache"), identity.containerId(), legacyPath);
             try (var file = FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
                 file.position(PreviewStore.MAX_STORED_BYTES - 1L);
                 file.write(ByteBuffer.wrap(new byte[] {1}));
@@ -300,16 +311,16 @@ class ServerTypedResourceFlowTest {
                     assertEquals(1, reads.pending());
                     reads.runNext();
                     runtime.tick();
-                    runtime.invalidatePreview(identity.containerId());
+                    runtime.invalidatePreview(previews, identity.containerId());
                     transfers.tick();
                     if (index < 8)
-                        assertTrue(failures.isEmpty(), "Unexpected failure after preview " + index + ": " + failures);
+                        assertTrue(failures.isEmpty(), "Unexpected failure after preview " + index + ": "
+                            + failures.stream().map(ResourceTransferFailureProto::reason).toList());
                 }
                 runtime.tick();
                 assertEquals(0, reads.pending(), "The action must reject before starting its tenth read");
                 assertEquals(1, failures.size());
                 assertEquals(ResourceFailureReason.ITEM_TOO_LARGE, failures.get(0).reason());
-                assertEquals(0, transfers.activeCount());
                 assertEquals(0, worker.queued(owner));
                 assertTrue(port.frames.isEmpty());
             }
@@ -323,8 +334,9 @@ class ServerTypedResourceFlowTest {
         var missing = standaloneContent();
         try {
             var identity = missing.representation().identity();
-            var path = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
+            var legacyPath = Files.createDirectories(testRoot.resolve("preview-cache/previews"))
                 .resolve(identity.containerId() + ".image");
+            var path = TestPreviews.index(testRoot.resolve("preview-cache"), identity.containerId(), legacyPath);
             var expected = new byte[RangePacket.FRAGMENT_BYTES * 2 + 5];
             for (var index = 0; index < expected.length; index++)
                 expected[index] = (byte)index;
@@ -336,7 +348,7 @@ class ServerTypedResourceFlowTest {
                 var transfers = new ServerAssetTransfers(owner, worker, port, () -> false, failures::add, runtime)) {
                 assertTrue(transfers.accept(previewRequest(1, identity)));
                 awaitQueued(worker, owner, transfers);
-                runtime.invalidatePreview(identity.containerId());
+                runtime.invalidatePreview(previews, identity.containerId());
                 Files.write(path, new byte[] {9});
                 drain(worker, owner, transfers);
                 var received = new java.io.ByteArrayOutputStream();
@@ -353,7 +365,6 @@ class ServerTypedResourceFlowTest {
                 }
                 assertArrayEquals(expected, received.toByteArray());
                 assertTrue(failures.isEmpty());
-                assertEquals(0, transfers.activeCount());
             }
         } finally {
             missing.representation().close();
@@ -369,7 +380,7 @@ class ServerTypedResourceFlowTest {
                 runtime = new ServerResourceRuntime(previews, ignored -> {
                 });
                 for (var index = 0; index < 4_096; index++)
-                    runtime.acquirePreview(content.representation().containerId());
+                    runtime.acquirePreview(content);
                 var source = standalone ? missing : content;
                 var owner = active(catalogFor(source));
                 var port = new RecordingPort();
@@ -381,7 +392,6 @@ class ServerTypedResourceFlowTest {
                     transfers.tick();
                     assertEquals(1, failures.size());
                     assertEquals(ResourceFailureReason.BUSY, failures.get(0).reason());
-                    assertEquals(0, transfers.activeCount());
                     assertEquals(0, worker.queued(owner));
                     assertTrue(port.frames.isEmpty());
                 }
@@ -400,8 +410,11 @@ class ServerTypedResourceFlowTest {
         Files.delete(content.file());
         var failures = new ArrayList<ResourceTransferFailureProto>();
         var port = new RecordingPort();
-        try (var worker = new ResourceDispatchWorker(1, 8, 0); var transfers =
-            new ServerAssetTransfers(owner, worker, port, () -> false, failures::add, runtime, previews)) {
+        try (var work = new ServerPreviewWork(); var worker = new ResourceDispatchWorker(1, 8, 0);
+            var transfers = new ServerAssetTransfers(owner, worker, port, () -> false, failures::add, runtime, previews,
+                new ServerAssetTransfers.Management(work, () -> false, ignored -> {
+                }, ignored -> {
+                }))) {
             assertTrue(transfers.accept(previewRequest(1, identity)));
             var deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
             while (failures.isEmpty() && System.nanoTime() < deadline) {
@@ -412,7 +425,6 @@ class ServerTypedResourceFlowTest {
             assertEquals(1, failures.size());
             assertEquals(ResourceFailureReason.UNAVAILABLE, failures.get(0).reason());
             assertTrue(port.frames.isEmpty());
-            assertEquals(0, transfers.activeCount());
         }
     }
 
@@ -423,15 +435,14 @@ class ServerTypedResourceFlowTest {
     private static PresentationPageRequestProto previewRequest(long id, ModelFileIdentity identity, int count) {
         var request = PresentationPageRequestProto.newBuilder().setDataTransferId(id);
         for (var slot = 0; slot < count; slot++)
-            request.addPreviews(
-                PreviewMemberProto.newBuilder().setSlot(slot).setModelId(ProtoBytes.wrap(identity.modelId()))
-                    .setContainerId(ProtoBytes.wrap(identity.containerId())).build());
+            request.addPreviews(PreviewMemberProto.newBuilder().setSlot(slot).setModelId(identity.modelId().toString())
+                .setContainerId(ProtoBytes.wrap(identity.containerId())).build());
         return request.build();
     }
 
     private ManagedContainer standaloneContent() throws IOException {
         return ManagedContainer.openDirect(fixtureWithoutPreview,
-            new CatalogLocation(CatalogRootKind.AUTH, new ModelPath("standalone")));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("standalone")));
     }
 
     private static CatalogSnapshot catalogFor(ManagedContainer source) {
@@ -520,7 +531,7 @@ class ServerTypedResourceFlowTest {
                 .filter(value -> !value.type().equals(AssetContainerConstant.VERIFICATION_CHUNK_TYPE)).findFirst()
                 .orElseThrow();
             var request = ModelChunkRequestProto.newBuilder().setDataTransferId(2)
-                .setModelId(ProtoBytes.wrap(identity.modelId())).setContainerId(ProtoBytes.wrap(identity.containerId()))
+                .setModelId(identity.modelId().toString()).setContainerId(ProtoBytes.wrap(identity.containerId()))
                 .addChunks(ChunkMemberProto.newBuilder().setName(chunk.type())
                     .setExpectedHash(ByteBuffer.wrap(chunk.hash())).setStoredSize(chunk.size())
                     .setDecodedSize(chunk.decodeSize()).setEncoding(chunk.encoding()).build())
@@ -530,6 +541,41 @@ class ServerTypedResourceFlowTest {
             drain(worker, owner, transfers);
             assertTrue(failures.isEmpty());
             assertChunkFrames(port.take(), chunk.type(), chunk.size());
+        }
+    }
+
+    @Test
+    void cancelledManagementReadKeepsQuotaUntilItsPhysicalTerminalWithoutConsumerTick() throws Exception {
+        var reads = useControlledReads();
+        var missing = standaloneContent();
+        var owner = active(catalogFor(missing));
+        var failures = new ArrayList<ResourceTransferFailureProto>();
+        var chunk = com.elfmcys.ysm.format.schema.model.RenderTargetChunkPlan
+            .chunks(missing.modelFile(), com.elfmcys.ysm.model.domain.RenderTargetIds.PLAYER, "").get(0);
+        try (var work = new ServerPreviewWork(); var worker = new ResourceDispatchWorker(1, 8, 0);
+            var transfers = new ServerAssetTransfers(owner, worker, new RecordingPort(), () -> false, failures::add,
+                runtime, previews, new ServerAssetTransfers.Management(work, () -> true, ignored -> {
+                }, ignored -> {
+                }))) {
+            assertTrue(transfers.accept(chunkRequest(1, chunk).toBuilder().setModelId(missing.modelId().toString())
+                .setContainerId(ProtoBytes.wrap(missing.representation().containerId()))
+                .setPurpose(com.elfmcys.ysm.proto.network.ModelChunkPurpose.GEN_PREVIEW_MAIN).build()));
+            var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (reads.pending() == 0 && System.nanoTime() < deadline) {
+                transfers.tick();
+                runtime.tick();
+                Thread.yield();
+            }
+            assertEquals(1, reads.pending());
+            transfers.close();
+            assertEquals(1, work.activeRequests());
+            reads.runNext();
+            assertEquals(0, work.activeRequests());
+            runtime.tick();
+            assertEquals(0, worker.queued(owner));
+            assertTrue(failures.isEmpty());
+        } finally {
+            missing.representation().close();
         }
     }
 
@@ -545,7 +591,7 @@ class ServerTypedResourceFlowTest {
         try (var worker = new ResourceDispatchWorker(1, 2, 0);
             var transfers = transfers(owner, worker, new RecordingPort(), true, failures)) {
             assertTrue(transfers.accept(ModelChunkRequestProto.newBuilder().setDataTransferId(1)
-                .setModelId(ProtoBytes.wrap(identity.modelId())).setContainerId(ProtoBytes.wrap(identity.containerId()))
+                .setModelId(identity.modelId().toString()).setContainerId(ProtoBytes.wrap(identity.containerId()))
                 .addChunks(ChunkMemberProto.newBuilder().setName(chunk.type())
                     .setExpectedHash(ByteBuffer.wrap(chunk.hash())).setStoredSize(chunk.size())
                     .setDecodedSize(chunk.decodeSize()).setEncoding(chunk.encoding()).build())
@@ -563,7 +609,6 @@ class ServerTypedResourceFlowTest {
         try (var worker = new ResourceDispatchWorker(1, 8, 0);
             var transfers = transfers(owner, worker, new RecordingPort(), false, failures)) {
             assertTrue(transfers.accept(chunkRequest(1)));
-            assertEquals(1, transfers.activeCount());
             assertTrue(transfers.cancel(1));
 
             for (var attempt = 0; attempt < 20; attempt++) {
@@ -572,7 +617,6 @@ class ServerTypedResourceFlowTest {
                 Thread.yield();
             }
             assertEquals(0, worker.queued(owner));
-            assertEquals(0, transfers.activeCount());
             assertTrue(failures.isEmpty());
         }
     }
@@ -595,7 +639,37 @@ class ServerTypedResourceFlowTest {
             assertEquals(1, failures.size());
             assertEquals(com.elfmcys.ysm.proto.network.ResourceFailureReason.UNAVAILABLE, failures.get(0).reason());
             assertEquals(0, worker.queued(owner));
-            assertEquals(0, transfers.activeCount());
+        }
+    }
+
+    @Test
+    void oneFailedChunkRejectsTheWholeChildAfterAnotherSourceBecameReady() throws Exception {
+        var reads = useControlledReads();
+        var owner = active(catalog);
+        var failures = new ArrayList<ResourceTransferFailureProto>();
+        var chunks = content.modelFile().getFileView().getAssetView().getChunkTable().values().stream()
+            .filter(value -> !value.type().equals(AssetContainerConstant.VERIFICATION_CHUNK_TYPE))
+            .filter(value -> value.size() > 0)
+            .sorted(java.util.Comparator.comparing(AssetContainerView.ChunkInfo::type)).limit(2).toList();
+        assertEquals(2, chunks.size());
+        try (var worker = new ResourceDispatchWorker(1, 8, 0);
+            var transfers = transfers(owner, worker, new RecordingPort(), false, failures)) {
+            var request = chunkRequest(1, chunks.get(0)).toBuilder()
+                .addChunks(chunkRequest(1, chunks.get(1)).chunks().get(0)).build();
+            assertTrue(transfers.accept(request));
+            runtime.tick();
+            assertEquals(2, reads.pending());
+            reads.runNext();
+            runtime.tick();
+            transfers.tick();
+            assertEquals(0, worker.queued(owner));
+            Files.delete(content.file());
+            reads.runNext();
+            runtime.tick();
+            transfers.tick();
+            assertEquals(0, worker.queued(owner));
+            assertEquals(1, failures.size());
+            assertEquals(ResourceFailureReason.UNAVAILABLE, failures.get(0).reason());
         }
     }
 
@@ -606,15 +680,15 @@ class ServerTypedResourceFlowTest {
             .max(Comparator.comparingInt(AssetContainerView.ChunkInfo::size)).orElseThrow();
         assertTrue(chunk.size() > RangePacket.FRAGMENT_BYTES * 2,
             "fixture must cover first, middle, and last range cursors");
-        var expectedFuture = runtime.acquireChunk(content, chunk);
+        var expectedUse = runtime.acquireChunk(content, chunk);
         var sourceDeadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (!expectedFuture.isDone() && System.nanoTime() < sourceDeadline) {
+        while (expectedUse.state() == ServerResourceRuntime.State.PENDING && System.nanoTime() < sourceDeadline) {
             runtime.tick();
             Thread.yield();
         }
-        assertTrue(expectedFuture.isDone());
+        assertEquals(ServerResourceRuntime.State.READY, expectedUse.state());
         byte[] expected;
-        try (var source = expectedFuture.join()) {
+        try (var source = expectedUse) {
             expected = new byte[source.size()];
             source.copyTo(0, ByteBuffer.wrap(expected));
         }
@@ -635,7 +709,6 @@ class ServerTypedResourceFlowTest {
             }
             assertEquals(0, worker.queued(owner));
             transfers.tick();
-            assertEquals(0, transfers.activeCount());
             assertTrue(failures.isEmpty());
 
             var fragmentCount =
@@ -675,7 +748,7 @@ class ServerTypedResourceFlowTest {
         try (var worker = new ResourceDispatchWorker(1, 8, 0);
             var transfers = transfers(owner, worker, port, false, failures)) {
             var request = PresentationPageRequestProto.newBuilder().setDataTransferId(1)
-                .addPreviews(PreviewMemberProto.newBuilder().setSlot(0).setModelId(ProtoBytes.wrap(identity.modelId()))
+                .addPreviews(PreviewMemberProto.newBuilder().setSlot(0).setModelId(identity.modelId().toString())
                     .setContainerId(ProtoBytes.wrap(identity.containerId())).build())
                 .build();
 
@@ -699,8 +772,7 @@ class ServerTypedResourceFlowTest {
 
     private ServerAssetTransfers transfers(ServerModelSession owner, ResourceDispatchWorker worker, TransportPort port,
         boolean restricted, List<ResourceTransferFailureProto> failures) {
-        return new ServerAssetTransfers(owner, worker, port, () -> restricted, failures::add, runtime,
-            ignored -> testRoot);
+        return new ServerAssetTransfers(owner, worker, port, () -> restricted, failures::add, runtime);
     }
 
     private ModelChunkRequestProto chunkRequest(long transferId) {
@@ -713,7 +785,7 @@ class ServerTypedResourceFlowTest {
     private ModelChunkRequestProto chunkRequest(long transferId, AssetContainerView.ChunkInfo chunk) {
         var identity = content.representation().identity();
         return ModelChunkRequestProto.newBuilder().setDataTransferId(transferId)
-            .setModelId(ProtoBytes.wrap(identity.modelId())).setContainerId(ProtoBytes.wrap(identity.containerId()))
+            .setModelId(identity.modelId().toString()).setContainerId(ProtoBytes.wrap(identity.containerId()))
             .addChunks(ChunkMemberProto.newBuilder().setName(chunk.type())
                 .setExpectedHash(ByteBuffer.wrap(chunk.hash())).setStoredSize(chunk.size())
                 .setDecodedSize(chunk.decodeSize()).setEncoding(chunk.encoding()).build())

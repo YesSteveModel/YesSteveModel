@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.model.domain.Hash256;
@@ -115,7 +116,7 @@ class ClientModelActionContractTest {
     }
 
     private static ModelFileIdentity identity() {
-        return new ModelFileIdentity(hash(1), hash(2));
+        return new ModelFileIdentity(ModelId.fromHash(hash(1)), hash(2));
     }
 
     private static Hash256 hash(int value) {

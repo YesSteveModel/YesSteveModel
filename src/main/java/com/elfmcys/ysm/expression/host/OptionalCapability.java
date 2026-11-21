@@ -5,11 +5,13 @@ import java.util.List;
 /** Optional host adapters whose availability is part of registry identity. */
 public enum OptionalCapability {
     BETTER_COMBAT("bettercombat", null, "net.bettercombat.", "dev.kosmx.playerAnim."),
-    CARRY_ON("carryon", null, "tschipp.carryon."), CURIOS("curios", null, "top.theillusivec4.curios."),
+    CARRY_ON("carryon", null, "tschipp.carryon."), CREATE("create", "6.0.0", "com.simibubi.create."),
+    CURIOS("curios", null, "top.theillusivec4.curios."),
     IMMERSIVE_MELODIES("immersive_melodies", null, "immersive_melodies."),
+    IRONS_SPELLBOOKS("irons_spellbooks", null, "io.redspace.ironsspellbooks.", "dev.kosmx.playerAnim."),
     PARCOOL("parcool", "3.4.1", "com.alrex.parcool."), SLASH_BLADE("slashblade", null, "mods.flammpfeil.slashblade."),
     SOPHISTICATED_BACKPACKS("sophisticatedbackpacks", "3.24.25", "net.p3pp3rf1y.sophisticatedbackpacks."),
-    TACZ("tacz", null, "com.tacz.guns.");
+    SWEM("swem", null, "com.alaharranhonor.swem."), TACZ("tacz", null, "com.tacz.guns.");
 
     private final String modId;
     private final String minimumVersion;

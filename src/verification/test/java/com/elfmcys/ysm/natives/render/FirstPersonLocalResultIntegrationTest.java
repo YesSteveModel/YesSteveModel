@@ -232,12 +232,6 @@ class FirstPersonLocalResultIntegrationTest {
             assertCleared(state);
             data.putFloat(poseOffset, original);
 
-            assertTrue(state.extractSubtree(fixture.model, attributes, fixture.index("RightArm")));
-            var reserved = direct.reserved;
-            assertFalse(NativeRenderer.render(direct.consumer, new PoseStack().last(), state,
-                state.getTotalVertexCount() - 1, 0, 0, -1, RenderContextType.LEVEL));
-            assertEquals(reserved, direct.reserved);
-            assertCleared(state);
             try (var tooSmall = new Probe(true, 1)) {
                 assertTrue(state.extractSubtree(fixture.model, attributes, fixture.index("RightArm")));
                 assertFalse(draw(state, tooSmall));
@@ -246,7 +240,7 @@ class FirstPersonLocalResultIntegrationTest {
                 assertTrue(state.isValid());
                 assertTrue(draw(state, direct));
             }
-            reserved = direct.reserved;
+            var reserved = direct.reserved;
             attributes[fixture.index("LeftArm") * STRIDE + 9] = 1;
             attributes[fixture.index("LeftArmChild1") * STRIDE + 9] = 1;
             assertTrue(state.extractSubtree(fixture.model, attributes, fixture.index("LeftArm")));
@@ -274,13 +268,13 @@ class FirstPersonLocalResultIntegrationTest {
                 host.last().pose().m00(Float.MAX_VALUE / 2);
                 host.last().normal().m00(1 / (Float.MAX_VALUE / 2));
                 // The published pose remains finite; only this host composition overflows.
-                assertFalse(NativeRenderer.render(direct.consumer, host.last(), state, count, 0x00F000F0, 0, -1,
+                assertFalse(NativeRenderer.render(direct.consumer, host.last(), state, 0x00F000F0, 0, -1,
                     RenderContextType.LEVEL));
                 assertEquals(advanced, direct.advanced);
                 assertTrue(state.isValid(), "C-04: output-only overflow must retain the published pose");
                 assertSame(published, state.getBonePoses());
                 var replayed = fallback.vertices.size();
-                assertFalse(NativeRenderer.render(fallback.consumer, host.last(), state, count, 0x00F000F0, 0, -1,
+                assertFalse(NativeRenderer.render(fallback.consumer, host.last(), state, 0x00F000F0, 0, -1,
                     RenderContextType.LEVEL));
                 assertEquals(replayed, fallback.vertices.size());
                 assertTrue(state.isValid());
@@ -297,6 +291,50 @@ class FirstPersonLocalResultIntegrationTest {
         var builder = new ForgeConfigSpec.Builder();
         ClientConfig.USE_COMPATIBILITY_RENDERER = builder.define("compatibility", false);
         builder.build().setConfig(CommentedConfig.inMemory());
+    }
+
+    @Test
+    void reservedByteCapacityBoundsNativeWritesAndPreservesCanaries() throws Exception {
+        configureDirect();
+        try (var fixture = new Fixture("surfaces-supported"); var state = NativeModelState.create();
+            var fallback = new Probe(false, 0)) {
+            assertTrue(state.extract(fixture.model, fixture.attributes(new JsonObject())));
+            var count = state.getTotalVertexCount();
+            var required = count * DefaultVertexFormat.NEW_ENTITY.getVertexSize();
+            assertTrue(count > 0);
+            assertTrue(state.getTranslucentVertexCount() > 0);
+            assertTrue(draw(state, fallback));
+            for (var capacity : new int[] {required, required - 1, 0}) {
+                try (var direct = new Probe(true, capacity, 64)) {
+                    var bytes = direct.region.nio().order(ByteOrder.nativeOrder());
+                    for (var i = 0; i < bytes.capacity(); i++)
+                        bytes.put(i, (byte)0xA5);
+                    assertEquals(capacity == required, draw(state, direct));
+                    assertTrue(state.isValid());
+                    assertEquals(capacity == required ? count : 0, direct.advanced);
+                    for (var i = 0; i < bytes.capacity(); i++) {
+                        if (capacity != required || i < 64 || i >= 64 + capacity)
+                            assertEquals((byte)0xA5, bytes.get(i), "canary byte " + i);
+                    }
+                    if (capacity == required) {
+                        for (var i = 0; i < count; i++) {
+                            var offset = 64 + i * 36;
+                            var vertex = fallback.vertices.get(i);
+                            for (var axis = 0; axis < 3; axis++) {
+                                assertEquals(bytes.getFloat(offset + axis * 4), vertex[axis], 0.00002f);
+                                assertEquals(bytes.get(offset + 32 + axis) / 127f, vertex[5 + axis], 0.00002f);
+                            }
+                            assertEquals(bytes.getFloat(offset + 16), vertex[3], 0.00002f);
+                            assertEquals(bytes.getFloat(offset + 20), vertex[4], 0.00002f);
+                            var material = fallback.materials.get(i);
+                            assertEquals(bytes.getInt(offset + 12), material[0]);
+                            assertEquals(bytes.getInt(offset + 24), material[1]);
+                            assertEquals(bytes.getInt(offset + 28), material[2]);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @Test
@@ -365,8 +403,8 @@ class FirstPersonLocalResultIntegrationTest {
     }
 
     private static boolean draw(NativeModelState state, Probe probe) {
-        return NativeRenderer.render(probe.consumer, new PoseStack().last(), state, state.getTotalVertexCount(),
-            0x00F000F0, 0, -1, RenderContextType.LEVEL);
+        return NativeRenderer.render(probe.consumer, new PoseStack().last(), state, 0x00F000F0, 0, -1,
+            RenderContextType.LEVEL);
     }
 
     private static void assertCleared(NativeModelState state) {
@@ -461,12 +499,17 @@ class FirstPersonLocalResultIntegrationTest {
         final NativeStorage region;
         final VertexConsumer consumer;
         final List<float[]> vertices = new ArrayList<>();
+        final List<int[]> materials = new ArrayList<>();
         int advanced;
         int reserved;
         RuntimeException failure;
 
         Probe(boolean direct, int bytes) {
-            region = direct ? NativeBuffer.allocate(bytes) : null;
+            this(direct, bytes, 0);
+        }
+
+        Probe(boolean direct, int bytes, int guardBytes) {
+            region = direct ? NativeBuffer.allocate(bytes + guardBytes * 2) : null;
             consumer = (VertexConsumer)Proxy.newProxyInstance(VertexConsumer.class.getClassLoader(),
                 direct ? new Class<?>[] {VertexConsumer.class, VertexBufferAccessor.class}
                     : new Class<?>[] {VertexConsumer.class},
@@ -476,7 +519,8 @@ class FirstPersonLocalResultIntegrationTest {
                         case "ysm$vertexFormat" -> DefaultVertexFormat.NEW_ENTITY;
                         case "ysm$reserve" -> {
                             reserved++;
-                            yield region.borrow();
+                            yield new com.elfmcys.ysm.accessor.ReservedVertexRange(region.ptr() + guardBytes, bytes,
+                                region);
                         }
                         case "ysm$advance" -> {
                             advanced += (int)args[0];
@@ -491,6 +535,10 @@ class FirstPersonLocalResultIntegrationTest {
                             for (var i = 0; i < selected.length; i++)
                                 data[i] = ((Number)args[selected[i]]).floatValue();
                             vertices.add(data);
+                            var color = 0;
+                            for (var channel = 0; channel < 4; channel++)
+                                color |= Math.round(((Number)args[3 + channel]).floatValue() * 255) << (channel * 8);
+                            materials.add(new int[] {color, (int)args[9], (int)args[10]});
                             yield null;
                         }
                         default -> throw new AssertionError(method.getName());

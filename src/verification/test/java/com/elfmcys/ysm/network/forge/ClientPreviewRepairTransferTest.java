@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
@@ -147,13 +148,13 @@ class ClientPreviewRepairTransferTest {
 
     private static MissingPreviewEntryProto entry(int marker, ResourceFailureReason failure) {
         var identity = identity(marker);
-        return MissingPreviewEntryProto.newBuilder().setModelId(ByteBuffer.wrap(identity.modelId().bytes()))
-            .setContainerId(ByteBuffer.wrap(identity.containerId().bytes()))
-            .setHierarchyPath("local:custom/fixture/" + marker).setProbeFailure(failure).build();
+        return MissingPreviewEntryProto.newBuilder().setModelId(identity.modelId().toString())
+            .setContainerId(ByteBuffer.wrap(identity.containerId().bytes())).setHierarchyPath("local:fixture/" + marker)
+            .setProbeFailure(failure).build();
     }
 
     private static ModelFileIdentity identity(int marker) {
-        return new ModelFileIdentity(hash(marker), hash(marker + 100));
+        return new ModelFileIdentity(ModelId.fromHash(hash(marker)), hash(marker + 100));
     }
 
     private static Hash256 hash(int marker) {

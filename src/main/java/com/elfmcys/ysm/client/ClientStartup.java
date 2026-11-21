@@ -76,12 +76,18 @@ public final class ClientStartup {
             SlashBladeCompat::isSlashBladeLoaded);
         SwemCompat.init();
         CreateCompat.init();
+        builtinAdmission.initialize(OptionalCapability.SWEM, () -> {
+        }, SwemCompat::isInstalled);
+        builtinAdmission.initialize(OptionalCapability.CREATE, () -> {
+        }, CreateCompat::isInstalled);
         builtinAdmission.initialize(OptionalCapability.SOPHISTICATED_BACKPACKS, SophisticatedCompat::init,
             SophisticatedCompat::isInstalled);
         SimpleHatsCompat.init();
         builtinAdmission.initialize(OptionalCapability.IMMERSIVE_MELODIES, ImmersiveMelodiesCompat::init,
             ImmersiveMelodiesCompat::isLoaded);
         IronsSpellBooksCompat.init();
+        builtinAdmission.initialize(OptionalCapability.IRONS_SPELLBOOKS, () -> {
+        }, IronsSpellBooksCompat::isInstalled);
         SimplePlaneCompat.init();
         ImmersiveAircraftCompat.init();
 

@@ -15,7 +15,8 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 public final class CustomTextureManager {
-    private static final int DEFAULT_REMOVAL_DELAY_TICKS = 10 * 20;
+    private static final int DEFAULT_REMOVAL_DELAY_TICKS =
+        com.elfmcys.ysm.model.resource.client.ResourceRetentionPolicy.DEFAULT_DELAY_TICKS;
     private static final Registry REGISTRY = new Registry(new MinecraftHost());
 
     private CustomTextureManager() {}
@@ -42,7 +43,9 @@ public final class CustomTextureManager {
     /** Exact host registration, independent of an activation holder's reachability. */
     public interface Registration {
         boolean live();
+
         TextureHolder acquire();
+
         void release();
     }
 
@@ -207,14 +210,16 @@ public final class CustomTextureManager {
         private WeakReference<TextureHolderImpl> holder;
         private int delay;
         private boolean live = true;
-        private Runnable invalidated = () -> {};
+        private Runnable invalidated = () -> {
+        };
 
         private void invalidate() {
             if (!live)
                 return;
             live = false;
             var listener = invalidated;
-            invalidated = () -> {};
+            invalidated = () -> {
+            };
             listener.run();
         }
 

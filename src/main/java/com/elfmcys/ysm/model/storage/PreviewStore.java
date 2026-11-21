@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.model.storage;
 
+import com.elfmcys.ysm.natives.storage.NativeArtifactIndex;
+import com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool;
 import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.ArrayStorage;
@@ -19,10 +21,6 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
-import java.nio.file.LinkOption;
-import java.nio.file.NoSuchFileException;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Objects;
@@ -30,50 +28,51 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 /**
- * Stores independently replaceable images weakly associated by container ID.
- * A preview proves neither model content identity nor access permission.
+ * Stores independently replaceable images weakly associated by container ID. A preview proves neither model content
+ * identity nor access permission.
  *
- * <p><b>Invariant:</b> Replacement versions belong to this store and container. An observation is
- * a commit/reuse qualification, not a filesystem lock. A usable in-memory preview can outlive failed
- * optional persistence; strict management commit instead requires persistent replacement through its gate.
+ * <p>
+ * <b>Invariant:</b> Replacement versions belong to this store and container. An observation is a commit/reuse
+ * qualification, not a filesystem lock. A usable in-memory preview can outlive failed optional persistence; strict
+ * management commit instead requires persistent replacement through its gate.
  *
- * <p><b>Execution:</b> Reads and writes use synchronous I/O. Configure the observer before concurrent
- * use. Store methods do not establish the caller's session or management-effect authority.
+ * <p>
+ * <b>Execution:</b> Reads and writes use synchronous I/O. Configure the observer before concurrent use. Store methods
+ * do not establish the caller's session or management-effect authority.
  *
- * <p><b>Seam:</b> [preview persistence and effects](docs/architecture/model-management/storage/overview.md#独立图片与提交资格).
+ * <p>
+ * <b>Seam:</b> [preview persistence and effects](docs/architecture/model-management/storage/overview.md#独立图片与提交资格).
  */
 public final class PreviewStore implements PreviewStorage {
     public static final int MAX_STORED_BYTES = 16 * 1024 * 1024;
     public static final int MAX_DIMENSION = 4_096;
     public static final long MAX_PIXELS = 16L * 1024 * 1024;
 
-    private static final String PREVIEW_SUFFIX = ".image";
-
-    /** Independent preview images; weakly associated by container id. */
-    private static final String PREVIEW_DIRECTORY = "previews";
-
-    private final Path cacheRoot;
     private final AtomicSharedCache cache;
+    private final StorageIndex<? extends NativeArtifactIndex> index;
     private Consumer<Hash256> storedObserver;
     private final java.util.Map<Hash256, Version> versions = new java.util.HashMap<>();
 
     public PreviewStore(Path cacheRoot, AtomicSharedCache cache, Consumer<Hash256> storedObserver) {
-        this.cacheRoot = Objects.requireNonNull(cacheRoot, "cacheRoot").toAbsolutePath().normalize();
-        this.cache = Objects.requireNonNull(cache, "cache");
-        this.storedObserver = Objects.requireNonNull(storedObserver, "storedObserver");
+        this(cacheRoot, cache, cache.catalogIndex(), storedObserver);
     }
 
-    public PreviewStore(Path cacheRoot, Consumer<Hash256> storedObserver) {
-        this(cacheRoot, new AtomicSharedCache(cacheRoot), storedObserver);
+    public PreviewStore(Path cacheRoot, AtomicSharedCache cache, StorageIndex<? extends NativeArtifactIndex> index) {
+        this(cacheRoot, cache, index, ignored -> {
+        });
+    }
+
+    private PreviewStore(Path cacheRoot, AtomicSharedCache cache, StorageIndex<? extends NativeArtifactIndex> index,
+        Consumer<Hash256> storedObserver) {
+        Objects.requireNonNull(cacheRoot, "cacheRoot");
+        this.cache = Objects.requireNonNull(cache, "cache");
+        this.index = Objects.requireNonNull(index);
+        this.storedObserver = Objects.requireNonNull(storedObserver, "storedObserver");
     }
 
     public PreviewStore(Path cacheRoot, AtomicSharedCache cache) {
         this(cacheRoot, cache, ignored -> {
         });
-    }
-
-    public PreviewStore(Path cacheRoot) {
-        this(cacheRoot, new AtomicSharedCache(cacheRoot));
     }
 
     @Override
@@ -113,42 +112,27 @@ public final class PreviewStore implements PreviewStorage {
         }
     }
 
-    private Path previewPath(Hash256 containerId) {
-        return cacheRoot.resolve(PREVIEW_DIRECTORY).resolve(containerId + PREVIEW_SUFFIX);
+    public Optional<EncodedPreview> load(Hash256 containerId) throws IOException {
+        return probe(Objects.requireNonNull(containerId, "containerId"));
     }
 
-    public Optional<EncodedPreview> load(Hash256 containerId) {
-        Objects.requireNonNull(containerId, "containerId");
-        var path = previewPath(containerId);
-        try {
-            return probe(containerId);
-        } catch (IOException | RuntimeException invalid) {
-            YesSteveModel.LOGGER.debug("Ignoring invalid preview cache entry {}", path, invalid);
-            return Optional.empty();
-        }
-    }
-
-    /** Returns owned encoded bytes without interpreting media; access failures remain failures. */
+    /** Returns owned encoded bytes without interpreting media; a failed cache read returns empty. */
     public Optional<ArrayStorage> readEncoded(Hash256 containerId) throws IOException {
-        var path = previewPath(Objects.requireNonNull(containerId, "containerId"));
         Optional<ArrayStorage> stored = Optional.empty();
         try {
-            var parent = cache.observe(path.resolveSibling(".guard"), false);
-            var fixed = parent.target().getParent().resolve(path.getFileName());
-            var attributes = Files.readAttributes(fixed, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            if (attributes.isDirectory() && !attributes.isSymbolicLink() && !attributes.isOther())
+            var found = index.find(NativeArtifactIndex.ExactKind.PREVIEW,
+                Objects.requireNonNull(containerId, "containerId").toString());
+            if (found.isEmpty())
                 return Optional.empty();
-            try (var input = cache.openRead(fixed)) {
-                parent.verify();
+            var path = cache.path(Pool.PREVIEW, found.get().location().fileId());
+            try (var input = cache.openRead(path)) {
                 stored = readSnapshot(input);
             }
             return stored;
-        } catch (NoSuchFileException absent) {
-            stored.ifPresent(ArrayStorage::close);
-            return Optional.empty();
         } catch (IOException failure) {
             stored.ifPresent(ArrayStorage::close);
-            throw AssetLoadException.access("Failed to read guarded preview cache", failure);
+            CacheReadFailure.miss(containerId, failure);
+            return Optional.empty();
         } catch (RuntimeException | Error failure) {
             stored.ifPresent(ArrayStorage::close);
             throw failure;
@@ -176,11 +160,11 @@ public final class PreviewStore implements PreviewStorage {
     }
 
     /**
-     * Observes and validates one local image without converting an inaccessible cache into a miss.
+     * Observes and validates one local image; failed cache reads return empty.
      *
      * @param containerId the non-null weak association key
      * @return empty for absent or invalid image content; otherwise an owned preview with its observed version
-     * @throws IOException if the guarded cache cannot be read
+     * @throws IOException if the read was interrupted or its channel could not close
      */
     public Optional<EncodedPreview> probe(Hash256 containerId) throws IOException {
         var version = observe(containerId);
@@ -193,8 +177,7 @@ public final class PreviewStore implements PreviewStorage {
             result.version(version);
             return Optional.of(result);
         } catch (AssetLoadException invalidMedia) {
-            if (invalidMedia.reason() != AssetLoadException.Reason.CONTENT)
-                throw invalidMedia;
+            CacheReadFailure.miss(containerId, invalidMedia);
             return Optional.empty();
         }
     }
@@ -222,35 +205,27 @@ public final class PreviewStore implements PreviewStorage {
     public void accept(Hash256 containerId, EncodedPreview preview) throws IOException {
         Objects.requireNonNull(containerId, "containerId");
         var expected = preview.bytes();
-        var target = previewPath(containerId);
-        var observed = new java.util.concurrent.atomic.AtomicReference<Version>();
         var original = observe(containerId);
         var committed = new java.util.concurrent.atomic.AtomicBoolean();
         try {
-            cache.materializeReplacing("preview", containerId.toString(), target, path -> {
-                try {
-                    var same = Arrays.equals(readBounded(path), expected);
-                    if (same)
-                        observed.set(observe(containerId));
-                    return same;
-                } catch (IOException invalid) {
-                    return false;
+            try (var existing = readEncoded(containerId).orElse(null)) {
+                if (existing != null && Arrays.equals(existing.array(), expected)) {
+                    preview.version(observe(containerId));
+                    notifyStored(containerId);
+                    return;
                 }
-            }, file -> file.writeBytes(expected), replacement -> {
-                synchronized (this) {
-                    replacement.run();
-                    replaced(containerId, preview);
-                    observed.set(preview.version());
-                    committed.set(true);
-                }
+            }
+            commit(containerId, preview, replacement -> {
+                replacement.run();
+                committed.set(true);
             });
-            preview.version(observed.get());
-            notifyStored(containerId);
-        } catch (IOException | RuntimeException failure) {
+        } catch (IOException failure) {
+            if (!CacheReadFailure.recoverable(failure))
+                throw failure;
             // Usable memory content must not impersonate the unchanged persistent observation.
             if (!committed.get())
                 preview.version(new Version(original));
-            YesSteveModel.LOGGER.warn("Failed to persist usable preview cache entry {}", target, failure);
+            YesSteveModel.LOGGER.warn("Failed to persist usable preview cache entry {}", containerId, failure);
         }
     }
 
@@ -284,8 +259,12 @@ public final class PreviewStore implements PreviewStorage {
         Objects.requireNonNull(containerId, "containerId");
         Objects.requireNonNull(gate, "gate");
         var encoded = preview.retainBytes();
-        try {
-            cache.replaceValidated("preview", containerId.toString(), previewPath(containerId), path -> {
+        try (var staging = cache.reserve(Pool.PREVIEW)) {
+            var output = staging.file();
+            var encodedData = encoded.nio();
+            while (encodedData.hasRemaining())
+                output.write(encodedData);
+            staging.publish(path -> {
                 try (var input = path; var scratch = ArrayBuffer.allocate(24 * 1024)) {
                     if (input.size() != encoded.size())
                         return false;
@@ -303,15 +282,10 @@ public final class PreviewStore implements PreviewStorage {
                     }
                     return true;
                 }
-            }, path -> {
-                try (var output = path) {
-                    var data = encoded.nio();
-                    while (data.hasRemaining())
-                        output.write(data);
-                }
             }, replacement -> gate.commit(() -> {
                 synchronized (this) {
                     replacement.run();
+                    index.publish(NativeArtifactIndex.ExactKind.PREVIEW, containerId.toString(), staging.location());
                     replaced(containerId, preview);
                 }
             }));
@@ -325,8 +299,10 @@ public final class PreviewStore implements PreviewStorage {
     public static EncodedPreview prepareTexture(ImageSource source) throws IOException {
         try (var image = source.open()) {
             if (image.format() == Image.Format.RGBA) {
-                try (var encoded = ImageEncoder.encodeLossless(image.data().shareNative(), image.width(), image.height())) {
-                    return prepareTexture(() -> new Image(encoded.format(), encoded.width(), encoded.height(), encoded.data()));
+                try (var encoded =
+                    ImageEncoder.encodeLossless(image.data().shareNative(), image.width(), image.height())) {
+                    return prepareTexture(
+                        () -> new Image(encoded.format(), encoded.width(), encoded.height(), encoded.data()));
                 }
             }
             var owner = new PreviewPixels.Owner();
@@ -481,14 +457,6 @@ public final class PreviewStore implements PreviewStorage {
         }
     }
 
-    private byte[] readBounded(CacheFile file) throws IOException {
-        try (var input = file.inputStream()) {
-            var bytes = input.readNBytes(MAX_STORED_BYTES + 1);
-            validateStoredSize(bytes.length);
-            return bytes;
-        }
-    }
-
     public static final class EncodedPreview implements ImageSource, AutoCloseable {
         private SharedBuffer bytes;
         private final Image.Format format;
@@ -529,8 +497,8 @@ public final class PreviewStore implements PreviewStorage {
 
         public synchronized EncodedPreview acquire() {
             requireOpen();
-            var result = new EncodedPreview(bytes, format, width, height, pixels == null ? null : pixels.acquire(),
-                pixelOwner);
+            var result =
+                new EncodedPreview(bytes, format, width, height, pixels == null ? null : pixels.acquire(), pixelOwner);
             result.version = version;
             return result;
         }

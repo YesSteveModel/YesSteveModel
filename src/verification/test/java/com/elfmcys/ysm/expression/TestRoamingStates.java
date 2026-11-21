@@ -5,32 +5,35 @@ import dev.semaweave.RoamingPayload;
 import dev.semaweave.RoamingRole;
 import dev.semaweave.compilation.ResourceGenerationToken;
 
-import java.util.TreeMap;
-import java.util.Set;
+import java.util.Arrays;
+import java.util.List;
+import java.util.TreeSet;
 
 public final class TestRoamingStates {
     private TestRoamingStates() {}
 
     public static CompiledRoamingState create(ResourceGenerationToken generation, RoamingRole role) {
-        return new State(generation, role, null);
+        return new State(generation, role, List.of());
     }
 
     public static CompiledRoamingState create(ResourceGenerationToken generation, RoamingRole role,
-        Set<String> allowedNames) {
-        return new State(generation, role, Set.copyOf(allowedNames));
+        List<String> fieldNames) {
+        return new State(generation, role, List.copyOf(fieldNames));
     }
 
     private static final class State implements CompiledRoamingState {
         private final ResourceGenerationToken generation;
         private final RoamingRole role;
-        private final Set<String> allowedNames;
-        private final TreeMap<String, Float> values = new TreeMap<>();
-        private final TreeMap<String, Float> dirty = new TreeMap<>();
+        private final List<String> fields;
+        private final float[] values;
+        private final TreeSet<Short> dirty;
 
-        private State(ResourceGenerationToken generation, RoamingRole role, Set<String> allowedNames) {
+        private State(ResourceGenerationToken generation, RoamingRole role, List<String> fields) {
             this.generation = generation;
             this.role = role;
-            this.allowedNames = allowedNames;
+            this.fields = fields;
+            values = new float[fields.size()];
+            dirty = role == RoamingRole.PRODUCER ? new TreeSet<>() : null;
         }
 
         @Override
@@ -44,74 +47,73 @@ public final class TestRoamingStates {
         }
 
         @Override
-        public Set<String> fields() {
-            return allowedNames == null ? Set.copyOf(values.keySet()) : allowedNames;
+        public List<String> fieldNames() {
+            return fields;
         }
 
         @Override
-        public float read(String name) {
-            return values.getOrDefault(name, 0.0f);
+        public float read(short field) {
+            return values[field];
         }
 
         @Override
-        public void write(String name, float value) {
-            values.put(name, value);
-            if (role == RoamingRole.PRODUCER)
-                dirty.put(name, value);
+        public void write(short field, float value) {
+            values[field] = value;
+            if (dirty != null)
+                dirty.add(field);
         }
 
         @Override
-        public boolean hasDelta() {
+        public boolean hasChanges() {
             requireProducer();
             return !dirty.isEmpty();
         }
 
         @Override
         public RoamingPayload full() {
-            requireProducer();
-            dirty.clear();
-            return new RoamingPayload(values);
-        }
-
-        @Override
-        public RoamingPayload snapshot() {
-            requireProducer();
-            return new RoamingPayload(values);
-        }
-
-        @Override
-        public RoamingPayload delta() {
-            requireProducer();
-            var result = new RoamingPayload(dirty);
+            var result = snapshot();
             dirty.clear();
             return result;
         }
 
         @Override
-        public void validateFull(RoamingPayload payload) {
-            validate(payload);
+        public RoamingPayload snapshot() {
+            requireProducer();
+            var ids = new short[values.length];
+            var exported = new float[values.length];
+            for (int index = 0; index < values.length; index++) {
+                ids[index] = (short)index;
+                exported[index] = Float.isFinite(values[index]) ? values[index] : 0.0f;
+            }
+            return new RoamingPayload(ids, exported);
         }
 
         @Override
-        public void validatePatch(RoamingPayload payload) {
-            validate(payload);
+        public RoamingPayload popChanges() {
+            requireProducer();
+            var ids = new short[dirty.size()];
+            var exported = new float[dirty.size()];
+            int index = 0;
+            for (var field : dirty) {
+                ids[index] = field;
+                exported[index++] = Float.isFinite(values[field]) ? values[field] : 0.0f;
+            }
+            dirty.clear();
+            return new RoamingPayload(ids, exported);
         }
 
         @Override
         public void applyFull(RoamingPayload payload) {
             requireConsumer();
-            validateFull(payload);
-            values.clear();
-            values.putAll(payload.values());
-            dirty.clear();
+            Arrays.fill(values, 0.0f);
+            applyPatch(payload);
         }
 
         @Override
         public void applyPatch(RoamingPayload payload) {
             requireConsumer();
-            validatePatch(payload);
-            values.putAll(payload.values());
-            dirty.clear();
+            for (int index = 0; index < payload.fields().length; index++)
+                values[payload.fields()[index]] = payload.values()[index];
         }
 
         private void requireProducer() {
@@ -122,14 +124,6 @@ public final class TestRoamingStates {
         private void requireConsumer() {
             if (role != RoamingRole.CONSUMER)
                 throw new IllegalStateException();
-        }
-
-        private void validate(RoamingPayload payload) {
-            payload.values().forEach((name, value) -> {
-                if (allowedNames != null && !allowedNames.contains(name) || !Float.isFinite(value.floatValue())) {
-                    throw new IllegalArgumentException();
-                }
-            });
         }
     }
 }

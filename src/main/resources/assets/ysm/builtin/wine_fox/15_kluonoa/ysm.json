@@ -129,6 +129,7 @@
 		}
 	},
 	"properties": {
+		"origin_ver": "2.6.5",
 		"height_scale": 0.7,
 		"width_scale": 0.7,
 		"extra_animation": {

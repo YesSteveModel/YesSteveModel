@@ -190,7 +190,7 @@ class NativeModelStateIntegrationTest {
             assertThrows(RuntimeException.class, () -> NativeBakedModel.bake(modelData, 0, texture, 1, 1, 0, false));
             try (var direct = NativeBakedModel.bake(modelData, 1, texture, 1, 1, 0, false).bakedModel();
                 var bytes = direct.serialize()) {
-                assertThrows(RuntimeException.class, () -> NativeBakedModel.read(bytes, 0));
+                assertThrows(com.elfmcys.ysm.format.AssetLoadException.class, () -> NativeBakedModel.read(bytes, 0));
                 assertEquals(1, direct.getInfo().boneCount());
             }
         }

@@ -1,387 +1,228 @@
 package com.elfmcys.ysm.network.forge;
 
-import com.elfmcys.ysm.YesSteveModel;
-import com.elfmcys.ysm.capability.ModelInfoCapability;
-import com.elfmcys.ysm.capability.ModelInfoCapabilityProvider;
-import com.elfmcys.ysm.capability.ModelInfoSyncAssembler;
-import com.elfmcys.ysm.capability.ModelSelectionService;
-import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
+import com.elfmcys.ysm.capability.*;
 import com.elfmcys.ysm.config.ServerConfig;
-import com.elfmcys.ysm.util.StringPool;
-import com.elfmcys.ysm.model.domain.Hash256;
-import com.elfmcys.ysm.model.service.ClientModelService;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.service.ServerModelService;
 import com.elfmcys.ysm.model.session.server.ServerModelSession;
-import com.elfmcys.ysm.network.NetworkHandler;
-import com.elfmcys.ysm.network.protocol.ModelReferenceCodec;
-import com.elfmcys.ysm.network.protocol.PlayerStateSection;
-import com.elfmcys.ysm.network.protocol.PlayerStateValidator;
-import com.elfmcys.ysm.network.protocol.ProtocolLimits;
-import com.elfmcys.ysm.proto.network.AnimationStateProto;
-import com.elfmcys.ysm.proto.network.EntityRefProto;
-import com.elfmcys.ysm.proto.network.MolangVariableProto;
-import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
-import com.elfmcys.ysm.proto.network.PlayerStateUpdateProto;
-import com.elfmcys.ysm.proto.network.RoamingStateProto;
-import com.elfmcys.ysm.proto.network.StateWriteMode;
-import it.unimi.dsi.fastutil.ints.Int2FloatOpenHashMap;
-import it.unimi.dsi.fastutil.objects.Object2FloatOpenHashMap;
-import java.nio.charset.StandardCharsets;
-import java.util.HashSet;
-import java.util.Optional;
+import com.elfmcys.ysm.network.NetworkDiagnostics;
+import com.elfmcys.ysm.network.protocol.*;
+import com.elfmcys.ysm.proto.network.*;
 import java.util.function.Supplier;
-import net.minecraft.client.Minecraft;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
+import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkEvent;
-import org.jetbrains.annotations.Nullable;
+import us.hebi.quickbuf.ProtoMessage;
 
-/**
- * Bridges typed player-state messages to exact-session domain facts and client projections.
- *
- * <p><b>Execution:</b> Receive entry validates structure and the source header, then enqueues
- * domain work. Server execution checks the original connection and session again before capability writes.
- * Client execution uses the original connection gate before projection. Mutable protobuf input must not
- * change after enqueue.
- *
- * <p><b>Invariant:</b> FULL baseline acceptance follows successful application of all requested facts.
- * Best-effort observation, update construction and broadcast occur after that frontier and cannot roll it back.
- * Invalid reports and missing owners do not establish a baseline.
- *
- * <p><b>Seam:</b> [player-state application frontier](docs/architecture/network/player-state.md#seam-contract).
- */
+/** State admission and publication run in the original player's server owner window. */
 public final class PlayerStateHandler {
-    private static final int MAX_ANIMATION_ID_BYTES = 256;
-
     private PlayerStateHandler() {}
 
-    public static PlayerStateUpdateProto.Builder newFull(ServerPlayer player) {
-        return PlayerStateUpdateProto.newBuilder().setSubject(serverEntityRef(player.getId()))
-            .setMode(StateWriteMode.FULL);
-    }
-
-    public static PlayerStateUpdateProto.Builder newDelta(int entityId) {
-        return PlayerStateUpdateProto.newBuilder().setSubject(serverEntityRef(entityId)).setMode(StateWriteMode.DELTA);
-    }
-
-    public static void broadcast(ServerPlayer player, PlayerStateUpdateProto update) {
-        try {
-            NetworkHandler.broadcastToVisiblePlayersAndSelf(update, player);
-        } catch (RuntimeException failure) {
-            YesSteveModel.LOGGER.warn("Failed to broadcast a player-state update for {}", player.getScoreboardName(),
-                failure);
+    public static void handleSelectionChange(SelectionChangeProto message, Supplier<NetworkEvent.Context> source) {
+        var context = source.get();
+        if (context.getDirection() == NetworkDirection.PLAY_TO_CLIENT) {
+            ClientPlayerStateHandler.selection(message, context);
+            return;
         }
-    }
-
-    public static void sendToObserver(PlayerStateUpdateProto update, Player observer) {
-        try {
-            NetworkHandler.sendToClientPlayer(update, observer);
-        } catch (RuntimeException failure) {
-            YesSteveModel.LOGGER.warn("Failed to send a player-state update to {}", observer.getScoreboardName(),
-                failure);
-        }
-    }
-
-    public static void handleReport(PlayerStateReportProto report, Supplier<NetworkEvent.Context> contextSupplier) {
-        var context = contextSupplier.get();
         var sender = context.getSender();
-        if (sender == null) {
-            context.setPacketHandled(true);
+        if (sender == null || !message.hasSelection()) {
+            NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message,
+                "missing-sender-or-selection");
             return;
         }
-        var connection = context.getNetworkManager();
-        var service = ServerModelService.current().orElse(null);
-        var owner = service == null ? null : service.session(sender, connection).orElse(null);
-        if (owner == null) {
-            context.setPacketHandled(true);
-            return;
-        }
-        if (!PlayerStateValidator.validReport(report) || !validServerReportHeader(report, sender)) {
-            context.setPacketHandled(true);
-            return;
-        }
-        context.enqueueWork(() -> service.runIfCurrent(sender, connection, owner, () -> {
+        enqueue(context, sender, message, session -> {
+            final CommittedSelection next;
             try {
-                if (!owner.acceptsPlayerStateReport(report)) {
+                next = SelectionCodec.read(message.selectionUnsafe(), session);
+            } catch (IllegalArgumentException invalid) {
+                NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "invalid-selection");
+                return;
+            }
+            if (message.selectionUnsafe().entityId() != sender.getId() || next.intentId() <= 0
+                || !session.observeSelectionRequest(next.intentId())) {
+                NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "subject-or-intent");
+                return;
+            }
+            var capability = sender.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).orElse(null);
+            if (capability == null) {
+                NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "missing-capability");
+                return;
+            }
+            var result = commitSelection(session, capability, next, ServerConfig.CAN_SWITCH_MODEL.get());
+            NetworkDiagnostics.message(
+                result == ServerModelSession.SelectionResult.ACCEPTED ? "selection-committed" : "selection-rejected",
+                MessageDirection.CLIENT_TO_SERVER, message, result.name());
+            if (result == ServerModelSession.SelectionResult.ACCEPTED)
+                publishSelection(sender);
+            else
+                sendDirective(sender, PublishedModelId.INTRINSIC_DEFAULT, "");
+        });
+    }
+
+    static ServerModelSession.SelectionResult commitSelection(ServerModelSession session,
+        ModelInfoCapability capability, CommittedSelection next, boolean canSwitch) {
+        var decision = canSwitch || next.model().isIntrinsicDefault() ? session.validateSelection(next.selection())
+            : ServerModelSession.SelectionResult.INVALID_REQUEST;
+        if (decision == ServerModelSession.SelectionResult.ACCEPTED)
+            capability.commitSelection(next);
+        return decision;
+    }
+
+    public static void handleSelectionState(SelectionStateSyncProto message, Supplier<NetworkEvent.Context> source) {
+        var context = source.get();
+        if (context.getDirection() == NetworkDirection.PLAY_TO_CLIENT) {
+            ClientPlayerStateHandler.selectionState(message, context);
+            return;
+        }
+        if (!PlayerStateValidator.validSyncShape(message)) {
+            NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "invalid-sync");
+            return;
+        }
+        var sender = context.getSender();
+        if (sender == null || message.entityId() != sender.getId() || message.intentId() <= 0) {
+            NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "subject-or-intent");
+            return;
+        }
+        enqueue(context, sender, message, session -> {
+            var capability = sender.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).orElse(null);
+            var selection = capability == null ? null : capability.selection();
+            if (selection == null || !selection.accepts(session, message.intentId())) {
+                NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message,
+                    "selection-or-session");
+                return;
+            }
+            if (message.hasState()) {
+                if (message.state().hasRoaming() && !session.syncRoaming()) {
+                    NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message,
+                        "roaming-disabled");
                     return;
                 }
-                sender.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP)
-                    .ifPresent(capability -> applyReport(sender, capability, owner, report));
-            } catch (RuntimeException failure) {
-                YesSteveModel.LOGGER.warn("Failed to process a player-state report from {}", sender.getScoreboardName(),
-                    failure);
+                try {
+                    SelectionCodec.apply(selection, message.state());
+                } catch (IllegalArgumentException invalid) {
+                    NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "invalid-state");
+                    return;
+                }
             }
-        }));
-        context.setPacketHandled(true);
+            NetworkDiagnostics.message("accepted", MessageDirection.CLIENT_TO_SERVER, message, "current-selection");
+            broadcast(sender, message);
+        });
     }
 
-    public static void handleUpdate(PlayerStateUpdateProto update, Supplier<NetworkEvent.Context> contextSupplier) {
-        var context = contextSupplier.get();
-        if (!PlayerStateValidator.validUpdate(update)) {
-            context.setPacketHandled(true);
-            return;
-        }
+    public static void handleEntityState(EntityStateSyncProto message, Supplier<NetworkEvent.Context> source) {
+        var context = source.get();
+        if (context.getDirection() == NetworkDirection.PLAY_TO_CLIENT)
+            ClientPlayerStateHandler.entityState(message, context);
+        else
+            NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "server-authority");
+        // Every field currently belongs to the game server; splitting packets grants no new C2S authority.
+    }
+
+    public static void handleTrack(EntityTrackProto message, Supplier<NetworkEvent.Context> source) {
+        ClientPlayerStateHandler.track(message, source.get());
+    }
+
+    public static void handleFlags(PlayerFlagsProto message, Supplier<NetworkEvent.Context> source) {
+        ClientPlayerStateHandler.flags(message, source.get());
+    }
+
+    public static void handleServerFlags(ServerFlagsProto message, Supplier<NetworkEvent.Context> source) {
+        ClientPlayerStateHandler.serverFlags(message, source.get());
+    }
+
+    public static void handleDirective(SelectionDirectiveProto message, Supplier<NetworkEvent.Context> source) {
+        ClientPlayerStateHandler.directive(message, source.get());
+    }
+
+    public static void handleInvalidated(SelectionInvalidatedProto message, Supplier<NetworkEvent.Context> source) {
+        ClientPlayerStateHandler.invalidated(message, source.get());
+    }
+
+    private static void enqueue(NetworkEvent.Context context, ServerPlayer sender, ProtoMessage<?> message,
+        java.util.function.Consumer<ServerModelSession> action) {
         var connection = context.getNetworkManager();
-        context.enqueueWork(() -> ClientSessionRuntime.runIfCurrent(connection, () -> applyClientUpdate(update)));
-        context.setPacketHandled(true);
+        var service = ServerModelService.current().orElse(null);
+        var session = service == null ? null : service.session(sender, connection).orElse(null);
+        if (session == null) {
+            NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "missing-session");
+            return;
+        }
+        context.enqueueWork(() -> {
+            if (!service.runIfCurrent(sender, connection, session, () -> {
+                if (session.active())
+                    action.accept(session);
+                else
+                    NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message,
+                        "inactive-session");
+            }))
+                NetworkDiagnostics.message("dropped", MessageDirection.CLIENT_TO_SERVER, message, "retired-connection");
+        });
     }
 
-    public static boolean sendAuthoritativeFull(ServerPlayer player, boolean broadcast) {
-        var capability = player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).resolve().orElse(null);
-        if (capability == null) {
+    public static EntityStateSyncProto.Builder newDelta(int entityId) {
+        return EntityStateSyncProto.newBuilder().setEntityId(entityId);
+    }
+
+    public static void broadcast(ServerPlayer subject, ProtoMessage<?> message) {
+        ServerModelService.current().ifPresent(service -> service.sendTrackedState(subject, message));
+    }
+
+    public static void send(ProtoMessage<?> message, Player observer) {
+        if (!(observer instanceof ServerPlayer player))
+            return;
+        ServerModelService.current().ifPresent(service -> service.sendState(player, message));
+    }
+
+    public static boolean publishSelection(ServerPlayer player) {
+        var capability = player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).orElse(null);
+        var catalog = ServerModelService.current().flatMap(ServerModelService::catalog).orElse(null);
+        if (capability == null || catalog == null || ModelSelectionService.resolve(capability, catalog).isEmpty())
             return false;
-        }
-        if (broadcast) {
-            capability.getPropertiesTracker().tick(player, false, ServerConfig.LOW_BANDWIDTH_USAGE.get());
-            capability.consumeDirty();
-        }
-        var update = buildAuthoritativeFull(player, capability).orElse(null);
-        if (update == null) {
-            return false;
-        }
-        if (broadcast) {
-            broadcast(player, update);
-        } else {
-            sendToObserver(update, player);
-        }
+        capability.consumeDirty();
+        broadcast(player, SelectionChangeProto.newBuilder()
+            .setSelection(SelectionCodec.write(player.getId(), capability.selection())).build());
         return true;
     }
 
-    private static boolean validServerReportHeader(PlayerStateReportProto report, ServerPlayer sender) {
-        return !report.subject().hasPlayerId() && report.subject().entityId() == sender.getId();
+    public static EntityStateSyncProto entityInitial(ServerPlayer player) {
+        return EntityStateSyncProto.newBuilder().setEntityId(player.getId())
+            .setState(java.util.Objects
+                .requireNonNull(player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).orElse(null))
+                .getPropertiesTracker().snapshot(player))
+            .build();
     }
 
-    private static void applyReport(ServerPlayer sender, ModelInfoCapability capability, ServerModelSession owner,
-        PlayerStateReportProto report) {
-        var full = report.mode() == StateWriteMode.FULL;
-        NetworkHandler.traceNetwork("player-state-report-accepted", "playerId=" + sender.getId(),
-            "mode=" + report.mode(), "hasRoaming=" + report.hasRoaming(),
-            "roamingVariables=" + (report.hasRoaming() ? report.roamingUnsafe().variables().size() : 0));
-        if (full) {
-            var snapshot = ServerModelService.current().flatMap(ServerModelService::catalog).orElse(null);
-            if (snapshot == null || ModelSelectionService.resolve(capability, snapshot).isEmpty()) {
-                return;
-            }
-        }
-        if (report.hasAnimation() && report.animationUnsafe().hasAnimationId()
-            && !isAnimationAllowed(capability, report.animationUnsafe().animationId())) {
-            return;
-        }
-        if (report.hasRoaming() && !validRoaming(capability, report.roamingUnsafe())) {
-            return;
-        }
-        var sections = owner.playerStateReportPolicy().requestedSections();
-        if (full && sections.contains(PlayerStateSection.ROAMING) && !report.hasRoaming()
-            && capability.getModelId() == null) {
-            return;
-        }
-
-        AnimationStateProto animation = null;
-        if (sections.contains(PlayerStateSection.ANIMATION)) {
-            if (report.hasAnimation()) {
-                animation = report.animationUnsafe().hasStopped()
-                    ? AnimationStateProto.newBuilder().setStopped(true).build()
-                    : AnimationStateProto.newBuilder().setAnimationId(report.animationUnsafe().animationId()).build();
-            } else if (full) {
-                animation = AnimationStateProto.newBuilder().setStopped(true).build();
-            }
-        }
-
-        Object2FloatOpenHashMap<String> roamingVariables = null;
-        var roamingKey = 0;
-        if (sections.contains(PlayerStateSection.ROAMING) && (report.hasRoaming() || full)) {
-            roamingKey =
-                report.hasRoaming() ? report.roamingUnsafe().modelKey() : capability.getModelId().roamingHash();
-            roamingVariables =
-                new Object2FloatOpenHashMap<>(report.hasRoaming() ? report.roamingUnsafe().variables().size() : 0);
-        }
-        if (report.hasRoaming()) {
-            if (roamingVariables == null) {
-                return;
-            }
-            for (var variable : report.roamingUnsafe().variables()) {
-                roamingVariables.put(variable.name(), variable.value_());
-            }
-        }
-
-        if (animation != null) {
-            capability.applyClientAnimation(animation.hasStopped() ? "" : animation.animationId());
-        }
-        if (roamingVariables != null) {
-            capability.applyClientRoaming(roamingKey, roamingVariables, full);
-        }
-
-        final PlayerStateUpdateProto update;
-        if (full) {
-            // Every fact taken from this report is applied above, and the real FULL baseline is
-            // accepted here at the same frontier. The observation advance, the authoritative update
-            // construction and the broadcast below are best-effort and cannot roll these back.
-            owner.commitPlayerStateReport(true);
-            capability.getPropertiesTracker().tick(sender, false, !sections.contains(PlayerStateSection.ROAMING));
-            capability.consumeDirty();
-            update = buildAuthoritativeFull(sender, capability).orElse(null);
-        } else {
-            var updateBuilder = newDelta(sender.getId());
-            if (animation != null) {
-                updateBuilder.setAnimation(animation);
-            }
-            if (roamingVariables != null) {
-                var roaming = RoamingStateProto.newBuilder().setModelKey(roamingKey);
-                roamingVariables.object2FloatEntrySet().fastForEach(entry -> roaming.addVariables(
-                    MolangVariableProto.newBuilder().setName(entry.getKey()).setValue(entry.getFloatValue()).build()));
-                updateBuilder.setRoaming(roaming.build());
-            }
-            update = updateBuilder.build();
-            owner.commitPlayerStateReport(false);
-        }
-        if (update != null) {
-            broadcast(sender, update);
-        }
+    public static void sendEntityInitial(ServerPlayer player) {
+        send(entityInitial(player), player);
     }
 
-    private static boolean isAnimationAllowed(ModelInfoCapability capability, String animationId) {
-        if (animationId.isBlank() || animationId.getBytes(StandardCharsets.UTF_8).length > MAX_ANIMATION_ID_BYTES
-            || capability.getModelId() == null) {
-            return false;
-        }
-        return ServerModelService.current().flatMap(ServerModelService::catalog)
-            .flatMap(snapshot -> snapshot.find(capability.getModelId())).map(model -> {
-                var settings = model.view().getManifest().info().settings();
-                if (!settings.extraAnimation().isEmpty()) {
-                    for (var animation : settings.extraAnimation()) {
-                        if (animationId.equals(animation.key()))
-                            return true;
-                    }
-                }
-                if (!settings.extraAnimationClassify().isEmpty()) {
-                    for (var classification : settings.extraAnimationClassify()) {
-                        if (classification.extraAnimation().isEmpty()) {
-                            continue;
-                        }
-                        for (var animation : classification.extraAnimation()) {
-                            if (animationId.equals(animation.key()))
-                                return true;
-                        }
-                    }
-                }
-                return false;
-            }).orElse(false);
+    public static PlayerFlagsProto flags(ServerPlayer player) {
+        var capability = player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).orElse(null);
+        return PlayerFlagsProto.newBuilder().setEntityId(player.getId())
+            .setState(
+                PlayerFlagsStateProto.newBuilder().setDisabled(capability != null && capability.isDisabled()).build())
+            .build();
     }
 
-    private static boolean validRoaming(ModelInfoCapability capability, RoamingStateProto roaming) {
-        if (capability.getModelId() == null || capability.getModelId().roamingHash() != roaming.modelKey()
-            || roaming.variables().size() > ProtocolLimits.MAX_ROAMING_VARIABLES) {
-            return false;
-        }
-        var names = new HashSet<String>();
-        for (var variable : roaming.variables()) {
-            if (!Float.isFinite(variable.value_()) || variable.name().isBlank()
-                || variable.name()
-                    .getBytes(StandardCharsets.UTF_8).length > ProtocolLimits.MAX_ROAMING_VARIABLE_NAME_BYTES
-                || !names.add(variable.name())) {
-                return false;
-            }
-        }
-        return true;
+    public static ServerFlagsProto serverFlags() {
+        return ServerFlagsProto.newBuilder().setCanSwitchModel(ServerConfig.CAN_SWITCH_MODEL.get()).build();
     }
 
-    private static void applyClientUpdate(PlayerStateUpdateProto update) {
-        var entityId = update.subject().entityId();
-        var level = Minecraft.getInstance().level;
-        if (level == null || !(level.getEntity(entityId) instanceof Player player)) {
-            return;
-        }
-        var builtinDefaultHash = update.hasModel() && ModelReferenceCodec.read(update.modelUnsafe().model()) == null
-            ? ClientModelService.instance().defaultRenderTarget().modelHash() : null;
-        player.getCapability(PlayerAnimatableCapabilityProvider.CAP)
-            .ifPresent(capability -> applyClientUpdate(player, capability, update, builtinDefaultHash));
+    public static void sendFlags(ServerPlayer subject, Player observer) {
+        send(flags(subject), observer);
     }
 
-    private static void applyClientUpdate(Player player,
-        com.elfmcys.ysm.capability.PlayerAnimatableCapability capability, PlayerStateUpdateProto update,
-        @Nullable Hash256 builtinDefaultHash) {
-        capability.waitForAsyncUpdate();
-        var full = update.mode() == StateWriteMode.FULL;
-        var authoritativeModelHash = update.hasModel() ? ModelReferenceCodec.read(update.modelUnsafe().model()) : null;
-        var appliedModelHash = update.hasModel() ? appliedPlayerModelHash(authoritativeModelHash, builtinDefaultHash)
-            : capability.getModelHash();
-        if (full) {
-            capability.getStateTracker().reset();
-        }
-        if (update.hasModel()) {
-            var model = update.modelUnsafe();
-            capability.updateModelAndTexture(appliedModelHash, model.textureId());
-            capability.setDisabled(model.disabled());
-        }
-        capability.getStateTracker().updateProtocolState(update.hasGameplay() ? update.gameplayUnsafe() : null,
-            update.hasEffects() ? update.effectsUnsafe() : null, full);
-        if (update.hasAnimation()) {
-            if (update.animationUnsafe().hasStopped()) {
-                capability.stopExtraAnimation();
-            } else {
-                capability.playExtraAnimation(update.animationUnsafe().animationId());
-            }
-        } else if (full) {
-            capability.stopExtraAnimation();
-        }
-        var roaming = roamingApplication(update, appliedModelHash);
-        if (roaming != null) {
-            if (roaming.modelKey() == null) {
-                capability.clearRoamingVars();
-            } else if (full && !update.hasRoaming()) {
-                capability.clearRoamingVars(roaming.modelKey());
-            } else if (roaming.full()) {
-                capability.resetRoamingVars(roaming.modelKey(), roaming.values());
-            } else {
-                capability.updateRemoteRoamingVars(roaming.modelKey(), roaming.values());
-            }
-        }
-        if (full && player == Minecraft.getInstance().player) {
-            ClientProtocolGateway.acceptAuthoritativeFull(authoritativeModelHash,
-                selfFullRoamingKey(update, appliedModelHash));
-        }
+    public static void broadcastFlags(ServerPlayer subject) {
+        broadcast(subject, flags(subject));
     }
 
-    static Hash256 appliedPlayerModelHash(@Nullable Hash256 authoritativeModelHash, Hash256 builtinDefaultHash) {
-        return authoritativeModelHash == null ? builtinDefaultHash : authoritativeModelHash;
+    public static SelectionDirectiveProto directive(PublishedModelId model, String texture) {
+        return SelectionDirectiveProto.newBuilder().setModel(ModelReferenceCodec.create(model)).setTextureId(texture)
+            .build();
     }
 
-    /**
-     * A FULL that omits roaming clears the namespace of its accepted model description, including the concrete builtin
-     * default hash. Resolving this identity does not require a model installation.
-     */
-    static Integer selfFullRoamingKey(PlayerStateUpdateProto update, Hash256 modelHash) {
-        if (update.hasRoaming()) {
-            return update.roamingUnsafe().modelKey();
-        }
-        return modelHash == null ? null : modelHash.roamingHash();
-    }
-
-    static RoamingApplication roamingApplication(PlayerStateUpdateProto update, @Nullable Hash256 modelHash) {
-        var full = update.mode() == StateWriteMode.FULL;
-        if (!update.hasRoaming()) {
-            if (!full) {
-                return null;
-            }
-            return new RoamingApplication(true, selfFullRoamingKey(update, modelHash), new Int2FloatOpenHashMap());
-        }
-        var values = new Int2FloatOpenHashMap(update.roamingUnsafe().variables().size());
-        for (var variable : update.roamingUnsafe().variables()) {
-            values.put(StringPool.computeIfAbsent(variable.name()), variable.value_());
-        }
-        return new RoamingApplication(full, update.roamingUnsafe().modelKey(), values);
-    }
-
-    private static Optional<PlayerStateUpdateProto> buildAuthoritativeFull(ServerPlayer player,
-        ModelInfoCapability capability) {
-        return ServerModelService.current().flatMap(ServerModelService::catalog)
-            .flatMap(snapshot -> ModelInfoSyncAssembler.build(player, capability, snapshot));
-    }
-
-    private static EntityRefProto serverEntityRef(int entityId) {
-        return EntityRefProto.newBuilder().setEntityId(entityId).build();
-    }
-
-    record RoamingApplication(boolean full, Integer modelKey, Int2FloatOpenHashMap values) {
+    public static void sendDirective(ServerPlayer player, PublishedModelId model, String texture) {
+        send(directive(model, texture), player);
     }
 }

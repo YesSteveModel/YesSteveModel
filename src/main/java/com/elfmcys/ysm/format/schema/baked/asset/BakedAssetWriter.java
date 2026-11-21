@@ -1,12 +1,13 @@
 package com.elfmcys.ysm.format.schema.baked.asset;
 
-import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.format.schema.file.AssetFileWriter;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.storage.ModelHashing;
 import com.elfmcys.ysm.proto.baked.asset.BakedAnimationEntryProto;
 import com.elfmcys.ysm.proto.baked.asset.BakedAnimationProto;
 import com.elfmcys.ysm.proto.baked.asset.BakedAssetManifestProto;
+import com.elfmcys.ysm.proto.baked.asset.BakedProgramInputProto;
+import com.elfmcys.ysm.proto.mixel.common.ProgramProto;
 import com.elfmcys.ysm.util.ProtoBytes;
 import com.elfmcys.ysm.util.ProtoUtil;
 
@@ -15,8 +16,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.nio.ByteBuffer;
 
-/** Writes one immutable baked target asset with one zstd chunk per animation. */
+/** Writes independent animation input with one zstd chunk per animation or program envelope. */
 public final class BakedAssetWriter extends AssetFileWriter {
     private static final int PAYLOAD_COMPRESSION_LEVEL = 9;
 
@@ -26,10 +28,15 @@ public final class BakedAssetWriter extends AssetFileWriter {
     }
 
     public void setData(Hash256 containerId, String renderTargetId, Hash256 inputHash,
-        Map<String, List<BakedAnimationProto>> animations, byte[] artifact) throws IOException {
+        Map<String, List<BakedAnimationProto>> animations, List<ProgramInputDescriptor> descriptors,
+        Map<Integer, ProgramProto> programs) throws IOException {
         Objects.requireNonNull(containerId, "containerId");
         Objects.requireNonNull(inputHash, "inputHash");
         Objects.requireNonNull(animations, "animations");
+        Objects.requireNonNull(descriptors, "descriptors");
+        Objects.requireNonNull(programs, "programs");
+        if (descriptors.size() != programs.size())
+            throw new IOException("Program input payloads do not match their descriptors");
         if (renderTargetId == null || renderTargetId.isBlank()) {
             throw new IOException("Baked asset render target id is empty");
         }
@@ -54,8 +61,27 @@ public final class BakedAssetWriter extends AssetFileWriter {
                 addProtoChunk(chunkName, animation, PAYLOAD_COMPRESSION_LEVEL);
             }
         }
-        try (var bytes = ArrayBuffer.move(artifact)) {
-            addRawChunk(BakedAssetConstant.EXPRESSION_CHUNK_NAME, bytes, PAYLOAD_COMPRESSION_LEVEL);
+        var locations = new HashSet<com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation>();
+        var keys = new HashSet<dev.semaweave.ProgramKey>();
+        var programIndex = 0;
+        for (var descriptor : descriptors) {
+            var program = programs.get(descriptor.id());
+            if (descriptor.id() != programIndex++ || program == null
+                || !renderTargetId.equals(descriptor.location().targetId()) || !locations.add(descriptor.location())
+                || !keys.add(descriptor.key()))
+                throw new IOException("Invalid program input descriptor: " + descriptor.id());
+            var bytes = ProtoUtil.serializeToArray(program);
+            if (bytes.length != descriptor.byteLength() || !descriptor.contentHash().equals(ModelHashing.blake3(bytes)))
+                throw new IOException("Program input payload does not match its descriptor: " + descriptor.id());
+            var chunkName = BakedAssetConstant.PROGRAM_CHUNK_PREFIX + "%06d".formatted(descriptor.id());
+            var location = descriptor.location();
+            manifest.addPrograms(BakedProgramInputProto.newBuilder().setId(descriptor.id()).setChunkName(chunkName)
+                .setContentHash(ProtoBytes.wrap(descriptor.contentHash())).setByteLength(descriptor.byteLength())
+                .setTargetId(location.targetId()).setExpressionSet(location.set().name())
+                .setLocation(location.location()).setRole(location.role().name())
+                .setDiscriminator(location.discriminator())
+                .setProgramKey(ByteBuffer.wrap(descriptor.key().canonicalBytes().toByteArray())).build());
+            addProtoChunk(chunkName, program, PAYLOAD_COMPRESSION_LEVEL);
         }
         addProtoChunk(BakedAssetConstant.MANIFEST_CHUNK_NAME, manifest.build(), 0);
     }

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.client.gui.button;
 
+import com.elfmcys.ysm.client.entity.EntityModelDemand;
 import com.elfmcys.ysm.client.animation.AnimationRegister;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
@@ -18,7 +19,7 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
     private final CustomGuiPlayerEntity entity;
     private final ClientDemandCoordinator.PageScope page;
     private final ClientDemandCoordinator.Target target;
-    private @Nullable ClientDemandCoordinator.EntityScope scope;
+    private @Nullable EntityModelDemand scope;
     private boolean active;
     private final CatalogCardImages images;
     private final CatalogModelPreviewAnimationState previewAnimations = new CatalogModelPreviewAnimationState();
@@ -113,21 +114,45 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
     }
 
     void captureInput(float partialTick, boolean hovered, boolean focused, long now, boolean disableRotation) {
-        frameInput = GuiFrameInput.capture(entity.getEntity(), partialTick, disableRotation, true, hovered, focused, now);
+        frameInput =
+            GuiFrameInput.capture(entity.getEntity(), partialTick, disableRotation, true, hovered, focused, now);
         prepared = null;
     }
 
-    GuiFrameInput frameInput() { return frameInput; }
-    GeoRenderData prepared() { return prepared; }
-    void prepared(GeoRenderData data) { prepared = data; }
-    CustomGuiPlayerEntity entity() { return entity; }
-    ClientDemandCoordinator.EntityScope scope() { return active ? scope : null; }
-    boolean closed() { return closed || page.isClosed(); }
-    void borrow() { borrowed = true; }
+    GuiFrameInput frameInput() {
+        return frameInput;
+    }
+
+    GeoRenderData prepared() {
+        return prepared;
+    }
+
+    void prepared(GeoRenderData data) {
+        prepared = data;
+    }
+
+    CustomGuiPlayerEntity entity() {
+        return entity;
+    }
+
+    EntityModelDemand scope() {
+        return active ? scope : null;
+    }
+
+    boolean closed() {
+        return closed || page.isClosed();
+    }
+
+    void borrow() {
+        borrowed = true;
+    }
+
     void returned() {
         borrowed = false;
-        if (closed) finishClose();
-        else finishDeactivation();
+        if (closed)
+            finishClose();
+        else
+            finishDeactivation();
     }
 
     @Override
@@ -154,11 +179,17 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
             deactivationPending = true;
             var previous = scope;
             scope = null;
-            try { if (previous != null) previous.close(); }
-            catch (Throwable error) { failure = error; }
+            try {
+                if (previous != null)
+                    previous.close();
+            } catch (Throwable error) {
+                failure = error;
+            }
         }
         if (!borrowed) {
-            try { finishDeactivation(); } catch (Throwable error) {
+            try {
+                finishDeactivation();
+            } catch (Throwable error) {
                 failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
             }
         }
@@ -193,18 +224,28 @@ final class CatalogModelCardState implements AutoCloseable, ClientDemandCoordina
             return;
         cleaned = true;
         Throwable failure = null;
-        try { page.removeCard(this); } catch (Throwable error) { failure = error; }
-        try { deactivate(); } catch (Throwable error) {
+        try {
+            page.removeCard(this);
+        } catch (Throwable error) {
+            failure = error;
+        }
+        try {
+            deactivate();
+        } catch (Throwable error) {
             failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
         }
-        try { entity.retire(); } catch (Throwable error) {
+        try {
+            entity.retire();
+        } catch (Throwable error) {
             failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
         }
         throwFailure(failure);
     }
 
     private static void throwFailure(Throwable failure) {
-        if (failure instanceof Error error) throw error;
-        if (failure instanceof RuntimeException error) throw error;
+        if (failure instanceof Error error)
+            throw error;
+        if (failure instanceof RuntimeException error)
+            throw error;
     }
 }

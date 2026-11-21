@@ -15,12 +15,11 @@ import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.catalog.source.CatalogRoot;
 import com.elfmcys.ysm.model.catalog.source.ModelCatalogSource;
 import com.elfmcys.ysm.model.catalog.source.ModelSourceResolver;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.domain.ModelScanError;
 import com.elfmcys.ysm.model.domain.ModelScanReport;
 import com.elfmcys.ysm.model.domain.ModelScanWarning;
-import com.elfmcys.ysm.model.storage.ConvertedCacheCoordinator;
 import com.elfmcys.ysm.model.storage.ConvertedSourceIndex;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.model.storage.ModelStorageInfra;
@@ -33,6 +32,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -58,30 +58,24 @@ import java.util.stream.Collectors;
 /**
  * Process catalog authority that publishes complete candidates from one scan coordinator.
  *
- * <p><b>Invariant:</b> Each candidate contains a matching catalog and index. Separate calls to
- * {@link #current()} and {@link #index()} can observe different publications; use
- * {@link #currentCandidate()} when both views must come from one publication.
- * Metadata admission does not prove that unread payloads or mutable source paths remain readable.
+ * <p>
+ * <b>Invariant:</b> Each candidate contains a matching catalog and index. Separate calls to {@link #current()} and
+ * {@link #index()} can observe different publications; use {@link #currentCandidate()} when both views must come from
+ * one publication. Metadata admission does not prove that unread payloads or mutable source paths remain readable.
  *
- * <p><b>Execution:</b> The lifecycle owner serializes {@link #tick()} with owner-side publication.
- * Scanning runs off that owner thread. Reload synchronizes admission and does not wait for a scan.
- * Closing seals admission and waits for the scan coordinator; the owner must not close from that coordinator.
+ * <p>
+ * <b>Execution:</b> The lifecycle owner serializes {@link #tick()} with owner-side publication. Scanning runs off that
+ * owner thread. Reload synchronizes admission and does not wait for a scan. Closing seals admission and waits for the
+ * scan coordinator; the owner must not close from that coordinator.
  *
- * <p><b>Seam:</b> [catalog publication](docs/architecture/model-management/catalog/overview.md#seam-contract).
+ * <p>
+ * <b>Seam:</b> [catalog publication](docs/architecture/model-management/catalog/overview.md#seam-contract).
  */
 public final class ReloadableModelCatalog implements AutoCloseable {
     private static final int MAX_INPUTS = 100_000;
     private static final long BATCH_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1);
 
-    /** Unreachable converted root of a composition that owns no converted storage. */
-    private static final Path DETACHED_CONVERTED_ROOT =
-        Path.of(".").toAbsolutePath().normalize().resolve("never-converted");
-
     private final CatalogReconciler reconciler;
-    private final Path convertedRoot;
-    private final Pruner pruner;
-    private final Registration registration;
-    private final Consumer<CatalogScanProgress> progressObserver;
     private final ModelStorageInfra storage;
     private final ThreadFactory coordinatorThreads;
     private final BiFunction<Long, ThreadPolicy, ExecutorService> workerExecutors;
@@ -106,10 +100,6 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         } catch (CatalogBuildException failure) {
             throw new UncheckedIOException("Failed to materialize the builtin catalog", failure);
         }
-        convertedRoot = storage.local().root().resolve("converted");
-        pruner = ignored -> ConvertedCacheCoordinator.PruneResult.SKIPPED_ACTIVE_CONSUMER;
-        registration = storage::registerConverted;
-        progressObserver = ignored -> {};
         coordinatorThreads = Thread::new;
         workerExecutors = ReloadableModelCatalog::newWorkerExecutor;
     }
@@ -124,27 +114,11 @@ public final class ReloadableModelCatalog implements AutoCloseable {
 
     ReloadableModelCatalog(CatalogReconciler reconciler, CatalogCandidate initial, ThreadFactory coordinatorThreads,
         BiFunction<Long, ThreadPolicy, ExecutorService> workerExecutors) {
-        this(reconciler, initial, coordinatorThreads, workerExecutors, () -> {
-        });
-    }
-
-    ReloadableModelCatalog(CatalogReconciler reconciler, CatalogCandidate initial, ThreadFactory coordinatorThreads,
-        BiFunction<Long, ThreadPolicy, ExecutorService> workerExecutors, Registration registration) {
-        this(reconciler, initial, coordinatorThreads, workerExecutors, registration, ignored -> {});
-    }
-
-    ReloadableModelCatalog(CatalogReconciler reconciler, CatalogCandidate initial, ThreadFactory coordinatorThreads,
-        BiFunction<Long, ThreadPolicy, ExecutorService> workerExecutors, Registration registration,
-        Consumer<CatalogScanProgress> progressObserver) {
         this.storage = null;
         this.reconciler = Objects.requireNonNull(reconciler, "reconciler");
         current = Objects.requireNonNull(initial, "initial");
-        convertedRoot = DETACHED_CONVERTED_ROOT;
-        pruner = ignored -> ConvertedCacheCoordinator.PruneResult.SKIPPED_ACTIVE_CONSUMER;
         this.coordinatorThreads = Objects.requireNonNull(coordinatorThreads, "coordinatorThreads");
         this.workerExecutors = Objects.requireNonNull(workerExecutors, "workerExecutors");
-        this.registration = Objects.requireNonNull(registration, "registration");
-        this.progressObserver = Objects.requireNonNull(progressObserver, "progressObserver");
     }
 
     public CatalogSnapshot current() {
@@ -174,8 +148,8 @@ public final class ReloadableModelCatalog implements AutoCloseable {
     /**
      * Requests one scan without replacing the last published candidate at admission.
      *
-     * @return a non-null future completed by owner ticks after the scan terminates; BUSY admits no scan,
-     *     and a closed or inactive owner returns FAILED
+     * @return a non-null future completed by owner ticks after the scan terminates; BUSY admits no scan, and a closed
+     *         or inactive owner returns FAILED
      */
     public CompletableFuture<ReloadResult> reload() {
         final Admission admission;
@@ -219,8 +193,9 @@ public final class ReloadableModelCatalog implements AutoCloseable {
     /**
      * Registers an observer and immediately offers the current candidate.
      *
-     * <p><b>Execution:</b> The initial callback runs on the caller. Later callbacks run on the publishing
-     * tick, outside the catalog monitor. The catalog reports observer failure without rolling back publication.
+     * <p>
+     * <b>Execution:</b> The initial callback runs on the caller. Later callbacks run on the publishing tick, outside
+     * the catalog monitor. The catalog reports observer failure without rolling back publication.
      *
      * @param listener a non-null observer that must not block publication
      * @return an independent subscription whose close removes only this observer
@@ -363,7 +338,6 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private final AtomicReference<Handoff> latest = new AtomicReference<>();
         private final List<ConvertedSourceIndex> convertedIndexes = new ArrayList<>();
-        private final Set<Path> retainedConverted = new LinkedHashSet<>();
         private final LinkedBlockingQueue<Object> outcomes = new LinkedBlockingQueue<>();
         private final Map<CatalogLocation, CatalogRecord> effectiveRecords = new LinkedHashMap<>();
         private final Map<CatalogLocation, CatalogIndexEntry> effectiveIndex = new LinkedHashMap<>();
@@ -372,7 +346,7 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         private final List<ModelScanWarning> warnings = new ArrayList<>();
         private final List<CatalogLocation> acceptedOrder = new ArrayList<>();
         private final Set<CatalogLocation> acceptedLocations = new HashSet<>();
-        private final Set<Hash256> acceptedModelIds = new HashSet<>();
+        private final Set<ModelId> acceptedModelIds = new HashSet<>();
 
         private CatalogCandidate lastBuilt;
         private long lastBuildNanos;
@@ -403,7 +377,6 @@ public final class ReloadableModelCatalog implements AutoCloseable {
             var detail = "";
             var phase = "CONVERTED_REGISTRATION";
             try {
-                progressObserver.accept(progress);
                 synchronized (ReloadableModelCatalog.this) {
                     checkEligible();
                 }
@@ -411,13 +384,13 @@ public final class ReloadableModelCatalog implements AutoCloseable {
                     .forEach(record -> effectiveRecords.put(record.location(), record));
                 previous.index().entries().forEach(entry -> effectiveIndex.put(entry.location(), entry));
                 previous.snapshot().packs().forEach(pack -> effectivePacks.put(pack.hierarchy(), pack));
-                registration.register();
+                if (storage != null)
+                    storage.registerCaches();
                 synchronized (ReloadableModelCatalog.this) {
                     checkEligible();
                     initialScanPending = false;
                 }
                 phase = "SCAN_EXECUTION";
-                previous.index().entries().stream().map(CatalogIndexEntry::backingFile).forEach(this::retainConverted);
                 executor = workerExecutors.apply(sequence, plan.workerPolicy);
                 checkCancelled();
                 var value = reconciler.discoverIncremental();
@@ -427,8 +400,8 @@ public final class ReloadableModelCatalog implements AutoCloseable {
                     throw new IllegalStateException("Catalog scan input capacity exceeded");
                 }
                 applyDiscovery(value);
-                updateProgress(count == 0 ? CatalogScanProgress.Phase.FINALIZING
-                    : CatalogScanProgress.Phase.PROCESSING, 0, count);
+                updateProgress(count == 0 ? CatalogScanProgress.Phase.FINALIZING : CatalogScanProgress.Phase.PROCESSING,
+                    0, count);
                 for (var source : value.sources()) {
                     checkCancelled();
                     var location = source.key().root().location(source.key().relativePath());
@@ -460,30 +433,37 @@ public final class ReloadableModelCatalog implements AutoCloseable {
                 buildIfDue(startedAt);
                 awaitWorkers(false);
                 checkCancelled();
-                try {
-                    reconciler.verifyDiscovery(value);
-                    var scopes = value.completeRoots().values().stream().map(root -> root.root()).toList();
-                    var observedLocations = value.sources().stream()
-                        .map(source -> source.key().root().location(source.key().relativePath()))
+                var groups = storage == null ? List.of(reconciler.sourceRoots())
+                    : reconciler.sourceRoots().stream().collect(Collectors
+                        .groupingBy(root -> storage.scope(root).region(), LinkedHashMap::new, Collectors.toList()))
+                        .values();
+                var finalized = new ArrayList<com.elfmcys.ysm.model.catalog.source.CatalogRootIdentity>();
+                var observedLocations =
+                    value.sources().stream().map(source -> source.key().root().location(source.key().relativePath()))
                         .collect(Collectors.toUnmodifiableSet());
-                    var selected = selectRecords(effectiveRecords, acceptedOrder, acceptedLocations);
-                    var retainedIndex =
-                        effectiveIndex.values().stream().filter(entry -> observedLocations.contains(entry.location()))
-                            .filter(entry -> selected.containsKey(entry.modelId())
-                                && selected.get(entry.modelId()).location().equals(entry.location()))
-                            .toList();
-                    reconciler.replaceIncrementalIndex(scopes, convertedIndexes, retainedIndex);
-                    dirty |= applyConfirmedDeletions(value);
-                    if (plan.initial && (storage == null ? pruner.prune(retainedConverted)
-                        : storage.prune(retainedConverted, scopes)) == ConvertedCacheCoordinator.PruneResult.FAILED) {
-                        addFailure("CONVERTED_PRUNE_FAILED", new IOException("Converted prune failed"));
+                var selected = selectRecords(effectiveRecords, acceptedOrder, acceptedLocations);
+                var retainedIndex =
+                    effectiveIndex.values().stream().filter(entry -> observedLocations.contains(entry.location()))
+                        .filter(entry -> selected.containsKey(entry.modelId())
+                            && selected.get(entry.modelId()).location().equals(entry.location()))
+                        .toList();
+                for (var group : groups) {
+                    checkCancelled();
+                    try {
+                        reconciler.verifyDiscovery(value, group);
+                        reconciler.replaceIncrementalIndex(group, convertedIndexes, retainedIndex);
+                        finalized.addAll(group);
+                    } catch (Throwable failure) {
+                        addFailure("CATALOG_FINALIZATION_FAILED", failure);
+                        diagnose("SCAN_FINALIZATION", failure);
+                        status = ReloadStatus.FAILED;
+                        detail = message(failure);
                     }
-                } catch (Throwable failure) {
-                    addFailure("CATALOG_FINALIZATION_FAILED", failure);
-                    diagnose("SCAN_FINALIZATION", failure);
-                    status = ReloadStatus.FAILED;
-                    detail = message(failure);
                 }
+                dirty |= applyConfirmedDeletions(value, finalized);
+                checkCancelled();
+                if (plan.initial && storage != null)
+                    storage.finishStartupScan(finalized);
             } catch (Throwable failure) {
                 status = ReloadStatus.FAILED;
                 detail = message(failure);
@@ -519,19 +499,16 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         }
 
         private void updateProgress(CatalogScanProgress.Phase phase, int processed, int total) {
-            final CatalogScanProgress value;
             synchronized (this) {
-                value = new CatalogScanProgress(sequence,
+                progress = new CatalogScanProgress(sequence,
                     cancelled.get() ? CatalogScanProgress.Phase.FINALIZING : phase, processed, total);
-                progress = value;
             }
-            progressObserver.accept(value);
         }
 
         private synchronized void finalizeProgress() {
             var value = progress;
-            progress = new CatalogScanProgress(sequence, CatalogScanProgress.Phase.FINALIZING,
-                value.processed(), value.total());
+            progress = new CatalogScanProgress(sequence, CatalogScanProgress.Phase.FINALIZING, value.processed(),
+                value.total());
         }
 
         private void checkEligible() throws InterruptedException {
@@ -587,7 +564,7 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         }
 
         private void addFailure(String code, Throwable failure) {
-            errors.add(ModelScanError.infrastructure(CatalogRootKind.CUSTOM, "Catalog infrastructure", code,
+            errors.add(ModelScanError.infrastructure(CatalogRootKind.MODELS, "Catalog infrastructure", code,
                 failure instanceof IOException io ? io : new IOException(failure)));
             dirty = true;
         }
@@ -617,7 +594,6 @@ public final class ReloadableModelCatalog implements AutoCloseable {
             }
             var entry = outcome.entry();
             var location = entry.location();
-            retainConverted(entry.backingFile());
             var path = location.value();
             if (acceptedModelIds.contains(entry.modelId()) || reconciler.conflictsWithBuiltin(entry)) {
                 errors.add(ModelScanError.conflict(location.rootKind(), path));
@@ -674,32 +650,25 @@ public final class ReloadableModelCatalog implements AutoCloseable {
                 .filter(entry -> entry.identity().equals(selectedIdentities.get(entry.location())))
                 .sorted(Comparator.comparing(CatalogIndexEntry::location)).toList();
             var candidate = new CatalogCandidate(new CatalogIndexSnapshot(indexEntries, packs, report),
-                new CatalogSnapshot(selected, packs, report));
+                new CatalogSnapshot(selected, reconciler.intrinsicDefault(), packs, report));
             lastBuilt = candidate;
             lastBuildNanos = System.nanoTime();
             built = true;
             dirty = false;
-            if (plan.initial) {
-                candidate.index().entries().stream().map(CatalogIndexEntry::backingFile).forEach(this::retainConverted);
-            }
         }
 
-        private void retainConverted(Path path) {
-            var checked = path.toAbsolutePath().normalize();
-            if (storage == null ? checked.startsWith(convertedRoot) : storage.scopes().stream()
-                .anyMatch(scope -> checked.startsWith(scope.identity().root().resolve("objects"))))
-                retainedConverted.add(checked);
-        }
-
-        private boolean applyConfirmedDeletions(CatalogReconciler.ScanDiscovery value) {
+        private boolean applyConfirmedDeletions(CatalogReconciler.ScanDiscovery value,
+            Collection<com.elfmcys.ysm.model.catalog.source.CatalogRootIdentity> finalized) {
             var observed =
                 value.sources().stream().map(source -> source.key().root().location(source.key().relativePath()))
                     .collect(Collectors.toUnmodifiableSet());
             var observedPacks = value.packs().stream().map(pack -> pack.key().location().value())
                 .collect(Collectors.toUnmodifiableSet());
-            var completeRoots = value.completeRoots().keySet();
-            var changed = effectiveRecords.entrySet().removeIf(entry -> completeRoots.contains(entry.getKey().root())
-                && !isIntrinsicDefault(entry.getKey()) && !observed.contains(entry.getKey()));
+            var completeRoots =
+                finalized.stream().map(com.elfmcys.ysm.model.catalog.source.CatalogRootIdentity::publicRoot)
+                    .collect(Collectors.toUnmodifiableSet());
+            var changed = effectiveRecords.entrySet()
+                .removeIf(entry -> completeRoots.contains(entry.getKey().root()) && !observed.contains(entry.getKey()));
             changed |= effectiveIndex.entrySet()
                 .removeIf(entry -> completeRoots.contains(entry.getKey().root()) && !observed.contains(entry.getKey()));
             changed |= effectivePacks.entrySet()
@@ -764,7 +733,7 @@ public final class ReloadableModelCatalog implements AutoCloseable {
         }
     }
 
-    private static Map<Hash256, CatalogRecord> selectRecords(Map<CatalogLocation, CatalogRecord> source,
+    private static Map<ModelId, CatalogRecord> selectRecords(Map<CatalogLocation, CatalogRecord> source,
         List<CatalogLocation> acceptedOrder, Set<CatalogLocation> acceptedLocations) {
         var baseline = new ArrayList<>(source.values());
         baseline.sort(Comparator.comparing(CatalogRecord::location));
@@ -775,14 +744,10 @@ public final class ReloadableModelCatalog implements AutoCloseable {
             .filter(record -> record.location().rootKind() != CatalogRootKind.BUILTIN).forEach(ordered::add);
         baseline.stream().filter(record -> record.location().rootKind() != CatalogRootKind.BUILTIN
             && !acceptedLocations.contains(record.location())).forEach(ordered::add);
-        var records = new LinkedHashMap<Hash256, CatalogRecord>();
+        var records = new LinkedHashMap<ModelId, CatalogRecord>();
         for (var record : ordered)
             records.putIfAbsent(record.binding().modelId(), record);
         return records;
-    }
-
-    private static boolean isIntrinsicDefault(CatalogLocation location) {
-        return location.rootKind() == CatalogRootKind.BUILTIN && location.path().value().equals("default");
     }
 
     private static String message(Throwable failure) {
@@ -796,16 +761,6 @@ public final class ReloadableModelCatalog implements AutoCloseable {
     }
 
     private record Admission(ActiveScan scan, Throwable failure) {
-    }
-
-    @FunctionalInterface
-    interface Registration {
-        void register() throws IOException;
-    }
-
-    @FunctionalInterface
-    private interface Pruner {
-        ConvertedCacheCoordinator.PruneResult prune(Set<Path> retained);
     }
 
     public final class Subscription implements AutoCloseable {

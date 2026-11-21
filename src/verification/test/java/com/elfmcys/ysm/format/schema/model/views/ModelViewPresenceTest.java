@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.format.schema.model.views;
 
+import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.format.schema.file.AssetFileView;
 import com.elfmcys.ysm.proto.mixel.common.ProgramProto;
 import com.elfmcys.ysm.proto.mixel.common.StringPairProto;
@@ -26,6 +28,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ModelViewPresenceTest {
+    @Test
+    void expressionOptionsUseTheUnroundedSourceVersion() {
+        for (String version : java.util.List.of("2.6.6", "0002.0-dev+build", "3.0-dev-forge+mc1.20.1", "", "invalid",
+            "2".repeat(1000))) {
+            var builder = infoBuilder();
+            var properties = builder.build().properties().toBuilder().setOriginVer(version).build();
+            var metadata = view(builder.setProperties(properties).build(), player());
+            assertEquals(version.equals("2.6.6") || version.equals("0002.0-dev+build"),
+                metadata.expressionOptions().divZeroFallback());
+        }
+    }
+
     @Test
     void acceptsAbsentDisplayMetadataAndAuthorAvatar() {
         var info = infoBuilder().clearMetadata().build();
@@ -131,8 +145,8 @@ class ModelViewPresenceTest {
             .setMetadata(MetadataProto.newBuilder().setName("").setTips("")
                 .setLicense(LicenseProto.newBuilder().setType("").setDesc("").build()).build())
             .setProperties(PropertiesProto.newBuilder()
-                .setModelId(java.nio.ByteBuffer.wrap(new byte[com.elfmcys.ysm.model.domain.Hash256.SIZE]))
-                .setFree(false).setOriginVer("").build());
+                .setModelId("hash:" + java.util.HexFormat.of().formatHex(new byte[Hash256.SIZE])).setFree(false)
+                .setOriginVer("").build());
     }
 
     private static RenderTargetProto player() {

@@ -2,21 +2,17 @@ package com.elfmcys.ysm.network.forge;
 
 import com.elfmcys.ysm.capability.ModelInfoCapabilityProvider;
 import com.elfmcys.ysm.capability.ModelSelectionService;
-import com.elfmcys.ysm.capability.StarModelsCapabilityProvider;
 import com.elfmcys.ysm.event.CapabilityEvent;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
 import com.elfmcys.ysm.info.roulette.forms.ConfigActionRoute;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.service.ServerModelService;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.network.NetworkHandler;
 import com.elfmcys.ysm.network.protocol.ExpressionProtocol;
-import com.elfmcys.ysm.network.protocol.StarredModelSnapshots;
 import com.elfmcys.ysm.proto.network.*;
 import com.elfmcys.ysm.proto.network.EntityRefProto;
-import com.elfmcys.ysm.proto.network.StarredModelsSnapshotProto;
 import com.elfmcys.ysm.proto.network.SwingHandRequestProto;
-import com.elfmcys.ysm.proto.network.UpdateStarredModelRequestProto;
 import com.elfmcys.ysm.util.ProtoBytes;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
 import net.minecraft.network.protocol.game.ClientboundAnimatePacket;
@@ -38,57 +34,7 @@ import java.util.Collection;
 import java.util.function.Supplier;
 
 public final class ControlHandler {
-    private static final int MAX_TRANSIENT_TARGETS = 1024;
-    private static final int MAX_TRANSIENT_SOURCE_BYTES = 4096;
-
     private ControlHandler() {}
-
-    public static void handleStarredModels(StarredModelsSnapshotProto message,
-        Supplier<NetworkEvent.Context> contextSupplier) {
-        ClientControlHandler.handleStarredModels(message, contextSupplier);
-    }
-
-    public static void handleUpdateStar(UpdateStarredModelRequestProto message,
-        Supplier<NetworkEvent.Context> contextSupplier) {
-        var context = contextSupplier.get();
-        var sender = context.getSender();
-        if (sender != null && message.modelHash().remaining() == Hash256.SIZE
-            && message.operation() != com.elfmcys.ysm.proto.network.StarredModelOperation.UNSPECIFIED) {
-            var hash = new Hash256(ProtoBytes.copy(message.modelHash()));
-            enqueueServer(context, sender,
-                () -> sender.getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).ifPresent(capability -> {
-                    if (message.operation() == com.elfmcys.ysm.proto.network.StarredModelOperation.ADD) {
-                        capability.addModel(hash);
-                    } else {
-                        capability.removeModel(hash);
-                    }
-                }));
-        }
-        context.setPacketHandled(true);
-    }
-
-    public static void handlePrivilegedTransient(PrivilegedTransientEventProto message,
-        Supplier<NetworkEvent.Context> contextSupplier) {
-        ClientControlHandler.handlePrivilegedTransient(message, contextSupplier);
-    }
-
-    public static PrivilegedTransientEventProto privilegedTransient(String source, Collection<ServerPlayer> players) {
-        if (source.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_TRANSIENT_SOURCE_BYTES) {
-            throw new IllegalArgumentException("transient source exceeds wire bound");
-        }
-        var result = PrivilegedTransientEventProto.newBuilder().setSource(source)
-            .setCapability(TransientCapability.SERVER_ADMIN_ACTION);
-        players.stream().limit(MAX_TRANSIENT_TARGETS).forEach(player -> {
-            var target = serverTarget(player);
-            if (target != null) {
-                result.addTargets(PrivilegedTransientTargetProto.newBuilder()
-                    .setTarget(EntityRefProto.newBuilder().setEntityId(player.getId()).build())
-                    .setModelId(ProtoBytes.wrap(target.model().representation().modelId()))
-                    .setTargetId(target.targetId()).build());
-            }
-        });
-        return result.build();
-    }
 
     public static void handleSubmitConfigAction(SubmitConfigActionRequestProto message,
         Supplier<NetworkEvent.Context> contextSupplier) {
@@ -119,30 +65,6 @@ public final class ControlHandler {
         ClientControlHandler.handleConfigAction(message, contextSupplier);
     }
 
-    public static void handleEmitMolangSync(EmitMolangSyncProto message,
-        Supplier<NetworkEvent.Context> contextSupplier) {
-        var context = contextSupplier.get();
-        var sender = context.getSender();
-        if (sender != null && ExpressionProtocol.validIdentity(message.identity())
-            && validArguments(message.arguments())) {
-            enqueueServer(context, sender, () -> {
-                var target = serverTarget(sender);
-                if (target == null)
-                    return;
-                var event = authorizeMolangSync(message, target.model().representation().modelId(), target.targetId(),
-                    target.settings(), sender.getId());
-                if (event == null)
-                    return;
-                NetworkHandler.broadcastToVisiblePlayersAndSelf(event, sender);
-            });
-        }
-        context.setPacketHandled(true);
-    }
-
-    public static void handleMolangSync(MolangSyncEventProto message, Supplier<NetworkEvent.Context> contextSupplier) {
-        ClientControlHandler.handleMolangSync(message, contextSupplier);
-    }
-
     public static void handleSwingHand(SwingHandRequestProto message, Supplier<NetworkEvent.Context> contextSupplier) {
         var context = contextSupplier.get();
         var sender = context.getSender();
@@ -166,44 +88,6 @@ public final class ControlHandler {
         }
     }
 
-    public static void applyAcceptedModelSelection(ServerPlayer sender, Hash256 hash, String textureId) {
-        applyAcceptedModelSelection(sender, hash, textureId, true);
-    }
-
-    static void applyAcceptedModelSelection(ServerPlayer sender, Hash256 hash, String textureId, boolean publishState) {
-        var modelCapability = sender.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).resolve().orElse(null);
-        if (modelCapability == null) {
-            return;
-        }
-        ServerModelService.instance().catalog().ifPresent(snapshot -> {
-            var previousModelId = modelCapability.getModelId();
-            if (hash == null) {
-                ModelSelectionService.selectBuiltinDefault(modelCapability, snapshot, textureId);
-            } else {
-                modelCapability.setModelAndTexture(hash, textureId);
-            }
-            if (!java.util.Objects.equals(previousModelId, modelCapability.getModelId())) {
-                modelCapability.applyClientAnimation("");
-            }
-        });
-        if (publishState && PlayerStateHandler.sendAuthoritativeFull(sender, true) && sender.getVehicle() != null
-            && sender.getVehicle().getFirstPassenger() == sender) {
-            CapabilityEvent.onVehicleSetModel(sender.getVehicle(), sender);
-        }
-    }
-
-    static Set<Hash256> readHashSet(Iterable<java.nio.ByteBuffer> values) {
-        var result = new HashSet<Hash256>();
-        var count = 0;
-        for (var value : values) {
-            if (++count > StarredModelSnapshots.MAX_MODEL_SET_SIZE || value.remaining() != Hash256.SIZE)
-                return null;
-            if (!result.add(new Hash256(com.elfmcys.ysm.util.ProtoBytes.copy(value))))
-                return null;
-        }
-        return result;
-    }
-
     static boolean validArguments(it.unimi.dsi.fastutil.floats.FloatList values) {
         if (values.size() > MolangEventCatalog.SYNC_MAX_ARGUMENTS)
             return false;
@@ -213,7 +97,7 @@ public final class ControlHandler {
         return true;
     }
 
-    static ConfigActionEventProto authorizeConfigAction(SubmitConfigActionRequestProto message, Hash256 modelId,
+    static ConfigActionEventProto authorizeConfigAction(SubmitConfigActionRequestProto message, ModelId modelId,
         String targetId, SettingsProto settings, int subjectId) {
         if (!validWireAction(message.action())
             || !ExpressionProtocol.matchesServerAuthority(message.identity(), modelId, targetId, settings)
@@ -225,38 +109,9 @@ public final class ControlHandler {
             .setAction(message.action()).build();
     }
 
-    static MolangSyncEventProto authorizeMolangSync(EmitMolangSyncProto message, Hash256 modelId, String targetId,
-        SettingsProto settings, int subjectId) {
-        if (!validArguments(message.arguments())
-            || !ExpressionProtocol.matchesServerAuthority(message.identity(), modelId, targetId, settings)) {
-            return null;
-        }
-        return MolangSyncEventProto.newBuilder().setSubject(EntityRefProto.newBuilder().setEntityId(subjectId).build())
-            .setIdentity(message.identity()).addAllArguments(message.arguments()).build();
-    }
-
-    static boolean acceptsMolangSync(MolangSyncEventProto message,
-        com.elfmcys.ysm.expression.inventory.SharedExpressionSemantics semantics) {
-        return validArguments(message.arguments()) && ExpressionProtocol.matches(message.identity(), semantics);
-    }
-
     static boolean acceptsConfigAction(ExpressionTargetIdentityProto identity, ConfigActionProto action,
         com.elfmcys.ysm.expression.inventory.SharedExpressionSemantics semantics) {
         return validWireAction(action) && ExpressionProtocol.matches(identity, semantics);
-    }
-
-    static boolean validPrivilegedTransient(PrivilegedTransientEventProto message) {
-        if (message.targets().size() > MAX_TRANSIENT_TARGETS
-            || message.source().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_TRANSIENT_SOURCE_BYTES
-            || message.capability() != TransientCapability.SERVER_ADMIN_ACTION) {
-            return false;
-        }
-        for (var target : message.targets()) {
-            if (target.target().hasPlayerId() || target.modelId().remaining() != Hash256.SIZE
-                || target.targetId().isBlank() || target.targetId().length() > ExpressionProtocol.MAX_TARGET_ID_LENGTH)
-                return false;
-        }
-        return true;
     }
 
     static boolean validWireAction(ConfigActionProto action) {

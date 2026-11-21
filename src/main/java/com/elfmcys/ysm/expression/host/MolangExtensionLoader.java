@@ -8,17 +8,21 @@ import java.util.*;
 /**
  * Called by the client startup owner before it constructs any target factory.
  *
- * <p>Requires: Forge discovery and the non-null host-availability snapshot are complete. This loader
- * freezes the process collector once; it is not a per-world reload or a repeatable service factory.
+ * <p>
+ * Requires: Forge discovery and the non-null host-availability snapshot are complete. This loader freezes the process
+ * collector once; it is not a per-world reload or a repeatable service factory.
  *
- * <p>Ensures: normal return exposes one frozen declaration host after every admitted class reaches
- * its outcome. Rejected classes contribute diagnostics, not placeholders. Admission does not certify
- * provider thread safety or construct installation-local components.
+ * <p>
+ * Ensures: normal return exposes one frozen declaration host after every admitted class reaches its outcome. Rejected
+ * classes contribute diagnostics, not placeholders. Admission does not certify provider thread safety or construct
+ * installation-local components.
  *
- * <p>Execution: synchronous metadata reads, checker execution, binding, and class initialization on
- * the startup caller. Discovery itself does not initialize implementation classes.
+ * <p>
+ * Execution: synchronous metadata reads, checker execution, binding, and class initialization on the startup caller.
+ * Discovery itself does not initialize implementation classes.
  *
- * <p>Seam: implements [extension qualification and freeze](docs/architecture/integration/overview.md#扩展接纳与声明发布).
+ * <p>
+ * Seam: implements [extension qualification and freeze](docs/architecture/integration/overview.md#扩展接纳与声明发布).
  */
 public final class MolangExtensionLoader {
     private MolangExtensionLoader() {}

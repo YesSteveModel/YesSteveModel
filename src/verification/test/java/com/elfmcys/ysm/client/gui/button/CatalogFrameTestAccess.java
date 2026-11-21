@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.client.gui.button;
 
+import com.elfmcys.ysm.client.entity.EntityModelDemand;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.gui.CustomGuiPlayerEntity;
 import com.elfmcys.ysm.client.gui.GuiFrameTasks;
@@ -16,8 +17,8 @@ import static org.junit.jupiter.api.Assertions.*;
 public final class CatalogFrameTestAccess {
     private CatalogFrameTestAccess() {}
 
-    public static Card card(CatalogPageFrame frame, ClientDemandCoordinator.PageScope page,
-        ClientCatalogEntry entry, CustomGuiPlayerEntity entity) {
+    public static Card card(CatalogPageFrame frame, ClientDemandCoordinator.PageScope page, ClientCatalogEntry entry,
+        CustomGuiPlayerEntity entity) {
         return new Card(new CatalogModelCardState(frame, page, entry, CatalogModelMetadata.from(entry), entity));
     }
 
@@ -27,24 +28,46 @@ public final class CatalogFrameTestAccess {
 
     public static final class Card implements AutoCloseable {
         private final CatalogModelCardState state;
-        private Card(CatalogModelCardState state) { this.state = state; }
-        public void input(float partial, long now) { state.captureInput(partial, true, false, now, false); }
-        public ClientDemandCoordinator.Target target() { return state.target(); }
-        public ClientDemandCoordinator.EntityScope scope() { return state.scope(); }
-        public GeoRenderData prepared() { return state.prepared(); }
+
+        private Card(CatalogModelCardState state) {
+            this.state = state;
+        }
+
+        public void input(float partial, long now) {
+            state.captureInput(partial, true, false, now, false);
+        }
+
+        public ClientDemandCoordinator.Target target() {
+            return state.target();
+        }
+
+        public EntityModelDemand scope() {
+            return state.scope();
+        }
+
+        public GeoRenderData prepared() {
+            return state.prepared();
+        }
+
         public void retainAnimationReference(ModelRenderTarget target) throws Exception {
             var animations = field(CatalogModelCardState.class, "previewAnimations").get(state);
             field(CatalogModelPreviewAnimationState.class, "hoverFadeoutMillis").set(animations,
                 (DoubleSupplier)() -> target.playerResources().animations().size());
             assertSame(target, field(CatalogModelCardState.class, "configuredTarget").get(state));
         }
+
         public void assertAnimationReferencesCleared() throws Exception {
             assertNull(field(CatalogModelCardState.class, "configuredTarget").get(state));
             var animations = field(CatalogModelCardState.class, "previewAnimations").get(state);
-            assertEquals(0d, ((DoubleSupplier)field(CatalogModelPreviewAnimationState.class,
-                "hoverFadeoutMillis").get(animations)).getAsDouble());
+            assertEquals(0d,
+                ((DoubleSupplier)field(CatalogModelPreviewAnimationState.class, "hoverFadeoutMillis").get(animations))
+                    .getAsDouble());
         }
-        @Override public void close() { state.close(); }
+
+        @Override
+        public void close() {
+            state.close();
+        }
     }
 
     private static Field field(Class<?> type, String name) throws Exception {

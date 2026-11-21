@@ -8,7 +8,7 @@ public final class MolangFrontendException extends Exception {
     private static final long serialVersionUID = 1L;
 
     public enum Kind {
-        SOURCE_LIMIT, TOKEN_LIMIT, SYNTAX, UNSUPPORTED, LOWERING
+        SYNTAX, UNSUPPORTED, LOWERING
     }
 
     private final Kind kind;

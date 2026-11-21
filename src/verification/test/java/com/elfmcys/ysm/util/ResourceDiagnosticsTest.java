@@ -8,7 +8,6 @@ import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.junit.jupiter.api.Test;
 
 import java.lang.ref.Reference;
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,24 +29,6 @@ class ResourceDiagnosticsTest {
         assertTrue(registry.snapshot(ResourceDiagnostics.Kind.GEO).isEmpty());
         Reference.reachabilityFence(first);
         Reference.reachabilityFence(second);
-    }
-
-    @Test
-    void doesNotKeepResourcesAlive() throws InterruptedException {
-        var registry = new ResourceDiagnostics.Registry();
-        var reference = trackTemporaryOwner(registry);
-        for (var attempt = 0; attempt < 100 && reference.get() != null; attempt++) {
-            System.gc();
-            Thread.sleep(20);
-        }
-        assertNull(reference.get(), "Resource diagnostics must not retain an owner");
-        assertTrue(registry.snapshot(ResourceDiagnostics.Kind.RENDERTARGET).isEmpty());
-    }
-
-    private static WeakReference<Object> trackTemporaryOwner(ResourceDiagnostics.Registry registry) {
-        var owner = new Object();
-        registry.track(ResourceDiagnostics.Kind.RENDERTARGET, owner, "temporary");
-        return new WeakReference<>(owner);
     }
 
     @Test

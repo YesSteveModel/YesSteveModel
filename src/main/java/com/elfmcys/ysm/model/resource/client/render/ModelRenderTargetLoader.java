@@ -1,7 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
 import com.elfmcys.ysm.model.storage.ModelStorageInfra;
-import com.elfmcys.ysm.model.storage.CacheRegion;
 
 import com.elfmcys.ysm.model.resource.client.work.ClientResourceScheduler;
 import com.elfmcys.ysm.model.resource.client.AnimationStore;
@@ -12,19 +11,16 @@ import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.client.model.locator.PlayerLocator;
 import com.elfmcys.ysm.model.resource.client.PlayerModelVariant;
 import com.elfmcys.ysm.model.resource.client.ResourceFailure;
-import com.elfmcys.ysm.expression.aot.BooleanProgram;
 import com.elfmcys.ysm.expression.aot.EventProgram;
-import com.elfmcys.ysm.expression.aot.FloatExpression;
-import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule;
 import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory;
 import com.elfmcys.ysm.expression.host.ExpressionBinding;
 import com.elfmcys.ysm.expression.aot.UserFunctionProgram;
-import com.elfmcys.ysm.expression.aot.VoidProgram;
 import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
 import com.elfmcys.ysm.expression.inventory.ExpressionSet;
-import com.elfmcys.ysm.model.resource.client.remote.RemoteModelContent;
+
 import java.util.concurrent.CompletableFuture;
 import java.util.Set;
+
 import com.elfmcys.ysm.expression.inventory.ProgramRole;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
 import com.elfmcys.ysm.model.resource.client.data.CommonAssetData;
@@ -70,9 +66,12 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+
 import net.minecraft.client.player.AbstractClientPlayer;
 
-/** Builds the current Java model render target from a model container view. */
+/**
+ * Builds the current Java model render target from a model container view.
+ */
 public final class ModelRenderTargetLoader implements AutoCloseable {
     private static final int CURRENT_RAW_UV_VERSION = 29;
 
@@ -144,73 +143,15 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
     public CompletableFuture<LoadResult> loadAsync(BooleanSupplier cancelled, ClientResourceScheduler.Dispatch dispatch,
         ModelContent content, RenderTargetKey key, boolean defaultModel, boolean cacheOnly,
         ModelResourceFailures resourceFailures) {
-        var representation = content.representation();
-        var chunks = content.chunks();
         try {
             requireActive(cancelled);
-            var view = representation.view();
-            final RenderTargetView target;
-            final String selectedTexture;
+            var inputs = content.retainPreparationInputs();
             try {
-                target = view.requireRenderTarget(key.targetId());
-                selectedTexture =
-                    ModelManifestLookup.chooseTexture(view.getManifest(), key.targetId(), key.selectedTexture());
-            } catch (IllegalArgumentException failure) {
-                throw AssetLoadException.content("Invalid model render target selection", failure);
+                return loadRetainedAsync(cancelled, dispatch, inputs, key, defaultModel, cacheOnly, resourceFailures);
+            } catch (Throwable failure) {
+                inputs.close();
+                throw failure;
             }
-            var request = new LoadRequest(representation, view, target, target.textureDescriptor(selectedTexture),
-                target.textureSources(cancelled, chunks, selectedTexture), key.targetId(), selectedTexture,
-                key.expressionBinding(), key.purpose(), defaultModel, cacheOnly, resourceFailures, key.stateKey(),
-                content);
-            requireActive(cancelled);
-            var interest = buildStage.prepare(request, content, dispatch);
-            var result = new CompletableFuture<LoadResult>();
-            interest.whenComplete((pin, failure) -> {
-                if (failure != null) {
-                    completeFailure(result, failure);
-                    return;
-                }
-                try {
-                    var queued = dispatch.enqueue(() -> {
-                        if (result.isDone()) {
-                            pin.close();
-                            return;
-                        }
-                        try {
-                            requireActive(cancelled);
-                            var candidate = consumerStage.build(() -> result.isCancelled() || cancelled.getAsBoolean(),
-                                request, pin);
-                            if (!result.complete(new LoadResult.Ready(candidate)))
-                                candidate.close();
-                        } catch (Throwable rejected) {
-                            try {
-                                pin.close();
-                            } catch (Throwable cleanup) {
-                                rejected.addSuppressed(cleanup);
-                            }
-                            completeFailure(result, rejected);
-                        }
-                    });
-                    result.whenComplete((outcome, rejected) -> {
-                        if (result.isCancelled() && queued.withdraw())
-                            pin.close();
-                    });
-                } catch (Throwable rejected) {
-                    try {
-                        pin.close();
-                    } catch (Throwable cleanup) {
-                        rejected.addSuppressed(cleanup);
-                    }
-                    completeFailure(result, rejected);
-                }
-            });
-            result.whenComplete((outcome, failure) -> {
-                if (result.isCancelled())
-                    interest.cancel(false);
-                if (cancelled.getAsBoolean() && outcome instanceof LoadResult.Ready ready)
-                    ready.candidate().close();
-            });
-            return result;
         } catch (AssetLoadException | CancellationException failure) {
             return CompletableFuture.completedFuture(failure(failure));
         } catch (IOException failure) {
@@ -220,6 +161,96 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
             return CompletableFuture
                 .completedFuture(failure(AssetLoadException.content("Failed to build model render target", failure)));
         }
+    }
+
+    private CompletableFuture<LoadResult> loadRetainedAsync(BooleanSupplier cancelled,
+        ClientResourceScheduler.Dispatch dispatch, ModelContent.PreparationInputs inputs, RenderTargetKey key,
+        boolean defaultModel, boolean cacheOnly, ModelResourceFailures resourceFailures) throws IOException {
+        var content = inputs.content();
+        var representation = content.representation();
+        var chunks = content.chunks();
+        requireActive(cancelled);
+        var view = representation.view();
+        final RenderTargetView target;
+        final String selectedTexture;
+        try {
+            target = view.requireRenderTarget(key.targetId());
+            selectedTexture =
+                ModelManifestLookup.chooseTexture(view.getManifest(), key.targetId(), key.selectedTexture());
+        } catch (IllegalArgumentException failure) {
+            throw AssetLoadException.content("Invalid model render target selection", failure);
+        }
+        var request = new LoadRequest(representation, view, target, target.textureDescriptor(selectedTexture),
+            target.textureSources(cancelled, chunks, selectedTexture), key.targetId(), selectedTexture,
+            key.expressionBinding(), key.purpose(), defaultModel, cacheOnly, resourceFailures, key.stateKey(), content);
+        requireActive(cancelled);
+        var interest = buildStage.prepare(request, content, dispatch);
+        var result = new CompletableFuture<LoadResult>();
+        interest.whenComplete((pin, failure) -> {
+            if (failure != null) {
+                try {
+                    inputs.close();
+                } finally {
+                    completeFailure(result, failure);
+                }
+                return;
+            }
+            try {
+                var queued = dispatch.enqueue(() -> {
+                    if (result.isDone()) {
+                        try {
+                            pin.close();
+                        } finally {
+                            inputs.close();
+                        }
+                        return;
+                    }
+                    try {
+                        requireActive(cancelled);
+                        var candidate =
+                            consumerStage.build(() -> result.isCancelled() || cancelled.getAsBoolean(), request, pin);
+                        if (!result.complete(new LoadResult.Ready(candidate)))
+                            candidate.close();
+                    } catch (Throwable rejected) {
+                        try {
+                            pin.close();
+                        } catch (Throwable cleanup) {
+                            rejected.addSuppressed(cleanup);
+                        }
+                        completeFailure(result, rejected);
+                    } finally {
+                        inputs.close();
+                    }
+                });
+                result.whenComplete((outcome, rejected) -> {
+                    if (result.isCancelled() && queued.withdraw()) {
+                        try {
+                            pin.close();
+                        } finally {
+                            inputs.close();
+                        }
+                    }
+                });
+            } catch (Throwable rejected) {
+                try {
+                    pin.close();
+                } catch (Throwable cleanup) {
+                    rejected.addSuppressed(cleanup);
+                }
+                try {
+                    inputs.close();
+                } finally {
+                    completeFailure(result, rejected);
+                }
+            }
+        });
+        result.whenComplete((outcome, failure) -> {
+            if (result.isCancelled())
+                interest.cancel(false);
+            if (cancelled.getAsBoolean() && outcome instanceof LoadResult.Ready ready)
+                ready.candidate().close();
+        });
+        return result;
     }
 
     private static void completeFailure(CompletableFuture<LoadResult> result, Throwable cause) {
@@ -285,6 +316,28 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
         buildStage.prepared.close();
     }
 
+    private static void closeResources(AutoCloseable... resources) {
+        Throwable failure = null;
+        for (var resource : resources) {
+            if (resource == null)
+                continue;
+            try {
+                resource.close();
+            } catch (Throwable cleanup) {
+                if (failure == null)
+                    failure = cleanup;
+                else if (failure != cleanup)
+                    failure.addSuppressed(cleanup);
+            }
+        }
+        if (failure instanceof RuntimeException error)
+            throw error;
+        if (failure instanceof Error error)
+            throw error;
+        if (failure != null)
+            throw new IllegalStateException("Failed to close render-target resources", failure);
+    }
+
     public sealed interface LoadResult {
         record Ready(ModelCandidate candidate) implements LoadResult {
             public Ready {
@@ -308,19 +361,19 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
     private record PreparationKey(Hash256 containerId, RenderTargetKey.StateKey stateKey, Object region) {
     }
 
-    record PreparedExpressions(RenderTargetExpressionModule module, ModelDataProto definition) {
+    record PreparedExpressions(AnimationStore store) {
     }
 
     static PreparedExpressions prepareExpressions(RenderTargetExpressionModuleFactory factory,
         BooleanSupplier cancelled, Hash256 containerId, String targetId, ExpressionSet set, ExpressionBinding binding,
         ModelDataProto complete, StringDataProto functions, SettingsProto settings, boolean cacheOnly,
-        ModelResourcePurpose purpose, RenderTargetKind kind) throws IOException {
+        ModelResourcePurpose purpose, RenderTargetKind kind, dev.semaweave.compilation.CompilerOptions options)
+        throws IOException {
         var config = ProtoUtil.serializeToArray(settings);
         requireActive(cancelled);
-        var input = GuiAnimationClosure.select(complete, functions, settings, purpose, kind);
-        var module = factory.createSet(cancelled, containerId, targetId, set, binding, input, functions, settings,
-            config, cacheOnly, purpose);
-        return new PreparedExpressions(module, input);
+        var store = factory.createStore(cancelled, containerId, targetId, set, binding, complete, functions, settings,
+            config, cacheOnly, purpose, options);
+        return new PreparedExpressions(store);
     }
 
     @FunctionalInterface
@@ -329,71 +382,51 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
             PreparedTargetCache<PreparationKey, PreparedTarget>.Pin pin) throws IOException;
     }
 
-    private record PreparedSet(RenderTargetExpressionModule module, AnimationStore animations,
-        Map<String, AnimationControllerFile> controllers, StringDataProto functions, Set<String> localEvents,
-        ExpressionSet set, DefaultAnimationRuntime.Source defaultSource,
-        AnimationStore fallback) implements AutoCloseable {
+    private record PreparedSet(AnimationStore animationStore,
+        DefaultAnimationRuntime.Source defaultSource) implements AutoCloseable {
         @Override
         public void close() {
-            try {
-                animations.close();
-            } finally {
-                try {
-                    if (fallback != null)
-                        fallback.close();
-                } finally {
-                    module.close();
-                }
-            }
+            animationStore.close();
         }
     }
 
     private record PreparedTarget(ModelDataProto definition, PreparedSet main, PreparedSet arm,
-        Map<String, DefaultAnimationRuntime.Source> defaultSources,
-        TargetSoundResources sounds) implements AutoCloseable {
+        Map<String, DefaultAnimationRuntime.Source> defaultSources, TargetSoundResources sounds,
+        Object identityToken) implements AutoCloseable {
         @Override
         public void close() {
-            try {
-                if (arm != null)
-                    arm.close();
-            } finally {
-                try {
-                    main.close();
-                } finally {
-                    sounds.close();
-                }
-            }
+            closeResources(arm, main, sounds);
         }
     }
 
     private static final class DefaultBuildStage {
         private final BakedModelCache bakedModels;
         private boolean regionBound;
-        private final java.util.concurrent.ConcurrentHashMap<CacheRegion, BakedModelCache> regionalModels =
-            new java.util.concurrent.ConcurrentHashMap<>();
-        private final java.util.concurrent.ConcurrentHashMap<CacheRegion,
+        private final java.util.concurrent.ConcurrentHashMap<com.elfmcys.ysm.model.storage.BakeIndexStore,
+            BakedModelCache> regionalModels = new java.util.concurrent.ConcurrentHashMap<>();
+        private final java.util.concurrent.ConcurrentHashMap<com.elfmcys.ysm.expression.aot.ExpressionArtifactStore,
             RenderTargetExpressionModuleFactory> regionalExpressions = new java.util.concurrent.ConcurrentHashMap<>();
 
         private Object region(ModelContent content) {
             return regionBound
-                ? java.util.Objects.requireNonNull(content.storageBinding(), "Storage provenance").region()
+                ? java.util.Objects.requireNonNull(content.storageBinding(), "Storage provenance").artifacts()
                 : bakedModels;
         }
 
         private RenderTargetExpressionModuleFactory modules(ModelContent content) {
             if (!regionBound)
                 return expressionModules;
-            var region = content.storageBinding().region();
-            return regionalExpressions.computeIfAbsent(region,
-                value -> expressionModules.withArtifacts(value.expressions()));
+            return regionalExpressions.computeIfAbsent(content.storageBinding().expressions(),
+                store -> expressionModules.withStores(store, content.storageBinding().animations()));
         }
 
         private BakedModelCache models(ModelContent content) {
             if (!regionBound)
                 return bakedModels;
-            var region = content.storageBinding().region();
-            return regionalModels.computeIfAbsent(region,
-                value -> new BakedModelCache(value.root().resolve("bake"), value.cache()));
+            var binding = content.storageBinding();
+            var region = binding.region();
+            return regionalModels.computeIfAbsent(binding.artifacts(),
+                index -> new BakedModelCache(region.root().resolve("bake"), region.cache(), index));
         }
 
         private final RenderTargetExpressionModuleFactory expressionModules;
@@ -425,8 +458,7 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
             ModelContent content, ClientResourceScheduler.Dispatch dispatch) {
             var key = new PreparationKey(request.representation().containerId(), request.stateKey(), region(content));
             return prepared.acquire(key, request.cacheOnly(), dispatch, () -> {
-                var retained =
-                    content instanceof RemoteModelContent remote ? remote.retainPreparationInputs() : content;
+                var retained = content.retainPreparationInputs();
                 return new PreparedTargetCache.Producer<PreparedTarget>() {
                     @Override
                     public PreparedTarget produce(BooleanSupplier cancelled) throws Exception {
@@ -434,11 +466,12 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                             final ModelDataProto definition;
                             final StringDataProto strings;
                             final TargetSoundResources sounds;
-                            try (var phase = retained.chunks().openReadPhase()) {
+                            try (var phase = retained.content().chunks().openReadPhase()) {
                                 definition = request.target().readDefinition(cancelled, phase);
                                 strings = readCommonStrings(cancelled, request.view(), phase);
-                                sounds = resources.own(TargetSoundResources.prepare(cancelled,
-                                    request.representation().identity(), request.view().getCommon().sounds(), phase));
+                                sounds = resources
+                                    .own(TargetSoundResources.prepare(cancelled, request.representation().identity(),
+                                        request.view().getCommon().sounds(), phase, request.stateKey().role()));
                             }
                             var result = prepareNow(cancelled, request, definition, strings, sounds);
                             resources.commit();
@@ -448,8 +481,7 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
 
                     @Override
                     public void close() {
-                        if (retained instanceof RemoteModelContent remote)
-                            remote.closePreparationInputs();
+                        retained.close();
                     }
                 };
             });
@@ -461,7 +493,7 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                 request.target(), request.textureProto(), request.textureSources(), request.targetId(),
                 request.selectedTexture(), pin.value(), pin, request.defaultModel(), request.cacheOnly(),
                 request.resourceFailures(), new ModelRenderTarget.StateIdentity(request.representation().identity(),
-                    request.stateKey(), pin.value()));
+                    request.stateKey(), pin.value().identityToken()));
         }
 
         private PreparedTarget prepareNow(BooleanSupplier cancelled, LoadRequest request, ModelDataProto definition,
@@ -472,9 +504,9 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                     && request.purpose() == ModelResourcePurpose.FULL
                         ? resources.own(prepareSet(cancelled, request, definition, strings, ExpressionSet.FP_ARM))
                         : null;
-                var union = new java.util.HashSet<>(main.module().roamingFields());
+                var union = new java.util.HashSet<>(main.animationStore().roamingFields());
                 if (arm != null)
-                    union.addAll(arm.module().roamingFields());
+                    union.addAll(arm.animationStore().roamingFields());
                 if (union.size() > com.elfmcys.ysm.network.protocol.ProtocolLimits.MAX_ROAMING_VARIABLES)
                     throw AssetLoadException.content("Combined roaming layout exceeds wire capacity");
                 var sources = new LinkedHashMap<String, DefaultAnimationRuntime.Source>();
@@ -486,7 +518,7 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                             arm.defaultSource());
                 }
                 return publishCandidate(cancelled, resources,
-                    new PreparedTarget(definition, main, arm, Map.copyOf(sources), sounds));
+                    new PreparedTarget(definition, main, arm, Map.copyOf(sources), sounds, new Object()));
             }
         }
 
@@ -494,6 +526,7 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
             StringDataProto strings, ExpressionSet set) throws IOException {
             try (var resources = new ResourceTransaction()) {
                 var local = set.select(definition);
+                var defaultSource = local;
                 var domain = DefaultAnimationKey.domain(request.target().descriptor(), set.id());
                 var defaults = request.defaultModel() ? null : defaultAnimations.source(domain);
                 if (!request.defaultModel() && defaults == null)
@@ -510,45 +543,30 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                 var selected = prepareExpressions(modules(request.content()).forDefaultModel(request.defaultModel()),
                     cancelled, request.representation().containerId(), request.targetId(), set,
                     request.expressionBinding(), closure.build(), functions, settings, request.cacheOnly(),
-                    request.purpose(), request.target().kind());
-                var module = resources.own(selected.module());
-                var input = selected.definition();
-                if (request.purpose() == ModelResourcePurpose.GUI
-                    && request.target().kind() == com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind.PLAYER) {
-                    var selectedLocal = local.toBuilder().clearAnimationFiles();
-                    var selectedFallback = fallbackDefinition.clearAnimationFiles();
-                    for (var entry : input.animationFiles().entrySet()) {
-                        if (local.animationFiles().containsKey(entry.getKey()))
-                            selectedLocal.putAnimationFiles(entry.getKey(), entry.getValue());
-                        else
-                            selectedFallback.putAnimationFiles(entry.getKey(), entry.getValue());
-                    }
-                    local = selectedLocal.build();
+                    request.purpose(), request.target().kind(), request.view().getMetadata().expressionOptions());
+                var store = resources.own(selected.store());
+                try (var preparation = store.prepare()) {
+                    var binder = preparation.programBinder();
+                    var fallback = defaults == null ? null
+                        : preparation.animations(fallbackDefinition.build().animationFiles().keySet());
+                    var animations =
+                        request.defaultModel()
+                            ? BakedAnimationCache
+                                .bindResident(local.animationFiles().object2ObjectEntrySet(), binder,
+                                    (animation, bound) -> defaultAnimations
+                                        .requireCurrent(request.target().descriptor(), set.id(), animation))
+                            : preparation.animations(local.animationFiles().keySet());
+                    var controllers = controllerFiles(local, binder);
+                    var localEvents = new java.util.HashSet<String>();
+                    if (strings != null)
+                        strings.userFunctions().forEach(function -> localEvents.add(function.name()));
+                    var programs = bindPrograms(preparation, request.targetId(), set, functions, localEvents);
+                    preparation.initialize(animations, fallback, controllers, programs.functions(), programs.events());
                 }
-                var binder = programBinder(module);
-                AnimationStore fallback = null;
-                if (defaults != null) {
-                    fallback = resources
-                        .own(module.animations(fallbackDefinition.build().animationFiles().keySet(), null).shared());
-                }
-                var files = local.animationFiles().object2ObjectEntrySet();
-                var animations =
-                    resources
-                        .own(request.defaultModel()
-                            ? BakedAnimationCache.bindResident(files, binder,
-                                (animation, bound) -> defaultAnimations.requireCurrent(request.target().descriptor(),
-                                    set.id(), animation))
-                            : module.animations(local.animationFiles().keySet(), fallback));
-                animations.shared();
-                var controllers = controllerFiles(local, binder);
-                var localEvents = new java.util.HashSet<String>();
-                if (strings != null)
-                    strings.userFunctions().forEach(function -> localEvents.add(function.name()));
                 var source =
                     request.defaultModel() ? new DefaultAnimationRuntime.Source(request.representation().containerId(),
-                        request.targetId(), set, local, strings) : null;
-                var result = new PreparedSet(module, animations, controllers, functions, Set.copyOf(localEvents), set,
-                    source, fallback);
+                        request.targetId(), set, defaultSource, strings) : null;
+                var result = new PreparedSet(store, source);
                 resources.commit();
                 return result;
             }
@@ -577,76 +595,81 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
             ModelResourceFailures resourceFailures, ModelRenderTarget.StateIdentity stateIdentity) throws IOException {
             try (var resources = new ResourceTransaction()) {
                 resources.own(preparedOwner);
-                var definition = prepared.definition();
-                var soundResources = resources.own(prepared.sounds().acquire());
-                var textureResource = targetId + "/" + selectedTexture + "/";
-                var textures = resources.own(new PreparedTextureSet(textureSources, textureResource, resourceFailures));
-                var textureHash = textureHash(view, textureProto.uv());
-                var expressions = prepared.main().module();
-                var controllers = prepared.main().controllers();
-                final RenderTargetData targetData;
-                switch (target.kind()) {
-                    case PLAYER -> {
-                        var main = resources.own(bakeModel(bakedModels, representation,
-                            targetId + "/" + selectedTexture + "/main", textureHash, geoModel(definition, "main"),
-                            textures, target, textureProto, defaultModel, cacheOnly));
-                        var arm = prepared.arm() == null ? null
-                            : resources.own(bakeModel(bakedModels, representation,
-                                targetId + "/" + selectedTexture + "/arm", textureHash, geoModel(definition, "arm"),
+                try (var mainUse = prepared.main().animationStore().prepare();
+                    var armUse = prepared.arm() == null ? null : prepared.arm().animationStore().prepare()) {
+                    var definition = prepared.definition();
+                    var soundResources = resources.own(prepared.sounds().acquire());
+                    var textureResource = targetId + "/" + selectedTexture + "/";
+                    var textures =
+                        resources.own(new PreparedTextureSet(textureSources, textureResource, resourceFailures));
+                    var textureHash = textureHash(view, textureProto.uv());
+                    var store = prepared.main().animationStore();
+                    final RenderTargetData targetData;
+                    switch (target.kind()) {
+                        case PLAYER -> {
+                            var main = resources.own(bakeModel(bakedModels, representation,
+                                targetId + "/" + selectedTexture + "/main", textureHash, geoModel(definition, "main"),
                                 textures, target, textureProto, defaultModel, cacheOnly));
-                        var animations = resources.own(AnimationStore.consumerView(prepared.main().animations(),
-                            name -> resourceFailures.animation(targetId + "/main/" + name)));
-                        var firstPersonAnimations = resources.own(prepared.arm() == null ? AnimationStore.eager(Map.of())
-                            : AnimationStore.consumerView(prepared.arm().animations(),
-                                name -> resourceFailures.animation(targetId + "/fp_arm/" + name)));
-                        var variants = new FifoHashMap<>(new String[] {selectedTexture},
-                            new PlayerModelVariant[] {new PlayerModelVariant(main, arm)});
-                        targetData = new PlayerModelData(variants, animations, firstPersonAnimations,
-                            List.copyOf(controllers.values()),
-                            prepared.arm() == null ? List.of() : List.copyOf(prepared.arm().controllers().values()));
+                            var arm = prepared.arm() == null ? null
+                                : resources.own(bakeModel(bakedModels, representation,
+                                    targetId + "/" + selectedTexture + "/arm", textureHash, geoModel(definition, "arm"),
+                                    textures, target, textureProto, defaultModel, cacheOnly));
+                            var animations = store.view(name -> resourceFailures.animation(targetId + "/main/" + name));
+                            var firstPersonAnimations =
+                                prepared.arm() == null ? AnimationStore.emptyView() : prepared.arm().animationStore()
+                                    .view(name -> resourceFailures.animation(targetId + "/fp_arm/" + name));
+                            var variants = new FifoHashMap<>(new String[] {selectedTexture},
+                                new PlayerModelVariant[] {new PlayerModelVariant(main, arm)});
+                            targetData = new PlayerModelData(variants, animations, firstPersonAnimations);
+                        }
+                        case PROJECTILE, VEHICLE -> {
+                            var baked = resources.own(bakeModel(bakedModels, representation,
+                                targetId + "/" + selectedTexture, textureHash, geoModel(definition, "main"), textures,
+                                target, textureProto, defaultModel, cacheOnly));
+                            var animations = store.view(name -> resourceFailures.animation(targetId + "/main/" + name));
+                            targetData =
+                                target.kind() == com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind.PROJECTILE
+                                    ? new ProjectileModelData(baked, animations)
+                                    : new VehicleModelData(baked, animations);
+                        }
+                        default -> throw AssetLoadException.content("Unsupported render target kind: " + target.kind());
                     }
-                    case PROJECTILE, VEHICLE -> {
-                        var baked = resources
-                            .own(bakeModel(bakedModels, representation, targetId + "/" + selectedTexture, textureHash,
-                                geoModel(definition, "main"), textures, target, textureProto, defaultModel, cacheOnly));
-                        var animations = resources.own(AnimationStore.consumerView(prepared.main().animations(),
-                            name -> resourceFailures.animation(targetId + "/main/" + name)));
-                        var controller = controllers.values().stream().findFirst().orElse(null);
-                        targetData =
-                            target.kind() == com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind.PROJECTILE
-                                ? new ProjectileModelData(baked, animations, controller)
-                                : new VehicleModelData(baked, animations, controller);
-                    }
-                    default -> throw AssetLoadException.content("Unsupported render target kind: " + target.kind());
-                }
 
-                var common = commonAssets(view, prepared.main(), soundResources);
-                var armCommon = prepared.arm() == null ? null : commonAssets(view, prepared.arm(), soundResources);
-                var data = new ModelRenderTargetBuildInput(targetId, targetData, common, expressions,
-                    view.getMetadata(), armCommon, prepared.arm() == null ? null : prepared.arm().module(),
-                    preparedOwner, prepared.defaultSources(), stateIdentity);
-                textures.prepare(cancelled);
-                final ModelRenderTarget targetResult;
-                try {
-                    targetResult = resources.own(ModelRenderTargetAssembler.build(representation.modelId(), data));
-                } catch (java.io.UncheckedIOException error) {
-                    throw AssetLoadException.access("Failed to close animation read phase: " + targetId,
-                        error.getCause());
-                } catch (IllegalArgumentException error) {
-                    throw AssetLoadException.content("Invalid assembled model render target: " + targetId, error);
+                    var common = commonAssets(view, soundResources);
+                    var armCommon = prepared.arm() == null ? null : commonAssets(view, soundResources);
+                    var data = new ModelRenderTargetBuildInput(targetId, targetData, common, store, view.getMetadata(),
+                        armCommon, prepared.arm() == null ? null : prepared.arm().animationStore(), preparedOwner,
+                        prepared.defaultSources(), stateIdentity);
+                    textures.prepare(cancelled);
+                    final ModelRenderTarget targetResult;
+                    try {
+                        targetResult = resources.own(ModelRenderTargetAssembler.build(representation.modelId(), data));
+                    } catch (java.io.UncheckedIOException error) {
+                        throw AssetLoadException.access("Failed to close animation read phase: " + targetId,
+                            error.getCause());
+                    } catch (IllegalArgumentException error) {
+                        throw AssetLoadException.content("Invalid assembled model render target: " + targetId, error);
+                    }
+                    return publishCandidate(cancelled, resources, new ModelCandidate(targetResult, textures));
                 }
-                return publishCandidate(cancelled, resources, new ModelCandidate(targetResult, textures));
             }
         }
 
-        private static CommonAssetData commonAssets(ModelFileView view, PreparedSet prepared,
-            TargetSoundResources soundResources) throws IOException {
-            var source = prepared.functions();
-            var expressions = prepared.module();
+        private static CommonAssetData commonAssets(ModelFileView view, TargetSoundResources soundResources)
+            throws IOException {
             var sounds = new LinkedHashMap<String, SoundSource>();
             for (var entry : view.getCommon().sounds().entrySet()) {
                 sounds.put(entry.getKey(), soundResources.bind(entry.getValue()));
             }
+            return new CommonAssetData(sounds, soundResources);
+        }
+
+        private record ProgramDefinitions(Map<String, UserFunctionProgram> functions,
+            Map<String, List<EventProgram>> events) {
+        }
+
+        private static ProgramDefinitions bindPrograms(AnimationStore.Preparation preparation, String targetId,
+            ExpressionSet set, StringDataProto source, Set<String> localEvents) {
             var functions = new Object2ReferenceOpenHashMap<String, UserFunctionProgram>();
             var eventHandlers = new LinkedHashMap<String, List<EventProgram>>();
             var eventOrders = new java.util.HashMap<String, Integer>();
@@ -657,7 +680,8 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                     if (separator != 0) {
                         var callable = separator < 0 ? name : name.substring(0, separator);
                         functions.put(callable,
-                            userFunction(expressions, "function/" + name, ProgramRole.USER_FUNCTION, "callable"));
+                            preparation.requireUserFunctionProgram(new ModelProgramInventory.SemanticLocation(targetId,
+                                set, "function/" + name, ProgramRole.USER_FUNCTION, "callable")));
                     }
                     if (separator >= 0 && separator + 1 < name.length()) {
                         var event = name.substring(separator + 1).toLowerCase(java.util.Locale.ROOT);
@@ -665,21 +689,22 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                         var classification = MolangEventCatalog.production().classify(event, order);
                         if (classification instanceof MolangEventCatalog.Classification.Declared declared) {
                             var role = declared.route().role();
-                            if (prepared.set() == ExpressionSet.FP_ARM && role != ProgramRole.EVENT_DEFER
+                            if (set == ExpressionSet.FP_ARM && role != ProgramRole.EVENT_DEFER
                                 && role != ProgramRole.EVENT_CODED_CONTROLLER)
                                 continue;
-                            if (!prepared.localEvents().contains(name) && role != ProgramRole.EVENT_DEFER
+                            if (!localEvents.contains(name) && role != ProgramRole.EVENT_DEFER
                                 && role != ProgramRole.EVENT_CODED_CONTROLLER)
                                 continue;
-                            eventHandlers.computeIfAbsent(event, ignored -> new ArrayList<>()).add(eventProgram(
-                                expressions, "function/" + name, declared.route().role(), event + ':' + order));
+                            eventHandlers.computeIfAbsent(event, ignored -> new ArrayList<>()).add(
+                                preparation.requireEventProgram(new ModelProgramInventory.SemanticLocation(targetId,
+                                    set, "function/" + name, declared.route().role(), event + ':' + order)));
                         }
                     }
                 }
             }
             var immutableEvents = new LinkedHashMap<String, List<EventProgram>>();
             eventHandlers.forEach((name, handlers) -> immutableEvents.put(name, List.copyOf(handlers)));
-            return new CommonAssetData(Map.copyOf(sounds), soundResources, functions, Map.copyOf(immutableEvents));
+            return new ProgramDefinitions(Map.copyOf(functions), Map.copyOf(immutableEvents));
         }
 
         private static Map<String, AnimationControllerFile> controllerFiles(ModelDataProto source,
@@ -707,63 +732,17 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                     target.descriptor().settings().forceCulling(), false, hasPbr(textureProto), PlayerLocator.get());
             }
             if (cacheOnly) {
-                return bakedModels.loadExisting(representation.containerId(), resourceName, textureHash,
+                var model = bakedModels.loadExisting(representation.containerId(), resourceName, textureHash,
                     PlayerLocator.get());
+                if (model == null)
+                    throw AssetLoadException.access("Geometry is not locally cached");
+                return model;
             }
             return bakedModels.loadOrBake(representation.containerId(), resourceName, textureHash, geo, texturePixels,
                 CURRENT_RAW_UV_VERSION, target.descriptor().settings().forceCulling(), false, hasPbr(textureProto),
                 PlayerLocator.get());
         }
 
-        private static AnimationProtoMapper.ProgramBinder programBinder(RenderTargetExpressionModule expressions) {
-            return new AnimationProtoMapper.ProgramBinder() {
-                @Override
-                public FloatExpression.Program bindFloat(String location, ProgramRole role, String discriminator) {
-                    return floatProgram(expressions, location, role, discriminator);
-                }
-
-                @Override
-                public BooleanProgram bindBoolean(String location, ProgramRole role, String discriminator) {
-                    return booleanProgram(expressions, location, role, discriminator);
-                }
-
-                @Override
-                public VoidProgram bindVoid(String location, ProgramRole role, String discriminator) {
-                    return voidProgram(expressions, location, role, discriminator);
-                }
-            };
-        }
-
-        private static ModelProgramInventory.SemanticLocation semantic(RenderTargetExpressionModule expressions,
-            String location, ProgramRole role, String discriminator) {
-            return new ModelProgramInventory.SemanticLocation(expressions.identity().targetId(),
-                expressions.identity().set(), location, role, discriminator);
-        }
-
-        private static FloatExpression.Program floatProgram(RenderTargetExpressionModule expressions, String location,
-            ProgramRole role, String discriminator) {
-            return expressions.requireFloatProgram(semantic(expressions, location, role, discriminator));
-        }
-
-        private static BooleanProgram booleanProgram(RenderTargetExpressionModule expressions, String location,
-            ProgramRole role, String discriminator) {
-            return expressions.requireBooleanProgram(semantic(expressions, location, role, discriminator));
-        }
-
-        private static VoidProgram voidProgram(RenderTargetExpressionModule expressions, String location,
-            ProgramRole role, String discriminator) {
-            return expressions.requireVoidProgram(semantic(expressions, location, role, discriminator));
-        }
-
-        private static UserFunctionProgram userFunction(RenderTargetExpressionModule expressions, String location,
-            ProgramRole role, String discriminator) {
-            return expressions.requireUserFunctionProgram(semantic(expressions, location, role, discriminator));
-        }
-
-        private static EventProgram eventProgram(RenderTargetExpressionModule expressions, String location,
-            ProgramRole role, String discriminator) {
-            return expressions.requireEventProgram(semantic(expressions, location, role, discriminator));
-        }
     }
 
     static GeoModelProto geoModel(ModelDataProto source, String name) throws IOException {
@@ -835,10 +814,7 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
-            if (textures != null) {
-                textures.close();
-            }
-            target.close();
+            closeResources(textures, target);
         }
 
         void reject(java.util.function.Consumer<ModelRenderTarget> rejectedTargetCloser) {

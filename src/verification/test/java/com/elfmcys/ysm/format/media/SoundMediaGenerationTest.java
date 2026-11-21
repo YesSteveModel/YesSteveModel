@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.media;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
@@ -144,8 +145,9 @@ class SoundMediaGenerationTest {
                     .setDisablePreviewRotation(false).build())
                 .setMetadata(MetadataProto.newBuilder().setName("").setTips("")
                     .setLicense(LicenseProto.newBuilder().setType("").setDesc("").build()).build())
-                .setProperties(PropertiesProto.newBuilder().setModelId(ByteBuffer.wrap(new byte[32])).setFree(false)
-                    .setOriginVer("").build())
+                .setProperties(
+                    PropertiesProto.newBuilder().setModelId("hash:" + java.util.HexFormat.of().formatHex(new byte[32]))
+                        .setFree(false).setOriginVer("").build())
                 .build())
             .build();
     }

@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.expression.aot;
 
 import com.elfmcys.ysm.YesSteveModel;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.expression.host.*;
 import com.elfmcys.ysm.geckolib3.core.PlayState;
 import com.elfmcys.ysm.expression.inventory.ProgramRole;
@@ -10,12 +11,10 @@ import dev.semaweave.CompiledModuleInstance;
 import dev.semaweave.CompiledRoamingState;
 import dev.semaweave.ListType;
 import dev.semaweave.ProgramArguments;
-import dev.semaweave.RuntimeExecutionException;
 import dev.semaweave.ExpressionValues;
-import dev.semaweave.ProviderReturnContractException;
 import dev.semaweave.RoamingPayload;
 import dev.semaweave.RoamingRole;
-import dev.semaweave.compilation.ResourceGenerationToken;
+import dev.semaweave.interpreter.InterpretedValue;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayDeque;
@@ -31,25 +30,59 @@ import java.util.function.BooleanSupplier;
 /**
  * Owns one installation's mutable expression instance and closed event dispatcher.
  *
- * <p>Invariant: an invocation uses one exact installation and one effect batch. The first program or
- * component failure remains a batch failure even when later code receives a typed fallback.
+ * <p>
+ * Invariant: an invocation uses one exact installation. The first program or component failure remains recorded even
+ * when later code receives a typed fallback. Domain actions take effect immediately.
  *
- * <p>Execution: lifecycle calls require the idle main-thread owner. Preparation and installation can
- * also run under the exact GUI installation permit. Evaluation uses the owner's exclusive execution window
- * and rejects reentry. A batch closes its source round before external dispatch can enter a later round.
+ * <p>
+ * Execution: lifecycle calls require the idle main-thread owner. Preparation and installation can also run under the
+ * exact GUI installation permit. Evaluation uses the owner's exclusive execution window and rejects reentry. Local sync
+ * dispatch starts after its source borrow ends.
  *
- * <p>Ownership: immutable compiled modules and host inputs remain borrowed; this runtime owns its mutable instance and pending projections.
+ * <p>
+ * Ownership: one store execution protects this runtime's private instance and active interpreted use. Host inputs
+ * remain borrowed, and the runtime owns pending projections.
  *
- * <p>Seam: implements [complete preparation and admission](docs/architecture/animation/molang-runtime.md#完整准备与准入), [invocations and effects](docs/architecture/animation/molang-runtime.md#invocation-与效果), and [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接).
+ * <p>
+ * Seam: implements [complete preparation and admission](docs/architecture/animation/molang-runtime.md#完整准备与准入),
+ * [invocations and effects](docs/architecture/animation/molang-runtime.md#invocation-与效果), and [execution authority and
+ * task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接).
  */
 public final class EntityExpressionRuntime implements AutoCloseable {
     public static final int MAX_DEFERRED_CAPTURES = 64;
 
     private static final ListType EVENT_ARGUMENTS = ExpressionHost.EVENT_F32_ARGUMENTS;
 
+    private static final InterpretedValue.ForeignAccess INTERPRETED_EVENT_ARGUMENTS =
+        new InterpretedValue.ForeignAccess() {
+            @Override
+            public dev.semaweave.ValueType type() {
+                return EVENT_ARGUMENTS;
+            }
+
+            @Override
+            public InterpretedValue.Kind kind() {
+                return InterpretedValue.Kind.LIST;
+            }
+
+            @Override
+            public int length(Object carrier) {
+                return ((EventArguments)carrier).size();
+            }
+
+            @Override
+            public InterpretedValue element(Object carrier, int index) {
+                var values = (EventArguments)carrier;
+                return index < 0 || index >= values.size() ? InterpretedValue.missing(dev.semaweave.BuiltinType.F32)
+                    : InterpretedValue.ofFloat(values.getFloat(index));
+            }
+        };
+
     private final Thread mainThread = Thread.currentThread();
-    private Runnable publicAccess = () -> {};
-    private Runnable executionAccess = () -> {};
+    private Runnable publicAccess = () -> {
+    };
+    private Runnable executionAccess = () -> {
+    };
     private Runnable installationAccess = () -> {
         if (Thread.currentThread() != mainThread)
             throw new IllegalStateException("Expression installation requires its main thread");
@@ -57,12 +90,15 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     private boolean executionOwnerBound;
     private long nextGeneration;
     private final ArrayDeque<DeferredCapture> deferred = new ArrayDeque<>();
-    private State current;
+    private volatile State current;
     private ArmPair armPair;
     private ArmPair executionArmPair;
     private java.util.function.BooleanSupplier projectionAvailable = () -> true;
     private final ArrayDeque<Projection> projections = new ArrayDeque<>();
     private boolean evaluating;
+    private Evaluation activeEvaluation;
+    private final ArrayDeque<LocalSync> localSyncs = new ArrayDeque<>();
+    private boolean drainingSync;
 
     public void bindExecutionOwner(Runnable publicAccess, Runnable executionAccess, Runnable installationAccess) {
         assertLifecycleThread();
@@ -74,54 +110,47 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         executionOwnerBound = true;
     }
 
-    public void replace(RenderTargetExpressionModule module,
-        Map<String, ? extends List<? extends EventProgram>> handlers, ComponentScope components) {
-        replace(module, handlers, components, RoamingRole.PRODUCER);
+    public void replace(AnimationStore store, ComponentScope components) {
+        replace(store, components, RoamingRole.PRODUCER);
     }
 
-    public void replace(RenderTargetExpressionModule module,
-        Map<String, ? extends List<? extends EventProgram>> handlers, ComponentScope components,
-        RoamingRole roamingRole) {
-        Objects.requireNonNull(module, "module");
-        Objects.requireNonNull(handlers, "handlers");
-        Objects.requireNonNull(components, "components");
-        Objects.requireNonNull(roamingRole, "roamingRole");
-        try (var prepared = prepare(module, handlers, components, roamingRole)) {
+    public void replace(AnimationStore store, ComponentScope components, RoamingRole role) {
+        try (var prepared = prepare(store, components, role)) {
             install(prepared, () -> {
             });
         }
     }
 
-    /**
-     * Constructs a complete private instance without replacing the installed instance.
-     *
-     * <p>Requires: the module, handlers, components, and roaming role describe one candidate installation.
-     * The caller holds the installation window and keeps the candidate resource alive.
-     *
-     * @return an owned candidate that the caller must install or close
-     */
-    public PreparedInstallation prepare(RenderTargetExpressionModule module,
-        Map<String, ? extends List<? extends EventProgram>> handlers, ComponentScope components, RoamingRole role) {
+    /** Constructs a complete private instance under the store's execution protection. */
+    public PreparedInstallation prepare(AnimationStore store, ComponentScope components, RoamingRole role) {
         assertInstallationThread();
-        return new PreparedInstallation(
-            State.create(module, handlers, ++nextGeneration, module.newRoamingState(role), components));
+        return new PreparedInstallation(State.create(store, ++nextGeneration, role, components));
     }
 
     /**
      * Consumes a private candidate and invokes publication inline before retiring the previous instance.
      *
-     * <p>Requires: the caller owns the candidate and the idle installation window. Publication must not
-     * leave externally published state behind if the callback throws.
+     * <p>
+     * Requires: the caller owns the candidate and the idle installation window. Publication must not leave externally
+     * published state behind if the callback throws.
      *
-     * <p>Failure: publication failure restores the previous expression instance and closes the candidate.
-     * Failure after publication does not roll back the installation.
+     * <p>
+     * Failure: publication failure restores the previous expression instance and closes the candidate. Failure after
+     * publication does not roll back the installation.
      *
-     * <p>Ownership: a taken candidate is consumed on success and failure. The caller must not reuse its mutable state.
+     * <p>
+     * Ownership: a taken candidate is consumed on success and failure. The caller must not reuse its mutable state.
      */
     public void install(PreparedInstallation prepared, Runnable publication) {
+        install(prepared, publication, () -> {
+        });
+    }
+
+    public void install(PreparedInstallation prepared, Runnable publication, Runnable clearRetiredState) {
         assertInstallationThread();
         if (evaluating)
             throw new IllegalStateException("cannot replace an evaluating expression owner");
+        prepared.initializeAtCommit();
         var candidate = prepared.take();
         var retired = current;
         current = candidate;
@@ -137,7 +166,11 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         deferred.clear();
         if (retired != null) {
             try {
-                retired.close();
+                try {
+                    clearRetiredState.run();
+                } finally {
+                    retired.close();
+                }
             } catch (RuntimeException | LinkageError failure) {
                 YesSteveModel.LOGGER.warn("Previous expression installation cleanup failed", failure);
             }
@@ -147,11 +180,13 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     /**
      * Owns an unpublished mutable instance until install() takes it or close() releases it.
      *
-     * <p>Execution: preparation, initialization, installation, and close use the same exclusive installation window.
-     * The returned installation identity does not grant evaluation or publication rights before activation.
+     * <p>
+     * Execution: preparation, initialization, installation, and close use the same exclusive installation window. The
+     * returned installation identity does not grant evaluation or publication rights before activation.
      */
     public final class PreparedInstallation implements AutoCloseable {
         private State state;
+        private java.util.function.Supplier<RoamingPayload> roamingInitializer;
 
         private PreparedInstallation(State state) {
             this.state = state;
@@ -168,6 +203,19 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             EntityExpressionRuntime.initializeRoaming(candidate, payload);
         }
 
+        /** Reads selection-owned inputs in the installation commit window, before publication. */
+        public void initializeRoamingAtCommit(java.util.function.Supplier<RoamingPayload> payload) {
+            Objects.requireNonNull(state, "installation already transferred");
+            roamingInitializer = Objects.requireNonNull(payload);
+        }
+
+        private void initializeAtCommit() {
+            if (roamingInitializer != null) {
+                initializeRoaming(roamingInitializer.get());
+                roamingInitializer = null;
+            }
+        }
+
         public Installation installation() {
             return new Installation(EntityExpressionRuntime.this,
                 Objects.requireNonNull(state, "installation already transferred"));
@@ -179,28 +227,21 @@ public final class EntityExpressionRuntime implements AutoCloseable {
 
         @Override
         public void close() {
-            if (state != null) {
-                state.close();
-                state = null;
-            }
+            var retired = state;
+            state = null;
+            roamingInitializer = null;
+            if (retired != null)
+                retired.close();
         }
     }
 
-    void replace(RenderTargetExpressionModule module, Map<String, ? extends List<? extends EventProgram>> handlers,
-        dev.semaweave.RuntimeLinkage<MolangContext> linkage) {
-        replace(module, handlers, linkage, RoamingRole.PRODUCER);
+    void replace(AnimationStore store, dev.semaweave.RuntimeLinkage<MolangContext> linkage) {
+        replace(store, linkage, RoamingRole.PRODUCER);
     }
 
-    void replace(RenderTargetExpressionModule module, Map<String, ? extends List<? extends EventProgram>> handlers,
-        dev.semaweave.RuntimeLinkage<MolangContext> linkage, RoamingRole roamingRole) {
+    void replace(AnimationStore store, dev.semaweave.RuntimeLinkage<MolangContext> linkage, RoamingRole role) {
         assertLifecycleThread();
-        Objects.requireNonNull(module, "module");
-        Objects.requireNonNull(handlers, "handlers");
-        Objects.requireNonNull(linkage, "linkage");
-        Objects.requireNonNull(roamingRole, "roamingRole");
-        var roamingState = module.newRoamingState(roamingRole);
-        var prepared = State.create(module, handlers, ++nextGeneration, roamingState, linkage);
-        replace(prepared);
+        replace(State.create(store, ++nextGeneration, role, linkage));
     }
 
     private void replace(State prepared) {
@@ -235,10 +276,12 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         java.util.function.Consumer<RoamingPayload> localProjection) {
         Objects.requireNonNull(localProjection);
         var evaluation = beginEvaluation(inputs, MolangContext.LogicalPhase.UPDATE);
-        evaluation.localProjection = (delta, finalWindow) -> { localProjection.accept(delta); return true; };
+        evaluation.localProjection = (delta, finalWindow) -> {
+            localProjection.accept(delta);
+            return true;
+        };
         boolean successful = false;
         try {
-            drainDeferred(evaluation.state, evaluation);
             T result = runWithComponents(body, evaluation);
             successful = true;
             return result;
@@ -254,26 +297,30 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         return invoke(inputs, MolangContext.LogicalPhase.ACTION, body);
     }
 
-    /** Component cleanup remains inside the transaction so a failed hook cannot publish effects. */
+    /** Component cleanup completes before borrowed inputs are released. */
     public <T> T animationPass(InvocationInputs inputs, boolean persistentActionWindow, Body<T> body,
         java.util.function.Consumer<RoamingPayload> localProjection) {
         if (persistentActionWindow)
             Objects.requireNonNull(localProjection);
-        return animationPassProjected(inputs, persistentActionWindow, body,
-            (delta, finalWindow) -> { localProjection.accept(delta); return true; });
+        return animationPassProjected(inputs, persistentActionWindow, body, (delta, finalWindow) -> {
+            localProjection.accept(delta);
+            return true;
+        });
     }
 
     /**
      * Runs one animation body and retains successful roaming output for later owner-qualified adoption.
      *
-     * <p>Requires: the caller encloses component hooks in this evaluation's transaction before the body returns.
-     * The production inputs match the installed subject. The projection sink is required for a persistent action window.
+     * <p>
+     * Requires: the caller completes component hooks before the body returns. The production inputs match the installed
+     * subject. The projection sink is required for a persistent action window.
      *
-     * <p>Failure: body, program, hook, or pre-commit validation failure discards staged effects and the new projection.
-     * External dispatch failure can leave earlier external effects committed; this boundary supplies no rollback.
+     * <p>
+     * Failure: body, program, or hook failure rejects the new projection. Earlier domain actions remain effective.
      *
-     * <p>Ownership: evaluation and component inputs must not escape the synchronous body. A pending sink
-     * remains associated with this exact source installation until adoption, invalidation, or the final window.
+     * <p>
+     * Ownership: evaluation and component inputs must not escape the synchronous body. A pending sink remains
+     * associated with this exact source installation until adoption, invalidation, or the final window.
      */
     public <T> T animationPassProjected(InvocationInputs inputs, boolean persistentActionWindow, Body<T> body,
         ProjectionSink localProjection) {
@@ -301,8 +348,6 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         var evaluation = beginEvaluation(inputs, phase);
         boolean successful = false;
         try {
-            if (phase != MolangContext.LogicalPhase.OBSERVATION)
-                drainDeferred(evaluation.state, evaluation);
             T result = runWithComponents(body, evaluation);
             successful = true;
             return result;
@@ -317,65 +362,51 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     private Evaluation beginEvaluation(InvocationInputs inputs, MolangContext.LogicalPhase phase) {
         executionAccess.run();
         Objects.requireNonNull(inputs, "inputs");
-        try {
-            if (evaluating)
-                throw new IllegalStateException("an entity expression owner cannot reenter");
-            var state = requireCurrent();
-            if (!state.accepting)
-                throw new IllegalStateException("Expression installation is sealed");
-            if (state.subject != null && inputs.productionInputs().entity() != state.subject) {
-                throw new IllegalArgumentException("invocation inputs belong to another entity owner");
-            }
-            var ownerProvenance =
-                provenance(state, "<logical-" + phase.name().toLowerCase(java.util.Locale.ROOT) + ">", -1);
-            var production = inputs.productionInputs();
-            BooleanSupplier eligible = () -> true;
-            var ownerContext = phase == MolangContext.LogicalPhase.OBSERVATION
-                ? (state.typedSubject
-                    ? state.linkage.observation(production, state.roamingState, ownerProvenance, inputs.cancellation(),
-                        eligible)
-                    : MolangContext.observation(production, production, state.linkage.access(production),
-                        state.roamingState, ownerProvenance, inputs.cancellation(), eligible))
-                : (state.typedSubject
-                    ? state.linkage.logical(production, state.roamingState, phase, ownerProvenance,
-                        inputs.cancellation(), eligible, EffectBatch.DEFAULT_MAX_COMMANDS)
-                    : MolangContext.logical(production, production, phase, state.linkage.access(production),
-                        state.roamingState, ownerProvenance, inputs.cancellation(), eligible,
-                        EffectBatch.DEFAULT_MAX_COMMANDS));
-            ownerContext.configureLimits(state.module.executionLimits());
-            var evaluation = new Evaluation(state, inputs, phase, ownerContext);
-            ownerContext.deferredSubmit((request, source) -> {
-                if (evaluation.deferredCaptures++ >= MAX_DEFERRED_CAPTURES)
-                    throw new IllegalStateException("deferred capture queue exceeds " + MAX_DEFERRED_CAPTURES);
-                deferred.addLast(new DeferredCapture(state, evaluation, ownerContext.animationState(),
-                    ownerContext.controllerState(), request.arguments(), source));
-            });
-            evaluating = true;
-            return evaluation;
-        } catch (Throwable failure) {
-            throw failure;
+        if (evaluating)
+            throw new IllegalStateException("an entity expression owner cannot reenter");
+        var state = requireCurrent();
+        if (!state.accepting)
+            throw new IllegalStateException("Expression installation is sealed");
+        if (state.subject != null && inputs.productionInputs().entity() != state.subject) {
+            throw new IllegalArgumentException("invocation inputs belong to another entity owner");
         }
+        var ownerProvenance =
+            provenance(state, "<logical-" + phase.name().toLowerCase(java.util.Locale.ROOT) + ">", -1);
+        var production = inputs.productionInputs();
+        var ownerContext = phase == MolangContext.LogicalPhase.OBSERVATION
+            ? (state.typedSubject ? state.linkage.observation(production, state.roamingState, ownerProvenance)
+                : MolangContext.observation(production, production, state.roamingState, ownerProvenance))
+            : (state.typedSubject ? state.linkage.logical(production, state.roamingState, phase, ownerProvenance)
+                : MolangContext.logical(production, production, phase, state.roamingState, ownerProvenance));
+        ownerContext.configureLimits(state.execution.metadata().executionLimits());
+        ownerContext.bindOrigin(state.subjectBinding);
+        var evaluation = new Evaluation(state, inputs, phase, ownerContext);
+        ownerContext.deferredSubmit((request, source) -> {
+            if (evaluation.deferredCaptures++ >= MAX_DEFERRED_CAPTURES)
+                throw new IllegalStateException("deferred capture queue exceeds " + MAX_DEFERRED_CAPTURES);
+            deferred.addLast(new DeferredCapture(state, evaluation, ownerContext.animationState(),
+                ownerContext.controllerState(), request, source));
+        });
+        evaluating = true;
+        activeEvaluation = evaluation;
+        return evaluation;
     }
 
     private void endEvaluation(Evaluation evaluation, boolean successful) {
         Throwable primary = evaluation.failure().orElse(null);
         Throwable closingFailure = null;
         try {
-            if (successful && evaluation.failure().isEmpty())
+            if (primary == null && evaluation.phase != MolangContext.LogicalPhase.OBSERVATION)
                 drainDeferred(evaluation.state, evaluation);
-            if (evaluation.phase != MolangContext.LogicalPhase.OBSERVATION) {
-                EffectTransaction.finish(evaluation.ownerContext, effectSink(evaluation.state, evaluation.inputs),
-                    successful && evaluation.failure().isEmpty(), () -> closeEvaluation(evaluation));
-            }
             if (evaluation.localProjection != null && successful && evaluation.failure().isEmpty()
                 && evaluation.state.roamingState.role() == RoamingRole.PRODUCER
-                && evaluation.state.roamingState.hasDelta()) {
-                var delta = evaluation.state.roamingState.delta();
-                projections.addLast(new Projection(evaluation.state, delta, evaluation.localProjection, executionArmPair));
+                && evaluation.state.roamingState.hasChanges()) {
+                var delta = evaluation.state.roamingState.popChanges();
+                projections
+                    .addLast(new Projection(evaluation.state, delta, evaluation.localProjection, executionArmPair));
             }
         } catch (Throwable failure) {
             closingFailure = failure;
-            EffectTransaction.finish(evaluation.ownerContext, evaluation.inputs.effectSink(), false);
         } finally {
             try {
                 try {
@@ -390,12 +421,21 @@ public final class EntityExpressionRuntime implements AutoCloseable {
                 }
             } finally {
                 evaluating = false;
+                activeEvaluation = null;
             }
         }
+        try {
+            if (primary != null || closingFailure != null)
+                localSyncs.clear();
+            else
+                drainLocalSyncs();
+        } catch (Throwable failure) {
+            closingFailure = appendFailure(closingFailure, failure);
+        }
         if (closingFailure != null) {
-            if (primary != null)
-                appendFailure(primary, closingFailure);
-            else if (closingFailure instanceof RuntimeException failure)
+            if (appendFailure(primary, closingFailure) != closingFailure)
+                return;
+            if (closingFailure instanceof RuntimeException failure)
                 throw failure;
             else if (closingFailure instanceof Error failure)
                 throw failure;
@@ -410,6 +450,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         evaluation.ownerContext.closeRound();
         evaluation.closed = true;
         evaluating = false;
+        evaluation.state.execution.reportPreparation();
     }
 
     private static Throwable appendFailure(@Nullable Throwable primary, Throwable failure) {
@@ -449,12 +490,17 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         var producer = body.current;
         if (producer == null || !producer.accepting || producer.roamingState.role() != RoamingRole.PRODUCER)
             return;
-        if (!producer.module.identity().containerId().equals(arm.module.identity().containerId())
-            || !producer.module.identity().targetId().equals(arm.module.identity().targetId()))
+        if (arm.execution.interpreted() || producer.execution.interpreted())
+            throw new IllegalStateException("arm pairing requires AOT installations");
+        if (!producer.execution.metadata().containerId().equals(arm.execution.metadata().containerId())
+            || !producer.execution.metadata().targetId().equals(arm.execution.metadata().targetId()))
             return;
-        var fields = new java.util.HashSet<>(producer.roamingState.fields());
-        fields.retainAll(arm.roamingState.fields());
-        var pair = new ArmPair(body, producer, this, arm, java.util.Set.copyOf(fields));
+        var bodyFields = producer.roamingState.fieldNames();
+        var armFields = arm.roamingState.fieldNames();
+        var fields = new short[bodyFields.size()];
+        for (int index = 0; index < fields.length; index++)
+            fields[index] = (short)armFields.indexOf(bodyFields.get(index));
+        var pair = new ArmPair(body, producer, this, arm, fields);
         arm.armConnection = pair;
         arm.roamingState.applyFull(project(producer.roamingState.snapshot(), pair.fields));
     }
@@ -484,8 +530,10 @@ public final class EntityExpressionRuntime implements AutoCloseable {
                     result.localDone = result.local.adopt(result.delta, finalWindow);
                 } catch (RuntimeException | Error next) {
                     result.localDone = true;
-                    if (failure == null) failure = next;
-                    else if (failure != next) failure.addSuppressed(next);
+                    if (failure == null)
+                        failure = next;
+                    else if (failure != next)
+                        failure.addSuppressed(next);
                 }
             }
             var pair = result.pair;
@@ -497,28 +545,34 @@ public final class EntityExpressionRuntime implements AutoCloseable {
                     if (pair.arm.current == pair.consumer && pair.consumer.accepting
                         && pair.consumer.armConnection == pair) {
                         var payload = project(result.delta, pair.fields);
-                        pair.consumer.module.validateRoamingPatch(payload);
                         pair.consumer.roamingState.applyPatch(payload);
                     }
                 } catch (RuntimeException | Error next) {
-                    if (failure == null) failure = next;
-                    else if (failure != next) failure.addSuppressed(next);
+                    if (failure == null)
+                        failure = next;
+                    else if (failure != next)
+                        failure.addSuppressed(next);
                 }
             }
             if (finalWindow || result.localDone && result.armDone)
                 iterator.remove();
         }
-        if (failure instanceof RuntimeException error) throw error;
-        if (failure instanceof Error error) throw error;
+        if (failure instanceof RuntimeException error)
+            throw error;
+        if (failure instanceof Error error)
+            throw error;
     }
 
     /**
      * Receives a committed delta at an idle owner adoption point.
      *
-     * <p>Execution: called synchronously on the lifecycle thread after task handoff. Returning false
-     * retains the pending projection only before the final window. A thrown failure ends that sink's attempt.
+     * <p>
+     * Execution: called synchronously on the lifecycle thread after task handoff. Returning false retains the pending
+     * projection only before the final window. A thrown failure ends that sink's attempt.
      *
-     * <p>Ownership: the delta contains copied values. The callback does not obtain access to the source's mutable instance.
+     * <p>
+     * Ownership: the delta contains copied values. The callback does not obtain access to the source's mutable
+     * instance.
      */
     @FunctionalInterface
     public interface ProjectionSink {
@@ -532,6 +586,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         final ArmPair pair;
         boolean localDone;
         boolean armDone;
+
         Projection(State source, RoamingPayload delta, ProjectionSink local, ArmPair pair) {
             this.source = source;
             this.delta = delta;
@@ -540,17 +595,27 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
     }
 
-    private static RoamingPayload project(RoamingPayload source, java.util.Set<String> fields) {
-        var values = new java.util.TreeMap<String, Float>();
-        source.values().forEach((name, value) -> {
-            if (fields.contains(name))
-                values.put(name, value);
-        });
-        return new RoamingPayload(values);
+    private static RoamingPayload project(RoamingPayload source, short[] fields) {
+        int count = 0;
+        for (var field : source.fields()) {
+            if (fields[field] >= 0)
+                count++;
+        }
+        var mappedFields = new short[count];
+        var values = new float[count];
+        int next = 0;
+        for (int index = 0; index < source.fields().length; index++) {
+            short target = fields[source.fields()[index]];
+            if (target >= 0) {
+                mappedFields[next] = target;
+                values[next++] = source.values()[index];
+            }
+        }
+        return new RoamingPayload(mappedFields, values);
     }
 
     private record ArmPair(EntityExpressionRuntime body, State producer, EntityExpressionRuntime arm, State consumer,
-        java.util.Set<String> fields) {
+        short[] fields) {
     }
 
     private void disconnect(State retired) {
@@ -584,11 +649,14 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             throw new IllegalStateException("Expression installation requires its idle execution owner");
     }
 
-    /**
-     * Revokes the current installation's acceptance and drops pending projections before resource cleanup.
-     *
-     * <p>Execution: requires the lifecycle thread. Revocation does not close the mutable instance or revive an ended installation.
-     */
+    /** Revokes admission without mutating collections still owned by an accepted execution. */
+    public void seal() {
+        var state = current;
+        if (state != null)
+            state.accepting = false;
+    }
+
+    /** Revokes acceptance and drops projections in the idle lifecycle window. */
     public void invalidate() {
         assertLifecycleThread();
         if (current != null)
@@ -613,8 +681,9 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     /**
      * Identifies one installation without owning or extending that installation's lifetime.
      *
-     * <p>Ownership: callers can retain this routing identity, but must use commit() for an operation
-     * that depends on the installation still being current and accepting.
+     * <p>
+     * Ownership: callers can retain this routing identity, but must use commit() for an operation that depends on the
+     * installation still being current and accepting.
      */
     public static final class Installation {
         private final EntityExpressionRuntime owner;
@@ -625,11 +694,16 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             this.state = state;
         }
 
+        public List<String> roamingFields() {
+            return state.roamingState == null ? List.of() : state.roamingState.fieldNames();
+        }
+
         /**
          * Runs the action inline only if this exact installation is current, accepting, and idle.
          *
-         * <p>Execution: the caller uses the lifecycle thread. A false result runs no action.
-         * An action failure propagates without rolling back mutations that the action already made.
+         * <p>
+         * Execution: the caller uses the lifecycle thread. A false result runs no action. An action failure propagates
+         * without rolling back mutations that the action already made.
          *
          * @return whether the qualified action ran and returned normally
          */
@@ -645,8 +719,36 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     public record Snapshot(Installation installation, RoamingPayload payload) {
     }
 
-    private EffectSink effectSink(State state, InvocationInputs inputs) {
-        return inputs.effectSink();
+    /** Accepts an independent sync payload; dispatch starts after the source borrow has ended. */
+    public void enqueueLocalSync(EventArguments arguments,
+        com.elfmcys.ysm.geckolib3.core.processor.AnimationProcessor<?> processor) {
+        if (!evaluating || activeEvaluation == null)
+            throw new IllegalStateException("sync capture requires an active source evaluation");
+        localSyncs.addLast(
+            new LocalSync(activeEvaluation.state, arguments, activeEvaluation.ownerContext.provenance(), processor));
+    }
+
+    private void drainLocalSyncs() {
+        if (drainingSync)
+            return;
+        drainingSync = true;
+        try {
+            LocalSync pending;
+            while ((pending = localSyncs.pollFirst()) != null) {
+                if (current != pending.state || !pending.state.accepting) {
+                    YesSteveModel.LOGGER.debug("Molang sync rejected after installation ended: {}", pending.source);
+                    continue;
+                }
+                pending.processor.dispatchSync(pending.arguments);
+            }
+        } finally {
+            localSyncs.clear();
+            drainingSync = false;
+        }
+    }
+
+    private record LocalSync(State state, EventArguments arguments, InvocationProvenance source,
+        com.elfmcys.ysm.geckolib3.core.processor.AnimationProcessor<?> processor) {
     }
 
     private void drainDeferred(State state, Evaluation evaluation) {
@@ -654,12 +756,22 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     private void drainDeferred(State state, Evaluation evaluation, AnimationExecutionState animation, boolean exact) {
+        if (evaluation.failure != null || current != state || !state.accepting) {
+            deferred.removeIf(capture -> capture.evaluation == evaluation);
+            return;
+        }
         var previousAnimation = evaluation.ownerContext.animationState();
         var previousController = evaluation.ownerContext.controllerState();
         var previousOrigin = evaluation.deferredOrigin;
         boolean previousActionWindow = evaluation.persistentActionWindow;
+        var production = evaluation.inputs.productionInputs();
+        var event = production instanceof com.elfmcys.ysm.geckolib3.core.processor.MinecraftRuntimeInputs<?> minecraft
+            ? minecraft.animationEvent() : null;
+        var controllerWindow = event == null ? null : event.getCodedController();
+        if (event != null)
+            event.setCodedAnimationController(null);
         try {
-            while (evaluation.failure().isEmpty()) {
+            while (true) {
                 DeferredCapture selected = null;
                 for (var it = deferred.descendingIterator(); it.hasNext();) {
                     var candidate = it.next();
@@ -680,6 +792,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
                 evaluation.dispatchDeferred(selected.arguments);
             }
         } finally {
+            restoreControllerWindow(event, controllerWindow);
             evaluation.ownerContext.setAnimationContext(previousAnimation);
             evaluation.ownerContext.setControllerContext(previousController);
             evaluation.deferredOrigin = previousOrigin;
@@ -687,21 +800,35 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
     }
 
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static void restoreControllerWindow(com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent event,
+        com.elfmcys.ysm.geckolib3.core.controller.CodedAnimationController controller) {
+        if (event != null)
+            event.setCodedAnimationController(controller);
+    }
+
     private <T> T runWithComponents(Body<T> body, Evaluation evaluation) {
         var production = evaluation.inputs.productionInputs();
         if (!(production instanceof com.elfmcys.ysm.geckolib3.core.processor.MinecraftRuntimeInputs<?> minecraft)
-            || minecraft.animationEvent() == null || evaluation.state.components == null)
+            || minecraft.animationEvent() == null || evaluation.state.components == null) {
+            evaluation.captureSubjectSample(com.elfmcys.ysm.expression.host.SubjectSample.MISSING);
+            if (evaluation.phase != MolangContext.LogicalPhase.OBSERVATION)
+                drainDeferred(evaluation.state, evaluation);
             return runBody(body, evaluation);
+        }
         class ComponentBody implements Runnable {
             T result;
+
             public void run() {
+                evaluation.captureSubjectSample(evaluation.state.components.captureSubjectSample());
+                if (evaluation.phase != MolangContext.LogicalPhase.OBSERVATION)
+                    drainDeferred(evaluation.state, evaluation);
                 result = runBody(body, evaluation);
                 drainDeferred(evaluation.state, evaluation);
             }
         }
         var scoped = new ComponentBody();
-        evaluation.state.components.evaluate(minecraft.animationEvent(),
-            () -> true, scoped);
+        evaluation.state.components.evaluate(minecraft.animationEvent(), () -> true, scoped);
         return scoped.result;
     }
 
@@ -717,12 +844,21 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
     }
 
-    public Optional<RenderTargetExpressionModule> module() {
+    public Optional<AnimationStore> store() {
         executionAccess.run();
-        return current == null ? Optional.empty() : Optional.of(current.module);
+        return current == null ? Optional.empty() : Optional.of(current.execution.store());
     }
 
-    public Optional<CompiledRoamingState> roamingState() {
+    public Optional<AnimationStore.Metadata> metadata() {
+        executionAccess.run();
+        return current == null ? Optional.empty() : Optional.of(current.execution.metadata());
+    }
+
+    public AnimationStore.ReadBatch openAnimationReadPhase(AnimationStore.View view) throws java.io.IOException {
+        return requireCurrent().execution.openReadPhase(view);
+    }
+
+    public Optional<RoamingState> roamingState() {
         executionAccess.run();
         return current == null ? Optional.empty() : Optional.of(current.roamingState);
     }
@@ -741,7 +877,8 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         if (state.roamingState.role() == RoamingRole.CONSUMER) {
             state.roamingState.applyFull(payload);
         } else {
-            payload.values().forEach(state.roamingState::write);
+            for (int index = 0; index < payload.fields().length; index++)
+                state.roamingState.write(payload.fields()[index], payload.values()[index]);
             state.roamingState.full();
         }
         state.roamingInitialized = true;
@@ -760,11 +897,11 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     public boolean hasRoamingDelta() {
-        return requireCurrent().roamingState.hasDelta();
+        return requireCurrent().roamingState.hasChanges();
     }
 
     public RoamingPayload takeRoamingDelta() {
-        return requireCurrent().roamingState.delta();
+        return requireCurrent().roamingState.popChanges();
     }
 
     public RoamingPayload takeRoamingFull() {
@@ -779,6 +916,15 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     public int pendingDeferredCount() {
         executionAccess.run();
         return deferred.size();
+    }
+
+    public void validateConfigAction(long expectedGeneration, String location, ProgramRole role, String discriminator) {
+        assertLifecycleThread();
+        var state = requireCurrent();
+        if (!state.accepting || expectedGeneration <= 0 || state.entityGeneration != expectedGeneration)
+            throw new IllegalStateException("config action belongs to a stale entity generation");
+        state.execution.requireVoidProgram(new ModelProgramInventory.SemanticLocation(state.targetId,
+            state.execution.metadata().set(), location, role, discriminator));
     }
 
     public boolean readConfigBoolean(InvocationInputs inputs, long expectedGeneration, ConfigActionRoute route) {
@@ -818,11 +964,13 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     /**
      * Executes a caller-owned transient session as one privileged action or observation round.
      *
-     * <p>Requires: the session is attached to this runtime's current installation. The owner holds its
-     * exclusive execution window. This call borrows the session through execution and cleanup without closing it.
+     * <p>
+     * Requires: the session is attached to this runtime's current installation. The owner holds its exclusive execution
+     * window. This call borrows the session through execution and cleanup without closing it.
      *
-     * <p>Failure: stale generation or incompatible phase rejects execution. Program failure follows the
-     * round's failure boundary; successful compilation alone does not authorize this invocation.
+     * <p>
+     * Failure: stale generation or incompatible phase rejects execution. Program failure follows the round's failure
+     * boundary; successful compilation alone does not authorize this invocation.
      */
     public Object executeTransient(InvocationInputs inputs, TransientExpressionSession session) {
         Objects.requireNonNull(session, "session");
@@ -831,13 +979,15 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     }
 
     /**
-     * Freezes transient compilation inputs and retains the current module on the idle lifecycle thread.
+     * Freezes transient compilation inputs under independent store protection on the idle lifecycle thread.
      *
-     * <p>Failure: a missing, ended, or different entity generation rejects preparation before handoff.
-     * A returned request can become stale while independent compilation continues.
+     * <p>
+     * Failure: a missing, ended, or different entity generation rejects preparation before handoff. A returned request
+     * can become stale while independent compilation continues.
      *
-     * <p>Ownership: the caller owns the returned request until a compiler accepts it. The caller must close
-     * an unaccepted request; an accepted compile releases the retained module when compilation ends.
+     * <p>
+     * Ownership: the caller owns the returned request until a compiler accepts it. The caller must close an unaccepted
+     * request. Successful compilation retains protection until attachment or result discard; failure releases it.
      *
      * @return the independent compilation request, not an executable owner capability
      */
@@ -848,10 +998,11 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         var state = requireCurrent();
         if (!state.accepting || state.entityGeneration != expectedGeneration)
             throw new IllegalStateException("transient compilation belongs to a stale entity generation");
-        var lease = state.module.retain();
+        state.aotInstance();
+        var lease = state.execution.openWork();
         try {
-            return new TransientCompilation(TransientExpressionSession.prepare(state.module, privilege),
-                state.installationKey, expectedGeneration, source, privilege, purpose, sourceLocation, lease);
+            return new TransientCompilation(lease.transientInputs(privilege), state.installationKey, expectedGeneration,
+                source, privilege, purpose, sourceLocation, lease);
         } catch (Throwable failure) {
             lease.close();
             throw failure;
@@ -861,13 +1012,16 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     /**
      * Attaches a completed program only to the request's exact current installation and target generation.
      *
-     * <p>Requires: session is the result of request, and the lifecycle-thread caller owns the session.
-     * The caller must serialize attachment with session execution and close.
+     * <p>
+     * Requires: session is the result of request, and the lifecycle-thread caller owns the session. The caller must
+     * serialize attachment with session execution and close.
      *
-     * <p>Ensures: success equips the session for qualified owner execution; the caller still owns its close obligation.
+     * <p>
+     * Ensures: success equips the session for qualified owner execution; the caller still owns its close obligation.
      *
-     * <p>Failure: stale installation rejects attachment without closing the session. The handoff owner
-     * must close a rejected or late session. Failure to attach execution access does not transfer session ownership.
+     * <p>
+     * Failure: stale installation rejects attachment without closing the session. The handoff owner must close a
+     * rejected or late session. Failure to attach execution access does not transfer session ownership.
      */
     public void attachTransient(TransientCompilation request, TransientExpressionSession session) {
         assertLifecycleThread();
@@ -876,33 +1030,37 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             || state.entityGeneration != session.entityGeneration()
             || !state.targetGeneration.equals(session.targetGeneration()))
             throw new IllegalStateException("transient compilation belongs to a stale installation");
-        session.attach(state.instance.openTransientAccess(session.layout(), session.dynamicAccess()));
+        session.attach(state.aotInstance().openTransientAccess(session.layout(), session.dynamicAccess()));
+        request.close();
     }
 
     /**
-     * Owns the frozen inputs and retained module for one independent compilation handoff.
+     * Owns frozen inputs and store protection for one independent compilation handoff.
      *
-     * <p>Execution: prepare runs on the idle lifecycle thread; compile can run on a background thread.
-     * The caller must not close an accepted request while compile uses its retained module.
+     * <p>
+     * Execution: prepare runs on the idle lifecycle thread; compile can run on a background thread. The caller must not
+     * close an accepted request while compile uses its frozen inputs.
      *
-     * <p>Ownership: close releases an unaccepted request. Once compile starts, compile owns that cleanup
-     * until return, including cancellation and failure. A successful session has its own independent lease.
+     * <p>
+     * Ownership: close releases an unaccepted request. Once compile starts, its worker retains cleanup on failure. A
+     * successful result receiver closes the request after attaching or discarding the session.
      *
-     * <p>Seam: refines [transient execution](docs/architecture/animation/molang-runtime.md#短期执行).
+     * <p>
+     * Seam: refines [transient execution](docs/architecture/animation/molang-runtime.md#短期执行).
      */
     public static final class TransientCompilation implements AutoCloseable {
-        private final TransientExpressionSession.CompilationInputs inputs;
+        private TransientExpressionSession.CompilationInputs inputs;
         private final Object installationKey;
         private final long generation;
         private final String source;
         private final TransientExpressionSession.Privilege privilege;
         private final TransientExpressionSession.Purpose purpose;
         private final String location;
-        private final dev.semaweave.ResourceLease<MolangContext> lease;
+        private AnimationStore.Work lease;
 
-        private TransientCompilation(TransientExpressionSession.CompilationInputs inputs, Object installationKey, long generation,
-            String source, TransientExpressionSession.Privilege privilege, TransientExpressionSession.Purpose purpose,
-            String location, dev.semaweave.ResourceLease<MolangContext> lease) {
+        private TransientCompilation(TransientExpressionSession.CompilationInputs inputs, Object installationKey,
+            long generation, String source, TransientExpressionSession.Privilege privilege,
+            TransientExpressionSession.Purpose purpose, String location, AnimationStore.Work lease) {
             this.inputs = inputs;
             this.installationKey = installationKey;
             this.generation = generation;
@@ -914,30 +1072,45 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
 
         /**
-         * Compiles this unconsumed request and releases its retained module on every exit.
+         * Compiles this unconsumed request, preserving store protection for the result handoff.
          *
-         * <p>Requires: the caller owns the accepted request and has not compiled or closed it before.
-         * A cancellation signal requests termination; the worker retains cleanup responsibility until return.
+         * <p>
+         * Requires: the caller owns the accepted request and has not compiled or closed it before. A cancellation
+         * signal requests termination; the worker retains cleanup responsibility until return.
          *
          * @return an owned session whose result receiver must attach or close, including after a late completion
          */
         public TransientExpressionSession compile(BooleanSupplier cancelled) throws Exception {
-            try (lease) {
-                return TransientExpressionSession.compile(inputs, generation, source, privilege, purpose, location,
-                    cancelled);
+            try {
+                return TransientExpressionSession.compile(Objects.requireNonNull(inputs, "compilation already used"),
+                    generation, source, privilege, purpose, location, cancelled);
+            } catch (Exception | Error failure) {
+                close();
+                throw failure;
+            } finally {
+                inputs = null;
             }
         }
 
-        @Override public void close() { lease.close(); }
+        @Override
+        public void close() {
+            var retained = lease;
+            lease = null;
+            inputs = null;
+            if (retained != null)
+                retained.close();
+        }
     }
 
     /**
      * Prepares, compiles, and attaches a transient session synchronously for tooling.
      *
-     * <p>Execution: the idle lifecycle-thread caller waits for compilation. Background callers must use
-     * separate prepare, compile, and attach handoffs instead.
+     * <p>
+     * Execution: the idle lifecycle-thread caller waits for compilation. Background callers must use separate prepare,
+     * compile, and attach handoffs instead.
      *
-     * <p>Ownership: failure closes the new session. Success transfers its close obligation to the caller.
+     * <p>
+     * Ownership: failure closes the new session. Success transfers its close obligation to the caller.
      */
     public TransientExpressionSession compileTransient(long expectedGeneration, String source,
         TransientExpressionSession.Privilege privilege, TransientExpressionSession.Purpose purpose,
@@ -948,7 +1121,11 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             attachTransient(request, session);
             return session;
         } catch (Throwable failure) {
-            session.close();
+            try {
+                session.close();
+            } finally {
+                request.close();
+            }
             throw failure;
         }
     }
@@ -961,6 +1138,8 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         current = null;
         disconnect(retired);
         deferred.clear();
+        projections.clear();
+        localSyncs.clear();
         if (retired != null) {
             retired.close();
         }
@@ -982,20 +1161,18 @@ public final class EntityExpressionRuntime implements AutoCloseable {
     /**
      * Borrows the current evaluation synchronously inside one owner invocation.
      *
-     * <p>Requires: the body must not retain the evaluation or its call-local contexts after return.
-     * A body failure participates in the enclosing round's effect and cleanup outcome.
+     * <p>
+     * Requires: the body must not retain the evaluation or its call-local contexts after return. A body failure
+     * participates in the enclosing round's effect and cleanup outcome.
      */
     @FunctionalInterface
     public interface Body<T> {
         T run(Evaluation evaluation) throws Throwable;
     }
 
-    public record InvocationInputs(com.elfmcys.ysm.expression.host.InvocationInputs<?> productionInputs,
-        EffectSink effectSink, BooleanSupplier cancellation) {
+    public record InvocationInputs(com.elfmcys.ysm.expression.host.InvocationInputs<?> productionInputs) {
         public InvocationInputs {
             Objects.requireNonNull(productionInputs, "productionInputs");
-            Objects.requireNonNull(effectSink, "effectSink");
-            Objects.requireNonNull(cancellation, "cancellation");
         }
     }
 
@@ -1022,6 +1199,15 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             persistentActionWindow = phase != MolangContext.LogicalPhase.OBSERVATION;
         }
 
+        /** Binds one immutable root sample before the entry's first expression. */
+        public void captureSubjectSample(com.elfmcys.ysm.expression.host.SubjectSample sample) {
+            ownerContext.captureSubjectInputs(sample);
+        }
+
+        public com.elfmcys.ysm.expression.host.SubjectSample subjectSample() {
+            return ownerContext.subjectSample();
+        }
+
         public void setControllerContext(@Nullable ControllerExecutionState value) {
             setAnimationContext(null);
             drainDeferred(state, this, null, true);
@@ -1035,7 +1221,9 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             ownerContext.setAnimationContext(value);
         }
 
-        public void endAnimationContext() { setAnimationContext(null); }
+        public void endAnimationContext() {
+            setAnimationContext(null);
+        }
 
         public float evaluate(FloatExpression expression) {
             Objects.requireNonNull(expression, "expression");
@@ -1049,7 +1237,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             try {
                 return executeFloat(program, ProgramArguments.empty());
             } catch (Throwable cause) {
-                programFailed(program.location(), program.reference(), cause);
+                programFailed(program.location(), program.binding(), cause);
                 return 0.0f;
             }
         }
@@ -1059,7 +1247,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             try {
                 return executeBoolean(program);
             } catch (Throwable cause) {
-                programFailed(program.location(), program.reference(), cause);
+                programFailed(program.location(), program.binding(), cause);
                 return false;
             }
         }
@@ -1071,17 +1259,17 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         public Object execute(UserFunctionProgram program, ProgramArguments arguments) {
             Objects.requireNonNull(program, "program");
             try {
-                var context = beginProgram(program.location(), program.reference(), program.generation());
+                var context = beginProgram(program.location(), program.binding());
                 try {
-                    var result = state.instance.executeValue(program.reference(), context, state.subjectBinding,
+                    var result = state.aotInstance().executeValue(program.reference(), context, state.subjectBinding,
                         ownerContext, arguments);
-                    context.verifyEligible();
+
                     return result;
                 } finally {
                     ownerContext.releaseExpression();
                 }
             } catch (Throwable cause) {
-                programFailed(program.location(), program.reference(), cause);
+                programFailed(program.location(), program.binding(), cause);
                 return ExpressionValues.UNSET;
             }
         }
@@ -1129,43 +1317,42 @@ public final class EntityExpressionRuntime implements AutoCloseable {
                     return PlayState.PAUSE;
                 return null;
             } catch (Throwable cause) {
-                programFailed(handler.location(), handler.reference(), cause);
+                programFailed(handler.location(), handler.binding(), cause);
                 return null;
             }
         }
 
         public Optional<Throwable> failure() {
-            return Optional.ofNullable(failure != null ? failure
-                : ownerContext.firstFailure() == null ? null : ownerContext.firstFailure().cause());
+            return Optional.ofNullable(failure);
         }
 
         private void recordFailure(Throwable cause) {
             if (failure == null)
-                failure = ownerContext.firstFailure() == null ? cause : ownerContext.firstFailure().cause();
+                failure = cause;
         }
 
         private boolean readConfigBoolean(long expectedGeneration, ConfigActionRoute route) {
             requireGeneration(expectedGeneration);
             var location = configLocation(route, ProgramRole.CONFIG_READ_BOOL, "read");
-            return evaluate(state.module.requireBooleanProgram(location));
+            return evaluate(state.execution.requireBooleanProgram(location));
         }
 
         private float readConfigFloat(long expectedGeneration, ConfigActionRoute route) {
             requireGeneration(expectedGeneration);
             var location = configLocation(route, ProgramRole.CONFIG_READ_F32, "read");
-            return evaluate(state.module.requireFloatProgram(location));
+            return evaluate(state.execution.requireFloatProgram(location));
         }
 
         private void writeConfigBoolean(long expectedGeneration, ConfigActionRoute route, boolean value) {
             requireGeneration(expectedGeneration);
             var location = configLocation(route, ProgramRole.CONFIG_WRITE_BOOL, "write");
-            executeVoid(state.module.requireVoidProgram(location), ProgramArguments.ofBoolean(value));
+            executeVoid(state.execution.requireVoidProgram(location), ProgramArguments.ofBoolean(value));
         }
 
         private void writeConfigFloat(long expectedGeneration, ConfigActionRoute route, float value) {
             requireGeneration(expectedGeneration);
             var location = configLocation(route, ProgramRole.CONFIG_WRITE_F32, "write");
-            executeVoid(state.module.requireVoidProgram(location), ProgramArguments.ofFloat(value));
+            executeVoid(state.execution.requireVoidProgram(location), ProgramArguments.ofFloat(value));
         }
 
         private void executeConfigLabel(long expectedGeneration, ConfigActionRoute route, String labelName,
@@ -1174,7 +1361,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             Objects.requireNonNull(route, "route");
             var location = new ModelProgramInventory.SemanticLocation(state.targetId, route.labelLocation(),
                 ProgramRole.CONFIG_LABEL_ACTION, route.labelDiscriminator(labelName, labelIndex));
-            executeVoid(state.module.requireVoidProgram(location), ProgramArguments.empty());
+            executeVoid(state.execution.requireVoidProgram(location), ProgramArguments.empty());
         }
 
         public void dispatchPendingDeferred() {
@@ -1185,6 +1372,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
 
         public Object executeTransient(TransientExpressionSession session) throws Throwable {
             Objects.requireNonNull(session, "session");
+            state.aotInstance();
             if (!state.targetGeneration.equals(session.targetGeneration())
                 || state.entityGeneration != session.entityGeneration() || current != state) {
                 throw new IllegalStateException("transient session belongs to a stale target generation");
@@ -1196,12 +1384,11 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             var context = ownerContext;
             try {
                 var result = session.execute(context, state.subjectBinding, ownerContext);
-                context.verifyEligible();
+
                 return result;
             } catch (Throwable cause) {
-                recordFailure(cause);
-                rethrowSevere(provenance(state, session.sourceLocation(), -1), cause);
-                throw cause;
+                acceptExecutionFailure(provenance(state, session.sourceLocation(), -1), cause);
+                return ExpressionValues.UNSET;
             } finally {
                 ownerContext.releaseExpression();
             }
@@ -1220,24 +1407,30 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         }
 
         private float executeFloat(FloatExpression.Program program, ProgramArguments arguments) throws Throwable {
-            var context = beginProgram(program.location(), program.reference(), program.generation());
+            var context = beginProgram(program.location(), program.binding());
             try {
-                float result = state.instance.executeFloat(program.reference(), context, state.subjectBinding,
-                    ownerContext, arguments);
-                context.verifyEligible();
-                return result;
+                if (program.binding() instanceof ProgramBinding.Aot aot)
+                    return state.aotInstance().executeFloat(aot.reference(), context, state.subjectBinding,
+                        ownerContext, arguments);
+                var interpreted = (ProgramBinding.Interpreted)program.binding();
+                var use = state.execution.interpreterUse();
+                return use.instance().executeFloat(use.program(interpreted.sourceId()), context, state.subjectBinding,
+                    ownerContext, interpretedArguments(arguments));
             } finally {
                 ownerContext.releaseExpression();
             }
         }
 
         private boolean executeBoolean(BooleanProgram program) throws Throwable {
-            var context = beginProgram(program.location(), program.reference(), program.generation());
+            var context = beginProgram(program.location(), program.binding());
             try {
-                boolean result = state.instance.executeBoolean(program.reference(), context, state.subjectBinding,
-                    ownerContext, ProgramArguments.empty());
-                context.verifyEligible();
-                return result;
+                if (program.binding() instanceof ProgramBinding.Aot aot)
+                    return state.aotInstance().executeBoolean(aot.reference(), context, state.subjectBinding,
+                        ownerContext, ProgramArguments.empty());
+                var interpreted = (ProgramBinding.Interpreted)program.binding();
+                var use = state.execution.interpreterUse();
+                return use.instance().executeBoolean(use.program(interpreted.sourceId()), context, state.subjectBinding,
+                    ownerContext, List.of());
             } finally {
                 ownerContext.releaseExpression();
             }
@@ -1246,70 +1439,46 @@ public final class EntityExpressionRuntime implements AutoCloseable {
         private void executeVoid(VoidProgram program, ProgramArguments arguments) {
             Objects.requireNonNull(program, "program");
             try {
-                var context = beginProgram(program.location(), program.reference(), program.generation());
+                var context = beginProgram(program.location(), program.binding());
                 try {
-                    state.instance.executeVoid(program.reference(), context, state.subjectBinding, ownerContext,
-                        arguments);
-                    context.verifyEligible();
+                    if (program.binding() instanceof ProgramBinding.Aot aot)
+                        state.aotInstance().executeVoid(aot.reference(), context, state.subjectBinding, ownerContext,
+                            arguments);
+                    else {
+                        var interpreted = (ProgramBinding.Interpreted)program.binding();
+                        var use = state.execution.interpreterUse();
+                        use.instance().executeVoid(use.program(interpreted.sourceId()), context, state.subjectBinding,
+                            ownerContext, interpretedArguments(arguments));
+                    }
                 } finally {
                     ownerContext.releaseExpression();
                 }
             } catch (Throwable cause) {
-                programFailed(program.location(), program.reference(), cause);
+                programFailed(program.location(), program.binding(), cause);
             }
         }
 
-        private MolangContext beginProgram(ModelProgramInventory.SemanticLocation location,
-            dev.semaweave.compilation.ProgramRef reference, ResourceGenerationToken generation) {
-            if (!state.targetGeneration.equals(generation)) {
-                throw new IllegalStateException("program belongs to a stale target generation");
-            }
-            if (state.failedPrograms.get(reference.sourceId())) {
-                throw new IllegalStateException("program is disabled until target replacement");
-            }
-            ownerContext.bindExpression(location.location(), reference.sourceId(), persistentActionWindow);
+        private MolangContext beginProgram(ModelProgramInventory.SemanticLocation location, ProgramBinding binding) {
+            // Target installation pairs program bindings with this evaluation's fixed state.
+            ownerContext.bindExpression(location.location(), binding.programId(), persistentActionWindow);
             return ownerContext;
         }
 
-        private void programFailed(ModelProgramInventory.SemanticLocation location,
-            dev.semaweave.compilation.ProgramRef reference, Throwable cause) {
-            if (cause instanceof VirtualMachineError fatal)
-                throw fatal;
-            if (cause instanceof ThreadDeath fatal)
-                throw fatal;
-            var source = provenance(state, location.location(), reference.sourceId());
-            if (deferredOrigin != null)
-                YesSteveModel.LOGGER.debug("Molang deferred capture failed: origin={} handler={}", deferredOrigin, source);
-            state.recordFailure(source, cause, isDeterministicProgramFailure(cause),
-                AnimationDiagnostics.errorLevel(inputs.productionInputs()));
-            recordFailure(cause);
-            rethrowSevere(source, cause);
+        private void programFailed(ModelProgramInventory.SemanticLocation location, ProgramBinding binding,
+            Throwable cause) {
+            acceptExecutionFailure(provenance(state, location.location(), binding.programId()), cause);
         }
 
-        private static void rethrowSevere(InvocationProvenance source, Throwable cause) {
-            var visited = new IdentityHashMap<Throwable, Boolean>();
-            for (Throwable currentCause = cause;
-                currentCause != null && visited.put(currentCause, Boolean.TRUE) == null;
-                currentCause = currentCause.getCause()) {
-                if (currentCause instanceof ProviderReturnContractException) {
-                    throw new ExecutionFailure(ExecutionFailure.Reason.NON_NULL_RETURN, source,
-                        "provider violated its non-null return contract", cause);
-                }
-                if (currentCause instanceof ExecutionFailure classified
-                    && classified.reason() == ExecutionFailure.Reason.NON_NULL_RETURN)
-                    throw classified;
-            }
-        }
-
-        private static boolean isDeterministicProgramFailure(Throwable failure) {
-            if (!(failure instanceof RuntimeExecutionException runtime)) {
-                return false;
-            }
-            return switch (runtime.reason()) {
-                case RUNTIME_LINKAGE_MISMATCH, UNKNOWN_PROGRAM, SHAPE_MISMATCH, INVALID_ARGUMENTS, CONTEXT_MISMATCH ->
-                    true;
-                case RESOURCE_CLOSED, INSTANCE_CLOSED, SUBJECT_BINDING_MISMATCH -> false;
-            };
+        private void acceptExecutionFailure(InvocationProvenance source, Throwable cause) {
+            if (cause instanceof Error error)
+                throw error;
+            ownerContext.reportFailure(source, cause);
+            if (cause instanceof ExecutionFailure budget && budget.isUserFunctionDepthExceeded())
+                return;
+            var terminal = new ExecutionFailure(ExecutionFailure.Reason.INSTANCE_EXECUTION, source,
+                "expression execution failed", cause);
+            recordFailure(terminal);
+            throw terminal;
         }
 
     }
@@ -1319,80 +1488,96 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             state.entityGeneration);
     }
 
+    private static List<InterpretedValue> interpretedArguments(ProgramArguments arguments) {
+        if (arguments.size() == 0)
+            return List.of();
+        var values = new ArrayList<InterpretedValue>(arguments.size());
+        for (int index = 0; index < arguments.size(); index++) {
+            var type = arguments.type(index);
+            if (arguments.isMissing(index))
+                values.add(InterpretedValue.missing(type));
+            else if (type == dev.semaweave.BuiltinType.F32)
+                values.add(InterpretedValue.ofFloat(arguments.floatValue(index)));
+            else if (type == dev.semaweave.BuiltinType.BOOL)
+                values.add(InterpretedValue.ofBoolean(arguments.booleanValue(index)));
+            else if (type.equals(EVENT_ARGUMENTS))
+                values.add(InterpretedValue.ofForeign(INTERPRETED_EVENT_ARGUMENTS, arguments.referenceValue(index)));
+            else
+                throw new IllegalArgumentException("unsupported interpreted host argument " + type);
+        }
+        return values;
+    }
+
     private static final class State implements AutoCloseable {
         private final Object installationKey = new Object();
-        private final RenderTargetExpressionModule module;
-        private final CompiledModuleInstance<MolangContext> instance;
-        private final CompiledRoamingState roamingState;
-        private final ResourceGenerationToken targetGeneration;
+        private AnimationStore.Execution execution;
+        private RoamingState roamingState;
+        private final Object targetGeneration;
         private final long targetGenerationId;
         private final long entityGeneration;
         private final String targetId;
-        private final HostLinkage linkage;
+        private HostLinkage linkage;
         private final boolean typedSubject;
         @Nullable
-        private final net.minecraft.world.entity.Entity subject;
-        private final dev.semaweave.SubjectBinding subjectBinding;
-        private final ComponentScope components;
-        private final List<VoidProgram> playerInit;
-        private final List<VoidProgram> playerUpdate;
-        private final List<VoidProgram> sync;
-        private final List<VoidProgram> defer;
-        private final BitSet failedPrograms = new BitSet();
-        private long invocationFailures;
-        private boolean accepting = true;
+        private net.minecraft.world.entity.Entity subject;
+        private dev.semaweave.SubjectBinding subjectBinding;
+        private ComponentScope components;
+        private List<VoidProgram> playerInit;
+        private List<VoidProgram> playerUpdate;
+        private List<VoidProgram> sync;
+        private List<VoidProgram> defer;
+        private volatile boolean accepting = true;
         private boolean roamingInitialized;
         private boolean armInitializationAttempted;
         private ArmPair armConnection;
 
-        private State(RenderTargetExpressionModule module, CompiledModuleInstance<MolangContext> instance,
-            CompiledRoamingState roamingState, long entityGeneration,
-            @Nullable net.minecraft.world.entity.Entity subject,
-            Map<String, ? extends List<? extends EventProgram>> handlers, @Nullable ComponentScope components) {
-            this.module = module;
-            this.instance = instance;
-            this.roamingState = roamingState;
-            this.targetGeneration = module.generation();
-            this.targetGenerationId = module.generationId();
+        private State(AnimationStore.Execution execution, long entityGeneration,
+            @Nullable net.minecraft.world.entity.Entity subject, @Nullable ComponentScope components) {
+            this.execution = execution;
+            this.roamingState = execution.roamingState();
+            var metadata = execution.metadata();
+            this.targetGeneration = metadata.executionGeneration();
+            this.targetGenerationId = metadata.generationId();
             this.entityGeneration = entityGeneration;
-            this.targetId = module.identity().targetId();
-            this.linkage = module.productionLinkage();
+            this.targetId = metadata.targetId();
+            this.linkage = metadata.productionLinkage();
             this.subject = subject;
             this.components = components;
             this.typedSubject = subject != null;
-            this.subjectBinding = instance.bindSubject(subject);
+            this.subjectBinding =
+                execution.interpreted() ? execution.interpreterUse().environment().bindSubject(subject)
+                    : execution.aotInstance().bindSubject(subject);
+            var handlers = execution.store().eventHandlers();
             playerInit = voidHandlers(handlers, "player_init", ProgramRole.EVENT_PLAYER_INIT, targetGeneration);
             playerUpdate = voidHandlers(handlers, "player_update", ProgramRole.EVENT_PLAYER_UPDATE, targetGeneration);
             sync = voidHandlers(handlers, "sync", ProgramRole.EVENT_SYNC, targetGeneration);
             defer = voidHandlers(handlers, "defer", ProgramRole.EVENT_DEFER, targetGeneration);
         }
 
-        private static State create(RenderTargetExpressionModule module,
-            Map<String, ? extends List<? extends EventProgram>> handlers, long entityGeneration,
-            CompiledRoamingState roamingState, ComponentScope components) {
-            var instance = module.newInstance(components, roamingState);
+        private static State create(AnimationStore store, long entityGeneration, RoamingRole role,
+            ComponentScope components) {
+            var execution = store.openExecution(components, role);
             try {
-                return new State(module, instance, roamingState, entityGeneration, components.subject(), handlers, components);
+                return new State(execution, entityGeneration, components.subject(), components);
             } catch (Throwable failure) {
-                instance.close();
+                execution.close();
                 throw failure;
             }
         }
 
-        private static State create(RenderTargetExpressionModule module,
-            Map<String, ? extends List<? extends EventProgram>> handlers, long entityGeneration,
-            CompiledRoamingState roamingState, dev.semaweave.RuntimeLinkage<MolangContext> linkage) {
-            var instance = module.newInstance(linkage, roamingState);
+        private static State create(AnimationStore store, long entityGeneration, RoamingRole role,
+            dev.semaweave.RuntimeLinkage<MolangContext> linkage) {
+            var execution = store.openExecution(linkage, role);
             try {
-                return new State(module, instance, roamingState, entityGeneration, null, handlers, null);
+                return new State(execution, entityGeneration, null, null);
             } catch (Throwable failure) {
-                instance.close();
+                execution.close();
                 throw failure;
             }
         }
 
         private static List<VoidProgram> voidHandlers(Map<String, ? extends List<? extends EventProgram>> handlers,
-            String name, ProgramRole role, ResourceGenerationToken generation) {
+            String name, ProgramRole role, Object generation) {
             var values = handlers.get(name);
             if (values == null) {
                 values = List.of();
@@ -1400,7 +1585,7 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             var result = new ArrayList<VoidProgram>(values.size());
             for (var value : values) {
                 if (!(value instanceof VoidProgram program) || program.location().role() != role
-                    || !program.generation().equals(generation)) {
+                    || !program.binding().executionGeneration().equals(generation)) {
                     throw new IllegalArgumentException("invalid " + name + " event binding");
                 }
                 result.add(program);
@@ -1410,26 +1595,29 @@ public final class EntityExpressionRuntime implements AutoCloseable {
 
         @Override
         public void close() {
-            instance.close();
+            var retired = execution;
+            execution = null;
+            subject = null;
+            subjectBinding = null;
+            components = null;
+            linkage = null;
+            roamingState = null;
+            playerInit = List.of();
+            playerUpdate = List.of();
+            sync = List.of();
+            defer = List.of();
+            armConnection = null;
+            accepting = false;
+            if (retired != null)
+                retired.close();
         }
 
-        private void recordFailure(InvocationProvenance provenance, Throwable failure, boolean deterministic,
-            org.apache.logging.log4j.Level logLevel) {
-            var id = provenance.programId();
-            if (deterministic && !failedPrograms.get(id)) {
-                failedPrograms.set(id);
-                YesSteveModel.LOGGER.log(logLevel,
-                    "Persistent expression disabled until target replacement: "
-                        + "target={} location={} program={} targetGeneration={} " + "entityGeneration={}",
-                    provenance.targetId(), provenance.programLocation(), id, provenance.targetGeneration(),
-                    provenance.entityGeneration(), failure);
-            } else if (!deterministic && invocationFailures++ % 256 == 0) {
-                YesSteveModel.LOGGER.log(logLevel,
-                    "Expression invocation aborted without disabling its program: "
-                        + "target={} location={} program={} targetGeneration={} " + "entityGeneration={}",
-                    provenance.targetId(), provenance.programLocation(), id, provenance.targetGeneration(),
-                    provenance.entityGeneration(), failure);
-            }
+        private CompiledModuleInstance<MolangContext> aotInstance() {
+            if (execution == null)
+                throw new IllegalStateException("installation has ended");
+            if (execution.interpreted())
+                throw new IllegalStateException("Interpreted installations do not admit AOT transient execution");
+            return execution.aotInstance();
         }
     }
 

@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.api.annotation;
 
-import com.elfmcys.ysm.api.molang.MolangEffect;
 import java.lang.annotation.*;
 
 @Retention(RetentionPolicy.RUNTIME)
@@ -10,10 +9,11 @@ public @interface MolangFunction {
 
     String namespace() default "";
 
-    MolangEffect effect() default MolangEffect.CONTEXT;
+    /** Uses the origin subject, context, and any component receiver. Arguments still use the current environment. */
+    boolean alwaysOrigin() default false;
 
-    /** Declares an exact same-class target; this hint does not authorize context-free execution. */
-    String contextFreeTarget() default "";
+    /** Requires ACTION permission before evaluating arguments. */
+    boolean action() default false;
 
     int minArgs() default -1;
 

@@ -1,38 +1,47 @@
 package com.elfmcys.ysm.capability;
 
+import static com.elfmcys.ysm.expression.TestRoamingPayloads.named;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.elfmcys.ysm.util.StringPool;
 import it.unimi.dsi.fastutil.ints.Int2FloatOpenHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 import org.junit.jupiter.api.Test;
-import dev.semaweave.RoamingPayload;
 
 final class RoamingPayloadsTest {
     @Test
-    void networkAdapterPreservesTargetDeclaredNames() {
+    void networkAdapterUsesTheSourceAndTargetLayouts() {
         int key = StringPool.computeIfAbsent("custom_state");
         var network = new Int2FloatOpenHashMap();
         network.put(key, 5.0f);
+        var fields = List.of("other", "custom_state");
 
-        var payload = RoamingPayloads.fromNetwork(network);
+        RoamingPayloads.validateNetwork(network);
+        var payload = RoamingPayloads.fromNetwork(network, fields);
 
-        assertEquals(Map.of("custom_state", 5.0f), payload.values());
-        assertEquals(5.0f, RoamingPayloads.toNetwork(payload).get(key));
+        assertEquals(Map.of("custom_state", 5.0f), named(payload, fields));
+        assertEquals(5.0f, RoamingPayloads.toNetwork(payload, fields).get(key));
     }
 
     @Test
-    void networkAdapterRejectsPayloadsOutsideWireCapacity() {
-        var tooMany = new TreeMap<String, Float>();
-        for (int index = 0; index <= 64; index++) {
-            tooMany.put("r" + index, 1.0f);
-        }
-        assertThrows(IllegalArgumentException.class, () -> RoamingPayloads.toNetwork(new RoamingPayload(tooMany)));
+    void ingressRejectsInvalidValuesBeforeFilteringUnknownNames() {
+        var network = new Int2FloatOpenHashMap();
+        network.put(StringPool.computeIfAbsent("known"), 5.0f);
+        network.put(StringPool.computeIfAbsent("unknown"), Float.NaN);
+        assertThrows(IllegalArgumentException.class, () -> RoamingPayloads.validateNetwork(network));
+    }
 
-        var longName = "r".repeat(33);
-        assertThrows(IllegalArgumentException.class,
-            () -> RoamingPayloads.toNetwork(new RoamingPayload(new TreeMap<>(Map.of(longName, 1.0f)))));
+    @Test
+    void ingressRejectsNamesAndCountsOutsideWireCapacity() {
+        var network = new Int2FloatOpenHashMap();
+        for (int index = 0; index <= 64; index++)
+            network.put(StringPool.computeIfAbsent("r" + index), 1.0f);
+        assertThrows(IllegalArgumentException.class, () -> RoamingPayloads.validateNetwork(network));
+
+        network.clear();
+        network.put(StringPool.computeIfAbsent("r".repeat(33)), 1.0f);
+        assertThrows(IllegalArgumentException.class, () -> RoamingPayloads.validateNetwork(network));
     }
 }

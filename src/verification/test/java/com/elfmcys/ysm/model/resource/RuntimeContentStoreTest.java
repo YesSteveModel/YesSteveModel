@@ -1,12 +1,13 @@
 package com.elfmcys.ysm.model.resource;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
@@ -26,6 +27,31 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RuntimeContentStoreTest {
+    @Test
+    void ordinaryCorruptionFactDoesNotMutateTheResidentSource() throws Exception {
+        var fail = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var bytes = constantChunks(new byte[] {4, 5});
+        var source = managed(identity(4, 14), new ChunkDataSource() {
+            public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType type) throws IOException {
+                return readStoredVerified(chunk, type);
+            }
+
+            public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType type)
+                throws IOException {
+                if (fail.getAndSet(false))
+                    throw AssetLoadException.content("ordinary source failure");
+                return bytes.readStoredVerified(chunk, type);
+            }
+        });
+        var store = new RuntimeContentStore(ignored -> {
+        });
+        var ordinary = store.exact(source);
+        assertThrows(AssetLoadException.class, () -> ordinary.chunks().readStoredVerified(chunk(), BufferType.ARRAY));
+        store.tick();
+        assertThrows(AssetLoadException.class, () -> ordinary.chunks().readStoredVerified(chunk(), BufferType.ARRAY));
+        assertEquals(2, source.chunks().readStoredVerified(chunk(), BufferType.ARRAY).size());
+    }
+
     @Test
     void exactWrapperPreservesOnePhysicalChannelForTheWholePhase(
         @org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
@@ -205,12 +231,12 @@ class RuntimeContentStoreTest {
     }
 
     private static ModelFileIdentity identity(int model, int container) {
-        return new ModelFileIdentity(hash(model), hash(container));
+        return new ModelFileIdentity(hash(model), Hash256.parse(hash(container).toString().substring(5)));
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 }

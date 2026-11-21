@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.client.entity.EntityModelDemand;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
@@ -21,7 +22,7 @@ import com.elfmcys.ysm.model.catalog.snapshot.CatalogRecord;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.domain.ModelScanReport;
 import com.elfmcys.ysm.model.resource.client.*;
@@ -118,7 +119,8 @@ public final class DemandDiskReadVerification {
                     require(
                         stable.groups.stream()
                             .anyMatch(group -> group.kind.equals(expected) && group.bytes > 0
-                                && (!source.equals("bake") || group.path.endsWith(".geo.ysm-cache"))
+                                && (!source.equals("bake")
+                                    || Path.of(group.path).getFileName().toString().matches("[0-9a-f]{16}"))
                                 && group.stack.stream()
                                     .anyMatch(frame -> source.equals("bake")
                                         ? frame.equals(BakedModelCache.class.getName() + ".read")
@@ -199,7 +201,7 @@ public final class DemandDiskReadVerification {
                     file = ModelParser.parse(directory, destination, DefaultAnimationFilter.keepAll());
                 }
                 var content =
-                    ManagedContainer.openDirect(file, new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath(name)));
+                    ManagedContainer.openDirect(file, new CatalogLocation(CatalogRootKind.MODELS, new ModelPath(name)));
                 local.add(content);
                 var texture = content.modelFile().requireRenderTarget("player").getTextureNames().stream().sorted()
                     .findFirst().orElseThrow();
@@ -262,10 +264,10 @@ public final class DemandDiskReadVerification {
             this.root = root;
             bakeRoot = Files.createDirectories(root.resolve("geometry"));
             expressionRoot = Files.createDirectories(root.resolve("expression"));
-            var records = new LinkedHashMap<Hash256, CatalogRecord>();
+            var records = new LinkedHashMap<ModelId, CatalogRecord>();
             for (int index = 0; index < 3; index++) {
                 ModelContent content = useRemote ? input.remote.get(index) : input.local.get(index);
-                var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("page-" + index));
+                var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("page-" + index));
                 records.put(content.modelId(),
                     new CatalogRecord(location, new CatalogContentBinding(content.modelId(), content)));
             }
@@ -276,9 +278,11 @@ public final class DemandDiskReadVerification {
             // Discovery has no role in this resource-admission probe; retain the actual immutable catalog projection.
             catalogs = (ClientCatalogManager)UnsafeUtil.getUnsafe().allocateInstance(ClientCatalogManager.class);
             setField(ClientCatalogManager.class, catalogs, "catalog", new ClientCatalogSnapshot(snapshot));
-            var modules = new RenderTargetExpressionModuleFactory(
-                new ExpressionArtifactStore(expressionRoot, new AtomicSharedCache(expressionRoot, storageWork)),
-                ExpressionHost.create(HostAvailability.none()), new ExpressionEngineMetrics());
+            var expressionCache = new AtomicSharedCache(expressionRoot, storageWork);
+            var modules =
+                new RenderTargetExpressionModuleFactory(new ExpressionArtifactStore(expressionRoot, expressionCache),
+                    new AnimationInputStore(expressionRoot, expressionCache),
+                    ExpressionHost.create(HostAvailability.none()), new ExpressionEngineMetrics());
             var animations = new DefaultAnimationRuntime();
             var loader =
                 new ModelRenderTargetLoader(new BakedModelCache(bakeRoot, new AtomicSharedCache(bakeRoot, storageWork)),
@@ -391,11 +395,11 @@ public final class DemandDiskReadVerification {
             return sample;
         }
 
-        public ModelContent content(Hash256 id) {
+        public ModelContent content(ModelId id) {
             return catalogs.snapshot().find(id).map(entry -> entry.content()).orElse(null);
         }
 
-        public ResourceRequest resourceRequest(Hash256 id, String target, String texture, ModelResourcePurpose purpose,
+        public ResourceRequest resourceRequest(ModelId id, String target, String texture, ModelResourcePurpose purpose,
             Class<?> subject) {
             return manager.request(id, target, texture, purpose, subject);
         }
@@ -412,14 +416,12 @@ public final class DemandDiskReadVerification {
             return manager.findReady(request);
         }
 
-        public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request,
-            WorkPriority priority) {
+        public ResourceLease getOrStartCached(ResourceRequest request, WorkPriority priority) {
             acquisitionCalls.incrementAndGet();
             return manager.getOrStartCached(request, priority);
         }
 
-        public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request,
-            WorkPriority priority) {
+        public ResourceLease getOrStartOffline(ResourceRequest request, WorkPriority priority) {
             acquisitionCalls.incrementAndGet();
             return manager.getOrStartOffline(request, priority);
         }
@@ -438,23 +440,33 @@ public final class DemandDiskReadVerification {
         }
 
         public ClientDemandCoordinator.SelectionContext context() {
-            return new ClientDemandCoordinator.SelectionContext(this, false, true);
+            return new ClientDemandCoordinator.SelectionContext(this, new java.util.UUID(0, 1), this, false, true);
         }
 
         public ClientDemandCoordinator.Target authority() {
             return new ClientDemandCoordinator.Target(null, "");
         }
 
-        public boolean installed(ClientDemandCoordinator.Target target) {
+        public boolean installed(ClientDemandCoordinator.Target target, Object application) {
             return false;
         }
 
-        public void send(ClientDemandCoordinator.Target target, long id) {
+        public ClientDemandCoordinator.InitialRoaming retainedInitial(ClientDemandCoordinator.SelectionContext context,
+            ClientDemandCoordinator.Target target) {
+            return null;
+        }
+
+        public void send(ClientDemandCoordinator.SelectionContext context, ClientDemandCoordinator.Target target,
+            long id, com.elfmcys.ysm.model.storage.NamedRoamingSnapshot initial, boolean reinitialize) {
             throw new AssertionError("Automatic cards must not select");
         }
 
         public void reportFailure(Throwable failure) {
             throw new IllegalStateException(failure);
+        }
+
+        public void reportPreferenceReadFailure(Throwable failure) {
+            throw new AssertionError(failure);
         }
 
         @Override
@@ -475,7 +487,7 @@ public final class DemandDiskReadVerification {
         implements ClientDemandCoordinator.CardDisplay, ClientDemandCoordinator.Installation {
         final Fixture fixture;
         final ClientDemandCoordinator.Target target;
-        ClientDemandCoordinator.EntityScope scope;
+        EntityModelDemand scope;
         ModelResourceDemand.Mode mode;
         ResourceLease lease;
 

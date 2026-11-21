@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.client.demand;
 
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.resource.client.*;
 import com.elfmcys.ysm.util.UnsafeUtil;
 import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
@@ -8,15 +9,14 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayDeque;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
 
 import static com.elfmcys.ysm.client.demand.ModelResourceDemand.Mode.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ModelResourceDemandTest {
-    private static final ResourceRequest REQUEST =
-        new ResourceRequest(new Hash256(new byte[Hash256.SIZE]), "player", "default", new BakeProfile("test"));
+    private static final ResourceRequest REQUEST = new ResourceRequest(
+        ModelId.fromHash(new Hash256(new byte[Hash256.SIZE])), "player", "default", new BakeProfile("test"));
 
     @Test
     void readyModeOnlyObservesPublishedResources() {
@@ -37,7 +37,7 @@ class ModelResourceDemandTest {
     @Test
     void onlineAdmissionWaitsForTheOfflineMissWithoutRestartingProbe() {
         var access = new Access();
-        access.offline = new CompletableFuture<>();
+        access.offline = new Lease();
         try (var demand = new ModelResourceDemand(access, REQUEST)) {
             assertNull(demand.advance(READY));
             assertEquals(0, access.cachedCalls + access.offlineCalls + access.onlineCalls);
@@ -45,12 +45,12 @@ class ModelResourceDemandTest {
             assertNull(demand.advance(OFFLINE));
             assertNull(demand.advance(ONLINE));
             assertNull(demand.advance(ONLINE));
-            assertFalse(access.offline.isCancelled());
+            assertEquals(0, ((Lease)access.offline).releases);
             assertEquals(1, access.offlineCalls);
             assertEquals(0, access.onlineCalls);
             assertTrue(demand.hasUnfinishedWork());
 
-            access.offline.complete(Optional.empty());
+            ((Lease)access.offline).result = new AcquireResult.Missing();
             assertNull(demand.advance(ONLINE));
             assertEquals(1, access.onlineCalls);
             assertNull(demand.advance(ONLINE));
@@ -64,12 +64,12 @@ class ModelResourceDemandTest {
     @Test
     void offlineReadyAfterOnlineAdmissionAvoidsAnyNetworkAcquisition() {
         var access = new Access();
-        access.offline = new CompletableFuture<>();
-        var ready = Lease.ready();
+        access.offline = new Lease();
+        var ready = (Lease)access.offline;
         try (var demand = new ModelResourceDemand(access, REQUEST)) {
             demand.advance(OFFLINE);
             demand.advance(ONLINE);
-            assertTrue(access.offline.complete(Optional.of(ready)));
+            ready.result = new AcquireResult.Ready(target());
             assertSame(ready, demand.advance(ONLINE));
             assertEquals(1, access.offlineCalls);
             assertEquals(0, access.onlineCalls);
@@ -79,19 +79,17 @@ class ModelResourceDemandTest {
     }
 
     @Test
-    void closingOfflineWorkAfterOnlineAdmissionReleasesLateReadyWithoutStartingNetwork() {
+    void closingOfflineWorkAfterOnlineAdmissionReleasesItsUseAndStopsProgress() {
         var access = new Access();
-        access.offline = uncancellableFuture();
+        access.offline = new Lease();
         var demand = new ModelResourceDemand(access, REQUEST);
         demand.advance(OFFLINE);
         demand.advance(ONLINE);
         demand.close();
-        var late = Lease.ready();
-        access.offline.complete(Optional.of(late));
         demand.close();
         assertNull(demand.advance(ONLINE));
         assertFalse(demand.hasUnfinishedWork());
-        assertEquals(1, late.releases);
+        assertEquals(1, ((Lease)access.offline).releases);
         assertEquals(1, access.offlineCalls);
         assertEquals(0, access.onlineCalls);
     }
@@ -103,8 +101,9 @@ class ModelResourceDemandTest {
             demand.advance(CACHED);
             demand.advance(OFFLINE);
             demand.advance(ONLINE);
-            assertEquals(java.util.List.of(WorkPriority.LOCAL_PLAYER, WorkPriority.LOCAL_PLAYER,
-                WorkPriority.LOCAL_PLAYER), access.priorities);
+            assertEquals(
+                java.util.List.of(WorkPriority.LOCAL_PLAYER, WorkPriority.LOCAL_PLAYER, WorkPriority.LOCAL_PLAYER),
+                access.priorities);
             assertEquals(1, access.cachedCalls);
             assertEquals(1, access.offlineCalls);
             assertEquals(1, access.onlineCalls);
@@ -116,7 +115,7 @@ class ModelResourceDemandTest {
         var access = new Access();
         try (var demand = new ModelResourceDemand(access, REQUEST)) {
             demand.advance(ONLINE);
-            assertEquals(java.util.List.of(WorkPriority.BACKGROUND, WorkPriority.BACKGROUND), access.priorities);
+            assertEquals(java.util.List.of(WorkPriority.BACKGROUND), access.priorities);
         }
     }
 
@@ -141,12 +140,12 @@ class ModelResourceDemandTest {
     @Test
     void policyChangePreservesAdmittedPendingUseButNotTheNextCacheHit() {
         var access = new Access();
-        access.offline = new CompletableFuture<>();
+        access.offline = new Lease();
         var admitted = new ModelResourceDemand(access, REQUEST);
         assertNull(admitted.advance(OFFLINE));
         access.permitted = false;
-        var accepted = Lease.ready();
-        access.offline.complete(Optional.of(accepted));
+        var accepted = (Lease)access.offline;
+        accepted.result = new AcquireResult.Ready(target());
         assertSame(accepted, admitted.advance(ONLINE));
         assertEquals(0, accepted.releases);
         accepted.close();
@@ -181,18 +180,18 @@ class ModelResourceDemandTest {
     @Test
     void hoverUpgradeDoesNotWaitForCachedProbeAndLeavingCancelsOnlyItsInterest() {
         var access = new Access();
-        access.cached = new CompletableFuture<>();
+        access.cached = new Lease();
         var pending = new Lease();
-        access.offline = CompletableFuture.completedFuture(Optional.of(pending));
+        access.offline = pending;
         var demand = new ModelResourceDemand(access, REQUEST);
         demand.advance(CACHED);
         demand.advance(OFFLINE);
-        assertTrue(access.cached.isCancelled());
+        assertEquals(1, ((Lease)access.cached).releases);
         assertEquals(1, access.offlineCalls);
         demand.advance(CACHED);
         assertEquals(1, pending.releases);
         assertEquals(0, access.onlineCalls);
-        access.offline = CompletableFuture.completedFuture(Optional.of(Lease.ready()));
+        access.offline = Lease.ready();
         var ready = demand.advance(OFFLINE);
         assertNotNull(ready);
         assertEquals(2, access.offlineCalls);
@@ -201,68 +200,31 @@ class ModelResourceDemandTest {
     }
 
     @Test
-    void ordinaryLocalPendingIsNotRestartedAsOnlineWork() {
-        var access = new Access();
-        var pending = new Lease();
-        access.offline = CompletableFuture.completedFuture(Optional.of(pending));
-        var demand = new ModelResourceDemand(access, REQUEST);
-        demand.advance(OFFLINE);
-        demand.advance(ONLINE);
-        assertEquals(0, access.onlineCalls);
-        pending.result = new AcquireResult.Ready(target());
-        assertSame(pending, demand.advance(ONLINE));
-        demand.close();
-        assertEquals(0, pending.releases);
-        pending.close();
-    }
-
-    @Test
-    void lateCompletionAfterCloseReleasesOnlyItsOwnLease() {
-        var access = new Access();
-        access.cached = uncancellableFuture();
-        var old = new ModelResourceDemand(access, REQUEST);
-        old.advance(CACHED);
-        old.close();
-        var replacement = new ModelResourceDemand(access, REQUEST);
-        var replacementLease = Lease.ready();
-        access.ready.add(replacementLease);
-        assertSame(replacementLease, replacement.advance(CACHED));
-        var late = Lease.ready();
-        access.cached.complete(Optional.of(late));
-        assertEquals(1, late.releases);
-        assertEquals(0, replacementLease.releases);
-        assertNull(old.advance(ONLINE));
-        replacementLease.close();
-        replacement.close();
-    }
-
-    @Test
     void completedButUnconsumedAcquisitionIsReleasedOnClose() {
         var access = new Access();
-        access.cached = new CompletableFuture<>();
+        access.cached = new Lease();
         var demand = new ModelResourceDemand(access, REQUEST);
         demand.advance(CACHED);
-        var ready = Lease.ready();
-        access.cached.complete(Optional.of(ready));
+        var ready = (Lease)access.cached;
+        ready.result = new AcquireResult.Ready(target());
         demand.close();
         demand.close();
         assertEquals(1, ready.releases);
     }
 
     @Test
-    void currentReadySupersedesProbeAndLateProbeCannotReplaceIt() {
+    void stablePendingPollsRetainTheOriginalUse() {
         var access = new Access();
-        access.cached = uncancellableFuture();
+        var pending = new Lease();
+        access.cached = pending;
         var demand = new ModelResourceDemand(access, REQUEST);
-        demand.advance(CACHED);
-        var shared = Lease.ready();
-        access.ready.add(shared);
-        assertSame(shared, demand.advance(CACHED));
-        var late = Lease.ready();
-        access.cached.complete(Optional.of(late));
-        assertEquals(1, late.releases);
-        assertEquals(0, shared.releases);
-        shared.close();
+        for (int tick = 0; tick < 100; tick++)
+            assertNull(demand.advance(CACHED));
+        pending.result = new AcquireResult.Ready(target());
+        assertSame(pending, demand.advance(CACHED));
+        assertEquals(1, access.cachedCalls);
+        assertEquals(0, pending.releases);
+        pending.close();
         demand.close();
     }
 
@@ -270,7 +232,7 @@ class ModelResourceDemandTest {
     void failedAcquisitionRetainsCauseWithoutPerFrameRetryOrGlobalPoison() {
         var access = new Access();
         var failure = new IllegalArgumentException("invalid animation");
-        access.cached = CompletableFuture.failedFuture(failure);
+        access.cached = Lease.failed(failure);
         var demand = new ModelResourceDemand(access, REQUEST);
         demand.advance(CACHED);
         demand.advance(OFFLINE);
@@ -288,7 +250,7 @@ class ModelResourceDemandTest {
     @Test
     void cancellationIsNotContentFailure() {
         var access = new Access();
-        access.cached = CompletableFuture.failedFuture(new CancellationException());
+        access.cached = Lease.failed(new CancellationException());
         var demand = new ModelResourceDemand(access, REQUEST);
         demand.advance(CACHED);
         assertTrue(demand.failure() instanceof CancellationException);
@@ -310,15 +272,6 @@ class ModelResourceDemandTest {
         demand.close();
     }
 
-    private static <T> CompletableFuture<T> uncancellableFuture() {
-        return new CompletableFuture<>() {
-            @Override
-            public boolean cancel(boolean interrupt) {
-                return false;
-            }
-        };
-    }
-
     private static final class Access implements ModelResourceDemand.Access {
         boolean permitted = true;
 
@@ -328,8 +281,8 @@ class ModelResourceDemandTest {
         }
 
         final ArrayDeque<ResourceLease> ready = new ArrayDeque<>();
-        CompletableFuture<Optional<ResourceLease>> cached = CompletableFuture.completedFuture(Optional.empty());
-        CompletableFuture<Optional<ResourceLease>> offline = CompletableFuture.completedFuture(Optional.empty());
+        ResourceLease cached = ResourceLease.missing(REQUEST);
+        ResourceLease offline = ResourceLease.missing(REQUEST);
         int cachedCalls, offlineCalls, onlineCalls;
         final java.util.List<WorkPriority> priorities = new java.util.ArrayList<>();
 
@@ -339,14 +292,14 @@ class ModelResourceDemandTest {
         }
 
         @Override
-        public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkPriority priority) {
+        public ResourceLease getOrStartCached(ResourceRequest request, WorkPriority priority) {
             cachedCalls++;
             priorities.add(priority);
             return cached;
         }
 
         @Override
-        public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request, WorkPriority priority) {
+        public ResourceLease getOrStartOffline(ResourceRequest request, WorkPriority priority) {
             offlineCalls++;
             priorities.add(priority);
             return offline;
@@ -368,6 +321,12 @@ class ModelResourceDemandTest {
         static Lease ready() {
             var lease = new Lease();
             lease.result = new AcquireResult.Ready(target());
+            return lease;
+        }
+
+        static Lease failed(Throwable failure) {
+            var lease = new Lease();
+            lease.result = new AcquireResult.Failed(new ResourceFailure(ResourceFailure.Kind.TRANSIENT, failure));
             return lease;
         }
 

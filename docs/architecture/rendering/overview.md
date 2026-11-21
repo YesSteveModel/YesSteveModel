@@ -4,155 +4,157 @@
 
 ## 职责与边界
 
-CPU 渲染管线把已验证几何与骨骼姿态变成 Minecraft 可提交的顶点。Java 选择纹理、绘制状态和宿主输出；native 完成 bake、extract 和顶点计算；Minecraft/Iris 负责上传与 draw。
+CPU 渲染管线负责将已验证的模型几何与骨骼姿态转换为 Minecraft 可直接提交的顶点数据。跨语言分工明确：Java 侧负责选择纹理、绘制状态和宿主输出路径；native 侧完成几何烘焙（bake）、帧状态提取（extract）和顶点计算（render）；最终的缓冲区上传与 draw 调用仍交由 Minecraft 或 Iris 完成。
 
 ## Seam Contract
 
-按本次交接定位契约：
+按本次交接定位对应契约：
 
-- 取得可消费的几何、帧状态或 locator：[帧状态交付](#帧状态发布与借用)。
-- 把顶点交给宿主 consumer 并裁决接管：[宿主输出](#顶点输出与宿主接管)。
+- 获取可消费的几何、帧状态或 locator：[帧状态发布与借用](#帧状态发布与借用)。
+- 将顶点交给宿主 consumer 并裁决宿主接管：[顶点输出与宿主接管](#顶点输出与宿主接管)。
 
 ### 共同规则
 
-适用范围：本页的帧状态发布与借用、顶点输出与宿主接管两项交接。两项共同遵守本地呈现、三阶段职责、资源保留和并发边界。
+适用范围：本页的“帧状态发布与借用”与“顶点输出与宿主接管”两项交接。两项共同遵守以下本地呈现边界、三阶段职责划分、共享资源保留与并发规则。
 
 #### 本地呈现边界
 
-本机模型、第一人称手臂和模型音效的控制见[本地呈现决策](../../product-decisions/decisions/local-presentation-control.md#ddlocal-player-controls-presentation)。这些控制决定是否采用 YSM 呈现，不改变服务端游戏事实或其他玩家状态。
+玩家对本机模型、第一人称手臂和模型音效的显隐控制见[本地呈现决策](../../product-decisions/decisions/local-presentation-control.md#ddlocal-player-controls-presentation)。这些开关只决定本机是否采用 YSM 呈现，不影响服务端游戏事实或其他玩家的同步状态。
 
-本机 body 的 producer 职责与绘制许可分开。自身屏蔽时 body 继续逻辑推进，arm 等纯消费者结束当前运行；解除全部限制后按最新请求恢复。
+本机 body 的状态生产职责与绘制许可分开：自身模型被屏蔽时，body 仍继续推进逻辑与动画求值，而第一人称手臂（arm）等纯消费者会结束当前运行；待所有屏蔽限制解除后，再按最新请求恢复。
 
-精确派生 cache 由[模型存储设计](../model-management/storage/derived-artifacts.md)定义；renderer 只提供 bake profile，不解释容器身份。输出与容量失败见[顶点输出](implementation/vertex-output.md)，支持与视觉缺口见[渲染问题](../../status/known-issues/rendering.md)。[GPU Compute Renderer](../../future/gpu-compute-renderer.md)仍是后续方向。
+精确派生 cache 的键和校验规则由[模型存储设计](../model-management/storage/derived-artifacts.md)定义；renderer 只提供自身的 bake profile，不解释容器身份。输出与容量失败分类见[顶点输出](implementation/vertex-output.md)，支持范围与视觉缺口见[渲染问题](../../status/known-issues/rendering.md)。[GPU Compute Renderer](../../future/gpu-compute-renderer.md)仍是后续演进方向。
 
-阶段按数据依赖划分，不保证固定线程。Java 动画 worker 可以求值并 Extract；native render worker 只消费准备好的状态。当前发布与执行关系见[帧执行](implementation/frame-execution.md#任务发布与并发边界)。
+渲染管线的三个阶段按数据依赖划分，不绑定固定线程：Java 动画 worker 可以执行求值与 Extract，native render worker 只消费准备好的帧状态。当前任务发布与并发细节见[帧执行](implementation/frame-execution.md#任务发布与并发边界)。
 
 ```mermaid
 flowchart LR
-    Content["Geometry / base texture"] --> Bake["bake: immutable geometry"]
-    Bake --> Extract["extract: frame state"]
-    Pose["Entity animation pose"] --> Extract
-    Extract --> Render["render: vertex output"]
-    Context["Draw metadata / output range"] --> Render
-    Render --> Host["Minecraft / Iris submission"]
+    Content["模型几何与基础纹理"] --> Bake["bake：不可变几何"]
+    Bake --> Extract["extract：帧状态"]
+    Pose["实体动画姿态"] --> Extract
+    Extract --> Render["render：顶点输出"]
+    Context["绘制元数据与输出区间"] --> Render
+    Render --> Host["Minecraft 或 Iris 提交"]
 ```
 
 #### 设计目标
 
-[一致渲染需求](../../product-decisions/requirements/req-render-model-consistently.md)要求保持受支持的姿态、表面、UV、材质和透明语义。数据布局和执行策略可以替换；内部 `BakedModel`、schedule 和 serialized cache 不成为公开模型格式。
+[一致渲染需求](../../product-decisions/requirements/req-render-model-consistently.md)要求在受支持路径下保持姿态、表面、UV、材质和透明语义一致。管线内部的数据布局与执行策略可以随时替换，内部 `BakedModel`、schedule 以及序列化 cache 不构成公开模型格式。
 
 #### 三阶段契约
 
 | 阶段 | 输入 | 输出与边界 |
 |---|---|---|
-| Bake | 几何、基础纹理 alpha、UV 约定和 bake 选项 | 不可变几何与骨骼映射；不上传纹理、不计算动画 |
-| Extract | 已烘焙几何和 entity 的 `BoneAttribute` | 帧状态、借用 view、locator 与调度计划；不生成顶点 |
-| Render | 有效帧状态、本次矩阵/光照/context、顶点布局和输出区间 | 成功生成后交给宿主 consumer；不改变动画或提交 GPU draw |
+| Bake | 几何定义、基础纹理 alpha、UV 约定与 bake 选项 | 产出不可变几何与骨骼映射；不上传纹理，不计算动画 |
+| Extract | 已烘焙几何与实体的 `BoneAttribute` | 产出帧状态、借用 view、locator 与调度计划；不生成顶点 |
+| Render | 有效帧状态、本次矩阵与光照上下文、顶点布局与输出区间 | 成功生成顶点后交给宿主 consumer；不修改动画状态，也不提交 GPU draw |
 
 #### 共享资源保留
 
-Renderer 通过模型管理的 lease 保活共享资源，只拥有渲染所需的可变状态。另建 target cache、default pin 或引用计数会复制加载、淘汰和关闭判断。通用保留与物理关闭权由[模型生命周期](../model-management/overview.md#新使用接纳与独立保留)定义。
+Renderer 通过模型管理提供的 lease 保活共享资源，自身只持有渲染所需的可变帧状态。不在渲染层另建 target cache、默认常驻 pin 或第二套引用计数，避免把加载、淘汰和关闭判断复制两份。通用保留与物理关闭权由[模型生命周期](../model-management/overview.md#新使用接纳与独立保留)定义。
 
 #### 状态与绘制并发
 
-同一状态的 Extract、Render、resize 和释放串行。当前 renderer 的共享 executor、透明 scratch 与 fallback 要求 render 全局串行；不同实体的 Java 动画与 Extract 可以并行。当前并发限制见[并发边界](implementation/frame-execution.md#任务发布与并发边界)，不能据 worker pool 推定 render 可重入。
+对同一个帧状态，Extract、Render、resize 与释放必须串行执行。当前渲染器共享了 executor、透明排序临时缓冲（scratch）与 fallback 缓冲，因此 `Render` 必须全局串行；不同实体的 Java 动画求值与 Extract 则可以并行。具体并发限制见[并发边界](implementation/frame-execution.md#任务发布与并发边界)，不能因为存在 worker pool 就假定 `Render` 可重入。
 
-视觉、重入和组合验证缺口见[渲染问题](../../status/known-issues/rendering.md)。
+当前的视觉、重入与组合验证缺口见[渲染问题](../../status/known-issues/rendering.md)。
 
 ### 帧状态发布与借用
 
-本项显式继承[共同规则](#共同规则)。
-
 **边界与权威**
 
-Bake 与 Extract 向帧消费者交付几何、骨骼映射和状态；阶段职责与非公开制品范围见[三阶段契约](#三阶段契约)和[设计目标](#设计目标)。
+本契约继承[共同规则](#共同规则)，规定 Bake 与 Extract 如何向帧消费者交付不可变几何、骨骼映射和帧状态。各阶段职责与内部制品的非公开边界见[三阶段契约](#三阶段契约)和[设计目标](#设计目标)。
 
 **前置条件与输入**
 
-帧结果只在原 owner、安装、输出槽及相容采样/context 中有效。任务交接提供可见性，不能将旧结果变成当前结果。安装替换、结果撤销及 hook 改变许可后，消费者应重新判断接纳资格；不能靠仍可达的 view、相同模型内容或已经完成的任务恢复旧资格。实体执行权由[任务交接](../animation/entity-lifecycle.md#执行权与任务交接)提供。
+帧结果只在产生它的原负责方、原安装、对应输出槽以及兼容的采样上下文中有效。跨线程任务交接只提供内存可见性，不会让过期结果重新生效。一旦发生安装替换、结果撤销或 hook 修改绘制许可，消费者必须重新检查接纳资格，不能凭仍可达的 view、相同模型内容或已经完成的任务复用旧资格。实体执行权由[任务交接](../animation/entity-lifecycle.md#执行权与任务交接)定义。
 
 **结果与保证**
 
-帧状态、借用 view、locator 与 schedule 按[三阶段契约](#三阶段契约)交付。
+Extract 完整通过后，按[三阶段契约](#三阶段契约)交付帧状态、借用 view、locator 与调度计划。几何可见面遵循下列统一规则。
 
 #### 几何与可见面
 
-Cube 的完整性按原始六面结构判断，不随纹理透明洞或全透明面省略而变化。完整块的正尺寸资格要求三轴均正，负尺寸资格要求三轴均负；零厚度不获得这两类完整块剔除资格。
+Cube 是否完整按原始六面结构判断，不因纹理存在透明洞或省略全透明面而改变。正尺寸完整块要求三轴尺寸均大于零，负尺寸完整块要求三轴尺寸均小于零；任一轴零厚度都不具备这两类完整块的面剔除资格。
 
 | 几何条件 | 可见面规则 |
 |---|---|
 | 完整、完全不透明的正尺寸块 | 背面剔除 |
-| 完整负尺寸块，包括三轴镜像 | 正面剔除，不因不透明或透明分类改变 |
+| 完整负尺寸块（含三轴镜像） | 正面剔除，不因不透明或透明分类改变 |
 | 不完整块或透明正尺寸块 | 保留可见背面 |
 
-负尺寸描边通过正面剔除保留背面外壳，不能仅因尺寸为负而拒绝或取绝对值。完整正尺寸不透明块可省去被遮挡的背面；其他上述情况保留可见背面，避免改变观察角度后作品缺面。一轴、二轴镜像和从模型内部观察不属于这组可见面保证范围；该范围不扩展为所有借助实现特性的艺术技巧保证。
+负尺寸描边依靠正面剔除保留背面外壳，因此不能因为尺寸为负就拒绝烘焙或对尺寸取绝对值。完整且完全不透明的正尺寸块可以省去被遮挡的背面；其余情况保留可见背面，防止切换观察角度时出现缺面。一轴镜像、二轴镜像以及从模型内部向外观察不属于这组可见面保证范围，也不把该范围扩展为对所有依赖实现特性的艺术技巧做兜底。
 
-这些规则落实[创作结果与输出等价](../../product-decisions/decisions/geometry-regions.md)，由 Bake 映射到[逻辑分区](implementation/bake-and-partition.md#四逻辑分区)。逻辑面语义不规定物理数组或 SIMD 布局。
+上述规则落实[创作结果与输出等价](../../product-decisions/decisions/geometry-regions.md)，由 Bake 映射到[四逻辑分区](implementation/bake-and-partition.md#四逻辑分区)。逻辑面语义不限定底层物理数组或 SIMD 布局。
 
 **所有权与时序**
 
 #### 资源与状态
 
-不可变 `BakedModel` 可以共享；`ModelState` 保留所用 backing，拥有 pose、可见骨骼和 schedule。Java 只借用 view，Extract 不保留输入 attribute。下次 Extract、invalidate 或 close 前，应结束旧 view 和 locator 消费；view 可达不延长地址有效期。实体或第一人称输出 owner 负责保留状态和模型 lease，prepared 结果本身不接管这些资源。
+不可变 `BakedModel` 可跨实体共享；`ModelState` 保留所需的底层 backing，并独占姿态、可见骨骼和调度计划。Java 侧只借用 native view，Extract 完成后不保留输入的 `BoneAttribute`。下一次 Extract、invalidate 或 close 发生前，必须结束旧 view 与 locator 的消费，Java 引用可达并不能延长底层 native 地址的有效期。实体或第一人称输出的负责方负责保活帧状态与模型 lease，prepared 结果对象本身不接管这些资源的生命周期。
 
-Canonical 与 mutable 输出隔离保存，但同一 entity 仍共享动画状态。重复观察不能重置逻辑动作门禁；恢复派生输出也不能重放已提交动作。不同 context 的复用条件与第一人称局部根输出见[帧执行](implementation/frame-execution.md)。
+规范输出槽（canonical）与可变输出槽（mutable）分开保存，但同一实体仍共享底层的动画状态。重复观察同一实体不能重置逻辑动作门禁，恢复派生输出也不能重放已提交的动作。不同绘制上下文的复用条件与第一人称局部根输出见[帧执行](implementation/frame-execution.md)。
 
 **失败与拒收**
 
-`GeoModelState` 接纳 native 提取结果。提取先撤销旧消费资格，全部遍历、调度、JNI 写回和 Java view/count/locator 后置验证成功后才发布。发布只授权消费这份帧状态，不自动授权宿主接管。任何后置失败都使结果不可消费。成功 draw 不撤销姿态；本次输出条件无效与姿态本身损坏分别处理。
+`GeoModelState` 负责接纳 native 提取结果。开始提取前会先撤销旧的消费资格；只有层级遍历、调度构建、JNI 写回以及 Java 侧的 view、计数与 locator 后置校验全部通过后，才会发布新结果，任一后置校验失败都会使结果保持不可消费。发布本身只授权读取这份帧状态，不自动授权取消宿主渲染。一次成功的 draw 不会撤销当前姿态；“本次输出条件不合法”和“姿态状态本身损坏”按不同路径分开处理。
 
 **证据与依赖**
 
-发布依赖[实体执行权](../animation/entity-lifecycle.md#执行权与任务交接)和[JNI 采用](../native-runtime/overview.md#jni-能力与结果交付)。帧内借用、局部根及证据入口见[帧执行](implementation/frame-execution.md)。
+帧状态发布依赖[实体执行权](../animation/entity-lifecycle.md#执行权与任务交接)和[JNI 能力与结果交付](../native-runtime/overview.md#jni-能力与结果交付)。帧内借用、局部根提取与验证入口见[帧执行](implementation/frame-execution.md)。
 
 ### 顶点输出与宿主接管
 
-本项显式继承[共同规则](#共同规则)。
-
 **边界与权威**
 
-Native 只计算顶点；宿主接管由绘制调用方按消费结果裁决。分工与共享资源权威见[共同规则](#共同规则)。
+本契约继承[共同规则](#共同规则)。Native 只负责把有效帧状态计算成顶点数据，不参与业务判定；是否取消原版或宿主渲染，由绘制调用方根据本次实际消费结果决定。
 
 **前置条件与输入**
 
-帧输入先满足[帧状态发布与借用](#帧状态发布与借用)中的原 owner、安装、输出槽及采样/context 资格。
+进入顶点输出前，输入帧状态必须先满足[帧状态发布与借用](#帧状态发布与借用)中的原负责方、原安装、输出槽与采样上下文资格。
 
-Java 的 `RenderType` 决定宿主状态，native context 表达绘制环境，`VertexKind` 选择布局。三者正交。Direct 与 fallback 都在 native 成功后才提交；预留区间不等于宿主已经消费。
+三个正交维度共同决定最终输出：Java 的 `RenderType` 决定宿主渲染状态与目标 consumer，native context 表达绘制环境，`VertexKind` 选择顶点内存布局。无论走 direct 路径还是 fallback 路径，都必须在 native 计算成功后才向宿主提交；预先申请输出区间本身不代表宿主已经消费。
 
 **结果与保证**
 
-宿主接管另有当次准备与消费边界。第三人称只有有效 Prepared 或明确主动隐藏依据才能取消宿主，准备与消费使用同一结果。左右手只有对应侧实际消费成功才取消，合法空几何也算成功；缺根保留该侧宿主。背景只附加初始姿态。Hook 后应复核精确 owner、安装、输出和通道，不能用第二次 update 修补旧结果。
+宿主接管遵循当次准备与消费一致的原则：
+- **第三人称**：只有持有有效 Prepared 结果或具备明确主动隐藏依据时才取消宿主渲染，且准备阶段与消费阶段使用同一份结果。
+- **第一人称左右手**：仅当对应一侧实际消费成功时才取消该侧宿主手臂，合法空几何也算消费成功；缺少对应骨骼根时保留该侧宿主渲染。背景槽只附加初始姿态。
+- **Hook 复核**：Hook 回调返回后必须重新核对对应的负责方、安装、输出槽与通道，不能通过第二次 update 修补旧结果。
 
-Native 完成顶点计算与宿主消费成功是两个事实。`NativeRenderer` 解释计算结果，成功后才推进 direct 区间或完整回放 fallback；两条路径都不把分配成功、非零顶点数或部分写入当作消费成功。绘制调用方据本次消费结果裁决接管，不由 native 计算层取消宿主。
+Native 完成顶点计算与宿主完成消费是两个独立事实。`NativeRenderer` 解释 native 返回结果，确认成功后才推进 direct 顶点区间或向原 consumer 完整回放 fallback 数据；两条路径都不会把内存预留成功、非零顶点数或部分写入当成消费成功。绘制调用方依据这次消费结果决定是否接管宿主，native 计算层不直接取消宿主渲染。
 
 **所有权与时序**
 
 #### 并行输出与宿主提交
 
-并行任务只写预先分配的互不重叠区间，几何组不在任务间拆分。
+并行顶点任务各自写入预先分配的、互不重叠的输出区间，同一个几何组不会跨任务拆分。
 
-宿主输出区间只借给本次同步 native Render。调用方保留 backing，并在取得地址前完成扩容；借用期间不再次预约、扩容、重置或释放该 backing。Native 在返回前结束全部并行写入；Java 随后提交或放弃本次输出，不能把地址留给后续异步工作。JNI 的地址、容量与采用责任见[能力交接](../native-runtime/overview.md#jni-能力与结果交付)。
+宿主输出区间只借用给本次同步的 native Render 调用。Buffer 负责方在取得原始地址前完成扩容，随后把本次可写地址、字节容量和 backing anchor 交给渲染入口：direct JNI 直接写入这段地址，fallback 路径则借用实际的 Java 数组。借用期间严禁再次预约、扩容、重置或释放该 backing。Native 在返回前会结束全部并行写入；Java 侧保活相关对象直到调用返回，随后再提交或放弃本次输出，绝不把借用地址留给后续异步任务。JNI 地址、容量与采用责任见[JNI 能力与结果交付](../native-runtime/overview.md#jni-能力与结果交付)。
 
 **失败与拒收**
 
 #### 输出与失败
 
-合法空结果与失败应区分。姿态完整但外部区间不足或宿主矩阵非法时，只拒绝本次输出；无法证明 pose 完整时撤销状态。YSM 可控失败不 advance direct，也不回放 fallback；consumer 已开始回放后的异常仍传播，不具有通用回滚。
+必须明确区分“合法空结果”与“失败”：
+- **纯输出拒绝**：如果姿态本身完整，但外部输出区间不足或宿主传入的矩阵非法，只拒绝本次输出，保留原姿态状态。
+- **状态撤销**：如果无法证明姿态完整或状态已损坏，立即撤销当前发布状态。
+- **可控失败与宿主异常**：所有 YSM 可控失败都不会推进 direct 区间，也不会触发 fallback 回放；但如果 consumer 已经开始回放且在回放中途抛出异常，则原样向外传播，不提供通用回滚。
 
-实体求值阶段的 OOM 由执行 owner 终结，本次没有 Prepared 可供绘制；不会以单动画或表达式默认值继续输出。该边界不包围宿主 consumer，也不为输出入口增加阶段标记或异常 relay。
+实体求值阶段如果触发 OOM，由执行负责方终止本次求值，绘制阶段不会拿到可用的 Prepared 结果，也不会退回到单个动画或表达式默认值强行输出。这条 OOM 边界不包裹宿主 consumer，也不为输出入口新增阶段标记或异常中继。
 
-[输出等价契约](../../product-decisions/decisions/geometry-regions.md#bcoutput-paths-are-visually-equivalent)只约束受支持路径的作品结果。共同求值或绘制错误不会因切换输出路径消失，恢复应由故障 owner 判断，不能默认另一条路径可用于恢复。
+[输出等价契约](../../product-decisions/decisions/geometry-regions.md#bcoutput-paths-are-visually-equivalent)只约束受支持路径下的视觉结果。公共求值或绘制错误不会因为切换输出路径就自动消失；是否恢复应由故障负责方判断，不能默认拿另一条输出路径来做兜底恢复。
 
 **证据与依赖**
 
-输出依赖[帧状态发布](#帧状态发布与借用)及[JNI 地址与采用责任](../native-runtime/overview.md#jni-能力与结果交付)。实现与结果分类见[顶点输出](implementation/vertex-output.md)；视觉、重入和组合缺口沿[共同规则](#共同规则)的证据限制判断。
+顶点输出依赖[帧状态发布与借用](#帧状态发布与借用)和[JNI 能力与结果交付](../native-runtime/overview.md#jni-能力与结果交付)。详细实现与结果分类见[顶点输出](implementation/vertex-output.md)；视觉、重入与组合验证缺口沿[共同规则](#共同规则)的证据范围判断。
 
 ## 设计取舍
 
-按完整几何组分配互不重叠的输出区间，保持确定性、连续访问和单一输出容量，并省去共享 append。按组数近似均衡仍可能产生尾部不均衡。
+按完整几何组预先分配互不重叠的输出区间，省去了多线程共享 append 竞争，同时保证顶点顺序确定、内存访问连续且输出容量一次算清。代价是按组数做近似均衡时，如果个别几何组特别大，仍可能出现尾部负载不均。
 
 ## 实现与验证入口
 
-- [Bake 与派生身份](implementation/bake-and-partition.md)：不可变几何、逻辑分区及 cache 资格。
+- [Bake 与派生身份](implementation/bake-and-partition.md)：不可变几何、逻辑分区与 cache 资格。
 - [帧执行](implementation/frame-execution.md)：发布、借用、局部根与并发边界。
-- [顶点输出](implementation/vertex-output.md)：宿主接管与失败来源。
+- [顶点输出](implementation/vertex-output.md)：宿主接管与失败分类。

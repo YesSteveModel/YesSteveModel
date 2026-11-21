@@ -1,9 +1,8 @@
 package com.elfmcys.ysm.model.catalog.source;
 
-/** Public namespace; access policy remains a separate catalog fact. */
+/** Public region namespace; access policy is a separate catalog fact. */
 public enum CatalogRoot {
-    GLOBAL_CUSTOM("global:custom", CatalogRootKind.CUSTOM), GLOBAL_AUTH("global:auth", CatalogRootKind.AUTH),
-    LOCAL_CUSTOM("local:custom", CatalogRootKind.CUSTOM), LOCAL_AUTH("local:auth", CatalogRootKind.AUTH),
+    GLOBAL("global:", CatalogRootKind.MODELS), LOCAL("local:", CatalogRootKind.MODELS),
     BUILTIN("builtin:", CatalogRootKind.BUILTIN);
 
     private final String prefix;
@@ -23,10 +22,6 @@ public enum CatalogRoot {
     }
 
     public static CatalogRoot local(CatalogRootKind kind) {
-        return switch (kind) {
-            case CUSTOM -> LOCAL_CUSTOM;
-            case AUTH -> LOCAL_AUTH;
-            case BUILTIN -> BUILTIN;
-        };
+        return kind == CatalogRootKind.BUILTIN ? BUILTIN : LOCAL;
     }
 }

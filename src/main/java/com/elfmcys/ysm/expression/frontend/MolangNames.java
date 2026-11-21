@@ -9,7 +9,7 @@ import java.util.Objects;
 import java.util.regex.Pattern;
 
 public final class MolangNames {
-    private static final Pattern IDENTIFIER = Pattern.compile("[a-z_][a-z0-9_]{0,127}");
+    private static final Pattern IDENTIFIER = Pattern.compile("[a-z_][a-z0-9_]*");
 
     private MolangNames() {}
 

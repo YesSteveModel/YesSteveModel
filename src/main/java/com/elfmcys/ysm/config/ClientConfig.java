@@ -69,8 +69,8 @@ public class ClientConfig {
         MODEL_SCREEN_EAGER_LOADING = builder.define("ModelScreenEagerLoading", highEndDevice);
 
         builder.comment("Maximum number of unused model render targets retained in memory. Zero disables retention.");
-        MODEL_RETENTION_COUNT = builder.defineInRange("ModelRetentionCount",
-            highEndDevice ? 30 : 10, 0, Integer.MAX_VALUE);
+        MODEL_RETENTION_COUNT =
+            builder.defineInRange("ModelRetentionCount", highEndDevice ? 30 : 10, 0, Integer.MAX_VALUE);
 
         builder.comment("The amount of volume when the animation is played.");
         SOUND_VOLUME = builder.defineInRange("SoundVolume", 100.0, 0.0, 100.0);

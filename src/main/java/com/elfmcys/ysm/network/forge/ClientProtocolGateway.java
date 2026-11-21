@@ -4,26 +4,29 @@ import com.elfmcys.ysm.capability.PlayerAnimatableCapability;
 import com.elfmcys.ysm.model.service.ClientModelService;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
 import com.elfmcys.ysm.expression.inventory.ProgramRole;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
+import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.info.roulette.forms.ConfigActionRoute;
 import com.elfmcys.ysm.network.protocol.ExpressionProtocol;
 import com.elfmcys.ysm.network.protocol.EntityRefEncoder;
 import com.elfmcys.ysm.network.protocol.ProtocolMessages;
 import com.elfmcys.ysm.network.NetworkHandler;
 import com.elfmcys.ysm.proto.network.ConfigActionProto;
-import com.elfmcys.ysm.proto.network.EmitMolangSyncProto;
 import com.elfmcys.ysm.proto.network.EntityRefProto;
-import com.elfmcys.ysm.proto.network.SelectModelRequestProto;
+import com.elfmcys.ysm.model.storage.NamedRoamingSnapshot;
 import com.elfmcys.ysm.proto.network.SubmitConfigActionRequestProto;
 import com.elfmcys.ysm.proto.network.SwingHandRequestProto;
-import com.elfmcys.ysm.proto.network.UpdateStarredModelRequestProto;
 import it.unimi.dsi.fastutil.floats.FloatList;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 
-import java.nio.ByteBuffer;
+import com.elfmcys.ysm.proto.network.*;
+import com.elfmcys.ysm.network.protocol.RoamingDictionary;
+import com.elfmcys.ysm.network.protocol.SelectionCodec;
+import com.elfmcys.ysm.capability.CommittedSelection;
 
 public final class ClientProtocolGateway {
     private static final LocalPlayerStateReporter STATE_REPORTER = new LocalPlayerStateReporter();
@@ -40,46 +43,59 @@ public final class ClientProtocolGateway {
     }
 
     public static void playSelfAnimation(String animationId) {
+        var player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player != null)
+            player.getCapability(com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider.CAP)
+                .ifPresent(capability -> capability.playExtraAnimation(animationId));
         STATE_REPORTER.setAnimation(animationId);
     }
 
     public static void stopSelfAnimation() {
+        var player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player != null)
+            player.getCapability(com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider.CAP)
+                .ifPresent(PlayerAnimatableCapability::stopExtraAnimation);
+        reportAnimationStopped();
+    }
+
+    public static void reportAnimationStopped() {
         STATE_REPORTER.setAnimation("");
     }
 
-    public static void acceptAuthoritativeFull(Hash256 modelHash, Integer roamingKey) {
-        STATE_REPORTER.acceptAuthoritativeFull(modelHash, roamingKey);
+    public static void selectionCommitted(ClientPlayerPreferences.CurrentSelection selected,
+        NamedRoamingSnapshot initial) {
+        STATE_REPORTER.selectionCommitted(selected, initial);
     }
 
-    public static void localPlayerCloned() {
-        STATE_REPORTER.restartReportLifetime();
+    public static void sendTexture(ClientPlayerPreferences.CurrentSelection selected) {
+        var player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player != null)
+            send(ProtocolMessages.SELECTION_STATE_SYNC_ID,
+                SelectionStateSyncProto.newBuilder().setEntityId(player.getId()).setIntentId(selected.intentId())
+                    .setState(SelectionStateProto.newBuilder().setTextureId(selected.target().texture()).build())
+                    .build());
     }
 
-    public static void selectModel(Hash256 hash, String textureId) {
+    public static void selectModel(ModelId hash, String textureId) {
         ClientModelService.instance().demands()
             .select(new com.elfmcys.ysm.client.demand.ClientDemandCoordinator.Target(hash, textureId));
     }
 
-    static void sendModelSelection(Hash256 hash, String textureId, long intentId) {
-        if (intentId == 0)
-            throw new IllegalArgumentException("Selection requires a nonzero intent identifier");
-        var request = SelectModelRequestProto.newBuilder().setTextureId(textureId).setIntentId(intentId);
-        if (hash == null) {
-            request.setIntrinsicDefault(true);
-        } else {
-            request.setModelId(ByteBuffer.wrap(hash.bytes()));
-        }
-        if (!NetworkHandler.isRemoteChannelPresent() || ClientSessionRuntime.businessSession().isEmpty())
-            throw new IllegalStateException("Model selection connection is unavailable");
-        NetworkHandler.sendToServer(request.build());
+    static SelectionChangeProto prepareSelection(int entityId, ClientDemandCoordinator.Target target, long intentId,
+        NamedRoamingSnapshot initial, RoamingDictionary dictionary) {
+        var selected = new CommittedSelection(target.identity(), intentId, null, dictionary,
+            dictionary.encode(initial.toPayload(java.util.Arrays.asList(dictionary.names()))), target.texture(), "");
+        return SelectionChangeProto.newBuilder().setSelection(SelectionCodec.write(entityId, selected)).build();
     }
 
-    public static void updateStar(Hash256 hash, boolean add) {
-        send(ProtocolMessages.UPDATE_STARRED_MODEL_REQUEST_ID,
-            UpdateStarredModelRequestProto.newBuilder().setModelHash(ByteBuffer.wrap(hash.bytes()))
-                .setOperation(add ? com.elfmcys.ysm.proto.network.StarredModelOperation.ADD
-                    : com.elfmcys.ysm.proto.network.StarredModelOperation.REMOVE)
-                .build());
+    static void sendModelSelection(net.minecraft.network.Connection connection, SelectionChangeProto message) {
+        if (!connection.isConnected() || !NetworkHandler.isChannelPresent(connection))
+            throw new ClientDemandCoordinator.NotSubmitted("Selection transport is unavailable");
+        NetworkHandler.sendToServer(connection, message);
+    }
+
+    public static void updateStar(ModelId hash, boolean add) {
+        ClientModelService.instance().preferences().favourite(hash, add);
     }
 
     public static void submitConfigBoolean(AnimatableEntity<?> animatable, long generation, ConfigActionRoute route,
@@ -105,8 +121,6 @@ public final class ClientProtocolGateway {
         ConfigActionProto.Builder actionBuilder) {
         animatable.waitForAsyncUpdate();
         var runtime = animatable.getExpressionRuntime();
-        var module =
-            runtime.module().orElseThrow(() -> new IllegalStateException("entity has no current expression target"));
         if (generation <= 0 || runtime.generation() != generation) {
             throw new IllegalStateException("config action belongs to a stale entity generation");
         }
@@ -115,11 +129,11 @@ public final class ClientProtocolGateway {
             throw new IllegalArgumentException("config action violates the wire contract");
         }
         if (action.hasBoolValue()) {
-            module.requireProgram(route.location(), ProgramRole.CONFIG_WRITE_BOOL, "write");
+            runtime.validateConfigAction(generation, route.location(), ProgramRole.CONFIG_WRITE_BOOL, "write");
         } else if (action.hasF32Value()) {
-            module.requireProgram(route.location(), ProgramRole.CONFIG_WRITE_F32, "write");
+            runtime.validateConfigAction(generation, route.location(), ProgramRole.CONFIG_WRITE_F32, "write");
         } else {
-            module.requireProgram(route.labelLocation(), ProgramRole.CONFIG_LABEL_ACTION,
+            runtime.validateConfigAction(generation, route.labelLocation(), ProgramRole.CONFIG_LABEL_ACTION,
                 route.labelDiscriminator(action.labelName(), action.labelIndex()));
         }
         Entity entity = animatable.getEntity();
@@ -129,9 +143,20 @@ public final class ClientProtocolGateway {
     }
 
     public static void emitMolangSync(AnimatableEntity<?> animatable, FloatList values) {
-        var module = animatable.getExpressionRuntime().module()
-            .orElseThrow(() -> new IllegalStateException("entity has no current expression target"));
-        send(ProtocolMessages.EMIT_MOLANG_SYNC_ID, molangSyncMessage(consumerSemantics(animatable), values));
+        var selected = ClientModelService.instance().preferences().currentSelection();
+        if (selected == null || selected.intentId() <= 0 || !animatable.installedForSelection(selected.operation()))
+            return;
+        var session = ClientSessionRuntime.businessSession().orElse(null);
+        if (session == null
+            || !(selected
+                .operation() instanceof com.elfmcys.ysm.model.session.client.PlayerPreferenceSession.Scope scope)
+            || scope.authority() != session)
+            return;
+        try {
+            NetworkHandler.sendToServer(session.connection(),
+                molangSyncMessage(animatable.getEntity().getId(), selected.intentId(), values));
+        } catch (RuntimeException ignored) {
+        }
     }
 
     private static com.elfmcys.ysm.expression.inventory.SharedExpressionSemantics
@@ -150,20 +175,14 @@ public final class ClientProtocolGateway {
             .setIdentity(ExpressionProtocol.identity(semantics)).setAction(action).build();
     }
 
-    static EmitMolangSyncProto
-        molangSyncMessage(com.elfmcys.ysm.expression.inventory.SharedExpressionSemantics semantics, FloatList values) {
-        if (values.size() > MolangEventCatalog.SYNC_MAX_ARGUMENTS) {
+    static SelectionStateSyncProto molangSyncMessage(int entityId, long intentId, FloatList values) {
+        if (values.size() > MolangEventCatalog.SYNC_MAX_ARGUMENTS)
             throw new IllegalArgumentException("sync payload exceeds catalog bound");
-        }
-        for (var index = 0; index < values.size(); index++) {
-            if (!Float.isFinite(values.getFloat(index))) {
-                throw new IllegalArgumentException("sync payload must contain finite F32 values");
-            }
-        }
-        var message = EmitMolangSyncProto.newBuilder();
-        values.forEach((float value) -> message.addArguments(value));
-        message.setIdentity(ExpressionProtocol.identity(semantics));
-        return message.build();
+        for (int i = 0; i < values.size(); i++)
+            if (!Float.isFinite(values.getFloat(i)))
+                throw new IllegalArgumentException("sync payload must be finite");
+        return SelectionStateSyncProto.newBuilder().setEntityId(entityId).setIntentId(intentId)
+            .setSync(SyncArgumentsProto.newBuilder().addArguments(values.toFloatArray()).build()).build();
     }
 
     public static void swingHand(InteractionHand hand) {

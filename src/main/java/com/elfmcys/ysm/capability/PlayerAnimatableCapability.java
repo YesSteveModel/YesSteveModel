@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.capability;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.client.compat.FirstPersonCompat;
 import com.elfmcys.ysm.client.compat.bettercombat.BetterCombatCompat;
 import com.elfmcys.ysm.client.entity.CustomPlayerEntity;
@@ -22,7 +23,13 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
 
     public PlayerAnimatableCapability(Player player) {
         super(player, player instanceof LocalPlayer, true);
-        roamingSession = new ClientRoamingSession(player, player instanceof LocalPlayer, this::reloadGeoModel);
+        roamingSession = new ClientRoamingSession(player, player instanceof LocalPlayer, this::reloadGeoModel,
+            this::selectionOperation);
+    }
+
+    @Override
+    protected boolean worldSubjectSamplePublisher(Player subject) {
+        return true;
     }
 
     @Override
@@ -38,12 +45,13 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
     protected Runnable prepareRoleInstallation(ModelRenderTarget target,
         com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.PreparedInstallation prepared) {
         var player = super.prepareRoleInstallation(target, prepared);
-        var localOnly = com.elfmcys.ysm.network.forge.ClientSessionRuntime.state().orElse(null)
-            == com.elfmcys.ysm.model.session.client.ClientModelSession.State.LOCAL;
-        var roaming = roamingSession.prepare(target.modelHash().roamingHash(), target.expressions(), prepared, localOnly);
+        var roaming = roamingSession.prepare(target.modelHash(), prepared, target.publishedId());
         return () -> {
             player.run();
             roaming.run();
+            var selected = roamingSession.remoteSelection();
+            if (selected != null && selected.model().equals(target.publishedId()))
+                setRemoteAnimation(selected.animation());
         };
     }
 
@@ -91,28 +99,59 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
         }
     }
 
-    public void resetRoamingVars(int modelHashShort, Int2FloatOpenHashMap vars) {
+    public void applyRemoteAnimation(String animation) {
         waitForAsyncUpdate();
-        roamingSession.resetFromServer(getExpressionRuntime(), modelHashShort, vars);
+        if (installedForSelection(roamingSession.remoteOperation()))
+            setRemoteAnimation(animation);
     }
 
-    public void clearRoamingVars() {
-        waitForAsyncUpdate();
-        roamingSession.clearFromServer(getExpressionRuntime());
+    private void setRemoteAnimation(String animation) {
+        extraAnimationName = animation.isEmpty() ? "idle" : animation;
+        isPlayingExtraAnimation = !animation.isEmpty();
+        isExtraAnimationDirty = true;
     }
 
-    public void clearRoamingVars(int modelHashShort) {
-        waitForAsyncUpdate();
-        roamingSession.clearFromServer(getExpressionRuntime(), modelHashShort);
+    public CommittedSelection remoteSelection() {
+        return roamingSession.remoteSelection();
     }
 
-    public boolean hasRoamingStorage(int hashShort) {
-        return roamingSession.hasStorage(hashShort);
+    public Object remoteSelectionOperation() {
+        return roamingSession.remoteOperation();
     }
 
-    public void updateRemoteRoamingVars(int modelHashShort, Int2FloatMap vars) {
+    public void acceptRemoteSelection(CommittedSelection selected, Object operation, RemoteSyncBudget budget) {
         waitForAsyncUpdate();
-        roamingSession.updateRemote(getExpressionRuntime(), modelHashShort, vars);
+        roamingSession.acceptSelection(getExpressionRuntime(), selected, operation, budget);
+        prepareStateInputs();
+    }
+
+    public void updateRemoteRoamingVars(com.elfmcys.ysm.network.protocol.RoamingValues values) {
+        waitForAsyncUpdate();
+        roamingSession.updateRemote(getExpressionRuntime(), values);
+        prepareStateInputs();
+    }
+
+    public void acceptRemoteSync(com.elfmcys.ysm.expression.host.EventArguments arguments) {
+        waitForAsyncUpdate();
+        roamingSession.acceptSync(getExpressionRuntime(), arguments, this::dispatchSync);
+    }
+
+    public void clearRemoteSelection() {
+        try {
+            waitForAsyncUpdate();
+        } finally {
+            roamingSession.clearRemote();
+        }
+    }
+
+    @Override
+    protected void onEntityRetired() {
+        roamingSession.clearRemote();
+    }
+
+    @Override
+    protected void prepareStateInputs() {
+        roamingSession.drain(getExpressionRuntime(), this::dispatchSync);
     }
 
     @Override
@@ -120,25 +159,23 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
         return roamingSession.prepareLocalProjection();
     }
 
-    public RoamingSnapshot roamingSnapshot(int authoritativeModelKey) {
+    public RoamingSnapshot roamingSnapshot(com.elfmcys.ysm.model.domain.PublishedModelId authoritativeModelKey) {
         waitForAsyncUpdate();
         return roamingSession.snapshot(getExpressionRuntime(), authoritativeModelKey);
     }
 
     /** The roaming namespace of the applied model, or null before one is loaded. */
-    public Integer localRoamingKey() {
+    public ModelId localRoamingKey() {
         return roamingSession.currentRoamingKey();
     }
 
-    public record RoamingSnapshot(int modelKey, Int2FloatOpenHashMap values,
-        com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.Installation installation, boolean available) {
-        public RoamingSnapshot(int modelKey, Int2FloatOpenHashMap values,
-            com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.Installation installation) {
-            this(modelKey, values, installation, true);
-        }
-
-        public static RoamingSnapshot unavailable(int modelKey) {
-            return new RoamingSnapshot(modelKey, new Int2FloatOpenHashMap(), null, false);
+    public record RoamingSnapshot(com.elfmcys.ysm.model.domain.PublishedModelId modelKey,
+        dev.semaweave.RoamingPayload values,
+        com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.Installation installation, Object operation,
+        boolean available) {
+        public static RoamingSnapshot unavailable(com.elfmcys.ysm.model.domain.PublishedModelId key) {
+            return new RoamingSnapshot(key, new dev.semaweave.RoamingPayload(new short[0], new float[0]), null, null,
+                false);
         }
     }
 
@@ -147,7 +184,7 @@ public final class PlayerAnimatableCapability extends CustomPlayerEntity {
         source.waitForAsyncUpdate();
         roamingSession.moveFrom(source.roamingSession);
         if (source.isAssigned())
-            updateModelAndTexture(source.getModelHash(), source.textureName);
+            selectModel(source.getModelHash(), source.getRequestedTextureName(), source.selectionOperation());
         else
             revokeAssignment();
         setDisabled(source.isDisabled());

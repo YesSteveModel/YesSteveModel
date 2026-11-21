@@ -9,7 +9,7 @@
 
 | 任务涉及 | 决策包 |
 |---|---|
-| TaCZ/SlashBlade/背包/Curios、Oculus/Iris 与未来桥接 API | [mod-integration](../decisions/mod-integration.md) |
+| TaCZ、SlashBlade、背包、Curios、Oculus、Iris 与未来桥接 API | [mod-integration](../decisions/mod-integration.md) |
 
 ## Uses
 

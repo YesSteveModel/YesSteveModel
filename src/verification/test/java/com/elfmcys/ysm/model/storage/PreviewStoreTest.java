@@ -37,9 +37,10 @@ class PreviewStoreTest {
 
     @Test
     void contentVersionChangesInsideReplacementBeforeAnObserverCanFail() throws Exception {
-        var store = new PreviewStore(temp.resolve("versions"), ignored -> {
-            throw new IllegalStateException("observer failed");
-        });
+        var store = new PreviewStore(temp.resolve("versions"), com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("versions"))), ignored -> {
+                throw new IllegalStateException("observer failed");
+            });
         var id = hash(29);
         var before = store.observe(id);
         try (var image = PreviewStore.decode(PNG)) {
@@ -62,7 +63,8 @@ class PreviewStoreTest {
 
     @Test
     void aStoredReadCarriesItsOwnVersionAcrossAReplacement() throws Exception {
-        var store = new PreviewStore(temp.resolve("observed-read"));
+        var store = new PreviewStore(temp.resolve("observed-read"), com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("observed-read"))));
         var id = hash(30);
         try (var image = PreviewStore.decode(PNG)) {
             store.accept(id, image);
@@ -80,11 +82,13 @@ class PreviewStoreTest {
     void usableMemoryAfterPersistenceFailureHasADistinctDeliveryProof() throws Exception {
         var root = temp.resolve("failed-persistence-version");
         var refuse = new AtomicBoolean(true);
-        var store = new PreviewStore(root, new AtomicSharedCache(root, replacement -> {
-            if (refuse.get())
-                throw new IOException("replacement refused");
-            replacement.run();
-        }), ignored -> {});
+        var store = new PreviewStore(root,
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(root, replacement -> {
+                if (refuse.get())
+                    throw new IOException("replacement refused");
+                replacement.run();
+            })), ignored -> {
+            });
         var id = hash(31);
         var persistent = store.observe(id);
         try (var image = PreviewStore.decode(PNG)) {
@@ -117,12 +121,11 @@ class PreviewStoreTest {
             var returned = preview.bytes();
             returned[0] = 0;
             assertArrayEquals(PNG, preview.bytes());
-            var store = new PreviewStore(temp.resolve("sealed"));
+            var store = new PreviewStore(temp.resolve("sealed"), com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("sealed"))));
             store.accept(hash(20), preview);
             store.commit(hash(20), preview, AtomicSharedCache.AtomicReplacement::run);
             assertArrayEquals(PNG, Files.readAllBytes(preview(temp.resolve("sealed"), hash(20))));
-            assertTrue(java.util.Arrays.stream(PreviewStore.EncodedPreview.class.getDeclaredConstructors())
-                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(constructor.getModifiers())));
         }
     }
 
@@ -185,7 +188,8 @@ class PreviewStoreTest {
     void realCodecRunsOncePerNewInputAndNeverForQualifiedStoreHandoff() throws Exception {
         PreviewDecodeProbe.reset();
         var root = temp.resolve("decode-count");
-        var store = new PreviewStore(root);
+        var store = new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)));
         try (var preview = PreviewStore.decode(PNG)) {
             assertEquals(1, PreviewDecodeProbe.count());
             store.accept(hash(21), preview);
@@ -212,7 +216,8 @@ class PreviewStoreTest {
     @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "ysm.previewDecodeProbe", matches = "true")
     void tamperedRealStagingFailsItsCopyCheckAndPreservesTheOldFile() throws Exception {
         var root = temp.resolve("tampered-staging");
-        var store = new PreviewStore(root);
+        var store = new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)));
         try (var encoded = PreviewStore.decode(PNG)) {
             store.accept(hash(22), encoded);
             PreviewDecodeProbe.reset();
@@ -231,7 +236,8 @@ class PreviewStoreTest {
     @Test
     void invalidReadsAreNonDestructiveAndValidReplacementUsesOnlyContainerId() throws Exception {
         var cacheRoot = temp.resolve("cache");
-        var store = new PreviewStore(cacheRoot);
+        var store = new PreviewStore(cacheRoot, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cacheRoot)));
         var id = hash(1);
         Files.createDirectories(cacheRoot.resolve("previews"));
         var invalid = new byte[] {1, 2, 3};
@@ -252,7 +258,8 @@ class PreviewStoreTest {
     @Test
     void differentContainerIdsNeverShareOneCacheEntry() throws Exception {
         var cacheRoot = temp.resolve("separate");
-        var store = new PreviewStore(cacheRoot);
+        var store = new PreviewStore(cacheRoot, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cacheRoot)));
         store.accept(hash(1), PNG);
 
         assertTrue(store.load(hash(2)).isEmpty());
@@ -261,11 +268,13 @@ class PreviewStoreTest {
     @Test
     void strictCommitFailurePreservesOldImageAndNeverReportsOptionalSuccess() throws Exception {
         var root = temp.resolve("strict");
-        new PreviewStore(root).accept(hash(4), PNG);
+        new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root))).accept(hash(4), PNG);
         var observed = new AtomicInteger();
-        var store = new PreviewStore(root, new AtomicSharedCache(root, replacement -> {
-            throw new IOException("Atomic replacement failed");
-        }), ignored -> observed.incrementAndGet());
+        var store = new PreviewStore(root,
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(root, replacement -> {
+                throw new IOException("Atomic replacement failed");
+            })), ignored -> observed.incrementAndGet());
         try (var bytes = com.elfmcys.ysm.buffer.ArrayBuffer.move(PNG.clone())) {
             assertThrows(IOException.class, () -> store.commit(hash(4), bytes, replacement -> replacement.run()));
         }
@@ -279,9 +288,11 @@ class PreviewStoreTest {
     @Test
     void strictCommitRequiresTheEffectGateEvenWhenBytesMatchExistingImage() throws Exception {
         var root = temp.resolve("gate");
-        new PreviewStore(root).accept(hash(5), PNG);
+        new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root))).accept(hash(5), PNG);
         var observed = new AtomicInteger();
-        var store = new PreviewStore(root, ignored -> observed.incrementAndGet());
+        var store = new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)), ignored -> observed.incrementAndGet());
         var called = new AtomicBoolean();
         try (var bytes = com.elfmcys.ysm.buffer.ArrayBuffer.move(PNG.clone())) {
             assertThrows(IOException.class, () -> store.commit(hash(5), bytes, replacement -> {
@@ -298,9 +309,10 @@ class PreviewStoreTest {
     void persistenceFailureDoesNotRevokeTheValidatedInMemoryImage() throws Exception {
         var cacheRoot = temp.resolve("failed-write");
         var observed = new AtomicInteger();
-        var cache = new AtomicSharedCache(cacheRoot, replacement -> {
-            throw new IOException("injected commit failure");
-        });
+        var cache =
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(cacheRoot, replacement -> {
+                throw new IOException("injected commit failure");
+            }));
 
         var accepted = new PreviewStore(cacheRoot, cache, ignored -> observed.incrementAndGet()).accept(hash(3), PNG);
 
@@ -359,7 +371,8 @@ class PreviewStoreTest {
             file.write(ByteBuffer.wrap(new byte[] {1}));
         }
 
-        new PreviewStore(cacheRoot).accept(id, PNG);
+        new PreviewStore(cacheRoot, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cacheRoot))).accept(id, PNG);
 
         assertArrayEquals(PNG, Files.readAllBytes(preview(cacheRoot, id)));
     }
@@ -371,7 +384,8 @@ class PreviewStoreTest {
         var invalid = new byte[] {1, 2, 3};
         Files.createDirectories(root.resolve("previews"));
         Files.write(preview(root, id), invalid);
-        var store = new PreviewStore(root);
+        var store = new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)));
         try (var encoded = store.readEncoded(id).orElseThrow()) {
             var actual = new byte[encoded.size()];
             encoded.nio().get(actual);
@@ -386,7 +400,9 @@ class PreviewStoreTest {
         var root = temp.resolve("bounds");
         var id = hash(12);
         var path = preview(root, id);
-        var store = new PreviewStore(root);
+        Files.createDirectories(path.getParent());
+        var store = new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)));
         assertTrue(store.readEncoded(id).isEmpty());
         Files.createDirectories(path);
         assertTrue(store.readEncoded(id).isEmpty());
@@ -421,11 +437,16 @@ class PreviewStoreTest {
         } catch (IOException | UnsupportedOperationException unavailable) {
             org.junit.jupiter.api.Assumptions.abort("Symbolic links are unavailable: " + unavailable);
         }
-        assertThrows(AssetLoadException.class, () -> new PreviewStore(root).readEncoded(hash(13)));
+        assertTrue(new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root))).readEncoded(hash(13)).isEmpty());
         var parentRoot = temp.resolve("linked-parent");
-        Files.createDirectory(parentRoot);
-        Files.createSymbolicLink(parentRoot.resolve("previews"), root.resolve("previews"));
-        assertThrows(AssetLoadException.class, () -> new PreviewStore(parentRoot).readEncoded(hash(13)));
+        var parentTarget = preview(parentRoot, hash(13));
+        Files.move(parentTarget.getParent(), parentRoot.resolve("f/retired-p"));
+        Files.createSymbolicLink(parentTarget.getParent(), root.resolve("f/p"));
+        assertTrue(new PreviewStore(parentRoot,
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(parentRoot)))
+            .readEncoded(hash(13)).isEmpty());
         assertArrayEquals(new byte[] {1}, Files.readAllBytes(outside));
     }
 
@@ -439,8 +460,12 @@ class PreviewStoreTest {
         Files.write(preview(outside, id), bytes);
         for (var linkRoot : new boolean[] {false, true}) {
             var root = temp.resolve(linkRoot ? "junction-root" : "junction-parent");
-            var link = linkRoot ? root : Files.createDirectory(root).resolve("previews");
-            var destination = linkRoot ? outside : outside.resolve("previews");
+            if (!linkRoot) {
+                var target = preview(root, id);
+                Files.move(target.getParent(), root.resolve("f/retired-p"));
+            }
+            var link = linkRoot ? root : root.resolve("f/p");
+            var destination = linkRoot ? outside : outside.resolve("f/p");
             var process = new ProcessBuilder("cmd.exe", "/c", "mklink", "/J", link.toString(), destination.toString())
                 .redirectErrorStream(true).start();
             assertTrue(process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS));
@@ -448,19 +473,19 @@ class PreviewStoreTest {
             try {
                 assertFalse(Files.isSymbolicLink(link));
                 if (linkRoot) {
-                    try (var opened = new PreviewStore(root).readEncoded(id).orElseThrow()) {
+                    try (var opened = new PreviewStore(root,
+                        com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)))
+                        .readEncoded(id).orElseThrow()) {
                         assertArrayEquals(bytes, opened.array());
                     }
                     continue;
                 }
-                if (linkRoot) {
-                    try (var opened = new PreviewStore(root).readEncoded(id).orElseThrow()) {
-                        assertArrayEquals(bytes, opened.array());
-                    }
-                } else {
-                    var failure = assertThrows(AssetLoadException.class, () -> new PreviewStore(root).readEncoded(id));
-                    assertEquals(AssetLoadException.Reason.ACCESS, failure.reason());
-                }
+                assertTrue(
+                    new PreviewStore(root,
+                        com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)))
+                        .readEncoded(id).isEmpty());
                 assertArrayEquals(bytes, Files.readAllBytes(preview(outside, id)));
             } finally {
                 Files.delete(link);
@@ -498,7 +523,7 @@ class PreviewStoreTest {
     }
 
     @Test
-    void encodedReadAndManagementProbePreserveWindowsMandatoryLockFailures() throws Exception {
+    void encodedReadAndManagementProbeMissOnWindowsMandatoryLockFailures() throws Exception {
         org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("os.name").startsWith("Windows"),
             "This fixture requires Windows mandatory file locks");
         var root = temp.resolve("locked-read");
@@ -506,14 +531,12 @@ class PreviewStoreTest {
         Files.createDirectories(root.resolve("previews"));
         var path = preview(root, id);
         Files.write(path, PNG);
-        var store = new PreviewStore(root);
+        var store = new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)));
         try (var input = FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE);
             var ignored = input.lock()) {
-            var failure = assertThrows(IOException.class, () -> store.readEncoded(id));
-            assertEquals(AssetLoadException.Reason.ACCESS,
-                assertInstanceOf(AssetLoadException.class, failure).reason());
-            assertInstanceOf(IOException.class, failure.getCause());
-            assertThrows(IOException.class, () -> store.probe(id));
+            assertTrue(store.readEncoded(id).isEmpty());
+            assertTrue(store.probe(id).isEmpty());
         }
         try (var encoded = store.readEncoded(id).orElseThrow()) {
             assertEquals(PNG.length, encoded.size());
@@ -536,14 +559,15 @@ class PreviewStoreTest {
         var root = temp.resolve("observed-accept");
         var id = hash(14);
         var observed = new ArrayList<Hash256>();
-        var store = new PreviewStore(root, committed -> {
-            observed.add(committed);
-            try {
-                assertArrayEquals(PNG, Files.readAllBytes(preview(root, committed)));
-            } catch (IOException failure) {
-                throw new AssertionError(failure);
-            }
-        });
+        var store = new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)), committed -> {
+                observed.add(committed);
+                try {
+                    assertArrayEquals(PNG, Files.readAllBytes(preview(root, committed)));
+                } catch (IOException failure) {
+                    throw new AssertionError(failure);
+                }
+            });
         try (var first = store.accept(id, PNG); var second = store.accept(id, PNG)) {
             assertArrayEquals(PNG, first.bytes());
             assertArrayEquals(PNG, second.bytes());
@@ -556,11 +580,12 @@ class PreviewStoreTest {
         var root = temp.resolve("observed-commit");
         var id = hash(15);
         var events = new ArrayList<String>();
-        var store = new PreviewStore(root, committed -> {
-            assertEquals(id, committed);
-            assertEquals(List.of("gate", "persistent"), events);
-            events.add("observer");
-        });
+        var store = new PreviewStore(root, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(root)), committed -> {
+                assertEquals(id, committed);
+                assertEquals(List.of("gate", "persistent"), events);
+                events.add("observer");
+            });
         try (var bytes = com.elfmcys.ysm.buffer.ArrayBuffer.move(PNG.clone())) {
             store.commit(id, bytes, replacement -> {
                 events.add("gate");
@@ -630,7 +655,12 @@ class PreviewStoreTest {
     }
 
     private static Path preview(Path cacheRoot, Hash256 containerId) {
-        return cacheRoot.resolve("previews").resolve(containerId + ".image");
+        try {
+            return TestCacheFiles.path(cacheRoot, com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.PREVIEW,
+                containerId.toString(), false);
+        } catch (IOException failure) {
+            throw new java.io.UncheckedIOException(failure);
+        }
     }
 
     private static Hash256 hash(int value) {

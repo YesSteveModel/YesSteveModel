@@ -1,12 +1,13 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.expression.aot.TestExpressionModules;
 import com.elfmcys.ysm.format.schema.file.PBRImageSources;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
 import com.elfmcys.ysm.format.schema.model.views.ModelInfoView;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
 import com.elfmcys.ysm.model.resource.client.AcquireResult;
@@ -98,7 +99,8 @@ class ModelTextureLifecycleVerificationTest {
                     throw new AssertionError(failure);
                 }
             }, worker);
-            var lease = cache.getOrStart(request(2), content(2), key(), (ignored, dispatch) -> loading, current(), OWNER, WorkPriority.BACKGROUND);
+            var lease = cache.getOrStart(request(2), content(2), key(), (ignored, dispatch) -> loading, current(),
+                OWNER, WorkPriority.BACKGROUND);
 
             await(fixture.decodeEntered);
             assertSample(lease, previous, id(1), previousTexture, publisher.manager);
@@ -151,13 +153,14 @@ class ModelTextureLifecycleVerificationTest {
 
         try (var cache = cache(publisher, 4)) {
             var lease = cache.getOrStart(request(11), content(11), key(),
-                (ignored, dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(candidate)),
+                (ignored, dispatch) -> CompletableFuture
+                    .completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(candidate)),
                 current(), OWNER, WorkPriority.BACKGROUND);
 
             cache.tick();
 
             assertInstanceOf(AcquireResult.Failed.class, lease.poll());
-            assertEquals(0, cache.readyCount());
+            assertTrue(cache.findReady(request(11), content(11), key(), current()).isEmpty());
             assertSample(lease, previous, id(10), previousTexture, publisher.manager);
             assertTrue(events.contains("registration"));
             assertEquals(fault == HostFault.UPLOAD, events.contains("upload"));
@@ -181,8 +184,9 @@ class ModelTextureLifecycleVerificationTest {
         var staleTarget = target();
         try (var cache = cache(unusedPublisher, 4)) {
             var lease = cache.getOrStart(request(20), content(20), key(),
-                (ignored, dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(
-                    new ModelRenderTargetLoader.ModelCandidate(staleTarget, stale.prepared))),
+                (ignored,
+                    dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(
+                        new ModelRenderTargetLoader.ModelCandidate(staleTarget, stale.prepared))),
                 (content, key, request) -> false, OWNER, WorkPriority.BACKGROUND);
             cache.tick();
 
@@ -195,8 +199,9 @@ class ModelTextureLifecycleVerificationTest {
         var cancelledTarget = target();
         try (var cache = cache(unusedPublisher, 4)) {
             var lease = cache.getOrStart(request(21), content(21), key(),
-                (ignored, dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(
-                    new ModelRenderTargetLoader.ModelCandidate(cancelledTarget, cancelled.prepared))),
+                (ignored,
+                    dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(
+                        new ModelRenderTargetLoader.ModelCandidate(cancelledTarget, cancelled.prepared))),
                 current(), OWNER, WorkPriority.BACKGROUND);
             var terminal = cache.terminal(lease);
 
@@ -245,14 +250,15 @@ class ModelTextureLifecycleVerificationTest {
         var failureTarget = target();
         try (var cache = cache(publisher, 2)) {
             var failed = cache.getOrStart(request(40), content(40), key(),
-                (ignored, dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(
-                    new ModelRenderTargetLoader.ModelCandidate(failureTarget, failureImages.prepared))),
+                (ignored,
+                    dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(
+                        new ModelRenderTargetLoader.ModelCandidate(failureTarget, failureImages.prepared))),
                 current(), OWNER, WorkPriority.BACKGROUND);
 
             var cancelledTarget = target();
             targets.add(cancelledTarget);
-            var cancelled =
-                cache.getOrStart(request(41), content(41), key(), (ignored, dispatch) -> ready(cancelledTarget), current(), OWNER, WorkPriority.BACKGROUND);
+            var cancelled = cache.getOrStart(request(41), content(41), key(),
+                (ignored, dispatch) -> ready(cancelledTarget), current(), OWNER, WorkPriority.BACKGROUND);
             var cancelledTerminal = cache.terminal(cancelled);
             cancelled.cancelPending();
 
@@ -260,25 +266,24 @@ class ModelTextureLifecycleVerificationTest {
             for (var marker = 42; marker < 46; marker++) {
                 var target = target();
                 targets.add(target);
-                ordinary.add(cache.getOrStart(request(marker), content(marker), key(), (ignored, dispatch) -> ready(target),
-                    current(), OWNER, WorkPriority.BACKGROUND));
+                ordinary.add(cache.getOrStart(request(marker), content(marker), key(),
+                    (ignored, dispatch) -> ready(target), current(), OWNER, WorkPriority.BACKGROUND));
             }
 
             var bootstrapTarget = target();
             targets.add(bootstrapTarget);
-            var bootstrap =
-                cache.getOrStartRequired(request(46), content(46), key(),
-                    ignored -> new ModelRenderTargetLoader.LoadResult.Ready(
-                        ModelRenderTargetLoader.ModelCandidate.testing(bootstrapTarget)),
-                    current(), OWNER, Runnable::run);
+            var bootstrap = cache.getOrStartRequiredAsync(request(46), content(46), key(),
+                (ignored,
+                    dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(
+                        ModelRenderTargetLoader.ModelCandidate.testing(bootstrapTarget))),
+                current(), OWNER, Runnable::run);
             assertInstanceOf(AcquireResult.Ready.class, bootstrap.poll());
-            assertEquals(1, cache.readyCount());
 
             cache.tick();
 
             assertInstanceOf(AcquireResult.Failed.class, failed.poll());
             assertInstanceOf(AcquireResult.Failed.class, cancelledTerminal.join());
-            assertEquals(1, cache.readyCount());
+            assertTrue(cache.findReady(request(42), content(42), key(), current()).isEmpty());
             assertInstanceOf(AcquireResult.Pending.class, ordinary.get(0).poll());
             assertInstanceOf(AcquireResult.Pending.class, ordinary.get(1).poll());
             assertInstanceOf(AcquireResult.Pending.class, ordinary.get(2).poll());
@@ -286,7 +291,6 @@ class ModelTextureLifecycleVerificationTest {
 
             cache.tick();
 
-            assertEquals(3, cache.readyCount());
             assertInstanceOf(AcquireResult.Ready.class, ordinary.get(0).poll());
             assertInstanceOf(AcquireResult.Ready.class, ordinary.get(1).poll());
             assertInstanceOf(AcquireResult.Pending.class, ordinary.get(2).poll());
@@ -294,7 +298,6 @@ class ModelTextureLifecycleVerificationTest {
 
             cache.tick();
 
-            assertEquals(5, cache.readyCount());
             ordinary.forEach(lease -> assertInstanceOf(AcquireResult.Ready.class, lease.poll()));
             failureImages.assertAllClosed();
         } finally {
@@ -334,10 +337,11 @@ class ModelTextureLifecycleVerificationTest {
 
     private static ModelContent content(int marker) {
         var modelId = hash(marker);
-        var representation = representation(new ModelFileIdentity(modelId, hash(marker + 100)));
+        var representation =
+            representation(new ModelFileIdentity(modelId, Hash256.parse(hash(marker + 100).toString().substring(5))));
         return new ModelContent() {
             @Override
-            public Hash256 modelId() {
+            public ModelId modelId() {
                 return modelId;
             }
 
@@ -371,16 +375,18 @@ class ModelTextureLifecycleVerificationTest {
 
     private static ModelRenderTarget target() throws Exception {
         return new ModelRenderTarget(hash(100), "test", new RenderTargetResources() {},
-            new CommonAsset(Map.of(), TargetSoundResources.empty(new ModelFileIdentity(hash(100), hash(101))),
-                new Object2ReferenceOpenHashMap<>(), new Object2ReferenceOpenHashMap<>()),
-            com.elfmcys.ysm.expression.aot.TestExpressionModules.create(),
+            new CommonAsset(Map.of(),
+                TargetSoundResources
+                    .empty(new ModelFileIdentity(hash(100), Hash256.parse(hash(101).toString().substring(5))))),
+            com.elfmcys.ysm.expression.aot.TestExpressionModules
+                .store(com.elfmcys.ysm.expression.aot.TestExpressionModules.create(), Map.of()),
             (ModelInfoView)UnsafeUtil.getUnsafe().allocateInstance(ModelInfoView.class));
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
     @SuppressWarnings("removal")

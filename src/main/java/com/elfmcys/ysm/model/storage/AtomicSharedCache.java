@@ -1,34 +1,38 @@
 package com.elfmcys.ysm.model.storage;
 
-import com.elfmcys.ysm.util.ResourceDiagnostics;
+import com.elfmcys.ysm.natives.storage.NativeCacheRemote;
 import com.elfmcys.ysm.format.AssetLoadException;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.Objects;
 import java.util.UUID;
+import com.elfmcys.ysm.natives.storage.CacheStorageTypes;
+import com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool;
+import com.elfmcys.ysm.natives.storage.CacheStorageTypes.Location;
+import com.elfmcys.ysm.natives.storage.NativeCacheCatalog;
+import com.elfmcys.ysm.natives.storage.NativeFileIdAllocator;
 
 /**
- * Cross-process, immutable-object writer used by the preview, converted and baked caches. One instance guards one
- * physical store root: targets must stay inside it and its key locks live under {@code <root>/locks}, so caches in
- * different roots never share a lock directory.
+ * Staging writer for one physical cache region. Complete files publish atomically; SQLite owns index transactions.
+ * Concurrent generation may duplicate work and never holds an index transaction while writing payload.
  */
-public final class AtomicSharedCache {
-    private static final String LOCK_SUFFIX = ".lck";
-
-    /** Key-lock directory inside one shared-cache root. */
-    static final String LOCK_DIRECTORY = "locks";
+public final class AtomicSharedCache implements AutoCloseable {
 
     private final Path cacheRoot;
     private final AtomicMove atomicMove;
     private final StagingFlush stagingFlush;
     private volatile CacheDirectoryGuard guard;
     private final DerivedStorageWork derivedWork;
+    private DatabaseWork databaseWork;
+    private boolean ownsDatabaseWork;
+    private final boolean ownsDerivedWork;
+    private StorageIndex<NativeCacheCatalog> catalogIndex;
+    private StorageIndex<NativeCacheRemote> remoteIndex;
+    private BakeIndexStore bakeIndex;
+    private final CacheRootCoordinator coordinator;
+    private CacheDatabase<NativeCacheCatalog> catalog;
+    private CacheDatabase<NativeFileIdAllocator> ids;
 
     public AtomicSharedCache(Path cacheRoot) {
         this(cacheRoot, AtomicReplacement::run);
@@ -55,6 +59,8 @@ public final class AtomicSharedCache {
     }
 
     public CacheDirectoryGuard.Observation observe(Path target, boolean createParents) throws IOException {
+        if (!coordinator.registered())
+            coordinator.register();
         var owner = guard();
         var absolute = target.toAbsolutePath().normalize();
         if (absolute.startsWith(cacheRoot))
@@ -63,17 +69,36 @@ public final class AtomicSharedCache {
     }
 
     public FileChannel openRead(Path target) throws IOException {
+        var use = coordinator.borrow();
+        FileChannel channel = null;
         try {
-            return observe(target, false).open(java.util.Set.of(StandardOpenOption.READ));
+            var owner = guard();
+            var absolute = target.toAbsolutePath().normalize();
+            if (absolute.startsWith(cacheRoot))
+                absolute = owner.root().resolve(cacheRoot.relativize(absolute));
+            channel = owner.openRead(absolute);
+            return new CacheReadChannel(channel, use);
         } catch (java.nio.file.NoSuchFileException absent) {
+            use.close();
             throw absent;
         } catch (IOException | SecurityException failure) {
+            use.close();
             throw AssetLoadException.access("Failed to open guarded cache data: " + target, failure);
+        } catch (RuntimeException | Error failure) {
+            if (channel != null) {
+                try {
+                    channel.close();
+                } catch (IOException cleanup) {
+                    failure.addSuppressed(cleanup);
+                }
+            }
+            use.close();
+            throw failure;
         }
     }
 
     public AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove) {
-        this(cacheRoot, atomicMove, new DerivedStorageWork());
+        this(cacheRoot, atomicMove, new DerivedStorageWork(), CacheFile::force, true);
     }
 
     public AtomicSharedCache(Path cacheRoot, DerivedStorageWork derivedWork) {
@@ -86,133 +111,216 @@ public final class AtomicSharedCache {
     }
 
     AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove, StagingFlush stagingFlush) {
-        this(cacheRoot, atomicMove, new DerivedStorageWork(), stagingFlush);
+        this(cacheRoot, atomicMove, new DerivedStorageWork(), stagingFlush, true);
     }
 
     private AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove, DerivedStorageWork derivedWork) {
-        this(cacheRoot, atomicMove, derivedWork, CacheFile::force);
+        this(cacheRoot, atomicMove, derivedWork, CacheFile::force, false);
     }
 
     private AtomicSharedCache(Path cacheRoot, AtomicMove atomicMove, DerivedStorageWork derivedWork,
-        StagingFlush stagingFlush) {
+        StagingFlush stagingFlush, boolean ownsDerivedWork) {
         this.cacheRoot = Objects.requireNonNull(cacheRoot, "cacheRoot").toAbsolutePath().normalize();
         this.atomicMove = Objects.requireNonNull(atomicMove, "atomicMove");
         this.stagingFlush = Objects.requireNonNull(stagingFlush, "stagingFlush");
         this.derivedWork = Objects.requireNonNull(derivedWork, "derivedWork");
+        this.ownsDerivedWork = ownsDerivedWork;
+        coordinator = new CacheRootCoordinator(this.cacheRoot);
     }
 
     public DerivedStorageWork derivedWork() {
         return derivedWork;
     }
 
-    /** Key-lock directory of one shared-cache root. */
-    static Path locksRoot(Path cacheRoot) {
-        return cacheRoot.resolve(LOCK_DIRECTORY);
+    synchronized void databaseWork(DatabaseWork work) {
+        if (databaseWork != null)
+            throw new IllegalStateException("Cache database owner is already fixed");
+        databaseWork = Objects.requireNonNull(work);
     }
 
-    public void materialize(String namespace, String key, Path target, CacheValidator validator, CacheWriter writer)
-        throws IOException {
-        materialize(namespace, key, target, validator, writer, true);
+    synchronized DatabaseWork databaseWork() {
+        if (databaseWork == null) {
+            databaseWork = new DatabaseWork();
+            ownsDatabaseWork = true;
+        }
+        return databaseWork;
     }
 
-    /** Keeps an old exact object addressable until its verified replacement can commit. */
-    public void materializeReplacing(String namespace, String key, Path target, CacheValidator validator,
-        CacheWriter writer) throws IOException {
-        materialize(namespace, key, target, validator, writer, false);
+    public synchronized StorageIndex<NativeCacheCatalog> catalogIndex() {
+        if (catalogIndex == null)
+            catalogIndex = new StorageIndex<>(this, NativeCacheCatalog::open);
+        return catalogIndex;
     }
 
-    public void materializeReplacing(String namespace, String key, Path target, CacheValidator validator,
-        CacheWriter writer, CommitGate gate) throws IOException {
-        materialize(namespace, key, target, validator, writer, false, Objects.requireNonNull(gate, "gate"), false);
+    public synchronized StorageIndex<NativeCacheRemote> remoteIndex() {
+        if (remoteIndex == null)
+            remoteIndex = new StorageIndex<>(this, NativeCacheRemote::open);
+        return remoteIndex;
     }
 
-    /** The caller linearizes the final replacement with retirement of its effect capability. */
-    public void replaceValidated(String namespace, String key, Path target, CacheValidator validator,
-        CacheWriter writer, CommitGate gate) throws IOException {
-        materialize(namespace, key, target, validator, writer, false, Objects.requireNonNull(gate, "gate"), true);
+    public synchronized BakeIndexStore bakeIndex() {
+        if (bakeIndex == null)
+            bakeIndex = new BakeIndexStore(this);
+        return bakeIndex;
     }
 
-    private void materialize(String namespace, String key, Path target, CacheValidator validator, CacheWriter writer,
-        boolean quarantineInvalid) throws IOException {
-        materialize(namespace, key, target, validator, writer, quarantineInvalid, AtomicReplacement::run, false);
+    public Path root() {
+        return cacheRoot;
     }
 
-    private void materialize(String namespace, String key, Path target, CacheValidator validator, CacheWriter writer,
-        boolean quarantineInvalid, CommitGate gate, boolean replace) throws IOException {
-        var observation = observe(target, true);
-        withKeyLock(namespace, key, () -> {
-            try (var parent = observation.acquire()) {
-                var name = observation.target().getFileName().toString();
-                if (!replace && isValid(parent, name, validator))
-                    return null;
-                if (quarantineInvalid) {
+    public Path layoutRoot() {
+        return cacheRoot.resolve("f");
+    }
+
+    public Path path(Pool pool, long id) {
+        return layoutRoot().resolve(pool.directory()).resolve(CacheStorageTypes.formatFileId(id));
+    }
+
+    public CacheRootCoordinator coordinator() {
+        return coordinator;
+    }
+
+    public synchronized CacheDatabase<NativeCacheCatalog> catalog() {
+        if (catalog == null)
+            catalog = new CacheDatabase<>(this, NativeCacheCatalog::open);
+        return catalog;
+    }
+
+    private synchronized CacheDatabase<NativeFileIdAllocator> ids() {
+        if (ids == null)
+            ids = new CacheDatabase<>(this, NativeFileIdAllocator::open);
+        return ids;
+    }
+
+    /** Reserves both names against allocator loss. Only the created staging entry belongs to this operation. */
+    public Staging reserve(Pool pool) throws IOException {
+        var use = coordinator.borrow();
+        try {
+            return coordinator.acquire(() -> {
+                while (true) {
+                    if (Thread.currentThread().isInterrupted())
+                        throw new java.io.InterruptedIOException("Cache allocation interrupted");
+                    var allocated = StorageIndex.require(ids().execute(NativeFileIdAllocator::allocate));
+                    var location = new Location(allocated.rows().get(0), UUID.randomUUID());
+                    // Physical deletion can precede ownership cleanup, including across allocator reconstruction.
+                    if (pool == Pool.CONVERTED && StorageIndex
+                        .require(catalog().read((db, token) -> db.ownsFile(location.fileId(), token))).rows().get(0)
+                        || pool == Pool.BAKE && bakeIndex().ownsFile(location.fileId()))
+                        continue;
+                    var target = path(pool, location.fileId());
+                    var observation = observe(target, true);
+                    var parent = observation.acquire();
+                    com.elfmcys.ysm.util.DirectoryAccess stagingParent = null;
+                    CacheFile file = null;
                     try {
-                        parent.move(name, parent.fileIdentity(name), parent, name + ".corrupt-" + UUID.randomUUID());
-                    } catch (java.nio.file.NoSuchFileException absent) {
+                        stagingParent = parent.directory("s", true);
+                        file = new CacheFile(stagingParent, target.getFileName().toString());
+                        file.ownedChannel();
+                        try {
+                            java.nio.file.Files.readAttributes(target,
+                                java.nio.file.attribute.BasicFileAttributes.class,
+                                java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                            file.release();
+                            file.delete();
+                            stagingParent.close();
+                            parent.close();
+                            continue;
+                        } catch (java.nio.file.NoSuchFileException free) {
+                            coordinator.retain(pool, location);
+                            return new Staging(pool, location, parent, stagingParent, file, use);
+                        }
+                    } catch (java.nio.file.FileAlreadyExistsException collision) {
+                        if (stagingParent != null)
+                            stagingParent.close();
+                        parent.close();
+                    } catch (IOException | RuntimeException | Error failure) {
+                        if (file != null) {
+                            try {
+                                file.release();
+                                file.delete();
+                            } catch (IOException cleanup) {
+                                failure.addSuppressed(cleanup);
+                            }
+                        }
+                        if (stagingParent != null)
+                            stagingParent.close();
+                        parent.close();
+                        throw failure;
                     }
                 }
-                var staging = new CacheFile(parent, name + ".tmp-" + UUID.randomUUID());
-                boolean committed = false;
-                Throwable failure = null;
-                try {
-                    writer.write(staging);
-                    observation.verify();
-                    staging.position(0);
-                    if (!validator.validate(staging))
-                        throw AssetLoadException
-                            .content("Cache writer produced an invalid object: " + observation.target());
-                    stagingFlush.force(staging);
-                    gate.commit(() -> {
-                        observation.verify();
-                        atomicMove.move(() -> parent.move(staging.name(), staging.identity(), parent, name));
-                    });
-                    committed = true;
-                    if ("baked".equals(namespace) || "baked-animation".equals(namespace))
-                        ResourceDiagnostics.log("bake cache commit: {} namespace={} key={}", observation.target(),
-                            namespace, key);
-                } catch (IOException | RuntimeException | Error error) {
-                    failure = error;
-                    throw error;
-                } finally {
-                    try {
-                        staging.release();
-                        if (!committed)
-                            staging.delete();
-                    } catch (IOException cleanup) {
-                        if (failure != null)
-                            failure.addSuppressed(cleanup);
-                        else
-                            throw cleanup;
-                    }
-                }
-            }
-            return null;
-        });
-    }
-
-    public <T> T withKeyLock(String namespace, String key, LockedOperation<T> operation) throws IOException {
-        var lockFile = lockPath(namespace, key);
-        var observation = observe(lockFile, true);
-        return SharedCacheLocks.withLock(observation, operation);
-    }
-
-    private Path lockPath(String namespace, String key) {
-        var digest = securityDigest((namespace + "\0" + key).getBytes(StandardCharsets.UTF_8));
-        return locksRoot(cacheRoot).resolve(sanitize(namespace))
-            .resolve(HexFormat.of().formatHex(digest) + LOCK_SUFFIX);
-    }
-
-    private static boolean isValid(com.elfmcys.ysm.util.DirectoryAccess parent, String name, CacheValidator validator)
-        throws IOException {
-        try (var channel = parent.file(name, false, false, false)) {
-            return validator.validate(new CacheFile(channel));
-        } catch (java.nio.file.NoSuchFileException absent) {
-            return false;
+            });
+        } catch (IOException | RuntimeException | Error failure) {
+            use.close();
+            throw failure;
         }
     }
 
-    private static String sanitize(String value) {
-        return value.replaceAll("[^A-Za-z0-9._-]", "_");
+    /** Caller owns this capability through compilation, validation and publication, including failed production. */
+    public final class Staging implements AutoCloseable {
+        private final Pool pool;
+        private final Location location;
+        private final com.elfmcys.ysm.util.DirectoryAccess parent;
+        private final com.elfmcys.ysm.util.DirectoryAccess stagingParent;
+        private final CacheFile file;
+        private final CacheRootCoordinator.Use use;
+        private boolean published;
+        private boolean closed;
+
+        private Staging(Pool pool, Location location, com.elfmcys.ysm.util.DirectoryAccess parent,
+            com.elfmcys.ysm.util.DirectoryAccess stagingParent, CacheFile file, CacheRootCoordinator.Use use) {
+            this.pool = pool;
+            this.location = location;
+            this.parent = parent;
+            this.stagingParent = stagingParent;
+            this.file = file;
+            this.use = use;
+        }
+
+        public Location location() {
+            return location;
+        }
+
+        public Path path() {
+            return stagingParent.label().resolve(file.name());
+        }
+
+        public CacheFile file() {
+            if (closed || published)
+                throw new IllegalStateException("Cache staging is no longer writable");
+            return file;
+        }
+
+        public Path publish(CacheValidator validator, CommitGate gate) throws IOException {
+            if (closed || published)
+                throw new IllegalStateException("Cache staging has already terminated");
+            file.position(0);
+            if (!validator.validate(file))
+                throw AssetLoadException.content("Cache writer produced an invalid object: " + path());
+            stagingFlush.force(file);
+            coordinator.acquire(() -> {
+                gate.commit(() -> {
+                    parent.verify();
+                    atomicMove.move(() -> stagingParent.move(file.name(), file.identity(), parent, file.name()));
+                    published = true;
+                });
+                return null;
+            });
+            return AtomicSharedCache.this.path(pool, location.fileId());
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (closed)
+                return;
+            closed = true;
+            try (parent; stagingParent) {
+                file.release();
+                if (!published)
+                    file.delete();
+            } finally {
+                use.close();
+            }
+        }
     }
 
     @FunctionalInterface
@@ -223,11 +331,6 @@ public final class AtomicSharedCache {
     @FunctionalInterface
     public interface CacheWriter {
         void write(CacheFile file) throws IOException;
-    }
-
-    @FunctionalInterface
-    public interface LockedOperation<T> {
-        T run() throws IOException;
     }
 
     @FunctionalInterface
@@ -250,11 +353,23 @@ public final class AtomicSharedCache {
         void force(CacheFile file) throws IOException;
     }
 
-    private static byte[] securityDigest(byte[] input) {
+    @Override
+    public void close() {
+        coordinator.seal();
+        final DatabaseWork owned;
+        synchronized (this) {
+            owned = ownsDatabaseWork ? databaseWork : null;
+        }
         try {
-            return MessageDigest.getInstance("SHA-256").digest(input);
-        } catch (NoSuchAlgorithmException e) {
-            throw new AssertionError(e);
+            if (ownsDerivedWork)
+                derivedWork.close();
+        } finally {
+            try {
+                if (owned != null)
+                    owned.close();
+            } finally {
+                coordinator.close();
+            }
         }
     }
 

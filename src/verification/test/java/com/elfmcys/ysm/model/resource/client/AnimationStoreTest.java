@@ -37,17 +37,38 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 class AnimationStoreTest {
     @Test
-    void onlyCompleteNamespacesProveAbsenceAndPublishedNamesCannotChange() {
-        try (var incomplete = new AnimationStore(); var complete = AnimationStore.eager(Map.of())) {
-            assertFalse(incomplete.resolve("missing").cacheable());
-            incomplete.put("a", animation("a"));
-            assertFalse(incomplete.resolve("a").cacheable());
+    void anAnimationIndexCanBeTransferredToOnlyOneRoot() {
+        var index = AnimationStore.Index.eager(Map.of("idle", animation("idle")));
+        try (var owner =
+            AnimationStore.lazyBound(List.of(), name -> null, index, ignored -> ModelResourceFailureGate.none())) {
+            assertThrows(IllegalStateException.class, () -> AnimationStore.lazyBound(List.of(), name -> null, index,
+                ignored -> ModelResourceFailureGate.none()));
+            assertEquals("idle", owner.get("idle").name);
+        }
+    }
+
+    @Test
+    void rejectedFallbackTransferLeavesTheLocalIndexUnowned() {
+        var local = AnimationStore.Index.eager(Map.of("walk", animation("walk")));
+        var fallback = AnimationStore.Index.eager(Map.of("idle", animation("idle")));
+        try (var fallbackOwner = AnimationStore.fromIndices(fallback, null)) {
+            assertThrows(IllegalStateException.class, () -> AnimationStore.fromIndices(local, fallback));
+            try (var localOwner = AnimationStore.fromIndices(local, null)) {
+                assertEquals("walk", localOwner.get("walk").name);
+                assertEquals("idle", fallbackOwner.get("idle").name);
+            }
+        }
+    }
+
+    @Test
+    void publishedNamespacesProveAbsenceAndExposeImmutableNames() {
+        try (var complete = AnimationStore.eager(Map.of())) {
             assertTrue(complete.resolve("missing").cacheable());
             assertNull(complete.resolve("missing").animation());
-            assertThrows(UnsupportedOperationException.class, () -> complete.put("missing", animation("a")));
-            try (var local = AnimationStore.lazyBound(List.of(), name -> null, incomplete,
+            assertThrows(UnsupportedOperationException.class, () -> complete.keySet().add("missing"));
+            try (var local = AnimationStore.lazyBound(List.of(), name -> null, AnimationStore.Index.eager(Map.of()),
                 ignored -> ModelResourceFailureGate.none())) {
-                assertFalse(local.resolve("missing").cacheable(), "Fallback namespace is also required");
+                assertTrue(local.resolve("missing").cacheable());
             }
         }
     }
@@ -59,15 +80,15 @@ class AnimationStoreTest {
             var loads = new AtomicInteger();
             var replacement = animation("replacement");
             var expected = animation("verified");
-            try (var fallback = AnimationStore.eager(Map.of("a", replacement));
-                var source = AnimationStore.lazyBound(List.of("a"), name -> {
-                    if (loads.incrementAndGet() == 1) {
-                        if (first instanceof Exception error)
-                            throw error;
-                        return null;
-                    }
-                    return expected;
-                }, fallback, ignored -> ModelResourceFailureGate.none()).shared()) {
+            var fallback = AnimationStore.Index.eager(Map.of("a", replacement));
+            try (var source = AnimationStore.lazyBound(List.of("a"), name -> {
+                if (loads.incrementAndGet() == 1) {
+                    if (first instanceof Exception error)
+                        throw error;
+                    return null;
+                }
+                return expected;
+            }, fallback, ignored -> ModelResourceFailureGate.none()).shared()) {
                 var failed = source.resolve("a");
                 assertSame(replacement, failed.animation());
                 assertTrue(failed.fallback());
@@ -97,20 +118,129 @@ class AnimationStoreTest {
             if (!readable.get())
                 throw new IOException("removed");
             return expected;
-        }, null, ignored -> ModelResourceFailureGate.none()).shared();
-            var inherited = AnimationStore.lazyBound(List.of(), name -> null, backing,
-                ignored -> ModelResourceFailureGate.none())) {
+        }, null, ignored -> ModelResourceFailureGate.none()).shared()) {
             var direct = backing.resolve("a");
-            assertSame(expected, direct.animation());
-            assertFalse(direct.fallback());
             readable.set(false);
-            var fallback = inherited.resolve("a");
-            assertSame(expected, fallback.animation());
-            assertTrue(fallback.cacheable());
-            assertTrue(fallback.fallback());
-            assertFalse(backing.resolve("a").fallback());
-            assertFalse(direct.fallback());
-            assertEquals(1, loads.get());
+            try (var inherited = AnimationStore.lazyBound(List.of(), name -> null,
+                AnimationStore.Index.eager(Map.of("a", expected)), ignored -> ModelResourceFailureGate.none())) {
+                var fallback = inherited.resolve("a");
+                assertSame(expected, fallback.animation());
+                assertTrue(fallback.cacheable());
+                assertTrue(fallback.fallback());
+                assertFalse(backing.resolve("a").fallback());
+                assertFalse(direct.fallback());
+                assertEquals(1, loads.get());
+            }
+        }
+    }
+
+    @Test
+    void closingBatchInsideTheChannelOpenerLetsTheAcceptedReadFinishAndClosesOnce(@TempDir Path root) throws Exception {
+        var path = Files.write(root.resolve("input"), new byte[] {7});
+        for (var failClose : List.of(false, true)) {
+            var closes = new AtomicInteger();
+            var batchRef = new AtomicReference<AnimationStore.ReadBatch>();
+            var storeRef = new AtomicReference<AnimationStore>();
+            var expected = animation("idle");
+            var source = new AnimationStore.AnimationLoader() {
+                @Override
+                public Animation load(String name) {
+                    throw new AssertionError("Expected a local phase");
+                }
+
+                @Override
+                public AnimationStore.AnimationLoader inReadPhase(ReadPhaseSet phases) throws IOException {
+                    var phase = phases.acquire(this, () -> ChannelReadPhase.open(() -> {
+                        var physical = FileChannel.open(path);
+                        batchRef.get().close();
+                        storeRef.get().close();
+                        assertFalse(storeRef.get().isClosed());
+                        return (SeekableByteChannel)Proxy.newProxyInstance(getClass().getClassLoader(),
+                            new Class<?>[] {SeekableByteChannel.class}, (proxy, method, args) -> {
+                                try {
+                                    var result = method.invoke(physical, args);
+                                    if (method.getName().equals("close")) {
+                                        closes.incrementAndGet();
+                                        if (failClose)
+                                            throw new IOException("failed after physical close");
+                                    }
+                                    return result == physical ? proxy : result;
+                                } catch (InvocationTargetException failure) {
+                                    throw failure.getCause();
+                                }
+                            });
+                    }, channel -> {
+                    }));
+                    return name -> phase.read(channel -> {
+                        var value = java.nio.ByteBuffer.allocate(1);
+                        assertEquals(1, channel.read(value));
+                        assertEquals(7, value.get(0));
+                        return expected;
+                    });
+                }
+            };
+            try (
+                var store =
+                    AnimationStore.lazyBound(List.of("idle"), source, null, ignored -> ModelResourceFailureGate.none());
+                var batch = store.openReadPhase()) {
+                storeRef.set(store);
+                batchRef.set(batch);
+                if (failClose)
+                    assertThrows(UncheckedIOException.class, () -> batch.animations().get("idle"));
+                else
+                    assertSame(expected, batch.animations().get("idle"));
+                assertEquals(1, closes.get());
+                assertEquals(0, store.activeUses());
+                assertTrue(store.isClosed());
+                assertThrows(IllegalStateException.class, () -> batch.animations().get("idle"));
+                batch.close();
+                store.close();
+                assertEquals(1, closes.get());
+            }
+        }
+    }
+
+    @Test
+    void closingAnEnteredReadStillAllowsItsFailureToOpenTheFallbackPhase() throws Exception {
+        var batchRef = new AtomicReference<AnimationStore.ReadBatch>();
+        var closes = new AtomicInteger();
+        var source = new AnimationStore.AnimationLoader() {
+            @Override
+            public Animation load(String name) throws Exception {
+                batchRef.get().close();
+                throw new IOException("local payload");
+            }
+
+            @Override
+            public AnimationStore.AnimationLoader inReadPhase(ReadPhaseSet phases) throws IOException {
+                phases.acquire(this, () -> (AutoCloseable)closes::incrementAndGet);
+                return this;
+            }
+        };
+        var expected = animation("idle");
+        var fallback = AnimationStore.Index.lazy(List.of("idle"), new AnimationStore.AnimationLoader() {
+            @Override
+            public Animation load(String name) {
+                return expected;
+            }
+
+            @Override
+            public AnimationStore.AnimationLoader inReadPhase(ReadPhaseSet phases) throws IOException {
+                phases.acquire(this, () -> (AutoCloseable)closes::incrementAndGet);
+                return this;
+            }
+        });
+        try (
+            var store =
+                AnimationStore.lazyBound(List.of("idle"), source, fallback, ignored -> ModelResourceFailureGate.none());
+            var batch = store.openReadPhase()) {
+            batchRef.set(batch);
+            var result = batch.animations().resolve("idle");
+            assertSame(expected, result.animation());
+            assertTrue(result.fallback());
+            assertFalse(result.cacheable());
+            assertEquals(2, closes.get());
+            assertEquals(0, store.activeUses());
         }
     }
 
@@ -156,10 +286,11 @@ class AnimationStoreTest {
                 };
             }
         };
-        try (var fallback = AnimationStore.lazyBound(List.of("idle"), name -> {
+        var fallback = AnimationStore.Index.lazy(List.of("idle"), name -> {
             fallbackLoads.incrementAndGet();
             return animation(name);
-        }, null, ignored -> ModelResourceFailureGate.none());
+        });
+        try (
             var store =
                 AnimationStore.lazyBound(List.of("idle", "other"), source, fallback, ignored -> gate(remembered));
             var batch = store.openReadPhase()) {
@@ -196,11 +327,11 @@ class AnimationStoreTest {
                 return this;
             }
         };
-        try (var fallback = AnimationStore.lazyBound(List.of("idle"), name -> {
+        var fallback = AnimationStore.Index.lazy(List.of("idle"), name -> {
             fallbackLoads.incrementAndGet();
             return animation(name);
-        }, null, ignored -> ModelResourceFailureGate.none());
-            var store = AnimationStore.lazyBound(List.of("idle"), source, fallback, ignored -> gate(failure));
+        });
+        try (var store = AnimationStore.lazyBound(List.of("idle"), source, fallback, ignored -> gate(failure));
             var batch = store.openReadPhase()) {
             assertThrows(UncheckedIOException.class, () -> batch.animations().get("idle"));
             assertEquals(1, closes.get());
@@ -230,11 +361,11 @@ class AnimationStoreTest {
                     return this;
                 }
             };
-            try (var fallback = AnimationStore.lazyBound(List.of("idle"), name -> {
+            var fallback = AnimationStore.Index.lazy(List.of("idle"), name -> {
                 fallbackLoads.incrementAndGet();
                 return animation(name);
-            }, null, ignored -> ModelResourceFailureGate.none());
-                var store = AnimationStore.lazyBound(List.of("idle"), source, fallback, ignored -> gate(remembered))) {
+            });
+            try (var store = AnimationStore.lazyBound(List.of("idle"), source, fallback, ignored -> gate(remembered))) {
                 try (var batch = store.openReadPhase()) {
                     assertSame(failure, assertThrows(failure.getClass(), () -> batch.animations().get("idle")));
                     assertEquals(0, fallbackLoads.get());
@@ -264,36 +395,37 @@ class AnimationStoreTest {
     void marksOnlyResolvedFallbackAnimationsForLegacyHandLoops() {
         var local = animation("local");
         var inherited = animation("inherited");
-        try (var defaults = AnimationStore.eager(Map.of("inherited", inherited));
-            var store = AnimationStore.lazyBound(List.of("local"), ignored -> local, defaults,
-                ignored -> ModelResourceFailureGate.none());
-            var consumer = AnimationStore.consumerView(store, ignored -> ModelResourceFailureGate.none())) {
+        try (var store = AnimationStore.lazyBound(List.of("local"), ignored -> local,
+            AnimationStore.Index.eager(Map.of("inherited", inherited)), ignored -> ModelResourceFailureGate.none())) {
+            var consumer = store.view();
             assertSame(local, consumer.resolve("local").animation());
             assertFalse(consumer.resolve("local").fallback());
             assertSame(inherited, consumer.resolve("inherited").animation());
             assertTrue(consumer.resolve("inherited").fallback());
-            assertFalse(defaults.resolve("inherited").fallback(), "Shared content has no mutable origin flag");
+            try (var direct = AnimationStore.eager(Map.of("inherited", inherited))) {
+                assertFalse(direct.resolve("inherited").fallback(), "Shared content has no mutable origin flag");
+            }
         }
     }
 
     @Test
-    void consumerViewsShareOneBindingAndCloseWithoutClosingTheirDependency() {
+    void consumerViewsShareOneBindingWithoutIndependentCloseAuthority() {
         var binds = new AtomicInteger();
         var source = AnimationProto.newBuilder().setName("idle").setLength(0)
             .setLoop(com.elfmcys.ysm.proto.mixel.asset.model.data.LoopType.PLAY_ONCE).build();
         try (var backing = AnimationStore.lazy(List.of("idle"), ignored -> source, ignored -> {
             binds.incrementAndGet();
             return animation("idle");
-        }).shared(); var first = AnimationStore.consumerView(backing, ignored -> ModelResourceFailureGate.none());
-            var second = AnimationStore.consumerView(backing, ignored -> ModelResourceFailureGate.none())) {
+        }).shared()) {
+            var first = backing.view();
+            var second = backing.view();
             assertFalse(first.isEmpty());
             assertEquals(1, first.size());
-            assertEquals(1, first.entrySet().size());
+            assertEquals(1, first.keySet().size());
             var value = first.get("idle");
             assertSame(value, second.get("idle"));
             assertEquals(1, binds.get());
-            assertThrows(UnsupportedOperationException.class, () -> first.put("idle", animation("other")));
-            first.close();
+            assertThrows(UnsupportedOperationException.class, () -> first.keySet().add("other"));
             assertSame(value, second.get("idle"));
         }
     }
@@ -319,8 +451,9 @@ class AnimationStoreTest {
             if (loads.incrementAndGet() == 1)
                 throw new IOException("source access");
             return source;
-        }, ignored -> animation("idle")).shared(); var first = AnimationStore.consumerView(backing, ignored -> gate);
-            var second = AnimationStore.consumerView(backing, ignored -> ModelResourceFailureGate.none())) {
+        }, ignored -> animation("idle")).shared()) {
+            var first = backing.view(ignored -> gate);
+            var second = backing.view();
             assertNull(first.get("idle"));
             assertTrue(failure.get() instanceof IOException);
             var value = second.get("idle");
@@ -390,7 +523,7 @@ class AnimationStoreTest {
     void fallsBackWhenLocalNameIsAbsentOrPayloadIsMissing() {
         var fallbackAnimation = animation("shared");
         var fallbackOnly = animation("fallback-only");
-        var fallback = AnimationStore.eager(Map.of("shared", fallbackAnimation, "fallback-only", fallbackOnly));
+        var fallback = AnimationStore.Index.eager(Map.of("shared", fallbackAnimation, "fallback-only", fallbackOnly));
         var store = AnimationStore.lazy(List.of("shared"), name -> null, ignored -> animation("unused"), fallback);
 
         assertSame(fallbackAnimation, store.get("shared"));
@@ -401,7 +534,7 @@ class AnimationStoreTest {
     void bindsPresentLocalAnimationBeforeUsingFallback() {
         var fallbackAnimation = animation("shared");
         var localAnimation = animation("shared");
-        var fallback = AnimationStore.eager(Map.of("shared", fallbackAnimation));
+        var fallback = AnimationStore.Index.eager(Map.of("shared", fallbackAnimation));
         var store = AnimationStore.lazy(List.of("shared"),
             name -> AnimationProto.newBuilder().setName(name).setLength(0)
                 .setLoop(com.elfmcys.ysm.proto.mixel.asset.model.data.LoopType.PLAY_ONCE).build(),
@@ -413,7 +546,7 @@ class AnimationStoreTest {
     @Test
     void failedAnimationFallsBackAndDoesNotRetry() {
         var fallbackAnimation = animation("shared");
-        var fallback = AnimationStore.eager(Map.of("shared", fallbackAnimation));
+        var fallback = AnimationStore.Index.eager(Map.of("shared", fallbackAnimation));
         var loads = new AtomicInteger();
         var failure = new AtomicReference<Throwable>();
         var gate = new ModelResourceFailureGate() {
@@ -440,7 +573,8 @@ class AnimationStoreTest {
         var reconstructed = AnimationStore.lazy(List.of("shared"), name -> {
             loads.incrementAndGet();
             return null;
-        }, ignored -> animation("unused"), fallback, ignored -> gate);
+        }, ignored -> animation("unused"), AnimationStore.Index.eager(Map.of("shared", fallbackAnimation)),
+            ignored -> gate);
         assertSame(fallbackAnimation, reconstructed.get("shared"));
         assertEquals(1, loads.get());
     }

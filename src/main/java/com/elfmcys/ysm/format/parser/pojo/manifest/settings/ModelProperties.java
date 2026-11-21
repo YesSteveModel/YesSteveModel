@@ -32,6 +32,7 @@ public class ModelProperties {
 
     public boolean free = false;
 
+    @SerializedName(value = "origin_ver", alternate = {"originVer"})
     public String originVer;
 
     @SerializedName("all_cutout")

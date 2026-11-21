@@ -28,22 +28,22 @@ public class ParticleSpawner {
     private static final Cache<String, ParticleOptions> PARTICLE_OPTIONS_CACHE =
         CacheBuilder.newBuilder().expireAfterAccess(60, TimeUnit.SECONDS).build();
 
-    /**
-     * Validates and freezes an AOT particle effect before its logical transaction commits. The returned action performs
-     * only the already-admitted client mutation.
-     */
-    public static Runnable prepareSpawnParticle(Entity entity, String id, Vector3d pos, Vector3d delta,
-        double particleSpeed, int count, int particleLifeTime, boolean absPos, RandomSource random)
-        throws ExecutionException, CommandSyntaxException {
-        if (StringUtils.isBlank(id)) {
-            return () -> {
-            };
+    /** Rejects invalid particle syntax before handing the request to the client particle owner. */
+    public static void spawnParticle(Entity entity, String id, Vector3d pos, Vector3d delta, double speed, int count,
+        int lifetime, boolean absolute, RandomSource random) {
+        if (StringUtils.isBlank(id))
+            return;
+        ParticleOptions options;
+        try {
+            options = particleOptions(id);
+        } catch (CommandSyntaxException rejected) {
+            return;
+        } catch (ExecutionException failure) {
+            if (failure.getCause() instanceof CommandSyntaxException)
+                return;
+            throw new IllegalStateException("particle parser failed", failure.getCause());
         }
-        ParticleOptions particleOptions = particleOptions(id);
-        var frozenPos = new Vector3d(pos);
-        var frozenDelta = new Vector3d(delta);
-        return () -> spawnParticle(entity, particleOptions, frozenPos, frozenDelta, particleSpeed, count,
-            particleLifeTime, absPos, random);
+        spawnParticle(entity, options, pos, delta, speed, count, lifetime, absolute, random);
     }
 
     private static ParticleOptions particleOptions(String id) throws ExecutionException, CommandSyntaxException {

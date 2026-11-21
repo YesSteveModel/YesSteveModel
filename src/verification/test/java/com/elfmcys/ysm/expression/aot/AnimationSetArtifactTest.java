@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.expression.aot;
 
-import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
 import com.elfmcys.ysm.expression.host.*;
@@ -12,6 +11,7 @@ import com.elfmcys.ysm.format.schema.baked.asset.BakedAssetConstant;
 import com.elfmcys.ysm.format.schema.baked.asset.BakedAssetView;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.resource.client.AnimationStore;
+import com.elfmcys.ysm.model.resource.client.render.AnimationInputStore;
 import com.elfmcys.ysm.model.resource.client.ModelResourceFailureGate;
 import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
@@ -24,9 +24,7 @@ import com.elfmcys.ysm.proto.mixel.asset.model.data.InstructionKeyFrameProto;
 import com.elfmcys.ysm.proto.mixel.common.ProgramProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
 import com.elfmcys.ysm.util.ProtoUtil;
-import dev.semaweave.compilation.ArtifactCodecs;
 import dev.semaweave.compilation.EngineMetrics;
-import dev.semaweave.program.ReadOnlyBytes;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -54,19 +52,21 @@ import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AnimationSetArtifactTest {
+    private final Map<ExpressionArtifactStore, AnimationInputStore> animationStores = new java.util.IdentityHashMap<>();
+
     @Test
     void localReadViewsSharePhysicalChannelWithoutChangingTheSharedSource(@TempDir Path root) throws Exception {
         var store = store(root);
         try (var module =
             create(factory(store, new ExpressionEngineMetrics()), definition(), ExpressionSet.MAIN, false)) {
             store.awaitPersistence();
-            var file = store.path(module.identity());
+            var file = inputPath(store, module);
             var opens = new AtomicInteger();
             var closes = new AtomicInteger();
             var set = countedSet(file, opens, closes);
-            try (var backing = set.bind(List.of("main"), module, null).shared();
-                var first = AnimationStore.consumerView(backing, ignored -> ModelResourceFailureGate.none());
-                var second = AnimationStore.consumerView(backing, ignored -> ModelResourceFailureGate.none())) {
+            try (var backing = AnimationStore.fromIndices(set.bind(List.of("main"), module), null).shared()) {
+                var first = backing.view();
+                var second = backing.view();
                 try (var phase = first.openReadPhase()) {
                     assertEquals(0, opens.get(), "A phase must not preload animations");
                     assertNotNull(phase.animations().get("idle"));
@@ -78,7 +78,8 @@ class AnimationSetArtifactTest {
                 assertSame(first.get("idle"), second.get("idle"));
                 assertEquals(1, opens.get(), "Verified shared results outlive the read phase");
             }
-            try (var next = set.bind(List.of("main"), module, null); var phase = next.openReadPhase()) {
+            try (var next = AnimationStore.fromIndices(set.bind(List.of("main"), module), null);
+                var phase = next.openReadPhase()) {
                 assertNotNull(phase.animations().get("idle"));
                 assertNotNull(phase.animations().get("other"));
                 assertEquals(2, opens.get());
@@ -114,7 +115,7 @@ class AnimationSetArtifactTest {
                     false));
                 store.awaitPersistence();
             }
-            try (var active = modules.get(0).animations(List.of("main"), null)) {
+            try (var active = AnimationStore.fromIndices(modules.get(0).animationIndex(List.of("main")), null)) {
                 assertNotNull(active.get("idle"), "LRU must preserve the active module");
             }
             var hash = new byte[Hash256.SIZE];
@@ -132,50 +133,44 @@ class AnimationSetArtifactTest {
     }
 
     @Test
-    void oneFileContainsTheCatalogClassesAndEveryAnimationAndLoadsWithoutCompilation(@TempDir Path root)
+    void independentFilesContainTheArtifactAndUnboundAnimationsAndLoadWithoutCompilation(@TempDir Path root)
         throws Exception {
         var definition = definition();
         var store = store(root);
         Path file;
         try (var cold = create(factory(store, new ExpressionEngineMetrics()), definition, ExpressionSet.MAIN, false)) {
             store.awaitPersistence();
-            file = store.path(cold.identity());
-            assertTrue(file.getFileName().toString().endsWith(".anim.ysm-cache"));
-            try (var files = Files.walk(root)) {
-                assertEquals(1,
-                    files.filter(Files::isRegularFile)
-                        .filter(path -> path.toString().endsWith(".ysm-cache") || path.toString().endsWith(".swa"))
-                        .count());
-            }
+            file = inputPath(store, cold);
+            assertNotEquals(store.path(cold.identity()), file);
+            assertTrue(file.getFileName().toString().matches("[0-9a-f]{16}"));
+            assertEquals(root.resolve("f/b"), file.getParent());
+            assertEquals(2, com.elfmcys.ysm.model.storage.TestCacheFiles.bakeCount(root,
+                com.elfmcys.ysm.natives.storage.CacheStorageTypes.BakeKind.ANIMATION));
             try (var channel = FileChannel.open(file)) {
                 var container = AssetContainerReader.read(channel);
-                assertEquals("zstd", container.getChunkInfo(BakedAssetConstant.EXPRESSION_CHUNK_NAME).encoding());
+                assertNull(container.getChunkInfo("expression"));
                 var view = new BakedAssetView(channel);
-                var artifact = ArtifactCodecs.v1().decodeAndVerify(
-                    ReadOnlyBytes.copyOf(view.readExpression(channel, Integer.MAX_VALUE)), cold.identity().expected(),
-                    ExpressionIdentityHash.SHA_256);
-                assertFalse(artifact.classes().isEmpty());
                 var baked = view.readAnimation(channel, "main", "idle");
                 assertTrue(baked.blendWeight().orElseThrow().hasProgramId());
-                assertEquals(
-                    cold.requireProgram("animation/main/idle/blend-weight",
-                        com.elfmcys.ysm.expression.inventory.ProgramRole.ANIMATION_SAMPLE, "").sourceId(),
-                    baked.blendWeight().orElseThrow().programId());
+                var descriptor =
+                    view.animationSet(() -> channel).descriptors().get(baked.blendWeight().orElseThrow().programId());
+                assertEquals("animation/main/idle/blend-weight", descriptor.location().location());
+                assertNotNull(view.readProgram(channel, descriptor.id()));
                 assertTrue(baked.boneAnimations().get(0).rotation().get(0).pre().get(0).hasProgramId());
                 assertNotNull(view.readAnimation(channel, "main", "other"));
                 assertNotNull(view.readAnimation(channel, "fallback/main", "idle"));
-                var descriptor = com.elfmcys.ysm.testutil.ProtobufJavaOracle
+                var valueDescriptor = com.elfmcys.ysm.testutil.ProtobufJavaOracle
                     .parse("ysm.baked.asset.BakedExpressionValue", new byte[0]).getDescriptorForType();
-                assertNull(descriptor.findFieldByName("program"));
-                assertNotNull(descriptor.findFieldByName("program_id"));
+                assertNull(valueDescriptor.findFieldByName("program"));
+                assertNotNull(valueDescriptor.findFieldByName("program_id"));
             }
         }
 
         var before = Files.getLastModifiedTime(file);
         var metrics = new ExpressionEngineMetrics();
         try (var warm = create(factory(store(root), metrics), definition, ExpressionSet.MAIN, true);
-            var fallback = warm.animations(List.of("fallback/main"), null);
-            var animations = warm.animations(List.of("main"), fallback)) {
+            var animations = AnimationStore.fromIndices(warm.animationIndex(List.of("main")),
+                warm.animationIndex(List.of("fallback/main")))) {
             assertEquals(ExpressionArtifactStore.Source.DISK, warm.source());
             assertEquals(AnimationStore.State.UNLOADED, animations.state("idle"));
             var idle = animations.get("idle");
@@ -186,16 +181,16 @@ class AnimationSetArtifactTest {
             assertEquals(0, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
             try (var runtime = new EntityExpressionRuntime()) {
                 TestExpressionModules.replace(runtime, warm, Map.of());
-                float actual = runtime.update(new EntityExpressionRuntime.InvocationInputs(new InvocationInputs<net.minecraft.world.entity.Entity>() {
-                    @Override
-                    public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
-                }, (commands, provenance) -> () -> {
-                }, () -> false), evaluation -> {
-                    evaluation.execute(idle.customInstructionKeyframes.get(0).getEventData()[0]);
-                    assertEquals((float)-Math.PI / 2,
-                        idle.boneAnimations.get(0).rotationKeyFrames.get(0).getLerpPoint(evaluation, 1).x, 0.00001f);
-                    return evaluation.evaluate(idle.blendWeight);
-                });
+                float actual = runtime.update(new EntityExpressionRuntime.InvocationInputs(
+                    new InvocationInputs<net.minecraft.world.entity.Entity>() {
+
+                    }), evaluation -> {
+                        evaluation.execute(idle.customInstructionKeyframes.get(0).getEventData()[0]);
+                        assertEquals((float)-Math.PI / 2,
+                            idle.boneAnimations.get(0).rotationKeyFrames.get(0).getLerpPoint(evaluation, 1).x,
+                            0.00001f);
+                        return evaluation.evaluate(idle.blendWeight);
+                    });
                 assertEquals(7, actual);
             }
         }
@@ -208,9 +203,43 @@ class AnimationSetArtifactTest {
         var factory = factory(store(root), metrics);
         assertThrows(AssetLoadException.class, () -> create(factory, definition(), ExpressionSet.MAIN, true));
         assertEquals(0, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
-        assertFalse(Files.exists(root.resolve("bake")));
+        assertFalse(Files.exists(root.resolve("f/bake.sqlite")));
         try (var module = create(factory, definition(), ExpressionSet.MAIN, false)) {
             assertEquals(ExpressionArtifactStore.Source.COLD, module.source());
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "ysm.cacheReadProbe", matches = "true")
+    void readFailuresDoNotCompileOrHideTerminalFailures(@TempDir Path root) throws Exception {
+        var definition = definition();
+        var seed = store(root);
+        Path file;
+        try (var cold = create(factory(seed, new ExpressionEngineMetrics()), definition, ExpressionSet.MAIN, false)) {
+            seed.awaitPersistence();
+            file = inputPath(seed, cold);
+        }
+        var metrics = new ExpressionEngineMetrics();
+        var factory = factory(store(root), metrics);
+        for (var failure : List.of("missing", "access", "io", "interrupted", "closed", "close", "cancelled", "oom",
+            "defect")) {
+            com.elfmcys.ysm.testutil.CacheReadFaults.set(file, failure);
+            try {
+                switch (failure) {
+                    case "cancelled" -> assertThrows(java.util.concurrent.CancellationException.class,
+                        () -> create(factory, definition, ExpressionSet.MAIN, false));
+                    case "oom" -> assertThrows(OutOfMemoryError.class,
+                        () -> create(factory, definition, ExpressionSet.MAIN, false));
+                    default -> assertThrows(java.io.IOException.class,
+                        () -> create(factory, definition, ExpressionSet.MAIN, true));
+                }
+                assertEquals(0, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION), failure);
+            } finally {
+                com.elfmcys.ysm.testutil.CacheReadFaults.set(file, null);
+            }
+        }
+        try (var warm = create(factory, definition, ExpressionSet.MAIN, true)) {
+            assertEquals(ExpressionArtifactStore.Source.DISK, warm.source());
         }
     }
 
@@ -220,7 +249,8 @@ class AnimationSetArtifactTest {
         Path file;
         try (var module =
             create(factory(store, new ExpressionEngineMetrics()), definition(), ExpressionSet.MAIN, false)) {
-            file = store.path(module.identity());
+            store.awaitPersistence();
+            file = inputPath(store, module);
         }
         store.awaitPersistence();
         var damaged = Files.readAllBytes(file);
@@ -237,10 +267,10 @@ class AnimationSetArtifactTest {
         Files.write(file, damaged);
         var metrics = new ExpressionEngineMetrics();
         try (var module = create(factory(store(root), metrics), definition(), ExpressionSet.MAIN, true);
-            var fallback = module.animations(List.of("fallback/main"), null);
-            var animations = module.animations(List.of("main"), fallback)) {
+            var animations = AnimationStore.fromIndices(module.animationIndex(List.of("main")),
+                module.animationIndex(List.of("fallback/main")))) {
             var recovered = animations.get("idle");
-            assertSame(fallback.get("idle"), recovered);
+            assertSame(animations.get("idle"), recovered);
             assertEquals(new FloatExpression.Literal(3), recovered.blendWeight);
             assertEquals(AnimationStore.State.FAILED, animations.state("idle"));
             assertNotNull(animations.get("other"));
@@ -255,7 +285,8 @@ class AnimationSetArtifactTest {
         Path file;
         try (var module =
             create(factory(store, new ExpressionEngineMetrics()), definition(), ExpressionSet.MAIN, false)) {
-            file = store.path(module.identity());
+            store.awaitPersistence();
+            file = inputPath(store, module);
         }
         store.awaitPersistence();
         var damaged = Files.readAllBytes(file);
@@ -277,9 +308,9 @@ class AnimationSetArtifactTest {
         try (
             var module =
                 create(factory(store(root), new ExpressionEngineMetrics()), definition(), ExpressionSet.MAIN, true);
-            var fallback = set.bind(List.of("fallback/main"), module, null).shared();
-            var backing = set.bind(List.of("main"), module, fallback).shared();
-            var consumer = AnimationStore.consumerView(backing, name -> new ModelResourceFailureGate() {
+            var backing = AnimationStore
+                .fromIndices(set.bind(List.of("main"), module), set.bind(List.of("fallback/main"), module)).shared()) {
+            var consumer = backing.view(name -> new ModelResourceFailureGate() {
                 @Override
                 public Optional<Throwable> failure() {
                     return Optional.ofNullable(failures.get(name));
@@ -289,11 +320,11 @@ class AnimationSetArtifactTest {
                 public void fail(Throwable cause) {
                     failures.putIfAbsent(name, cause);
                 }
-            })) {
+            });
             try (var batch = consumer.openReadPhase()) {
                 var recovered = batch.animations().get("idle");
                 assertNotNull(recovered);
-                assertSame(fallback.get("idle"), recovered);
+                assertSame(backing.get("idle"), recovered);
                 assertEquals(new FloatExpression.Literal(3), recovered.blendWeight);
                 assertEquals(2, opens.get(), "Only the failed stage is replaced before fallback");
                 assertEquals(1, closes.get(), "The failed channel closes before the replacement stage opens");
@@ -338,7 +369,7 @@ class AnimationSetArtifactTest {
         try (var module =
             create(factory(store, new ExpressionEngineMetrics()), definition(), ExpressionSet.MAIN, false)) {
             store.awaitPersistence();
-            var file = store.path(module.identity());
+            var file = inputPath(store, module);
             var entered = new CountDownLatch(1);
             var resume = new CountDownLatch(1);
             var closes = new AtomicInteger();
@@ -393,27 +424,41 @@ class AnimationSetArtifactTest {
     }
 
     @Test
-    void programIdsRejectInvalidRangeAndWrongRoleAndSetsUseSeparateFiles(@TempDir Path root) throws Exception {
+    void inputIndexesHaveIndependentLocationsAndSetsUseSeparateFiles(@TempDir Path root) throws Exception {
         var store = store(root);
         var factory = factory(store, new ExpressionEngineMetrics());
         try (var main = create(factory, definition(), ExpressionSet.MAIN, false);
             var arm = create(factory, definition(), ExpressionSet.FP_ARM, false)) {
+            store.awaitPersistence();
             assertNotEquals(store.path(main.identity()), store.path(arm.identity()));
-            var sample = main.requireProgram("animation/main/idle/blend-weight",
-                com.elfmcys.ysm.expression.inventory.ProgramRole.ANIMATION_SAMPLE, "").sourceId();
-            assertThrows(IllegalArgumentException.class, () -> main.requireVoidProgram(sample));
-            assertThrows(IllegalArgumentException.class, () -> main.requireFloatProgram(-1));
-            assertThrows(IllegalArgumentException.class, () -> main.requireFloatProgram(65_535));
+            assertNotEquals(inputPath(store, main), inputPath(store, arm));
+            var inputs = animationStores.get(store).acquire(inputRequest(main), true).animations();
+            assertThrows(IOException.class, () -> inputs.loadProgram(-1));
+            assertThrows(IOException.class, () -> inputs.loadProgram(65_535));
         }
     }
 
-    private static ExpressionArtifactStore store(Path root) {
-        return track(new ExpressionArtifactStore(root, track(new AtomicSharedCache(root))));
+    private ExpressionArtifactStore store(Path root) {
+        var cache = track(new AtomicSharedCache(root));
+        var store = track(new ExpressionArtifactStore(root, cache));
+        animationStores.put(store, new AnimationInputStore(root, cache));
+        return store;
     }
 
-    private static RenderTargetExpressionModuleFactory factory(ExpressionArtifactStore store,
+    private RenderTargetExpressionModuleFactory factory(ExpressionArtifactStore store,
         ExpressionEngineMetrics metrics) {
-        return new RenderTargetExpressionModuleFactory(store, ExpressionHost.create(HostAvailability.all()), metrics);
+        return new RenderTargetExpressionModuleFactory(store, animationStores.get(store),
+            ExpressionHost.create(HostAvailability.all()), metrics);
+    }
+
+    private Path inputPath(ExpressionArtifactStore store, RenderTargetExpressionModule module) throws Exception {
+        return animationStores.get(store).path(inputRequest(module).identity());
+    }
+
+    private static AnimationInputStore.Request inputRequest(RenderTargetExpressionModule module) throws Exception {
+        return AnimationInputStore.prepare(module.identity().containerId(), module.identity().targetId(),
+            module.identity().set(), definition(), null, SettingsProto.newBuilder().build(),
+            module.identity().expected().options());
     }
 
     private static RenderTargetExpressionModule create(RenderTargetExpressionModuleFactory factory,

@@ -1,6 +1,15 @@
 {
   "capabilities": [
     {
+      "source_spelling": "query.debug_output",
+      "stable_id": "query:debug_output",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
       "source_spelling": "roaming",
       "stable_id": "ysm:roaming",
       "access": "READ",
@@ -989,6 +998,1302 @@
       "maximum": 1,
       "optional_capability": null,
       "staged": true
+    },
+    {
+      "source_spelling": "query.actor_count",
+      "stable_id": "query:actor_count",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.moon_phase",
+      "stable_id": "query:moon_phase",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.time_of_day",
+      "stable_id": "query:time_of_day",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.eye_target_x_rotation",
+      "stable_id": "query:eye_target_x_rotation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.modified_distance_moved",
+      "stable_id": "query:modified_distance_moved",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.walk_distance",
+      "stable_id": "query:walk_distance",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.has_rider",
+      "stable_id": "query:has_rider",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_in_water_or_rain",
+      "stable_id": "query:is_in_water_or_rain",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_on_fire",
+      "stable_id": "query:is_on_fire",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_riding",
+      "stable_id": "query:is_riding",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_spectator",
+      "stable_id": "query:is_spectator",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_sprinting",
+      "stable_id": "query:is_sprinting",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.hurt_time",
+      "stable_id": "query:hurt_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_playing_dead",
+      "stable_id": "query:is_playing_dead",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_sleeping",
+      "stable_id": "query:is_sleeping",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_using_item",
+      "stable_id": "query:is_using_item",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.item_in_use_duration",
+      "stable_id": "query:item_in_use_duration",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.item_max_use_duration",
+      "stable_id": "query:item_max_use_duration",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.item_remaining_use_duration",
+      "stable_id": "query:item_remaining_use_duration",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.air_supply",
+      "stable_id": "ysm:air_supply",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.frozen_ticks",
+      "stable_id": "ysm:frozen_ticks",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.eye_in_water",
+      "stable_id": "ysm:eye_in_water",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_passenger",
+      "stable_id": "ysm:is_passenger",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_sleep",
+      "stable_id": "ysm:is_sleep",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_sneak",
+      "stable_id": "ysm:is_sneak",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.dimension_name",
+      "stable_id": "ysm:dimension_name",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.block_light",
+      "stable_id": "ysm:block_light",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.sky_light",
+      "stable_id": "ysm:sky_light",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.arrow_count",
+      "stable_id": "ysm:arrow_count",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.stinger_count",
+      "stable_id": "ysm:stinger_count",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.hurt_time",
+      "stable_id": "ysm:hurt_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_riptide",
+      "stable_id": "ysm:is_riptide",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.on_ladder",
+      "stable_id": "ysm:on_ladder",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_player",
+      "stable_id": "ysm:is_player",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.swinging",
+      "stable_id": "ysm:swinging",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.swing_time",
+      "stable_id": "ysm:swing_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.swinging_arm",
+      "stable_id": "ysm:swinging_arm",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.attack_time",
+      "stable_id": "ysm:attack_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.delta_time",
+      "stable_id": "query:delta_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.time_delta",
+      "stable_id": "ysm:time_delta",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.body_x_rotation",
+      "stable_id": "query:body_x_rotation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.delta_movement_length",
+      "stable_id": "ysm:delta_movement_length",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.entity_type",
+      "stable_id": "ysm:entity_type",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.equipment_count",
+      "stable_id": "query:equipment_count",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.attack_damage",
+      "stable_id": "ysm:attack_damage",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.attack_speed",
+      "stable_id": "ysm:attack_speed",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.attack_knockback",
+      "stable_id": "ysm:attack_knockback",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.movement_speed",
+      "stable_id": "ysm:movement_speed",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.knockback_resistance",
+      "stable_id": "ysm:knockback_resistance",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.luck",
+      "stable_id": "ysm:luck",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.block_reach",
+      "stable_id": "ysm:block_reach",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.entity_reach",
+      "stable_id": "ysm:entity_reach",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.swim_speed",
+      "stable_id": "ysm:swim_speed",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.entity_gravity",
+      "stable_id": "ysm:entity_gravity",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.step_height_addition",
+      "stable_id": "ysm:step_height_addition",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.nametag_distance",
+      "stable_id": "ysm:nametag_distance",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.elytra_rot_x",
+      "stable_id": "ysm:elytra_rot_x",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.elytra_rot_y",
+      "stable_id": "ysm:elytra_rot_y",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.has_cape",
+      "stable_id": "query:has_cape",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.in_ground",
+      "stable_id": "ysm:in_ground",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.on_ground_time",
+      "stable_id": "ysm:on_ground_time",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_spectral_arrow",
+      "stable_id": "ysm:is_spectral_arrow",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.is_biting",
+      "stable_id": "ysm:is_biting",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.hooked_in",
+      "stable_id": "ysm:hooked_in",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.throwable_item",
+      "stable_id": "ysm:throwable_item",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.distance_from_camera",
+      "stable_id": "query:distance_from_camera",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.ladder_facing",
+      "stable_id": "ysm:ladder_facing",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.hit_target_type",
+      "stable_id": "ysm:hit_target_type",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.hit_target_id",
+      "stable_id": "ysm:hit_target_id",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_left_shoulder_parrot",
+      "stable_id": "ysm:has_left_shoulder_parrot",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_right_shoulder_parrot",
+      "stable_id": "ysm:has_right_shoulder_parrot",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.left_shoulder_parrot_variant",
+      "stable_id": "ysm:left_shoulder_parrot_variant",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.right_shoulder_parrot_variant",
+      "stable_id": "ysm:right_shoulder_parrot_variant",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.cape_flap_amount",
+      "stable_id": "query:cape_flap_amount",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.xxa",
+      "stable_id": "ysm:xxa",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.zza",
+      "stable_id": "ysm:zza",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.player_level",
+      "stable_id": "query:player_level",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.riptide",
+      "stable_id": "ctrl:riptide",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.climb",
+      "stable_id": "ctrl:climb",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.climbing",
+      "stable_id": "ctrl:climbing",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.state_pause",
+      "stable_id": "ctrl:state_pause",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.loop",
+      "stable_id": "ctrl:loop",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.play_once",
+      "stable_id": "ctrl:play_once",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.hold_on_last_frame",
+      "stable_id": "ctrl:hold_on_last_frame",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.carryon_type",
+      "stable_id": "ctrl:carryon_type",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "CARRY_ON",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.create_hanging_skyhook",
+      "stable_id": "ctrl:create_hanging_skyhook",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "CREATE",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.iss_animation",
+      "stable_id": "ctrl:iss_animation",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "IRONS_SPELLBOOKS",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.swem_is_ride",
+      "stable_id": "ctrl:swem_is_ride",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "SWEM",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.swem_state",
+      "stable_id": "ctrl:swem_state",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "SWEM",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.im_volume",
+      "stable_id": "ctrl:im_volume",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "IMMERSIVE_MELODIES",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.im_current",
+      "stable_id": "ctrl:im_current",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "IMMERSIVE_MELODIES",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_gun_type",
+      "stable_id": "ctrl:tac_gun_type",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_gun_id",
+      "stable_id": "ctrl:tac_gun_id",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_is_fire",
+      "stable_id": "ctrl:tac_is_fire",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_is_aim",
+      "stable_id": "ctrl:tac_is_aim",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_is_reload",
+      "stable_id": "ctrl:tac_is_reload",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_is_melee",
+      "stable_id": "ctrl:tac_is_melee",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_is_draw",
+      "stable_id": "ctrl:tac_is_draw",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.tac_fire_mode",
+      "stable_id": "ctrl:tac_fire_mode",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "TACZ",
+      "staged": false
+    },
+    {
+      "source_spelling": "math.ceil",
+      "stable_id": "math:ceil",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.trunc",
+      "stable_id": "math:trunc",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.ln",
+      "stable_id": "math:ln",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.acos",
+      "stable_id": "math:acos",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.asin",
+      "stable_id": "math:asin",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.atan",
+      "stable_id": "math:atan",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.hermite_blend",
+      "stable_id": "math:hermite_blend",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.hermite",
+      "stable_id": "math:hermite",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.atan2",
+      "stable_id": "math:atan2",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 2,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.randomi",
+      "stable_id": "math:randomi",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 2,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.die_roll",
+      "stable_id": "math:die_roll",
+      "access": "INVOKE",
+      "minimum": 3,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.die_roll_integer",
+      "stable_id": "math:die_roll_integer",
+      "access": "INVOKE",
+      "minimum": 3,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.roll",
+      "stable_id": "math:roll",
+      "access": "INVOKE",
+      "minimum": 3,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.rolli",
+      "stable_id": "math:rolli",
+      "access": "INVOKE",
+      "minimum": 3,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "math.lerprotate",
+      "stable_id": "math:lerprotate",
+      "access": "INVOKE",
+      "minimum": 3,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.rotation_to_camera",
+      "stable_id": "query:rotation_to_camera",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.bone_pos",
+      "stable_id": "ysm:bone_pos",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.bone_scale",
+      "stable_id": "ysm:bone_scale",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.relative_block_name",
+      "stable_id": "ysm:relative_block_name",
+      "access": "INVOKE",
+      "minimum": 3,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.relative_block_name_any",
+      "stable_id": "ysm:relative_block_name_any",
+      "access": "INVOKE",
+      "minimum": 4,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.effect_level",
+      "stable_id": "ysm:effect_level",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.equipped_enchantment_level",
+      "stable_id": "ysm:equipped_enchantment_level",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.perlin_noise",
+      "stable_id": "ysm:perlin_noise",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.mouse",
+      "stable_id": "ysm:mouse",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.relative_block_has_all_tags",
+      "stable_id": "query:relative_block_has_all_tags",
+      "access": "INVOKE",
+      "minimum": 4,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.biome_has_all_tags",
+      "stable_id": "query:biome_has_all_tags",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.biome_has_any_tag",
+      "stable_id": "query:biome_has_any_tag",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.equipped_item_all_tags",
+      "stable_id": "query:equipped_item_all_tags",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.equipped_item_any_tag",
+      "stable_id": "query:equipped_item_any_tag",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.max_durability",
+      "stable_id": "query:max_durability",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "query.remaining_durability",
+      "stable_id": "query:remaining_durability",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ctrl.ride",
+      "stable_id": "ctrl:ride",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_any_curios_with_all_tags",
+      "stable_id": "ysm:has_any_curios_with_all_tags",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": "CURIOS",
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.has_any_curios_with_any_tag",
+      "stable_id": "ysm:has_any_curios_with_any_tag",
+      "access": "INVOKE",
+      "minimum": 2,
+      "maximum": 255,
+      "optional_capability": "CURIOS",
+      "staged": false
+    },
+    {
+      "source_spelling": "query.is_first_person",
+      "stable_id": "query:is_first_person",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.first_person_mod_hide",
+      "stable_id": "ysm:first_person_mod_hide",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.person_view",
+      "stable_id": "ysm:person_view",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.rendering_in_paperdoll",
+      "stable_id": "ysm:rendering_in_paperdoll",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.biome_category",
+      "stable_id": "ysm:biome_category",
+      "access": "READ",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.dump_mods",
+      "stable_id": "ysm:dump_mods",
+      "access": "INVOKE",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.dump_effects",
+      "stable_id": "ysm:dump_effects",
+      "access": "INVOKE",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.dump_biome",
+      "stable_id": "ysm:dump_biome",
+      "access": "INVOKE",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.dump_curios",
+      "stable_id": "ysm:dump_curios",
+      "access": "INVOKE",
+      "minimum": 0,
+      "maximum": 0,
+      "optional_capability": "CURIOS",
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.dump_equipped_item",
+      "stable_id": "ysm:dump_equipped_item",
+      "access": "INVOKE",
+      "minimum": 1,
+      "maximum": 1,
+      "optional_capability": null,
+      "staged": false
+    },
+    {
+      "source_spelling": "ysm.dump_relative_block",
+      "stable_id": "ysm:dump_relative_block",
+      "access": "INVOKE",
+      "minimum": 3,
+      "maximum": 3,
+      "optional_capability": null,
+      "staged": false
     }
   ],
   "families": [
@@ -1003,7 +2308,8 @@
       "family": "carry_on",
       "mod_id": "carryon",
       "expected_keys": [
-        "ctrl.carryon_is_princess"
+        "ctrl.carryon_is_princess",
+        "ctrl.carryon_type"
       ]
     },
     {
@@ -1019,7 +2325,9 @@
       "expected_keys": [
         "ctrl.im_pitch",
         "ctrl.im_delta",
-        "ctrl.im_time"
+        "ctrl.im_time",
+        "ctrl.im_volume",
+        "ctrl.im_current"
       ]
     },
     {
@@ -1040,14 +2348,47 @@
       "family": "tacz",
       "mod_id": "tacz",
       "expected_keys": [
-        "ctrl.tac_hold_gun"
+        "ctrl.tac_hold_gun",
+        "ctrl.tac_gun_type",
+        "ctrl.tac_gun_id",
+        "ctrl.tac_is_fire",
+        "ctrl.tac_is_aim",
+        "ctrl.tac_is_reload",
+        "ctrl.tac_is_melee",
+        "ctrl.tac_is_draw",
+        "ctrl.tac_fire_mode"
       ]
     },
     {
       "family": "curios",
       "mod_id": "curios",
       "expected_keys": [
-        "ysm.has_any_curios"
+        "ysm.dump_curios",
+        "ysm.has_any_curios",
+        "ysm.has_any_curios_with_all_tags",
+        "ysm.has_any_curios_with_any_tag"
+      ]
+    },
+    {
+      "family": "create",
+      "mod_id": "create",
+      "expected_keys": [
+        "ctrl.create_hanging_skyhook"
+      ]
+    },
+    {
+      "family": "irons_spellbooks",
+      "mod_id": "irons_spellbooks",
+      "expected_keys": [
+        "ctrl.iss_animation"
+      ]
+    },
+    {
+      "family": "swem",
+      "mod_id": "swem",
+      "expected_keys": [
+        "ctrl.swem_is_ride",
+        "ctrl.swem_state"
       ]
     }
   ]

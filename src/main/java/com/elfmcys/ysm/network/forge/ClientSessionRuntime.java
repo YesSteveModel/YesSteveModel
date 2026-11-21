@@ -1,13 +1,16 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.proto.network.GenPreviewStartProto;
 import com.elfmcys.ysm.proto.network.MissingPreviewFragmentProto;
 import com.elfmcys.ysm.proto.network.PreviewUploadAdmissionProto;
 import com.elfmcys.ysm.proto.network.PreviewRepairResultProto;
 import com.elfmcys.ysm.YesSteveModel;
+import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
+import com.elfmcys.ysm.capability.RemoteSyncBudget;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.config.ClientConfig;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.resource.client.remote.RemotePresentationFetcher;
 import com.elfmcys.ysm.model.service.ClientModelService;
@@ -41,21 +44,25 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 
 /**
  * Owns the client adapter's one exact Connection and its independent model business and catalog lifetimes.
  *
- * <p><b>Execution:</b> Synchronized entry points serialize current-owner checks and replacement.
- * Callers must route domain work to the client owner thread. An exact check here does not authorize
- * an arbitrary worker to mutate Minecraft state.
+ * <p>
+ * <b>Execution:</b> Synchronized entry points serialize current-owner checks and replacement. Callers must route domain
+ * work to the client owner thread. An exact check here does not authorize an arbitrary worker to mutate Minecraft
+ * state.
  *
- * <p><b>Ownership:</b> Replacement removes current before closing transfer, publication and activation
- * owners. Late callbacks can dispose their own results but cannot borrow a replacement connection.
- * Catalog failure can retain handshake business eligibility; protocol failure retires both.
+ * <p>
+ * <b>Ownership:</b> Replacement removes current before closing transfer, publication and activation owners. Late
+ * callbacks can dispose their own results but cannot borrow a replacement connection. Catalog failure can retain
+ * handshake business eligibility; protocol failure retires both.
  *
- * <p><b>Seam:</b> [client connection retirement](docs/architecture/network/overview.md#连接撤销交接).
+ * <p>
+ * <b>Seam:</b> [client connection retirement](docs/architecture/network/overview.md#连接撤销交接).
  */
 public final class ClientSessionRuntime {
     private static ConnectionState current;
@@ -63,8 +70,8 @@ public final class ClientSessionRuntime {
     private ClientSessionRuntime() {}
 
     /**
-     * Replaces the current connection and opens its model-session owners.
-     * IOException or RuntimeException from remote-store setup retires the partial owner before propagation.
+     * Replaces the current connection and opens its model-session owners. IOException or RuntimeException from
+     * remote-store setup retires the partial owner before propagation.
      *
      * @param connection the non-null exact host connection
      * @return the new session; negotiation or content activation can still be pending
@@ -120,11 +127,52 @@ public final class ClientSessionRuntime {
         return current == null ? Optional.empty() : Optional.ofNullable(current.businessSession);
     }
 
+    static synchronized Optional<BusinessSession> businessSession(Connection connection) {
+        var owner = owner(connection);
+        return owner == null ? Optional.empty() : Optional.ofNullable(owner.businessSession);
+    }
+
+    static synchronized boolean runIfBusinessSessionCurrent(Connection connection, BusinessSession business,
+        Runnable action) {
+        Objects.requireNonNull(action, "action");
+        var owner = owner(connection);
+        if (business == null || owner == null || owner.businessSession != business)
+            return false;
+        action.run();
+        return true;
+    }
+
+    static synchronized RemoteSyncBudget remoteSyncBudget() {
+        if (current == null || current.closed || current.businessSession == null)
+            throw new IllegalStateException("No active client business session");
+        return current.remoteSyncBudget;
+    }
+
+    public static synchronized boolean canSwitchModel() {
+        return current == null || current.closed || current.canSwitchModel;
+    }
+
+    static synchronized void serverFlags(boolean canSwitchModel) {
+        current.canSwitchModel = canSwitchModel;
+    }
+
     public static synchronized Optional<ClientModelSession.State> state() {
         return current == null ? Optional.empty() : Optional.of(current.session.state());
     }
 
-    public static synchronized Optional<Set<Hash256>> authoritativeGrants() {
+    /**
+     * Returns the current state in the client shared-fact read window.
+     *
+     * <p>
+     * Requires: the caller observes [shared-fact windows](docs/architecture/integration/overview.md#共享事实读写窗口).
+     * Connection replacement, failure and disconnect remain outside every published reader's task lifetime. Cross-frame
+     * readers use {@link #state()}.
+     */
+    public static Optional<ClientModelSession.State> stateInReadWindow() {
+        return current == null ? Optional.empty() : Optional.of(current.session.stateInReadWindow());
+    }
+
+    public static synchronized Optional<Set<ModelId>> authoritativeGrants() {
         if (current == null || current.session.state() == ClientModelSession.State.LOCAL
             || current.session.state() == ClientModelSession.State.CLOSED) {
             return Optional.empty();
@@ -266,11 +314,11 @@ public final class ClientSessionRuntime {
         var owner = owner(connection);
         if (owner == null)
             return;
-        if (message.modelId().remaining() != Hash256.SIZE || message.containerId().remaining() != Hash256.SIZE) {
+        if (!ModelId.isValid(message.modelId()) || message.containerId().remaining() != Hash256.SIZE) {
             failProtocolSession(owner);
             return;
         }
-        var identity = new ModelFileIdentity(new Hash256(com.elfmcys.ysm.util.ProtoBytes.copy(message.modelId())),
+        var identity = new ModelFileIdentity(ModelId.parse(message.modelId()),
             new Hash256(com.elfmcys.ysm.util.ProtoBytes.copy(message.containerId())));
         owner.session.invalidatePreview(identity);
         if (owner.previewRepair != null)
@@ -377,7 +425,7 @@ public final class ClientSessionRuntime {
     }
 
     private static synchronized void completeActivation(ConnectionState connection, RemoteCatalogActivation activation,
-        Map<Hash256, PublicationEntry> expectedEntries, ActivationSnapshot snapshot, Throwable failure) {
+        Map<ModelId, PublicationEntry> expectedEntries, ActivationSnapshot snapshot, Throwable failure) {
         if (current != connection || connection.closed || connection.activation != activation
             || connection.session.state() != ClientModelSession.State.ACTIVE || !connection.session.remoteSnapshot()
                 .map(value -> value.entries().equals(expectedEntries)).orElse(false)) {
@@ -411,7 +459,7 @@ public final class ClientSessionRuntime {
         retryTransient(null);
     }
 
-    private static void retryTransient(Hash256 modelId) {
+    private static void retryTransient(ModelId modelId) {
         if (current == null || current.activation == null
             || current.session.state() != ClientModelSession.State.ACTIVE) {
             return;
@@ -469,8 +517,46 @@ public final class ClientSessionRuntime {
     }
 
     private static void failProtocolSession(ConnectionState owner) {
+        try {
+            retireBusinessSession(owner);
+        } finally {
+            failCatalogSession(owner);
+        }
+    }
+
+    private static void retireBusinessSession(ConnectionState owner) {
+        var business = owner.businessSession;
         owner.businessSession = null;
-        failCatalogSession(owner);
+        owner.remoteSyncBudget.close();
+        if (current != owner || business == null)
+            return;
+        var minecraft = Minecraft.getInstance();
+        if (minecraft == null || minecraft.level == null)
+            return;
+        Throwable failure = null;
+        for (var player : minecraft.level.players()) {
+            if (player instanceof LocalPlayer)
+                continue;
+            try {
+                player.getCapability(PlayerAnimatableCapabilityProvider.CAP)
+                    .ifPresent(capability -> capability.clearRemoteSelection());
+            } catch (RuntimeException | Error cleanupFailure) {
+                if (failure == null)
+                    failure = cleanupFailure;
+                else if ((cleanupFailure instanceof ThreadDeath
+                    || cleanupFailure instanceof VirtualMachineError && !(cleanupFailure instanceof OutOfMemoryError))
+                    && !(failure instanceof ThreadDeath
+                        || failure instanceof VirtualMachineError && !(failure instanceof OutOfMemoryError))) {
+                    cleanupFailure.addSuppressed(failure);
+                    failure = cleanupFailure;
+                } else if (failure != cleanupFailure)
+                    failure.addSuppressed(cleanupFailure);
+            }
+        }
+        if (failure instanceof RuntimeException runtimeFailure)
+            throw runtimeFailure;
+        if (failure instanceof Error error)
+            throw error;
     }
 
     private static void failCatalogSession(ConnectionState owner) {
@@ -484,17 +570,21 @@ public final class ClientSessionRuntime {
 
     private static boolean closeCurrent() {
         var owner = current;
-        current = null;
         if (owner == null) {
             return false;
         }
         try {
-            owner.close();
+            retireBusinessSession(owner);
         } finally {
+            current = null;
             try {
-                ClientProtocolGateway.resetWorld();
+                owner.close();
             } finally {
-                ClientModelService.instance().disconnect(owner.sessionOwner);
+                try {
+                    ClientProtocolGateway.resetWorld();
+                } finally {
+                    ClientModelService.instance().disconnect(owner.sessionOwner);
+                }
             }
         }
         return true;
@@ -505,7 +595,9 @@ public final class ClientSessionRuntime {
         private final ClientModelSession session;
         private final Consumer<String> catalogDeltaFailureNotice;
         private final Object sessionOwner;
+        private final RemoteSyncBudget remoteSyncBudget = new RemoteSyncBudget();
         private BusinessSession businessSession;
+        private boolean canSwitchModel = true;
         private SessionCollectionPublication.Receiver collectionPublication;
         private ClientAssetTransfer assetTransfer;
         private RemoteCatalogActivation activation;
@@ -595,15 +687,18 @@ public final class ClientSessionRuntime {
             if (closed) {
                 return;
             }
-            closed = true;
-            businessSession = null;
             try {
-                closeMissingServerNotice();
+                retireBusinessSession(this);
             } finally {
+                closed = true;
                 try {
-                    closeCatalogOwners();
+                    closeMissingServerNotice();
                 } finally {
-                    session.close();
+                    try {
+                        closeCatalogOwners();
+                    } finally {
+                        session.close();
+                    }
                 }
             }
         }

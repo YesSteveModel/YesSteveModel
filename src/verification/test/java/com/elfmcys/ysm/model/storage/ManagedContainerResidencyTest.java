@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.storage;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerWriter;
@@ -20,6 +21,7 @@ import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
 import java.nio.channels.FileChannel;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -122,7 +124,7 @@ class ManagedContainerResidencyTest {
             var prefix = representation.metadataPrefix().orElseThrow();
             assertThrows(IllegalArgumentException.class,
                 () -> new ModelRepresentation(
-                    new ModelFileIdentity(different(representation.modelId()), representation.containerId()), prefix,
+                    new ModelFileIdentity(ModelId.parse("different/model"), representation.containerId()), prefix,
                     representation.view()));
             assertThrows(IllegalArgumentException.class,
                 () -> new ModelRepresentation(
@@ -189,7 +191,96 @@ class ManagedContainerResidencyTest {
     }
 
     @Test
-    void identicalPrefixDoesNotAdmitCorruptPayloadOrWrongFileLength() throws Exception {
+    void directAndCachedMetadataValidateOnlyConsumedObjects() throws Exception {
+        var valid = Files.readAllBytes(fixture);
+        var asset = com.elfmcys.ysm.format.container.AssetContainerReader.readPreamble(valid);
+        var manifest = asset.getChunkInfo(ModelFileConstant.MANIFEST_CHUNK_NAME);
+        var later = asset.getChunkTable().values().stream()
+            .filter(chunk -> chunk.offset() >= manifest.offset() + manifest.size()).findFirst().orElseThrow();
+        try (var region = new CacheRegion(temp.resolve("cache"))) {
+            var file = region.cache().path(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.CONVERTED, 100);
+            Files.createDirectories(file.getParent());
+            Files.write(file, valid);
+            com.elfmcys.ysm.model.domain.ModelFileIdentity identity;
+            try (var expected = ManagedContainer.openDirect(fixture, location("expected")).representation()) {
+                identity = expected.identity();
+            }
+            var entry =
+                new CatalogIndexEntry(identity, location("cached"), file, ContentStorageBinding.builtin(region));
+            for (var corrupted : new int[] {0,
+                asset.getChunkInfo(AssetContainerConstant.VERIFICATION_CHUNK_TYPE).offset(), manifest.offset(),
+                later.offset()}) {
+                var bytes = valid.clone();
+                bytes[corrupted] ^= 1;
+                Files.write(file, bytes);
+                if (corrupted == later.offset()) {
+                    for (var content : new ManagedContainer[] {ManagedContainer.openDirect(file, location("direct")),
+                        ManagedContainer.openIndexed(entry)}) {
+                        try (var representation = content.representation()) {
+                            assertEquals(identity, representation.identity());
+                            assertThrows(IOException.class,
+                                () -> content.chunks().readStoredVerified(later, BufferType.ARRAY));
+                            assertEquals(identity, representation.identity());
+                        }
+                    }
+                } else {
+                    assertThrows(IOException.class, () -> ManagedContainer.openDirect(file, location("direct")));
+                    assertThrows(IOException.class, () -> ManagedContainer.openIndexed(entry));
+                }
+            }
+            Files.write(file, Arrays.copyOf(valid, manifest.offset() + manifest.size()));
+            var partial = ManagedContainer.openIndexed(entry);
+            try (var representation = partial.representation()) {
+                assertEquals(identity, representation.identity());
+                assertThrows(IOException.class, () -> partial.chunks().readStoredVerified(later, BufferType.ARRAY));
+            }
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "ysm.cacheReadProbe", matches = "true")
+    void convertedReadsKeepCandidatesSeparateFromReadFailures() throws Exception {
+        try (var region = new CacheRegion(temp.resolve("converted"));
+            var representation = ManagedContainer.openDirect(fixture, location("source")).representation()) {
+            var cache = region.cache();
+            var objects = new ConvertedObjectStore(cache);
+            var identity = representation.identity();
+            Path target;
+            com.elfmcys.ysm.natives.storage.CacheStorageTypes.Location token;
+            try (var staging = objects.stage()) {
+                staging.file().writeBytes(Files.readAllBytes(fixture));
+                token = staging.location();
+                target = staging.publish(file -> true, AtomicSharedCache.AtomicReplacement::run);
+            }
+            var entry = new ConvertedSourceIndex(identity, "custom/source", "test", token, target,
+                com.elfmcys.ysm.buffer.ArrayBuffer.move(new byte[0]).shareArray(),
+                representation.metadataPrefix().orElseThrow().shareArray());
+            var indexes = new ConvertedSourceIndexStore(new ConvertedScope("test", "test"), cache);
+            indexes.publish(entry);
+            for (var failure : java.util.List.of("missing", "access", "io", "interrupted", "closed", "close",
+                "cancelled", "oom", "defect")) {
+                com.elfmcys.ysm.testutil.CacheReadFaults.set(target, failure);
+                try {
+                    assertEquals(entry, indexes.find("custom/source").orElseThrow());
+                    switch (failure) {
+                        case "missing", "access", "io" -> assertTrue(objects.findIdentity(entry).isEmpty());
+                        case "cancelled" -> assertThrows(java.util.concurrent.CancellationException.class,
+                            () -> objects.findIdentity(entry));
+                        case "oom" -> assertThrows(OutOfMemoryError.class, () -> objects.findIdentity(entry));
+                        case "defect" -> assertThrows(IllegalStateException.class, () -> objects.findIdentity(entry));
+                        default -> assertThrows(IOException.class, () -> objects.findIdentity(entry));
+                    }
+                    assertEquals(identity, representation.identity());
+                } finally {
+                    com.elfmcys.ysm.testutil.CacheReadFaults.set(target, null);
+                }
+            }
+            assertEquals(identity, objects.findIdentity(entry).orElseThrow());
+        }
+    }
+
+    @Test
+    void directoryAdmissionDefersUnreadPayloadAndLengthValidation() throws Exception {
         var file = copyFixture("corrupt.mxc");
         var previous = ManagedContainer.openDirect(file, location("corrupt"));
         var payload = previous.view().getFileView().getAssetView().getChunkTable().values().stream()
@@ -199,12 +290,48 @@ class ManagedContainerResidencyTest {
         bytes[payload.offset()] ^= 1;
         Files.write(file, bytes);
 
-        assertThrows(AssetLoadException.class, () -> ManagedContainer.openDirect(file, location("corrupt"), previous));
+        var admitted = ManagedContainer.openDirect(file, location("corrupt"), previous);
+        try (var ignored = admitted.representation()) {
+            assertThrows(AssetLoadException.class,
+                () -> admitted.chunks().readStoredVerified(payload, BufferType.ARRAY));
+            assertThrows(AssetLoadException.class, () -> ManagedContainer.verifyFile(file));
+        }
         Files.write(file, Arrays.copyOf(bytes, bytes.length - 1));
-        assertThrows(AssetLoadException.class, () -> ManagedContainer.openDirect(file, location("corrupt"), previous));
+        try (var partial = ManagedContainer.openDirect(file, location("corrupt"), previous).representation()) {
+            assertEquals(previous.representation().identity(), partial.identity());
+        }
+        assertThrows(AssetLoadException.class, () -> ManagedContainer.verifyFile(file));
         {
             var retained = previous.representation().metadataPrefix().orElseThrow();
             assertTrue(retained.size() > 0);
+        }
+    }
+
+    @Test
+    void immutableDirectMetadataProofStillRequiresTheFreshPreamble() throws Exception {
+        try (var region = new CacheRegion(temp.resolve("proof-cache"))) {
+            var source = ManagedContainer.openDirect(fixture, location("source"));
+            Path file;
+            try (var representation = source.representation(); var preview = TestPreviews.blank()) {
+                file = ModelExporter.export(source, preview, temp.resolve("proof.mxc"), null);
+            }
+            var first = region.directories().open(file, location("direct"), null);
+            ModelFileIdentity identity;
+            try (var representation = first.representation()) {
+                identity = representation.identity();
+            }
+            var bytes = Files.readAllBytes(file);
+            var preamble = com.elfmcys.ysm.format.container.AssetContainerReader.readPreamble(bytes);
+            bytes[preamble.getChunkInfo(ModelFileConstant.MANIFEST_CHUNK_NAME).offset()] ^= 1;
+            Files.write(file, bytes);
+            var retained = region.directories().open(file, location("direct"), null);
+            try (var representation = retained.representation()) {
+                assertEquals(identity, representation.identity());
+            }
+            assertThrows(IOException.class, () -> ManagedContainer.openDirect(file, location("no-proof")));
+            bytes[preamble.getChunkInfo(AssetContainerConstant.VERIFICATION_CHUNK_TYPE).offset()] ^= 1;
+            Files.write(file, bytes);
+            assertThrows(IOException.class, () -> region.directories().open(file, location("direct"), null));
         }
     }
 

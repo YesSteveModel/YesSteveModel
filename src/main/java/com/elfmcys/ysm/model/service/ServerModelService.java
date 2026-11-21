@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.service;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.config.ServerConfig;
 import com.elfmcys.ysm.model.ModelRuntime;
@@ -15,6 +16,10 @@ import com.elfmcys.ysm.model.storage.PreviewStorage;
 import com.elfmcys.ysm.model.resource.server.ServerResourceRuntime;
 import com.elfmcys.ysm.network.NetworkHandler;
 import com.elfmcys.ysm.network.dispatch.ResourceDispatchWorker;
+import com.elfmcys.ysm.network.dispatch.TransportPort;
+import com.elfmcys.ysm.network.forge.PlayerStateHandler;
+import com.elfmcys.ysm.capability.ModelInfoCapabilityProvider;
+import com.elfmcys.ysm.capability.ModelInfoSyncAssembler;
 import com.elfmcys.ysm.network.dispatch.ServerAssetTransfers;
 import com.elfmcys.ysm.network.dispatch.ServerPreviewWork;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -44,6 +49,7 @@ public final class ServerModelService implements AutoCloseable {
     private static volatile ServerModelService INSTANCE;
 
     private final MinecraftServer server;
+    private final GameTrackingView tracking = GameTrackingView.live();
     private final ReloadableModelCatalog catalog;
     private final ResourceDispatchWorker dispatch;
     private final ModelExportService.Environment exports;
@@ -53,18 +59,24 @@ public final class ServerModelService implements AutoCloseable {
     private final AtomicReference<CatalogSnapshot> pendingPublication = new AtomicReference<>();
     private final PreviewStorage previews;
     private final ServerResourceRuntime serverResources;
+    private volatile CatalogSnapshot publication;
+    private boolean appliedCanSwitch = ServerConfig.CAN_SWITCH_MODEL.get();
+    private com.elfmcys.ysm.model.session.server.RestrictedModelPolicy appliedPolicy;
 
     private ServerModelService(MinecraftServer server) {
         this.server = server;
         var system = ModelRuntime.system();
         catalog = system.catalog();
+        appliedPolicy = ServerConfig.modelPolicy();
+        publication =
+            com.elfmcys.ysm.model.session.server.RestrictedModelPolicy.classify(catalog.current(), appliedPolicy);
         previews = system.previews();
         serverResources = system.serverResources();
         dispatch = new ResourceDispatchWorker(ServerModelService::dispatchSettings);
         dispatch.start();
-        exports = server.isDedicatedServer() ? null : net.minecraftforge.fml.DistExecutor.unsafeCallWhenOn(
-            net.minecraftforge.api.distmarker.Dist.CLIENT,
-            () -> () -> ClientModelService.createExportEnvironment(server, () -> new ServerCatalog(catalog.current())));
+        exports = server.isDedicatedServer() ? null
+            : net.minecraftforge.fml.DistExecutor.unsafeCallWhenOn(net.minecraftforge.api.distmarker.Dist.CLIENT,
+                () -> () -> ClientModelService.createExportEnvironment(server, () -> new ServerCatalog(publication)));
         publicationSubscription = catalog.subscribe(transition -> pendingPublication.set(transition.current()));
     }
 
@@ -73,8 +85,16 @@ public final class ServerModelService implements AutoCloseable {
         if (INSTANCE != this) {
             return;
         }
-        var publication = pendingPublication.getAndSet(null);
-        if (publication != null) {
+        if (appliedCanSwitch != ServerConfig.CAN_SWITCH_MODEL.get()) {
+            appliedCanSwitch = ServerConfig.CAN_SWITCH_MODEL.get();
+            broadcastServerState(PlayerStateHandler.serverFlags());
+        }
+        var discovered = pendingPublication.getAndSet(null);
+        var policy = ServerConfig.modelPolicy();
+        if (discovered != null || policy != appliedPolicy) {
+            appliedPolicy = policy;
+            publication =
+                com.elfmcys.ysm.model.session.server.RestrictedModelPolicy.classify(catalog.current(), policy);
             for (var player : server.getPlayerList().getPlayers()) {
                 try {
                     SessionProtocolHandler.publishCatalog(player, publication);
@@ -113,7 +133,7 @@ public final class ServerModelService implements AutoCloseable {
     }
 
     public Optional<ServerCatalog> catalog() {
-        return Optional.of(new ServerCatalog(catalog.current()));
+        return Optional.of(new ServerCatalog(publication));
     }
 
     public synchronized ServerModelSession offerSession(ServerPlayer player, boolean syncRoaming) {
@@ -125,7 +145,15 @@ public final class ServerModelService implements AutoCloseable {
         if (current != null) {
             return current.session;
         }
-        var session = new ServerModelSession(catalog::current, syncRoaming);
+        var session = new ServerModelSession(() -> publication, syncRoaming);
+        session.bindSelection(() -> {
+            var currentPlayer = server.getPlayerList().getPlayer(playerId);
+            var capability = currentPlayer == null ? null : currentPlayer
+                .getCapability(com.elfmcys.ysm.capability.ModelInfoCapabilityProvider.MODEL_INFO_CAP).orElse(null);
+            return capability == null || capability.selection() == null
+                ? new com.elfmcys.ysm.model.session.server.state.Selection.IntrinsicDefault()
+                : capability.selection().selection();
+        });
         var transport = new ForgeTransportPort(player);
         connections.replace(playerId, player.connection.connection, new ConnectionState(player, session, transport));
         return session;
@@ -156,11 +184,64 @@ public final class ServerModelService implements AutoCloseable {
         connections.remove(player.getUUID(), player.connection.connection);
     }
 
+    public synchronized void sendState(ServerPlayer player, us.hebi.quickbuf.ProtoMessage<?> message) {
+        var state = connections.current(player.getUUID(), player.connection.connection).orElse(null);
+        if (state != null)
+            sendState(state, message);
+    }
+
+    public synchronized void sendTrackedState(ServerPlayer subject, us.hebi.quickbuf.ProtoMessage<?> message) {
+        var recipients = new java.util.LinkedHashSet<>(tracking.observers(subject));
+        recipients.add(subject);
+        recipients.forEach(observer -> sendState(observer, message));
+    }
+
+    public synchronized void broadcastServerState(us.hebi.quickbuf.ProtoMessage<?> message) {
+        connections.forEach(state -> sendState(state, message));
+    }
+
+    /** Called only by the first successful activation, before catalog publication is attempted. */
+    public synchronized void initializePlayerState(ServerPlayer player) {
+        sendState(player, PlayerStateHandler.serverFlags());
+        sendState(player, PlayerStateHandler.flags(player));
+        sendState(player, PlayerStateHandler.entityInitial(player));
+        for (var subject : player.serverLevel().players()) {
+            if (subject != player && tracking.isTracking(player, subject))
+                sendTrackingInitial(subject, player);
+        }
+    }
+
+    /** StartTracking itself supplies the host relation; seenBy may still be updating in that callback. */
+    public synchronized void sendTrackingInitial(ServerPlayer subject, ServerPlayer observer) {
+        var state = connections.current(observer.getUUID(), observer.connection.connection).orElse(null);
+        if (state == null || !state.session.active())
+            return;
+        subject.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(capability -> {
+            if (!capability.isMandatory() && !NetworkHandler.isPlayerChannelPresent(subject))
+                return;
+            catalog().flatMap(snapshot -> ModelInfoSyncAssembler.build(subject, capability, snapshot))
+                .ifPresent(message -> sendState(state, message));
+        });
+    }
+
+    private void sendState(ConnectionState state, us.hebi.quickbuf.ProtoMessage<?> message) {
+        if (!state.session.active())
+            return;
+        var packet = new com.elfmcys.ysm.network.dispatch.SessionPublicationPacket(java.util.List.of(message));
+        try {
+            if (!dispatch.enqueue(state.session, state.transport, java.util.List.of(packet)))
+                packet.close();
+        } catch (RuntimeException failure) {
+            packet.close();
+            YesSteveModel.LOGGER.warn("Failed to enqueue player state for {}", state.playerId, failure);
+        }
+    }
+
     public ResourceDispatchWorker dispatch() {
         return dispatch;
     }
 
-    public synchronized ForgeTransportPort transport(ServerPlayer player, ServerModelSession owner) {
+    public synchronized TransportPort transport(ServerPlayer player, ServerModelSession owner) {
         var state = connections.current(player.getUUID(), player.connection.connection).orElse(null);
         if (state == null || state.session != owner) {
             throw new IllegalStateException("Model session is not current");
@@ -216,9 +297,8 @@ public final class ServerModelService implements AutoCloseable {
             synchronized (ServerModelService.this) {
                 if (INSTANCE != this)
                     return;
-                var notification =
-                    PreviewAvailableProto.newBuilder().setModelId(java.nio.ByteBuffer.wrap(identity.modelId().bytes()))
-                        .setContainerId(java.nio.ByteBuffer.wrap(identity.containerId().bytes())).build();
+                var notification = PreviewAvailableProto.newBuilder().setModelId(identity.modelId().toString())
+                    .setContainerId(java.nio.ByteBuffer.wrap(identity.containerId().bytes())).build();
                 for (var player : server.getPlayerList().getPlayers()) {
                     var state = connections.current(player.getUUID(), player.connection.connection).orElse(null);
                     if (state == null || !state.session.active())
@@ -315,12 +395,14 @@ public final class ServerModelService implements AutoCloseable {
 
     private final class ConnectionState implements AutoCloseable {
         private final ServerModelSession session;
-        private final ForgeTransportPort transport;
+        private final java.util.UUID playerId;
+        private final TransportPort transport;
         private final ServerAssetTransfers assetTransfers;
         private boolean closed;
 
         private ConnectionState(ServerPlayer player, ServerModelSession session, ForgeTransportPort transport) {
             this.session = session;
+            this.playerId = player.getUUID();
             this.transport = transport;
             assetTransfers = new ServerAssetTransfers(session, dispatch, transport, ServerConfig.RESTRICTED_AUTH::get,
                 failure -> ServerModelService.this
@@ -338,6 +420,10 @@ public final class ServerModelService implements AutoCloseable {
                 return;
             }
             closed = true;
+            var player = server.getPlayerList().getPlayer(playerId);
+            if (player != null)
+                player.getCapability(com.elfmcys.ysm.capability.ModelInfoCapabilityProvider.MODEL_INFO_CAP)
+                    .ifPresent(capability -> capability.retireProducer(session));
             assetTransfers.close();
             dispatch.disconnect(session);
             session.close();

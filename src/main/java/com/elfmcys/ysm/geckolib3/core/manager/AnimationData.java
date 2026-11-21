@@ -5,6 +5,7 @@
 package com.elfmcys.ysm.geckolib3.core.manager;
 
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
+import com.elfmcys.ysm.util.CleanupFailures;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 
@@ -54,10 +55,19 @@ public class AnimationData {
 
     public void reset() {
         resetTickLength = DEFAULT_ENDING_TRANSITION_LENGTH;
+        Throwable failure = null;
         for (var controller : animationControllers) {
-            controller.clear();
+            try {
+                controller.clear();
+            } catch (RuntimeException | Error next) {
+                failure = CleanupFailures.merge(failure, next);
+            }
         }
         animationControllers.clear();
         animationControllersMap.clear();
+        if (failure instanceof RuntimeException error)
+            throw error;
+        if (failure instanceof Error error)
+            throw error;
     }
 }

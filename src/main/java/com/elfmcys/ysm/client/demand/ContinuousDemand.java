@@ -78,8 +78,8 @@ public final class ContinuousDemand<T> {
     /** Page switches share one previous-page test while each effect keeps its own current-page threshold. */
     public boolean pageEffectEligible(boolean missing, long nowMillis, long thresholdMillis) {
         requireThreshold(thresholdMillis);
-        return active && (!requiresDwell(missing, PAGE_PREVIOUS_DWELL_MILLIS)
-            || elapsedAtLeast(nowMillis, thresholdMillis));
+        return active
+            && (!requiresDwell(missing, PAGE_PREVIOUS_DWELL_MILLIS) || elapsedAtLeast(nowMillis, thresholdMillis));
     }
 
     public void reset() {

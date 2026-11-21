@@ -101,7 +101,7 @@ public final class CustomGuiPlayerEntity extends CustomPlayerEntity implements I
     /** BUSY leaves the independent receiving lease with the caller. */
     ClientDemandCoordinator.InstallationResult receiveReady(ResourceRequest request, ResourceLease lease) {
         setResourceDemandMode(ModelResourceDemand.Mode.READY);
-        updateModelAndTexture(request.modelId(), request.requestedTexture());
+        updatePublishedModelAndTexture(request.modelId(), request.requestedTexture());
         var result = install(request, lease, false, purpose == ModelResourcePurpose.FULL);
         if (result == ClientDemandCoordinator.InstallationResult.INSTALLED)
             suppliedResource = true;

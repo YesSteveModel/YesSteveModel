@@ -28,7 +28,7 @@ public class MemoryAllocationBenchmark {
             var buffers = new ByteBuffer[1];
             long address = allocator.allocate(bytes, buffers, 0);
             try {
-                verify(address, bytes, (byte) 0x5A);
+                verify(address, bytes, (byte)0x5A);
             } finally {
                 allocator.free(address, buffers, 0);
             }
@@ -75,62 +75,78 @@ public class MemoryAllocationBenchmark {
         requireAddress(address);
         var unsafe = UnsafeUtil.getUnsafe();
         unsafe.putByte(address, marker);
-        unsafe.putByte(address + bytes - 1L, (byte) ~marker);
+        unsafe.putByte(address + bytes - 1L, (byte)~marker);
         check(address, bytes, marker);
     }
 
     static void check(long address, int bytes, byte marker) {
         var unsafe = UnsafeUtil.getUnsafe();
-        if (unsafe.getByte(address) != marker || unsafe.getByte(address + bytes - 1L) != (byte) ~marker)
+        if (unsafe.getByte(address) != marker || unsafe.getByte(address + bytes - 1L) != (byte)~marker)
             throw new IllegalStateException("Live allocation contents changed");
     }
 
     static native long nMalloc(int bytes);
+
     static native void nFree(long address);
+
     static native long nMiMalloc(int bytes);
+
     static native void nMiFree(long address);
 }
 
 enum AllocationMode {
     MALLOC {
-        @Override long allocate(int bytes, ByteBuffer[] buffers, int slot) {
+        @Override
+        long allocate(int bytes, ByteBuffer[] buffers, int slot) {
             return MemoryAllocationBenchmark.requireAddress(MemoryAllocationBenchmark.nMalloc(bytes));
         }
-        @Override void free(long address, ByteBuffer[] buffers, int slot) {
+
+        @Override
+        void free(long address, ByteBuffer[] buffers, int slot) {
             MemoryAllocationBenchmark.nFree(address);
         }
     },
     MIMALLOC {
-        @Override long allocate(int bytes, ByteBuffer[] buffers, int slot) {
+        @Override
+        long allocate(int bytes, ByteBuffer[] buffers, int slot) {
             return MemoryAllocationBenchmark.requireAddress(MemoryAllocationBenchmark.nMiMalloc(bytes));
         }
-        @Override void free(long address, ByteBuffer[] buffers, int slot) {
+
+        @Override
+        void free(long address, ByteBuffer[] buffers, int slot) {
             MemoryAllocationBenchmark.nMiFree(address);
         }
     },
     DIRECT {
-        @Override long allocate(int bytes, ByteBuffer[] buffers, int slot) {
+        @Override
+        long allocate(int bytes, ByteBuffer[] buffers, int slot) {
             var buffer = ByteBuffer.allocateDirect(bytes);
             buffers[slot] = buffer;
             return MemoryUtil.memAddress(buffer);
         }
-        @Override void free(long address, ByteBuffer[] buffers, int slot) {
+
+        @Override
+        void free(long address, ByteBuffer[] buffers, int slot) {
             UnsafeUtil.getUnsafe().invokeCleaner(buffers[slot]);
             buffers[slot] = null;
         }
     },
     LWJGL {
-        @Override long allocate(int bytes, ByteBuffer[] buffers, int slot) {
+        @Override
+        long allocate(int bytes, ByteBuffer[] buffers, int slot) {
             var buffer = MemoryUtil.memAlloc(bytes);
             buffers[slot] = buffer;
             return MemoryUtil.memAddress(buffer);
         }
-        @Override void free(long address, ByteBuffer[] buffers, int slot) {
+
+        @Override
+        void free(long address, ByteBuffer[] buffers, int slot) {
             MemoryUtil.memFree(buffers[slot]);
             buffers[slot] = null;
         }
     };
 
     abstract long allocate(int bytes, ByteBuffer[] buffers, int slot);
+
     abstract void free(long address, ByteBuffer[] buffers, int slot);
 }

@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.model.session.client;
 
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.session.client.state.ActivationFailure;
 import com.elfmcys.ysm.model.session.client.state.ActivationSnapshot;
@@ -18,15 +18,18 @@ import java.util.Set;
 /**
  * Owns remote publication and content activation for one connection chosen by the adapter.
  *
- * <p><b>Invariant:</b> ACTIVE means that remote authority exists; individual content can remain
- * Pending or Failed. Catalog queries expose Ready content plus the intrinsic default.
- * Publication, activation and render-target installation are separate transitions.
+ * <p>
+ * <b>Invariant:</b> ACTIVE means that remote authority exists; individual content can remain Pending or Failed. Catalog
+ * queries expose Ready content plus the intrinsic default. Publication, activation and render-target installation are
+ * separate transitions.
  *
- * <p><b>Execution:</b> Methods serialize this object's state. The adapter must reject a retired
- * connection before calling them; this object has no Minecraft connection identity.
- * Previously returned immutable snapshots remain values after replacement or close.
+ * <p>
+ * <b>Execution:</b> Methods serialize this object's state. The adapter must reject a retired connection before calling
+ * them; this object has no Minecraft connection identity. Previously returned immutable snapshots remain values after
+ * replacement or close.
  *
- * <p><b>Seam:</b> [remote publication and activation](docs/architecture/model-management/sessions/overview.md#目录权威与内容激活).
+ * <p>
+ * <b>Seam:</b> [remote publication and activation](docs/architecture/model-management/sessions/overview.md#目录权威与内容激活).
  */
 public final class ClientModelSession {
     private final CatalogSnapshot localCatalog;
@@ -49,6 +52,20 @@ public final class ClientModelSession {
     }
 
     public synchronized State state() {
+        return state;
+    }
+
+    /**
+     * Returns the state in the client shared-fact read window.
+     *
+     * <p>
+     * Requires: the client owner completes writes before task publication and joins every reader before the next state
+     * write. A synchronous owner read excludes state mutation. Cross-frame readers use {@link #state()}.
+     *
+     * <p>
+     * Seam: consumes [shared-fact windows](docs/architecture/integration/overview.md#共享事实读写窗口).
+     */
+    public State stateInReadWindow() {
         return state;
     }
 
@@ -81,8 +98,8 @@ public final class ClientModelSession {
     }
 
     /**
-     * Commits all remote collections together and starts their content as Pending.
-     * An ACTIVE session instead applies the publication replacement rules.
+     * Commits all remote collections together and starts their content as Pending. An ACTIVE session instead applies
+     * the publication replacement rules.
      *
      * @param snapshot the non-null, fully assembled publication admitted by the receiver
      * @throws IllegalStateException if the initial publication has no accepted hello or the state is invalid
@@ -103,8 +120,8 @@ public final class ClientModelSession {
     }
 
     /**
-     * Replaces authority and preserves activation only for unchanged exact content tuples.
-     * Grant changes affect new use; this transition does not close leases already held by consumers.
+     * Replaces authority and preserves activation only for unchanged exact content tuples. Grant changes affect new
+     * use; this transition does not close leases already held by consumers.
      *
      * @param snapshot the non-null, fully assembled replacement publication
      * @throws IllegalStateException if the session is not ACTIVE
@@ -112,7 +129,7 @@ public final class ClientModelSession {
     public synchronized void publishPublication(RemotePublicationSnapshot snapshot) {
         requireState(State.ACTIVE);
         Objects.requireNonNull(snapshot, "snapshot");
-        var states = new LinkedHashMap<Hash256, ActivationSnapshot.State>();
+        var states = new LinkedHashMap<ModelId, ActivationSnapshot.State>();
         snapshot.entries().forEach((modelId, entry) -> {
             var previousEntry = remote.entries().get(modelId);
             var previous = activation.entries().get(modelId);
@@ -204,8 +221,8 @@ public final class ClientModelSession {
     }
 
     /**
-     * Publishes a terminal activation result for the current publication.
-     * A Ready entry establishes content readiness, not a baked target or an installed entity model.
+     * Publishes a terminal activation result for the current publication. A Ready entry establishes content readiness,
+     * not a baked target or an installed entity model.
      *
      * @param snapshot the non-null terminal result whose entries belong to the current publication
      * @throws IllegalStateException if the session is not ACTIVE
@@ -217,7 +234,7 @@ public final class ClientModelSession {
         if (!snapshot.terminal() || !snapshot.publication().entries().equals(remote.entries())) {
             throw new IllegalArgumentException("Activation does not belong to the current publication owner");
         }
-        var states = new LinkedHashMap<Hash256, ActivationSnapshot.State>();
+        var states = new LinkedHashMap<ModelId, ActivationSnapshot.State>();
         remote.entries().forEach((modelId, entry) -> {
             var entryState = snapshot.entries().get(modelId);
             if (entryState instanceof ActivationSnapshot.Ready ready) {
@@ -231,10 +248,10 @@ public final class ClientModelSession {
         activation = new ActivationSnapshot(remote, states);
     }
 
-    public synchronized Set<Hash256> retryTransient(Hash256 modelId) {
+    public synchronized Set<ModelId> retryTransient(ModelId modelId) {
         requireState(State.ACTIVE);
         var states = new LinkedHashMap<>(activation.entries());
-        var retries = new LinkedHashSet<Hash256>();
+        var retries = new LinkedHashSet<ModelId>();
         for (var entry : activation.entries().entrySet()) {
             if (modelId != null && !modelId.equals(entry.getKey())) {
                 continue;
@@ -252,8 +269,8 @@ public final class ClientModelSession {
     }
 
     /**
-     * Retires remote authority and enters intrinsic-default-only mode unless LOCAL or CLOSED.
-     * The adapter separately owns handshake business eligibility, transfer cancellation and playback shutdown.
+     * Retires remote authority and enters intrinsic-default-only mode unless LOCAL or CLOSED. The adapter separately
+     * owns handshake business eligibility, transfer cancellation and playback shutdown.
      */
     public synchronized void failCompleteTransfer() {
         if (state != State.CLOSED && state != State.LOCAL) {

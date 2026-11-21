@@ -60,8 +60,7 @@ public class NativePartBenchmark {
 
         void draw(int part) {
             var output = outputs[part];
-            if (!NativeRenderer.render(sink, pose, output, output.getTotalVertexCount(), 0x00F000F0, 0, -1,
-                RenderContextType.LEVEL))
+            if (!NativeRenderer.render(sink, pose, output, 0x00F000F0, 0, -1, RenderContextType.LEVEL))
                 throw new IllegalStateException("part render failed");
         }
 

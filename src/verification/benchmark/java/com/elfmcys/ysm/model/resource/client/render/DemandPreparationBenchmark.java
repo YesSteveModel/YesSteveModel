@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.client.entity.EntityModelDemand;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.expression.aot.*;
@@ -63,7 +64,7 @@ public class DemandPreparationBenchmark {
         ClientDemandCoordinator.Target a;
         ClientDemandCoordinator.Target b;
         private ClientDemandCoordinator.Target authority;
-        private final Map<Hash256, ModelContent> catalog = new HashMap<>();
+        private final Map<ModelId, ModelContent> catalog = new HashMap<>();
         private final List<ResourceLease> leases = new ArrayList<>();
         private final Object owner = new Object();
         private final AtomicInteger starts = new AtomicInteger();
@@ -112,7 +113,7 @@ public class DemandPreparationBenchmark {
             for (int i = 0; i < unrelatedCatalog; i++) {
                 var hash = new byte[Hash256.SIZE];
                 java.nio.ByteBuffer.wrap(hash).putInt(i).putInt(0x7fffffff);
-                catalog.put(new Hash256(hash), content);
+                catalog.put(ModelId.fromHash(new Hash256(hash)), content);
             }
             System.out.println("DEMAND_INPUT " + content.representation().identity() + " textures=" + textures
                 + " workers=2 gpu=headless receiver=native-extract content=resident");
@@ -126,8 +127,8 @@ public class DemandPreparationBenchmark {
             scheduler = schedulerFactory.get();
             var shared = new AtomicSharedCache(root);
             metrics = new ExpressionEngineMetrics();
-            var modules =
-                new RenderTargetExpressionModuleFactory(new ExpressionArtifactStore(root, shared), host, metrics);
+            var modules = new RenderTargetExpressionModuleFactory(new ExpressionArtifactStore(root, shared),
+                new AnimationInputStore(root, shared), host, metrics);
             loader = new ModelRenderTargetLoader(new BakedModelCache(root, shared), modules, scheduler,
                 new DefaultAnimationRuntime());
             var manager = (TextureManager)UnsafeUtil.getUnsafe().allocateInstance(TextureManager.class);
@@ -232,7 +233,7 @@ public class DemandPreparationBenchmark {
                     readyAnchor = null;
                 }
                 cache.tick();
-                if (!leases.isEmpty() || cache.loadingCount() != 0 || cache.readyCount() != 0)
+                if (!leases.isEmpty() || cache.loadingCount() != 0)
                     throw new IllegalStateException("Retired demand still owns resources");
             } finally {
                 cache.close();
@@ -243,8 +244,8 @@ public class DemandPreparationBenchmark {
                     scheduler.awaitTermination();
                 }
             }
-            System.out.println("DEMAND_RETIRED leases=" + leases.size() + " pending=" + cache.loadingCount() + " ready="
-                + cache.readyCount() + " expressionOwners=" + Arrays.toString(metrics.snapshot().activeOwners()));
+            System.out.println("DEMAND_RETIRED leases=" + leases.size() + " pending=" + cache.loadingCount()
+                + " expressionOwners=" + Arrays.toString(metrics.snapshot().activeOwners()));
         }
 
         @TearDown(Level.Trial)
@@ -263,12 +264,12 @@ public class DemandPreparationBenchmark {
             }
         }
 
-        public ModelContent content(Hash256 id) {
+        public ModelContent content(ModelId id) {
             reads++;
             return catalog.get(id);
         }
 
-        public ResourceRequest resourceRequest(Hash256 id, String target, String texture, ModelResourcePurpose purpose,
+        public ResourceRequest resourceRequest(ModelId id, String target, String texture, ModelResourcePurpose purpose,
             Class<?> subject) {
             return new ResourceRequest(id, target, texture, loader.bakeProfile(),
                 loader.expressionBinding(AbstractClientPlayer.class), purpose);
@@ -330,14 +331,12 @@ public class DemandPreparationBenchmark {
             return true;
         }
 
-        public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request,
-            WorkPriority priority) {
-            return CompletableFuture.completedFuture(findExactReady(request));
+        public ResourceLease getOrStartCached(ResourceRequest request, WorkPriority priority) {
+            return findExactReady(request).orElseGet(() -> ResourceLease.missing(request));
         }
 
-        public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request,
-            WorkPriority priority) {
-            return CompletableFuture.completedFuture(Optional.of(getOrStart(request, priority)));
+        public ResourceLease getOrStartOffline(ResourceRequest request, WorkPriority priority) {
+            return getOrStart(request, priority);
         }
 
         public ResourceLease getOrStart(ResourceRequest request, WorkPriority priority) {
@@ -352,24 +351,34 @@ public class DemandPreparationBenchmark {
         public void reportActiveModelFailure(ModelContent content, boolean fallback) {}
 
         public ClientDemandCoordinator.SelectionContext context() {
-            return new ClientDemandCoordinator.SelectionContext(owner, false, true);
+            return new ClientDemandCoordinator.SelectionContext(owner, new java.util.UUID(0, 1), owner, false, true);
         }
 
         public ClientDemandCoordinator.Target authority() {
             return authority;
         }
 
-        public boolean installed(ClientDemandCoordinator.Target target) {
+        public boolean installed(ClientDemandCoordinator.Target target, Object application) {
             return player != null && player.lease != null && target.equals(player.target);
         }
 
-        public void send(ClientDemandCoordinator.Target target, long id) {
+        public ClientDemandCoordinator.InitialRoaming retainedInitial(ClientDemandCoordinator.SelectionContext context,
+            ClientDemandCoordinator.Target target) {
+            return null;
+        }
+
+        public void send(ClientDemandCoordinator.SelectionContext context, ClientDemandCoordinator.Target target,
+            long id, com.elfmcys.ysm.model.storage.NamedRoamingSnapshot initial, boolean reinitialize) {
             sends++;
             authority = target;
         }
 
         public void reportFailure(Throwable failure) {
             throw new IllegalStateException(failure);
+        }
+
+        public void reportPreferenceReadFailure(Throwable failure) {
+            throw new AssertionError(failure);
         }
     }
 
@@ -379,7 +388,7 @@ public class DemandPreparationBenchmark {
         final ClientDemandCoordinator.Target target;
         final ModelResourcePurpose purpose;
         final boolean pageOwned;
-        ClientDemandCoordinator.EntityScope scope;
+        EntityModelDemand scope;
         ResourceLease lease;
         long vertices;
         long installedAt;

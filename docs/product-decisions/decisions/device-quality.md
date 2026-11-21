@@ -34,23 +34,23 @@
 
 ### BC.device-derived-configuration-defaults
 
-- Claim: Native 结合设备事实与本次 JVM 最大堆给出统一分档。分档只决定缺失配置的默认值，不覆盖两个配置各自的合法显式值。关键事实未知、探测失败或 native 不可用时采用低配默认。
-- Rationale: 自动展示与未使用模型保留分别消耗计算和内存。统一的保守默认降低受限设备的初始成本，独立显式配置保留玩家选择；档位不构成帧率保证。
+- Claim: Native 会结合设备硬件信息与本次 JVM 最大堆容量给出统一分档。分档只用来决定缺失配置的默认值，不会覆盖两个配置各自的合法显式值。当关键信息未知、探测失败或 native 不可用时，一律采用低配默认。
+- Rationale: 自动展示与未使用模型保留分别消耗计算和内存。统一的保守默认可以降低受限设备的初始成本，独立的显式配置则保留玩家自主选择；档位本身不构成帧率保证。
 
 | 判据 | 低配条件 |
 |---|---|
 | 平台 | Android、Windows 7，或平台不能可靠确定 |
 | 总物理内存 | 不大于 8 GiB；不以空闲内存或 swap 替代 |
 | JVM 最大堆 | 不大于 4 GiB；不以当前提交量、空闲堆或 RSS 替代 |
-| x86 SIMD | 现有 SIMD type 不是 AVX2 或 AVX512 |
-| x86 总物理核 | 少于 6；SMT 不重复计数，P/E 均计入，不采用 affinity、parked 或 allocated 过滤后的调度数量 |
+| x86 SIMD | 检测到的 SIMD 类型不是 AVX2 或 AVX512 |
+| x86 总物理核 | 少于 6 个；SMT 逻辑线程不重复计数，P 核与 E 核均计入，不采用经 affinity、parked 或 allocated 过滤后的调度核数 |
 | 拓扑及其他适用事实 | 拓扑、内存、最大堆、架构、平台或适用 SIMD 未知 |
 
-`GiB = 2^30 byte`。只有全部适用事实已知且通过时才为高配。ARM 不应用 x86 SIMD 和六核判据，但仍要求拓扑已知。已知低配条件允许提前返回；分类不探测主频、GPU 或实时负载，也不改变 renderer 调度。
+`GiB = 2^30 byte`。只有全部适用判据信息均已知且通过检查时，才归为高配。ARM 平台不适用 x86 SIMD 和六核判据，但仍要求 CPU 拓扑已知。命中任一低配条件后允许提前返回；分档不探测主频、GPU 或实时负载，也不改变 renderer 调度。
 
 | 配置 | 高配缺失默认 | 低配缺失默认 |
 |---|---|---|
 | `general.ModelScreenEagerLoading` | `true` | `false` |
 | `general.ModelRetentionCount` | `30` | `10` |
 
-两个配置独立生效。`ModelRetentionCount` 的合法范围为 0 至 `Integer.MAX_VALUE`。数量只限制没有消费者的完整 Ready target，不限制活动数量、字节、idle 时间或峰值。超限只撤销最旧 cache 引用，required owner 继续保活默认模型。旧键 `general.UnusedModelRenderTargetLimit` 不读取、不迁移；仅有旧键时按新键缺失处理。
+两个配置各自独立生效。`ModelRetentionCount` 的合法范围为 0 至 `Integer.MAX_VALUE`。该数量仅限制当前没有消费者的完整 Ready target，不限制活跃使用中的数量、内存字节数、空闲时间或瞬时峰值。超出上限时，只撤销最旧的 cache 引用，默认模型仍由其必需持有方（required owner）保活。旧配置键 `general.UnusedModelRenderTargetLimit` 不读取也不迁移；仅存在旧键时，按新键缺失处理。

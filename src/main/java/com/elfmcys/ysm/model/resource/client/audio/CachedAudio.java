@@ -42,7 +42,8 @@ sealed interface CachedAudio {
         if (!AudioFormat.Encoding.PCM_SIGNED.equals(format.getEncoding()) || format.getSampleRate() != 48_000
             || format.getSampleSizeInBits() != 16 || format.getChannels() != 1 || format.getFrameSize() != 2
             || format.getFrameRate() != 48_000 || format.isBigEndian() || pcm.size() % 2 != 0) {
-            throw new IllegalArgumentException("Cached PCM must be frame-aligned 48 kHz signed 16-bit little-endian mono");
+            throw new IllegalArgumentException(
+                "Cached PCM must be frame-aligned 48 kHz signed 16-bit little-endian mono");
         }
     }
 }

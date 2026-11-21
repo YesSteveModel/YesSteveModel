@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.model.session.server.state;
 
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 
 import java.util.Objects;
 
@@ -8,7 +8,7 @@ public sealed interface Selection permits Selection.IntrinsicDefault, Selection.
     record IntrinsicDefault() implements Selection {
     }
 
-    record Model(Hash256 modelId, String textureId) implements Selection {
+    record Model(ModelId modelId, String textureId) implements Selection {
         public Model {
             Objects.requireNonNull(modelId, "modelId");
             textureId = Objects.requireNonNullElse(textureId, "");
@@ -17,7 +17,7 @@ public sealed interface Selection permits Selection.IntrinsicDefault, Selection.
             }
         }
 
-        public Model(Hash256 modelId) {
+        public Model(ModelId modelId) {
             this(modelId, "");
         }
     }

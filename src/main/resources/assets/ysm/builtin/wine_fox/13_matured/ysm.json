@@ -19,6 +19,7 @@
 		]
 	},
 	"properties": {
+		"origin_ver": "2.6.5",
 		"height_scale": 0.8,
 		"width_scale": 0.8,
 		"extra_animation": {

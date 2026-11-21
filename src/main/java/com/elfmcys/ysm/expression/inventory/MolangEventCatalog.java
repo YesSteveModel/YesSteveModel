@@ -19,7 +19,6 @@ import java.util.regex.Pattern;
 /** Closed authority for event classification and invocation policy. */
 public final class MolangEventCatalog {
     public static final int SYNC_MAX_ARGUMENTS = 16;
-    public static final int DEFER_MAX_ARGUMENTS = 255;
 
     private static final String DOMAIN = "ysm:event-catalog";
     private static final Pattern CODED_CONTROLLER = Pattern.compile("[a-z0-9_]+_ctrl_[a-z0-9_]+");
@@ -30,7 +29,7 @@ public final class MolangEventCatalog {
             "TYPED_VOID", "LOGICAL_BATCH", "event:player_update"),
         route("sync", ProgramRole.EVENT_SYNC, "LIST<F32>", SYNC_MAX_ARGUMENTS, HandlerSelection.ALL, "DECLARED",
             "TYPED_VOID", "SYNC_BATCH", "event:sync"),
-        route("defer", ProgramRole.EVENT_DEFER, "LIST<F32>", DEFER_MAX_ARGUMENTS, HandlerSelection.ALL,
+        route("defer", ProgramRole.EVENT_DEFER, "LIST<F32>", Integer.MAX_VALUE, HandlerSelection.ALL,
             "CAPTURE_LIFO_HANDLER_DECLARED", "TYPED_VOID", "DEFER_BATCH", "event:defer"),
         route("*_ctrl_*", ProgramRole.EVENT_CODED_CONTROLLER, "NONE", 0, HandlerSelection.FIRST, "FIRST_DECLARED",
             "ABSENT=DELEGATE_PREDICATE;DETERMINISTIC_FALLBACK=DELEGATE_PREDICATE;"

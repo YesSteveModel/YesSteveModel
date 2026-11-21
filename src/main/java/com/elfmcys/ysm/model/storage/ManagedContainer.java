@@ -5,7 +5,6 @@ import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
-import com.elfmcys.ysm.buffer.UniBufferIO;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
 import com.elfmcys.ysm.format.container.AssetContainerView;
@@ -60,41 +59,34 @@ public final class ManagedContainer implements ModelContent {
     public static ManagedContainer openIndexed(CatalogIndexEntry entry, @Nullable ManagedContainer reusable)
         throws IOException {
         var binding = entry.storageBinding();
+        return binding == null ? openIndexedProtected(entry, reusable)
+            : binding.acquire(() -> openIndexedProtected(entry, reusable));
+    }
+
+    private static ManagedContainer openIndexedProtected(CatalogIndexEntry entry, @Nullable ManagedContainer reusable)
+        throws IOException {
+        var binding = entry.storageBinding();
+        if (binding != null)
+            binding.requireReadable();
         var cached = binding != null && entry.backingFile().startsWith(binding.region().root());
-        CacheDirectoryGuard.Observation observation;
-        final boolean exists;
-        try {
-            observation = cached ? binding.region().cache().observe(entry.backingFile(), false) : null;
-            exists = RegularFileProbe.exists(observation == null ? entry.backingFile() : observation.target());
-        } catch (java.nio.file.NoSuchFileException absent) {
-            throw AssetLoadException.content("Indexed model container is missing", absent);
-        } catch (IOException | SecurityException failure) {
-            throw AssetLoadException.access("Failed to inspect indexed model container: " + entry.backingFile(),
-                failure);
-        }
-        if (!exists)
-            throw AssetLoadException.content("Indexed model container is missing: " + entry.backingFile());
-        var representation = cached
-            ? verifyCachedFile(entry.backingFile(), binding.region().cache(),
-                reusable == null ? null : reusable.representation)
-            : verifyFile(entry.backingFile(), reusable == null ? null : reusable.representation);
-        try {
-            if (observation != null)
-                observation.verify();
-        } catch (IOException failure) {
-            representation.close();
-            throw failure;
-        }
+        var representation = entry.convertedIndex() != null
+            ? readConvertedMetadata(entry.convertedIndex(), cached ? binding.region().cache() : null)
+            : cached
+                ? readCachedMetadata(entry.backingFile(), binding.region().cache(),
+                    reusable == null ? null : reusable.representation)
+                : readRepresentation(entry.backingFile(), reusable == null ? null : reusable.representation);
         if (!representation.identity().equals(entry.identity())) {
             representation.close();
             throw new IOException("Indexed container identity changed: " + entry.backingFile());
         }
         try {
             return new ManagedContainer(entry.backingFile(), entry.location(), representation,
-                new FileChunkDataSource(entry.backingFile(), expectedFileSize(representation.view()),
-                    () -> observation == null ? FileChannel.open(entry.backingFile(), StandardOpenOption.READ)
-                        : observation.open(java.util.Set.of(StandardOpenOption.READ))),
-                binding);
+                new FileChunkDataSource(entry.backingFile(), -1, () -> {
+                    CacheRootCoordinator.FileOperation<FileChannel> open =
+                        () -> !cached ? FileChannel.open(entry.backingFile(), StandardOpenOption.READ)
+                            : binding.region().cache().openRead(entry.backingFile());
+                    return binding == null ? open.run() : binding.acquire(open);
+                }), binding);
         } catch (RuntimeException | Error failure) {
             representation.close();
             throw failure;
@@ -108,10 +100,9 @@ public final class ManagedContainer implements ModelContent {
     public static ManagedContainer openDirect(Path file, CatalogLocation location, @Nullable ManagedContainer reusable)
         throws IOException {
         file = file.toAbsolutePath().normalize();
-        var representation = verifyFile(file, reusable == null ? null : reusable.representation);
+        var representation = readRepresentation(file, reusable == null ? null : reusable.representation);
         try {
-            return new ManagedContainer(file, location, representation,
-                new FileChunkDataSource(file, expectedFileSize(representation.view())));
+            return new ManagedContainer(file, location, representation, new FileChunkDataSource(file));
         } catch (RuntimeException | Error failure) {
             representation.close();
             throw failure;
@@ -127,7 +118,7 @@ public final class ManagedContainer implements ModelContent {
         var array = container.shareArray();
         final ModelRepresentation representation;
         try (var channel = new ByteArraySeekableChannel(array.array(), array.arrayOffset(), array.size())) {
-            representation = readRepresentation(channel, "builtin default memory");
+            representation = readRepresentation(channel, null);
         } finally {
             java.lang.ref.Reference.reachabilityFence(array);
         }
@@ -152,7 +143,7 @@ public final class ManagedContainer implements ModelContent {
         Throwable loadFailure = null;
         ModelRepresentation loaded = null;
         try {
-            loaded = readRepresentation(channel, file.toString(), reusable);
+            loaded = readRepresentation(channel, reusable);
             return loaded;
         } catch (IOException | RuntimeException | Error failure) {
             loadFailure = failure;
@@ -173,59 +164,87 @@ public final class ManagedContainer implements ModelContent {
         }
     }
 
-    private static ModelRepresentation readRepresentation(SeekableByteChannel channel, String source)
-        throws IOException {
-        return readRepresentation(channel, source, null);
+    private static ModelRepresentation readRepresentation(SeekableByteChannel channel,
+        @Nullable ModelRepresentation reusable) throws IOException {
+        var preamble = ModelFileIdentityReader.readContainer(channel);
+        return readRepresentation(channel, preamble, reusable);
     }
 
-    private static ModelRepresentation readRepresentation(SeekableByteChannel channel, String source,
+    private static ModelRepresentation readRepresentation(SeekableByteChannel channel, AssetContainerView preamble,
         @Nullable ModelRepresentation reusable) throws IOException {
-        var acceptedSize = channelSize(channel);
-        if (reusable != null && reusable.hasMetadataPrefix() && prefixMatches(channel, reusable)) {
-            if (expectedFileSize(reusable.view()) != acceptedSize) {
-                throw AssetLoadException.content("Model file length does not match its chunk table: " + source);
-            }
-            verifyFileSize(channel, acceptedSize, source);
+        if (reusable != null && reusable.hasMetadataPrefix()
+            && preamble.sameContents(reusable.view().getFileView().getAssetView())) {
             return reusable.acquire();
         }
-        var preamble = ModelFileIdentityReader.readContainer(channel);
-        if (expectedFileSize(preamble) != acceptedSize) {
-            throw AssetLoadException.content("Model file length does not match its chunk table: " + source);
-        }
         try (var scope = com.elfmcys.ysm.util.ScopeGuard.create(readMetadataPrefix(channel, preamble))) {
-            verifyFileSize(channel, acceptedSize, source);
             return ModelRepresentation
                 .fromMetadataPrefix(com.elfmcys.ysm.buffer.SharedNativeBuffer.adopt(scope.release()), reusable);
         }
     }
 
-    private static boolean prefixMatches(SeekableByteChannel channel, ModelRepresentation reusable) throws IOException {
-        var prefix = reusable.metadataPrefix().orElseThrow();
-        try {
-            if (channelSize(channel) < prefix.size()) {
-                return false;
-            }
-            channel.position(0);
-            var bytes = new byte[Math.min(8192, prefix.size())];
-            for (var offset = 0; offset < prefix.size();) {
-                var size = Math.min(bytes.length, prefix.size() - offset);
-                var target = java.nio.ByteBuffer.wrap(bytes, 0, size);
-                while (target.hasRemaining()) {
-                    if (channel.read(target) < 0) {
-                        throw AssetLoadException.content("Model file changed while comparing metadata");
+    record DirectAdmission(ManagedContainer content, boolean validated) {
+    }
+
+    static DirectAdmission openDirect(Path file, CatalogLocation location, @Nullable ManagedContainer reusable,
+        DirectContainerIndex index) throws IOException {
+        file = file.toAbsolutePath().normalize();
+        ModelRepresentation representation = null;
+        try (var channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            var preamble = ModelFileIdentityReader.readContainer(channel);
+            var saved = index.find(preamble.getContainerId());
+            if (saved.isPresent()) {
+                try {
+                    representation = ModelRepresentation.fromMetadataPrefix(saved.get(), null);
+                    if (!preamble.sameContents(representation.view().getFileView().getAssetView()))
+                        throw AssetLoadException.content("Stored direct metadata does not match the container");
+                    var content = new ManagedContainer(file, location, representation, new FileChunkDataSource(file));
+                    return new DirectAdmission(content, true);
+                } catch (IOException invalid) {
+                    CacheReadFailure.miss(file, invalid);
+                    if (representation != null) {
+                        representation.close();
+                        representation = null;
                     }
+                    com.elfmcys.ysm.YesSteveModel.LOGGER.warn("Stored direct metadata is invalid: {}", file, invalid);
                 }
-                if (!UniBufferIO.equals(prefix, offset, bytes, 0, size)) {
-                    return false;
-                }
-                offset += size;
             }
-            return true;
-        } catch (AssetLoadException failure) {
+            representation = readRepresentation(channel, preamble, reusable == null ? null : reusable.representation);
+            return new DirectAdmission(
+                new ManagedContainer(file, location, representation, new FileChunkDataSource(file)), false);
+        } catch (IOException | RuntimeException | Error failure) {
+            if (representation != null)
+                representation.close();
             throw failure;
-        } catch (IOException failure) {
-            throw AssetLoadException.access("Failed to compare model metadata prefix", failure);
         }
+    }
+
+    static ModelRepresentation readConvertedMetadata(ConvertedSourceIndex entry, @Nullable AtomicSharedCache cache)
+        throws IOException {
+        var representation = ModelRepresentation.fromMetadataPrefix(entry.metadata(), null);
+        try (var channel =
+            cache == null ? FileChannel.open(entry.file(), StandardOpenOption.READ) : cache.openRead(entry.file())) {
+            var preamble = ModelFileIdentityReader.readContainer(channel);
+            if (!representation.identity().equals(entry.identity())
+                || !preamble.sameContents(representation.view().getFileView().getAssetView()))
+                throw AssetLoadException.content("Converted cache structure or identity changed");
+            return representation;
+        } catch (IOException | RuntimeException | Error failure) {
+            representation.close();
+            throw failure;
+        }
+    }
+
+    static ModelRepresentation readCachedMetadata(Path file, AtomicSharedCache cache,
+        @Nullable ModelRepresentation reusable) throws IOException {
+        ModelRepresentation loaded = null;
+        try (var channel = cache.openRead(file)) {
+            loaded = readRepresentation(channel, reusable);
+        } catch (IOException | RuntimeException | Error failure) {
+            if (loaded != null)
+                loaded.close();
+            throw failure;
+        }
+        return loaded;
     }
 
     public static ModelRepresentation verifyCachedFile(Path file, AtomicSharedCache cache) throws IOException {
@@ -234,9 +253,15 @@ public final class ManagedContainer implements ModelContent {
 
     private static ModelRepresentation verifyCachedFile(Path file, AtomicSharedCache cache,
         @Nullable ModelRepresentation reusable) throws IOException {
+        ModelRepresentation loaded = null;
         try (var channel = cache.openRead(file)) {
-            return verifyCachedFile(channel, file.toString(), reusable);
+            loaded = verifyCachedFile(channel, file.toString(), reusable);
+        } catch (IOException | RuntimeException | Error failure) {
+            if (loaded != null)
+                loaded.close();
+            throw failure;
         }
+        return loaded;
     }
 
     public static ModelRepresentation verifyCachedFile(CacheFile file) throws IOException {
@@ -246,7 +271,7 @@ public final class ManagedContainer implements ModelContent {
 
     private static ModelRepresentation verifyCachedFile(SeekableByteChannel channel, String source,
         @Nullable ModelRepresentation reusable) throws IOException {
-        var representation = readRepresentation(channel, source, reusable);
+        var representation = readRepresentation(channel, reusable);
         try {
             for (var chunk : representation.view().getFileView().getAssetView().getChunkTable().values()) {
                 if (!chunk.type().equals(AssetContainerConstant.VERIFICATION_CHUNK_TYPE))

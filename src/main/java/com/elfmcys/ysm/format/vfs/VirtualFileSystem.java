@@ -8,13 +8,17 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Raw-source access borrowed by parsing and capture.
  *
- * <p>Execution: callers serialize access to a source and keep its owner open. A listing is an
- * observation, not a guarantee that a later read succeeds or sees the same bytes.
+ * <p>
+ * Execution: callers serialize access to a source and keep its owner open. A listing is an observation, not a guarantee
+ * that a later read succeeds or sees the same bytes.
  *
- * <p>Ownership: file buffers are borrowed, not independently owned. Without a stronger implementation
- * guarantee, consume or copy a buffer before the next source read and before source close.
+ * <p>
+ * Ownership: file buffers are borrowed, not independently owned. Without a stronger implementation guarantee, consume
+ * or copy a buffer before the next source read and before source close.
  *
- * <p>Seam: supplies inputs for [raw capture](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换); capture establishes its own retained parse closure.
+ * <p>
+ * Seam: supplies inputs for [raw conversion](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换). Direct parsing
+ * borrows stable inputs; capture establishes its own retained parse closure.
  */
 public interface VirtualFileSystem {
     /** Lists immediate file names; null denotes the root directory. */

@@ -20,8 +20,8 @@ import java.util.*;
  */
 public final class PackagedDeclarationMatrix {
     private static final List<String> SCENARIOS = List.of("all", "no-a", "no-b", "neither", "version", "method", "init",
-            "binding", "no-declaration", "all-restored", "reason-changed", "manual", "manual-failed", "manual-duplicate",
-            "auto-double", "conflict", "reversed");
+        "binding", "no-declaration", "all-restored", "reason-changed", "manual", "manual-failed", "manual-duplicate",
+        "auto-double", "conflict", "reversed");
 
     public static void main(String[] args) throws Throwable {
         Path output = Path.of(args[0]);
@@ -34,22 +34,22 @@ public final class PackagedDeclarationMatrix {
         args[0] = output.toString();
         System.out.println("DECLARATION_MATRIX_OUTPUT " + output);
         for (String scenario : Boolean.getBoolean("matrix.composition")
-                ? List.of("compose-cold", "compose-warm", "compose-conflict") : SCENARIOS) {
+            ? List.of("compose-cold", "compose-warm", "compose-conflict") : SCENARIOS) {
             Path log = output.resolve(scenario + ".log");
             var command =
-                    new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
-                            "-Xlog:class+load=info:file="
-                                    + output.resolve(scenario + "-classes.log").toString().replace('\\', '/'),
-                            "-cp", System.getProperty("java.class.path"), PackagedDeclarationMatrix.class.getName()));
+                new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
+                    "-Xlog:class+load=info:file="
+                        + output.resolve(scenario + "-classes.log").toString().replace('\\', '/'),
+                    "-cp", System.getProperty("java.class.path"), PackagedDeclarationMatrix.class.getName()));
             command.addAll(List.of(args));
             command.add(scenario);
             int exit =
-                    new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start().waitFor();
+                new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start().waitFor();
             require(exit == 0, scenario + " failed; see " + log);
             if (List.of("no-a", "no-b", "neither", "version", "method", "binding", "reason-changed", "conflict")
-                    .contains(scenario))
+                .contains(scenario))
                 require(!Files.readString(output.resolve(scenario + "-classes.log")).contains(" independent.Combined "),
-                        "JVM loaded rejected Combined");
+                    "JVM loaded rejected Combined");
             System.out.println("DECLARATION_MATRIX_OK " + scenario);
         }
     }
@@ -74,8 +74,8 @@ public final class PackagedDeclarationMatrix {
         try (var loader = new TraceLoader(urls.toArray(URL[]::new))) {
             try {
                 loader.loadClass(PackagedDeclarationMatrix.class.getName())
-                        .getMethod("runChild", String.class, String[].class, String.class, ClassLoader.class)
-                        .invoke(null, output.toString(), jars, scenario, loader);
+                    .getMethod("runChild", String.class, String[].class, String.class, ClassLoader.class)
+                    .invoke(null, output.toString(), jars, scenario, loader);
             } catch (java.lang.reflect.InvocationTargetException failure) {
                 throw failure.getCause();
             }
@@ -83,14 +83,14 @@ public final class PackagedDeclarationMatrix {
     }
 
     public static void runChild(String outputDirectory, String[] jars, String scenario, ClassLoader loader)
-            throws Throwable {
+        throws Throwable {
         Path output = Path.of(outputDirectory);
         boolean composed = scenario.startsWith("compose-");
         boolean a = !List.of("no-a", "neither").contains(scenario);
         boolean b = !List.of("no-b", "neither").contains(scenario);
         boolean declaration = !scenario.equals("no-declaration");
         boolean published = !scenario.equals("compose-conflict") && declaration && a && b
-                && !List.of("version", "method", "init", "binding", "reason-changed", "conflict").contains(scenario);
+            && !List.of("version", "method", "init", "binding", "reason-changed", "conflict").contains(scenario);
         Path declarationFile = Path.of(jars[scenario.equals("binding") ? 4 : 0]);
         var versions = new TreeMap<String, String>();
         if (a)
@@ -98,18 +98,19 @@ public final class PackagedDeclarationMatrix {
         if (b)
             versions.put("b", scenario.equals("version") || scenario.equals("reason-changed") ? "3.0" : "1.0");
         var collector = new MolangExtensions.Collector();
-        var names = new ArrayList<>(composed ? List.of("Query", "Actions") : List.of("Combined", "AOnly", "Probe", "Manual"));
+        var names =
+            new ArrayList<>(composed ? List.of("Query", "Actions") : List.of("Combined", "AOnly", "Probe", "Manual"));
         if (scenario.equals("reversed"))
             Collections.reverse(names);
         if (declaration) {
             var refs = names.stream()
-                    .map(n -> new MolangExtensions.DeclarationRef("independent." + n, "matrix_mod", "")).toList();
+                .map(n -> new MolangExtensions.DeclarationRef("independent." + n, "matrix_mod", "")).toList();
             collector
-                    .collect(new MolangExtensions.Source("matrix", Set.of("matrix_mod"), refs, loader, declarationFile));
+                .collect(new MolangExtensions.Source("matrix", Set.of("matrix_mod"), refs, loader, declarationFile));
             if (scenario.equals("conflict"))
                 collector.collect(new MolangExtensions.Source("duplicate", Set.of("matrix_mod"),
-                        List.of(refs.stream().filter(r -> r.className().endsWith("Combined")).findFirst().orElseThrow()),
-                        loader, Path.of(jars[0])));
+                    List.of(refs.stream().filter(r -> r.className().endsWith("Combined")).findFirst().orElseThrow()),
+                    loader, Path.of(jars[0])));
             if (scenario.startsWith("manual")) {
                 submit(collector, loader, "Manual", !scenario.equals("manual-failed"));
                 if (scenario.equals("manual-duplicate"))
@@ -120,7 +121,8 @@ public final class PackagedDeclarationMatrix {
         }
         if (scenario.equals("compose-conflict"))
             collector.collect(new MolangExtensions.Source("other", Set.of("other_mod"),
-                    List.of(new MolangExtensions.DeclarationRef("independent.Other", "matrix_mod", "")), loader, Path.of(jars[4])));
+                List.of(new MolangExtensions.DeclarationRef("independent.Other", "matrix_mod", "")), loader,
+                Path.of(jars[4])));
         var availability = new HostAvailability(Set.of(), versions);
         var admission = collector.freeze(availability, new MolangExtensions.Qualification() {
             public boolean dependency(String id, String range) {
@@ -129,7 +131,7 @@ public final class PackagedDeclarationMatrix {
                     return false;
                 try {
                     return range.isEmpty()
-                            || org.apache.maven.artifact.versioning.VersionRange.createFromVersionSpec(range)
+                        || org.apache.maven.artifact.versioning.VersionRange.createFromVersionSpec(range)
                             .containsVersion(new org.apache.maven.artifact.versioning.DefaultArtifactVersion(version));
                 } catch (Exception failure) {
                     throw new IllegalArgumentException(failure);
@@ -145,7 +147,7 @@ public final class PackagedDeclarationMatrix {
                         Class.forName("optional.b.Api", false, loader).getMethod("value");
                     }
                     return com.elfmcys.ysm.api.internal.CompatibilityQualification.check(schema.owner(), loader)
-                            .compatible();
+                        .compatible();
                 } catch (ReflectiveOperationException failure) {
                     return false;
                 }
@@ -168,57 +170,106 @@ public final class PackagedDeclarationMatrix {
         require(symbols.contains("matrix_mod:a_value") == aOnly, "independent A declaration");
         require(symbols.contains("matrix_mod:manual") == scenario.equals("manual"), "manual publication");
         if (scenario.equals("compose-conflict")) {
-            require(symbols.isEmpty(), "conflicting namespaces retained symbols " + symbols);
-            require(requests().stream().noneMatch(n -> List.of("Query", "Actions", "Other").stream().anyMatch(c -> n.equals("independent." + c) || n.startsWith("independent." + c + "$") || n.startsWith("independent." + c + "MolangBindings"))), "conflict loaded implementation " + requests());
+            require(
+                symbols.equals(com.elfmcys.ysm.expression.host.MathDeclarations.ALL.stream()
+                    .map(d -> d.key().canonical()).sorted().toList()),
+                "conflicting namespaces retained symbols " + symbols);
+            require(
+                requests().stream()
+                    .noneMatch(n -> List.of("Query", "Actions", "Other").stream()
+                        .anyMatch(c -> n.equals("independent." + c) || n.startsWith("independent." + c + "$")
+                            || n.startsWith("independent." + c + "MolangBindings"))),
+                "conflict loaded implementation " + requests());
             require(Integer.getInteger("composition.init", 0) == 0, "conflict initialized implementation");
-            Files.writeString(output.resolve(scenario + ".json"), new GsonBuilder().setPrettyPrinting().create().toJson(Map.of("symbols", symbols, "diagnostics", admission.diagnostics(), "loadRequests", requests(), "initializations", 0)));
+            Files.writeString(output.resolve(scenario + ".json"),
+                new GsonBuilder().setPrettyPrinting().create().toJson(Map.of("symbols", symbols, "diagnostics",
+                    admission.diagnostics(), "loadRequests", requests(), "initializations", 0)));
             return;
         }
         boolean preRejected = !composed && declaration && !published && !scenario.equals("init");
         if (preRejected) {
             require(
-                    requests().stream()
-                            .noneMatch(n -> n.equals("independent.Combined") || n.startsWith("independent.Combined$")
-                                    || n.startsWith("independent.CombinedMolangBindings")),
-                    "precheck loaded implementation " + requests());
+                requests().stream()
+                    .noneMatch(n -> n.equals("independent.Combined") || n.startsWith("independent.Combined$")
+                        || n.startsWith("independent.CombinedMolangBindings")),
+                "precheck loaded implementation " + requests());
             require(Integer.getInteger("combined.init", 0) == 0, "precheck initialized implementation");
         }
         if (scenario.equals("init"))
             require(admission.diagnostics().stream().anyMatch(s -> s.contains("INITIALIZATION")),
-                    "initialization provenance");
+                "initialization provenance");
         if (scenario.equals("binding"))
             require(
-                    admission.diagnostics().stream().anyMatch(
-                            s -> s.contains("RESOLUTION") && s.contains("missing implementation/helper class resource")),
-                    "missing helper resolution provenance " + admission.diagnostics());
+                admission.diagnostics().stream().anyMatch(
+                    s -> s.contains("RESOLUTION") && s.contains("missing implementation/helper class resource")),
+                "missing helper resolution provenance " + admission.diagnostics());
         var codec = PortableProgramCodecs.v1();
         var builder = CompilationUnit.builder(host.compilationPolicy(), codec, ExpressionIdentityHash.SHA_256);
         var action = call("action", call("probe"));
         var plus = new ProgramNode.Binary(ProgramNode.BinaryOperator.ADD, ProgramNode.F32.of(3), action);
-        var expressions = composed ? List.of(read("next"), call("defaulted"), new ProgramNode.Coalesce(read("missing"), ProgramNode.F32.of(7)), call("action", read("next")), new ProgramNode.Coalesce(call("action", read("next")), ProgramNode.F32.of(7)), read("next"), read("action"), new ProgramNode.Coalesce(read("missing"), ProgramNode.F32.of(7))) : List.of(plus, plus,
+        List<ProgramNode> expressions = composed
+            ? List.of(read("next"), call("defaulted"), new ProgramNode.Coalesce(read("missing"), ProgramNode.F32.of(7)),
+                call("action", read("next")),
+                new ProgramNode.Coalesce(call("action", read("next")), ProgramNode.F32.of(7)), read("next"),
+                read("action"), new ProgramNode.Coalesce(read("missing"), ProgramNode.F32.of(7)))
+            : List.of(plus, plus,
                 new ProgramNode.Binary(ProgramNode.BinaryOperator.ADD, ProgramNode.F32.of(3), call("action")),
                 new ProgramNode.Coalesce(action, ProgramNode.F32.of(7)), call("a_value"),
                 new ProgramNode.Symbol(new ProgramNode.SymbolRef(ProgramNode.SymbolDomain.EXTERNAL, "matrix_mod:read"),
-                        ProgramNode.AccessForm.READ, List.of()));
+                    ProgramNode.AccessForm.READ, List.of()));
+        var shapeOracles = new ArrayList<Float>();
+        int subjectGateIndex = -1;
+        if (!composed && published) {
+            expressions = new ArrayList<>(expressions);
+            for (String receiver : List.of("static", "member"))
+                for (String context : List.of("view", "plain")) {
+                    String prefix = receiver + "_" + context + "_";
+                    expressions.add(call(prefix + "fixed", ProgramNode.F32.of(-0.0f)));
+                    shapeOracles.add(-0.0f);
+                    expressions.add(call(prefix + "optional"));
+                    shapeOracles.add(5f);
+                    expressions.add(call(prefix + "optional", ProgramNode.F32.of(2)));
+                    shapeOracles.add(3f);
+                    expressions.add(call(prefix + "optional", new ProgramNode.Unset()));
+                    shapeOracles.add(1f);
+                    expressions.add(call(prefix + "tail"));
+                    shapeOracles.add(0f);
+                    expressions.add(call(prefix + "tail", ProgramNode.F32.of(2), ProgramNode.F32.of(3)));
+                    shapeOracles.add(4f);
+                }
+            for (float value : new float[] {0, -0.0f, 1, 2, 3, 9}) {
+                expressions.add(
+                    new ProgramNode.Coalesce(call("nullable_float", ProgramNode.F32.of(value)), ProgramNode.F32.of(7)));
+                shapeOracles.add(value == 1 || value == 2 || value == 3 ? 7 : value);
+            }
+            subjectGateIndex = expressions.size();
+            for (String name : List.of("member_plain_fixed", "static_view_fixed", "static_plain_fixed")) {
+                expressions.add(new ProgramNode.Coalesce(call(name, call("probe")), ProgramNode.F32.of(7)));
+                shapeOracles.add(1f);
+            }
+            expressions.add(new ProgramNode.Coalesce(call("plain_action", call("probe")), ProgramNode.F32.of(7)));
+            shapeOracles.add(7f);
+        }
         var keys = new ArrayList<ProgramKey>();
         for (int i = 0; i < expressions.size(); i++) {
-            var key = new ProgramKey(ReadOnlyBytes.copyOf(new byte[]{(byte) (i + 1)}));
+            var key = new ProgramKey(ReadOnlyBytes.copyOf(new byte[] {(byte)(i + 1)}));
             keys.add(key);
             builder
-                    .addProgram(new ProgramSource(key, codec.encode(PortablePrograms.ofRoots(List.of(expressions.get(i)))),
-                            new TopLevelEntrySignature(ProgramShape.F32, new EntryResult.Value(BuiltinType.F32), List.of(),
-                                    List.of()),
-                            Optional.empty(), new DiagnosticLocation("matrix/" + i),
-                            (composed ? i == 4 : i == 1) ? EntryPermissions.CONTEXT : EntryPermissions.ACTION));
+                .addProgram(new ProgramSource(key, codec.encode(PortablePrograms.ofRoots(List.of(expressions.get(i)))),
+                    new TopLevelEntrySignature(ProgramShape.F32, new EntryResult.Value(BuiltinType.F32), List.of(),
+                        List.of()),
+                    Optional.empty(), new DiagnosticLocation("matrix/" + i),
+                    (composed ? i == 4 : i == 1 || !shapeOracles.isEmpty() && i == expressions.size() - 1)
+                        ? EntryPermissions.CONTEXT : EntryPermissions.ACTION));
         }
         var unit = builder.build();
         var backend = new JaninoJavaCompilerBackend();
         var expressionBinding = host.expressionBinding();
         var plan = expressionBinding.bindingPlan();
         var expected = ExpectedArtifactIdentity.create(unit, host.hostAbi(), host.registry(), CompilerOptions.DEFAULT,
-                plan, backend.descriptor(), ExpressionIdentityHash.SHA_256);
+            plan, backend.descriptor(), ExpressionIdentityHash.SHA_256);
         String identity = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                .digest(expected.identity().toString().getBytes(StandardCharsets.UTF_8)));
+            .digest(expected.identity().toString().getBytes(StandardCharsets.UTF_8)));
         Path artifactPath = output.resolve(identity + ".swa");
         boolean warm = Files.exists(artifactPath);
         long start = System.nanoTime();
@@ -233,66 +284,59 @@ public final class PackagedDeclarationMatrix {
             require(warm == scenario.equals("compose-warm"), "composition cache source");
         if (warm)
             artifact = ArtifactCodecs.v1().decodeAndVerify(ReadOnlyBytes.copyOf(Files.readAllBytes(artifactPath)),
-                    expected, ExpressionIdentityHash.SHA_256);
+                expected, ExpressionIdentityHash.SHA_256);
         else {
             artifact = new DefaultExpressionAotCompiler<MolangContext>(backend, metrics).compile(TaskContext.NONE, unit,
-                    host.hostAbi(), host.registry(), CompilerOptions.DEFAULT, plan, ExpressionIdentityHash.SHA_256);
+                host.hostAbi(), host.registry(), CompilerOptions.DEFAULT, plan, ExpressionIdentityHash.SHA_256);
             Files.write(artifactPath,
-                    ArtifactCodecs.v1().encode(artifact, ExpressionIdentityHash.SHA_256).toByteArray());
+                ArtifactCodecs.v1().encode(artifact, ExpressionIdentityHash.SHA_256).toByteArray());
         }
         long buildNanos = System.nanoTime() - start;
         if (List.of("all-restored", "reversed", "reason-changed").contains(scenario))
             require(warm, "restored identity must reuse disk artifact");
-        for (var bytes : artifact.classes().values())
+        for (var bytes : artifact.classes().values()) {
+            String pool = new String(bytes.toByteArray(), StandardCharsets.ISO_8859_1);
+            for (String forbidden : List.of("RuntimeValue", "java/lang/reflect", "java/lang/invoke/MethodHandle",
+                "registry/FunctionDescriptor"))
+                require(!pool.contains(forbidden), "dynamic symbol/value dispatch " + forbidden);
             if (!published)
-                require(!new String(bytes.toByteArray(), StandardCharsets.ISO_8859_1).contains("independent/Combined"),
-                        "rejected Java linkage retained");
+                require(!pool.contains("independent/Combined"), "rejected Java linkage retained");
+        }
         var values = new ArrayList<Float>();
         try (var resource = ModuleLoaders.<MolangContext>standard().load(artifact, expected, host.registry(),
-                host.registry().visibilityRoot(), ExpressionIdentityHash.SHA_256)) {
-            var subject = a ? (net.minecraft.world.entity.Entity) loader.loadClass("optional.a.Subject").getConstructor()
-                    .newInstance() : new net.minecraft.world.entity.Entity();
+            host.registry().visibilityRoot(), ExpressionIdentityHash.SHA_256)) {
+            var subject = a ? (net.minecraft.world.entity.Entity)loader.loadClass("optional.a.Subject").getConstructor()
+                .newInstance() : new net.minecraft.world.entity.Entity();
             var holder = new DeclarationComponentScope(new com.elfmcys.ysm.client.entity.AnimatableEntity<>(subject),
-                    host.declarations());
+                host.declarations());
             var registryLinkage =
-                    RegistryRuntimeLinkage.<MolangContext>create(holder.providers(host, plan), RuntimeSymbolTable.empty());
+                RegistryRuntimeLinkage.<MolangContext>create(holder.providers(host, plan), RuntimeSymbolTable.empty());
             RuntimeLinkage<MolangContext> linkage = new RuntimeLinkage<>() {
-                public ContextType<MolangContext> contextType() {
-                    return host.contextType();
-                }
-
                 public RegistryRuntimeLinkage<MolangContext> registry() {
                     return registryLinkage;
-                }
-
-                public BakedConstantTable constants() {
-                    return artifact.constants();
                 }
 
                 public RuntimeDiagnostics diagnostics() {
                     return RuntimeDiagnostics.none();
                 }
 
-                public ResourceLease<MolangContext> retainResource() {
-                    return resource.retain();
-                }
             };
             var roaming = resource.newRoamingState(RoamingRole.PRODUCER);
             var state = MolangContext.logical(new EntityView() {
                 public net.minecraft.world.entity.Entity entity() {
                     return subject;
                 }
-            }, new RenderView() {
-            }, MolangContext.LogicalPhase.ACTION, (command, scope) -> {
-            }, roaming, new InvocationProvenance("matrix", scenario, 0, 1, 1), () -> false, () -> true, 16);
+            }, new RenderView() {}, MolangContext.LogicalPhase.ACTION, roaming,
+                new InvocationProvenance("matrix", scenario, 0, 1, 1));
             state.configureLimits(host.executionLimits());
             try (var instance = resource.newInstance(linkage, roaming)) {
+                state.bindOrigin(instance.bindSubject(subject));
                 for (var key : keys) {
                     var id = resource.bindProgram(key, ProgramShape.F32);
                     state.bindExpression("matrix", id.sourceId());
                     try {
                         values.add(instance.executeFloat(id, state,
-                                instance.bindSubject(MolangContext.subjectOrNull(state)), state));
+                            instance.bindSubject(MolangContext.subjectOrNull(state)), state));
                     } finally {
                         state.releaseExpression();
                     }
@@ -300,23 +344,51 @@ public final class PackagedDeclarationMatrix {
                 if (composed) {
                     require(values.equals(List.of(1f, 2f, 7f, 103f, 7f, 4f, 100f, 7f)), "composition values " + values);
                     require(System.getProperty("composition.sequence", "").equals("1,2,3,4,"), "component sequence");
-                    require(System.getProperty("composition.actions", "").isEmpty(), "action escaped before commit");
+                    require(System.getProperty("composition.actions", "").equals("3.0,0.0,"), "immediate action trace");
                     require(Integer.getInteger("composition.views", 0) == 1, "scope views differ");
-                    require(state.firstFailure() == null && !state.isActive(), "expression reset");
-                    EffectTransaction.finish(state, EffectSink.direct(), true);
-                    require(System.getProperty("composition.actions", "").equals("3.0,0.0,"), "committed action trace");
+                    require(state.firstFailure() == null && !state.actionAllowed(), "expression reset");
+
                 } else {
-                    require(values.equals(
-                                    List.of(published ? 12f : 3f, 3f, 3f, published ? 9f : 7f, aOnly ? 4f : 0f, published ? 9f : 0f)),
-                            "values " + values);
+                    var oracle = new ArrayList<>(List.of(published ? 12f : 3f, 3f, 3f, published ? 9f : 7f,
+                        aOnly ? 4f : 0f, published ? 9f : 0f));
+                    oracle.addAll(shapeOracles);
+                    require(values.equals(oracle), "values " + values);
+                    require(Integer.getInteger("plain.action", 0) == 0, "no-view ACTION escaped gate");
                     require(Integer.getInteger("combined.action", 0) == (published ? 2 : 0), "provider count");
-                    require(Integer.getInteger("probe.calls", 0) == (published ? 2 : 0), "argument count");
+                    require(Integer.getInteger("probe.calls", 0) == (published ? 5 : 0), "argument count");
+                    if (published) {
+                        var otherSubject = new net.minecraft.world.entity.Entity();
+                        var wrong = MolangContext.logical(new EntityView() {
+                            public net.minecraft.world.entity.Entity entity() {
+                                return otherSubject;
+                            }
+                        }, new RenderView() {}, MolangContext.LogicalPhase.ACTION, roaming,
+                            new InvocationProvenance("matrix", "subject-gate", 0, 1, 1));
+                        wrong.configureLimits(host.executionLimits());
+                        wrong.bindOrigin(instance.bindSubject(otherSubject));
+                        try {
+                            for (int i = 0; i < 3; i++) {
+                                var guarded = resource.bindProgram(keys.get(subjectGateIndex + i), ProgramShape.F32);
+                                wrong.bindExpression("subject-gate", guarded.sourceId());
+                                try {
+                                    require(instance.executeFloat(guarded, wrong, instance.bindSubject(otherSubject),
+                                        wrong) == (i == 2 ? 1f : 7f), "optional-view subject gate " + i);
+                                } finally {
+                                    wrong.releaseExpression();
+                                }
+                            }
+                            require(Integer.getInteger("probe.calls", 0) == 6, "rejected subject evaluated arguments");
+                        } finally {
+                            wrong.closeRound();
+                        }
+                    }
                     System.setProperty("matrix.throwProbe", "true");
                     var id = resource.bindProgram(keys.get(1), ProgramShape.F32);
                     state.bindExpression("matrix-skipped", id.sourceId());
                     try {
-                        require(instance.executeFloat(id, state, instance.bindSubject(MolangContext.subjectOrNull(state)),
-                                state) == 3f, "throwing skipped argument");
+                        require(instance.executeFloat(id, state,
+                            instance.bindSubject(MolangContext.subjectOrNull(state)), state) == 3f,
+                            "throwing skipped argument");
                     } finally {
                         state.releaseExpression();
                     }
@@ -329,7 +401,7 @@ public final class PackagedDeclarationMatrix {
         var receipt = new LinkedHashMap<String, Object>();
         receipt.put("scenario", scenario);
         receipt.put("classpath", System.getProperty("java.class.path"));
-        receipt.put("urls", Arrays.toString(((URLClassLoader) loader).getURLs()));
+        receipt.put("urls", Arrays.toString(((URLClassLoader)loader).getURLs()));
         receipt.put("loadRequests", requests());
         receipt.put("diagnostics", admission.diagnostics());
         receipt.put("symbols", symbols);
@@ -338,11 +410,13 @@ public final class PackagedDeclarationMatrix {
         receipt.put("artifactBytes", Files.size(artifactPath));
         receipt.put("buildNanos", buildNanos);
         require(artifact.report().replacements().isEmpty(), "unexpected whole-program replacement");
-        require(Integer.getInteger(composed ? "composition.construct" : "combined.construct", 0) == (published ? 1 : 0), "constructor count");
+        require(Integer.getInteger(composed ? "composition.construct" : "combined.construct", 0) == (published ? 1 : 0),
+            "constructor count");
         receipt.put("compileStages", compileStages);
         receipt.put("backendCompiles", compileStages.getOrDefault(EngineMetrics.Stage.BACKEND_COMPILATION, 0));
         if (composed)
-            require(compileStages.getOrDefault(EngineMetrics.Stage.BACKEND_COMPILATION, 0) == (warm ? 0 : 1), "backend compile count");
+            require(compileStages.getOrDefault(EngineMetrics.Stage.BACKEND_COMPILATION, 0) == (warm ? 0 : 1),
+                "backend compile count");
         if (composed) {
             receipt.put("sequence", System.getProperty("composition.sequence"));
             receipt.put("actionTrace", System.getProperty("composition.actions"));
@@ -358,24 +432,26 @@ public final class PackagedDeclarationMatrix {
         receipt.put("provider", Integer.getInteger("combined.action", 0));
         receipt.put("probe", Integer.getInteger("probe.calls", 0));
         Files.writeString(output.resolve(scenario + ".json"),
-                new GsonBuilder().setPrettyPrinting().create().toJson(receipt));
+            new GsonBuilder().setPrettyPrinting().create().toJson(receipt));
     }
 
     private static void submit(MolangExtensions.Collector collector, ClassLoader loader, String name,
-                               boolean accepted) {
+        boolean accepted) {
         String resource = DeclarationSchema.RESOURCE_ROOT + "independent." + name + ".bin";
         collector.submit(
-                new MolangExtensions.Submission(resource, loader.getResource(resource), accepted, "matrix precheck"));
+            new MolangExtensions.Submission(resource, loader.getResource(resource), accepted, "matrix precheck"));
     }
 
     private static ProgramNode read(String name) {
-        return new ProgramNode.Symbol(new ProgramNode.SymbolRef(ProgramNode.SymbolDomain.EXTERNAL, "matrix_mod:" + name), ProgramNode.AccessForm.READ, List.of());
+        return new ProgramNode.Symbol(
+            new ProgramNode.SymbolRef(ProgramNode.SymbolDomain.EXTERNAL, "matrix_mod:" + name),
+            ProgramNode.AccessForm.READ, List.of());
     }
 
     private static ProgramNode call(String name, ProgramNode... arguments) {
         return new ProgramNode.Symbol(
-                new ProgramNode.SymbolRef(ProgramNode.SymbolDomain.EXTERNAL, "matrix_mod:" + name),
-                ProgramNode.AccessForm.INVOKE, List.of(arguments));
+            new ProgramNode.SymbolRef(ProgramNode.SymbolDomain.EXTERNAL, "matrix_mod:" + name),
+            ProgramNode.AccessForm.INVOKE, List.of(arguments));
     }
 
     private static void require(boolean condition, String message) {

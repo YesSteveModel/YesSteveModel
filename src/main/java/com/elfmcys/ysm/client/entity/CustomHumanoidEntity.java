@@ -16,7 +16,7 @@ import com.elfmcys.ysm.geckolib3.geo.GeoRenderData;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.LivingEntity;
@@ -31,7 +31,6 @@ import java.util.Objects;
  * 使用玩家模型的实体
  */
 public abstract class CustomHumanoidEntity<T extends LivingEntity> extends AnimatableEntity<T> {
-    protected String textureName;
 
     private final FloatArrayList headRotBackup = new FloatArrayList(2);
     private AnimatedGeoModel headOwner;
@@ -112,7 +111,7 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Anima
     }
 
     @Override
-    protected AnimationStore animationSource() {
+    protected AnimationStore.View animationSource() {
         return getModelRenderTarget().playerResources().animations();
     }
 
@@ -124,26 +123,31 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Anima
     public void updateTextureName(String textureName) {
         rejectNewUse();
         waitForAsyncUpdate();
-        this.textureName = textureName;
-        if (isAssigned())
-            updateModelHash(getModelHash());
+        selectModel(getModelHash(), textureName, selectionOperation() == null ? new Object() : selectionOperation());
     }
 
-    public void updateModelAndTexture(Hash256 modelHash, String textureName) {
+    public void updateModelAndTexture(ModelId modelHash, String textureName) {
         rejectNewUse();
         waitForAsyncUpdate();
-        this.textureName = textureName;
-        updateModelHash(modelHash);
+        var same = isAssigned() && Objects.equals(modelHash, getModelHash());
+        selectModel(modelHash, textureName, same ? selectionOperation() : new Object());
     }
 
     public void updateModelAndTexture(String modelPath, String textureName) {
         ClientModelService.instance().resolvePath(modelPath)
-            .ifPresent(hash -> updateModelAndTexture(hash, textureName));
+            .ifPresent(modelId -> updatePublishedModelAndTexture(modelId, textureName));
+    }
+
+    public void updatePublishedModelAndTexture(com.elfmcys.ysm.model.domain.PublishedModelId modelId,
+        String textureName) {
+        updateModelAndTexture(
+            modelId instanceof com.elfmcys.ysm.model.domain.PublishedModelId.Model model ? model.hash() : null,
+            textureName);
     }
 
     @Override
     protected String requestedTextureName() {
-        return textureName == null ? "" : textureName;
+        return selectedTexture();
     }
 
     public void setDisabled(boolean disabled) {

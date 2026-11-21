@@ -14,6 +14,8 @@ def run(root, harness, output, script, config, timeout, detail=False, provider="
     if os.environ.get("YSM_PAGE_EXTRA_CONFIG"):
         shutil.copytree(os.environ["YSM_PAGE_EXTRA_CONFIG"], output / "game/config", dirs_exist_ok=True)
     shutil.copy2(config, output / "game/config/ysm-client.toml")
+    if os.environ.get("YSM_PAGE_SEED_CACHE"):
+        shutil.copytree(os.environ["YSM_PAGE_SEED_CACHE"], output / "game/ysm/cache")
     shutil.copy2(script, output / "script.json")
     if os.environ.get("YSM_PAGE_OPTIONS"):
         shutil.copy2(os.environ["YSM_PAGE_OPTIONS"], output / "game/options.txt")

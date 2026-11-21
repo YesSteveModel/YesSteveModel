@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.NativeStorage;
@@ -45,6 +46,40 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ModelParserTest {
+    @Test
+    void declaredIdentitySurvivesCaptureCompilationManifestAndPreamble(@TempDir Path output) throws Exception {
+        var version = "1.0.0+" + "a".repeat(122);
+        var owner = "o".repeat(32);
+        var name = "n".repeat(32);
+        var identity = ModelId.parse(owner + "/" + name + "@" + version);
+        try (var vfs = wheelFixture("ysm.json", """
+            {"owner":"%s","name":"%s","sem-ver":"%s",
+             "files":{"player":{"model":{"main":"main.json","arm":"arm.json"},"texture":["skin.png"]}}}
+            """.formatted(owner, name, version)); var captured = ModelParser.capture(vfs)) {
+            assertEquals(identity, captured.modelId());
+            var result =
+                ModelParser.compile(captured.data().asVirtualFileSystem(), output, DefaultAnimationFilter.keepAll());
+            try (var channel = FileChannel.open(result.stagedContainer())) {
+                assertEquals(identity,
+                    com.elfmcys.ysm.format.schema.model.ModelFileIdentityReader.read(channel).modelId());
+                var view = new ModelFileView(channel);
+                assertEquals(identity.toString(), view.getManifest().info().properties().modelId());
+            }
+        }
+    }
+
+    @Test
+    void rawIdentityDeclarationsRejectPartialNullAndWrongTypes() throws Exception {
+        for (var fields : List.of("\"owner\":\"owner\"", "\"name\":\"name\"", "\"sem-ver\":\"1.0.0\"",
+            "\"owner\":null,\"name\":\"name\"", "\"owner\":1,\"name\":\"name\"", "\"owner\":\"owner\",\"name\":\"\"",
+            "\"owner\":\"owner\",\"name\":\"name\",\"sem-ver\":null")) {
+            try (var vfs = wheelFixture("ysm.json", "{" + fields
+                + ",\"files\":{\"player\":{\"model\":{\"main\":\"main.json\",\"arm\":\"arm.json\"},\"texture\":[\"skin.png\"]}}}")) {
+                assertThrows(RuntimeException.class, () -> ModelParser.capture(vfs), fields);
+            }
+        }
+    }
+
     @ParameterizedTest
     @MethodSource("sourcesWithoutWheelAnimations")
     void conversionMaterializesDefaultWheelAnimations(String metadataFile, String metadata, @TempDir Path output)
@@ -114,24 +149,23 @@ class ModelParserTest {
     }
 
     @Test
-    void intrinsicDefaultRejectsExternalCallsAndReadsBeforePublishingAContainer(@TempDir Path outputDirectory)
+    void intrinsicDefaultPreservesExternalCallsAndReadsForReceivingHost(@TempDir Path outputDirectory)
         throws IOException {
         for (var expression : List.of("projection.value()", "projection.value", "ysm.unpublished")) {
             try (var vfs = expressionFixture("return " + expression + ";")) {
-                var memoryFailure =
-                    assertThrows(IllegalArgumentException.class, () -> ModelParser.parseBuiltinDefaultMemory(vfs));
-                var diskFailure = assertThrows(IllegalArgumentException.class,
-                    () -> ModelParser.parseBuiltinDefault(vfs, outputDirectory, (source, mode, location, result) -> {
-                    }));
-                var symbol = expression.startsWith("ysm.") ? "ysm:unpublished" : "projection:value";
-                for (var failure : List.of(memoryFailure, diskFailure)) {
-                    assertTrue(failure.getMessage().contains("functions/admission.molang"));
-                    assertTrue(failure.getMessage().contains(symbol));
-                }
+                var memory = ModelParser.parseBuiltinDefaultMemory(vfs);
+                assertTrue(memory.bytes().size() > 0);
+                var observed = new AtomicInteger();
+                var disk = ModelParser.parseBuiltinDefault(vfs, outputDirectory, (source, mode, location, result) -> {
+                    if (location.value().equals("functions/admission.molang")) {
+                        var symbol = expression.startsWith("ysm.") ? "ysm:unpublished" : "projection:value";
+                        assertTrue(result.referencedSymbols().stream().anyMatch(value -> value.name().equals(symbol)));
+                        observed.incrementAndGet();
+                    }
+                });
+                assertTrue(Files.isRegularFile(disk));
+                assertEquals(1, observed.get());
             }
-        }
-        try (var outputs = Files.list(outputDirectory)) {
-            assertEquals(0, outputs.count());
         }
     }
 
@@ -307,7 +341,8 @@ class ModelParserTest {
                 DefaultAnimationFilter.keepAll());
 
             assertEquals(captured.modelId(), result.modelHash());
-            assertEquals(captured.modelId() + ".mxc", result.stagedContainer().getFileName().toString());
+            assertEquals(com.elfmcys.ysm.model.storage.ModelHashing.blake3(captured.modelId().bytes()) + ".mxc",
+                result.stagedContainer().getFileName().toString());
         }
     }
 
@@ -326,6 +361,55 @@ class ModelParserTest {
             var failure = assertThrows(java.io.UncheckedIOException.class, () -> ModelParser.capture(invalidVfs));
             assertTrue(failure.getCause().getMessage().contains("Ogg page checksum mismatch"));
             assertTrue(supported.diagnostics().isEmpty());
+        }
+    }
+
+    @Test
+    void directCompileCopiesMediaBeforeTheNextBorrowedBufferRead(@TempDir Path output) throws Exception {
+        var resource = Objects.requireNonNull(getClass().getResource("/assets/ysm/builtin/misc/1_alex/ysm.json"));
+        var fixture = Path.of(resource.toURI()).getParent();
+        try (var stable = new MemoryVfs()) {
+            try (var paths = Files.walk(fixture)) {
+                for (var path : paths.filter(Files::isRegularFile).toList())
+                    stable.add(fixture.relativize(path).toString().replace('\\', '/'), Files.readAllBytes(path));
+            }
+            var audio = Files.readAllBytes(fixtureRoot().resolve("opus-under.ogg"));
+            stable.add("sounds/first.bin", audio);
+            stable.add("sounds/second.bin", audio);
+            var capacity = stable.files.values().stream().mapToInt(NativeBuffer::size).max().orElseThrow();
+            try (var scratch = NativeBuffer.allocate(capacity)) {
+                var overwrites = new java.util.concurrent.atomic.AtomicInteger();
+                VirtualFileSystem borrowed = new VirtualFileSystem() {
+                    public String[] listFiles(String path) {
+                        return stable.listFiles(path);
+                    }
+
+                    public String[] listDirectories(String path) {
+                        return stable.listDirectories(path);
+                    }
+
+                    public boolean hasFile(String path) {
+                        return stable.hasFile(path);
+                    }
+
+                    public NativeBuffer getFile(String path) {
+                        var source = stable.getFile(path);
+                        if (source == null)
+                            return null;
+                        scratch.nio().put(source.nio());
+                        overwrites.incrementAndGet();
+                        return scratch.slice(0, source.size());
+                    }
+                };
+                var expected = ModelParser.compile(stable, output.resolve("stable"), DefaultAnimationFilter.keepAll());
+                var actual =
+                    ModelParser.compile(borrowed, output.resolve("borrowed"), DefaultAnimationFilter.keepAll());
+                assertTrue(overwrites.get() > 5);
+                assertEquals(expected.modelHash(), actual.modelHash());
+                assertEquals(expected.diagnostics(), actual.diagnostics());
+                assertArrayEquals(Files.readAllBytes(expected.stagedContainer()),
+                    Files.readAllBytes(actual.stagedContainer()));
+            }
         }
     }
 
@@ -407,12 +491,12 @@ class ModelParserTest {
         assertThrows(IllegalArgumentException.class, () -> canonicalizer.add("model", "../invalid.json", new byte[0]));
     }
 
-    private static Hash256 expectedHash(MemoryVfs vfs, Map<String, String> expectedTypes) {
+    private static ModelId expectedHash(MemoryVfs vfs, Map<String, String> expectedTypes) {
         var canonicalizer = new ModelHashCanonicalizer();
         for (var entry : expectedTypes.entrySet()) {
             canonicalizer.add(entry.getValue(), entry.getKey(), vfs.file(entry.getKey()));
         }
-        return new Hash256(canonicalizer.aggregate());
+        return ModelId.fromHash(new Hash256(canonicalizer.aggregate()));
     }
 
     private static MemoryVfs legacyMemoryVfs() {

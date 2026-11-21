@@ -3,7 +3,6 @@ package com.elfmcys.ysm.format.schema.baked.model;
 import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
-import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.container.InlineChunkReader;
@@ -15,7 +14,6 @@ import com.elfmcys.ysm.version.VersionCompatibility;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.nio.channels.SeekableByteChannel;
-import java.util.Objects;
 import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
 import org.jetbrains.annotations.Nullable;
 
@@ -26,12 +24,17 @@ public class BakedModelView {
 
     public BakedModelView(SeekableByteChannel file) throws IOException {
         assetView = AssetContainerReader.read(file);
+        var expectedSize = assetView.getChunkTable().values().stream()
+            .mapToLong(chunk -> (long)chunk.offset() + chunk.size()).max().orElse(0);
+        if (file.size() != expectedSize)
+            throw new IOException("Baked geometry contains trailing or missing chunk data");
         if (!BakedModelConstant.SCHEMA_ID.equals(assetView.getSchema())) {
             throw new IOException("Schema ID mismatch: " + assetView.getSchema());
         }
 
-        var version = Objects.requireNonNull(assetView.getSchemaProperty(BakedModelConstant.PROP_VERSION),
-            "Version property not found");
+        var version = assetView.getSchemaProperty(BakedModelConstant.PROP_VERSION);
+        if (version == null)
+            throw new IOException("Version property not found");
         if (!VersionCompatibility.isCompatible(BakedModelConstant.CURRENT_VERSION.toString(), version, (current,
             candidate) -> new DefaultArtifactVersion(current).equals(new DefaultArtifactVersion(candidate)))) {
             throw new UnsupportedEncodingException(String.format("Unsupported baked model version: \"%s\".", version));

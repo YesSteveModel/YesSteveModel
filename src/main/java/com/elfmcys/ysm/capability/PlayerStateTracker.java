@@ -3,7 +3,9 @@ package com.elfmcys.ysm.capability;
 import com.elfmcys.ysm.client.entity.HumanoidStateTracker;
 import com.elfmcys.ysm.proto.network.EffectStateSetProto;
 import com.elfmcys.ysm.proto.network.GameplayStateProto;
-import it.unimi.dsi.fastutil.objects.Object2ByteOpenHashMap;
+import com.elfmcys.ysm.expression.host.PlayerQueryAccess;
+import com.elfmcys.ysm.expression.host.PlayerQueryProjection;
+import java.util.HashMap;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.effect.MobEffect;
@@ -11,19 +13,7 @@ import net.minecraft.world.entity.player.Player;
 
 public class PlayerStateTracker extends HumanoidStateTracker<Player> {
     private final boolean localPlayer;
-    private final Object2ByteOpenHashMap<MobEffect> effects;
-
-    private boolean remoteFlying;
-    private int expLevel;
-    private int health;
-    private int maxHealth;
-    private int foodLevel;
-
-    private float xxa;
-    private float yya;
-    private float zza;
-
-    private boolean inShieldBlockCooldown;
+    private final PlayerQueryAccess query;
 
     private static float YAW_SPEED;
     private static float LAST_YAW;
@@ -31,29 +21,27 @@ public class PlayerStateTracker extends HumanoidStateTracker<Player> {
     public PlayerStateTracker(Player player, boolean localPlayer) {
         super(player);
         this.localPlayer = localPlayer;
-        this.effects = new Object2ByteOpenHashMap<>(8);
+        this.query = (PlayerQueryAccess)player;
     }
 
     @Override
     public void reset() {
         super.reset();
 
-        effects.clear();
-
-        remoteFlying = false;
-        expLevel = 0;
-        health = 0;
-        maxHealth = 0;
-        foodLevel = 0;
-
-        xxa = 0;
-        yya = 0;
-        zza = 0;
-
-        inShieldBlockCooldown = false;
+        query.ysm$playerQueryProjection(PlayerQueryProjection.MISSING);
     }
 
     public void updateProtocolState(GameplayStateProto gameplay, EffectStateSetProto effectState, boolean full) {
+        var previous = query.ysm$playerQueryProjection();
+        float health = previous.health();
+        float maxHealth = previous.maxHealth();
+        float foodLevel = previous.foodLevel();
+        float expLevel = previous.experienceLevel();
+        float xxa = previous.xxa();
+        float yya = previous.yya();
+        float zza = previous.zza();
+        Boolean remoteFlying = previous.flying();
+        Boolean inShieldBlockCooldown = previous.shieldCooldown();
         if (gameplay != null) {
             if (gameplay.hasFlying())
                 remoteFlying = gameplay.flying().orElseThrow();
@@ -75,59 +63,61 @@ public class PlayerStateTracker extends HumanoidStateTracker<Player> {
                 inShieldBlockCooldown = gameplay.shieldCooldown().orElseThrow();
             }
         }
+        var effects = previous.effects();
         if (effectState != null) {
-            if (full)
-                effects.clear();
+            effects = full || effects == null ? new HashMap<>() : new HashMap<>(effects);
             for (var value : effectState.effects()) {
                 var key = ResourceLocation.tryParse(value.effectId());
                 var effect = key == null ? null : BuiltInRegistries.MOB_EFFECT.get(key);
                 if (effect != null) {
                     if (value.level() == 0)
-                        effects.removeByte(effect);
+                        effects.remove(effect);
                     else
                         effects.put(effect, (byte)value.level());
                 }
             }
         }
+        query.ysm$playerQueryProjection(new PlayerQueryProjection(health, maxHealth, foodLevel, expLevel, xxa, yya, zza,
+            remoteFlying, inShieldBlockCooldown, effects));
     }
 
     public boolean isFlying() {
         if (localPlayer) {
             return entity.getAbilities().flying;
         }
-        return remoteFlying;
+        return Boolean.TRUE.equals(query.ysm$playerQueryProjection().flying());
     }
 
     public int expLevel() {
-        return expLevel;
+        return (int)query.ysm$playerQueryProjection().experienceLevel();
     }
 
     public int health() {
-        return health;
+        return (int)query.ysm$playerQueryProjection().health();
     }
 
     public int maxHealth() {
-        return maxHealth;
+        return (int)query.ysm$playerQueryProjection().maxHealth();
     }
 
     public int foodLevel() {
-        return foodLevel;
+        return (int)query.ysm$playerQueryProjection().foodLevel();
     }
 
     public float xxa() {
-        return xxa;
+        return query.ysm$playerQueryProjection().xxa();
     }
 
     public float yya() {
-        return yya;
+        return query.ysm$playerQueryProjection().yya();
     }
 
     public float zza() {
-        return zza;
+        return query.ysm$playerQueryProjection().zza();
     }
 
     public boolean inShieldBlockCooldown() {
-        return inShieldBlockCooldown;
+        return Boolean.TRUE.equals(query.ysm$playerQueryProjection().shieldCooldown());
     }
 
     public byte getEffectLevel(MobEffect effect) {
@@ -135,7 +125,7 @@ public class PlayerStateTracker extends HumanoidStateTracker<Player> {
             var instance = entity.getEffect(effect);
             return instance != null ? (byte)(instance.getAmplifier() + 1) : 0;
         } else {
-            return effects.getOrDefault(effect, (byte)0);
+            return (byte)query.ysm$playerQueryProjection().effectLevel(effect);
         }
     }
 

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.storage.CacheRegion;
 import com.elfmcys.ysm.model.storage.ContentStorageBinding;
 
@@ -12,7 +13,8 @@ import com.elfmcys.ysm.format.schema.file.PBRImageSources;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
 import com.elfmcys.ysm.format.schema.model.views.ModelInfoView;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
 import com.elfmcys.ysm.model.resource.client.AcquireResult;
@@ -25,12 +27,14 @@ import com.elfmcys.ysm.model.resource.client.RenderTargetResources;
 import com.elfmcys.ysm.model.resource.client.ResourceFailure;
 import com.elfmcys.ysm.model.resource.client.ResourceLease;
 import com.elfmcys.ysm.model.resource.client.ResourceRequest;
+import com.elfmcys.ysm.model.resource.client.TargetSoundResources;
 import com.elfmcys.ysm.model.resource.client.work.ClientResourceScheduler;
 import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
 import com.elfmcys.ysm.natives.image.ImageSource;
 import com.elfmcys.ysm.util.UnsafeUtil;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
+import it.unimi.dsi.fastutil.objects.Object2ReferenceOpenHashMap;
 import java.io.IOException;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
@@ -39,6 +43,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -60,6 +65,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -77,6 +83,77 @@ class ModelRenderTargetCacheTest {
     private static final Object OWNER = new Object();
     private static final AtomicInteger NEXT_CONTAINER_ID = new AtomicInteger(100);
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void closingLeaseAroundCacheShutdownDropsItsTargetWithoutAnotherTick(boolean releaseFirst) throws Exception {
+        var id = hash(14);
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
+            var target = target();
+            var lease = cache.getOrStart(request(id), content(id), key(), (cancelled, dispatch) -> ready(target),
+                current(), OWNER, WorkPriority.BACKGROUND);
+            cache.tick();
+            assertInstanceOf(AcquireResult.Ready.class, lease.poll());
+            if (releaseFirst)
+                lease.close();
+            cache.close();
+            lease.close();
+            assertInstanceOf(AcquireResult.Ended.class, lease.poll());
+            var stateField = lease.getClass().getDeclaredField("state");
+            stateField.setAccessible(true);
+            var state = stateField.get(lease);
+            for (var name : List.of("cache", "flight", "interest", "ready")) {
+                var field = state.getClass().getDeclaredField(name);
+                field.setAccessible(true);
+                assertNull(field.get(state), name);
+            }
+            var releases = ModelRenderTargetCache.class.getDeclaredField("releases");
+            releases.setAccessible(true);
+            assertTrue(((java.util.Queue<?>)releases.get(cache)).isEmpty());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void sameContentRolesKeepSeparateFlightsReadyAndReceivingLeases(boolean intrinsicFirst) throws Exception {
+        var content = content(hash(13));
+        var ordinary = request(content.modelId());
+        var intrinsic = new ResourceRequest(PublishedModelId.INTRINSIC_DEFAULT, "player", "default", PROFILE,
+            ordinary.expressionBinding(), ModelResourcePurpose.FULL);
+        var intrinsicKey = new RenderTargetKey("player", "default", PROFILE, intrinsic.expressionBinding(),
+            intrinsic.purpose(), PublishedModelId.Role.INTRINSIC_DEFAULT);
+        var first = intrinsicFirst ? intrinsic : ordinary;
+        var second = intrinsicFirst ? ordinary : intrinsic;
+        var firstKey = intrinsicFirst ? intrinsicKey : key();
+        var secondKey = intrinsicFirst ? key() : intrinsicKey;
+        var starts = new AtomicInteger();
+        var firstTarget = target();
+        var secondTarget = target();
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
+            var a = cache.getOrStart(first, content, firstKey, (cancelled, dispatch) -> {
+                starts.incrementAndGet();
+                return ready(firstTarget);
+            }, current(), OWNER, WorkPriority.BACKGROUND);
+            var b = cache.getOrStart(second, content, secondKey, (cancelled, dispatch) -> {
+                starts.incrementAndGet();
+                return ready(secondTarget);
+            }, current(), OWNER, WorkPriority.BACKGROUND);
+            cache.tick();
+            assertEquals(2, starts.get());
+            assertTrue(hasReady(cache, first, content, firstKey, current()));
+            assertTrue(hasReady(cache, second, content, secondKey, current()));
+            assertSame(firstTarget, assertInstanceOf(AcquireResult.Ready.class, a.poll()).target());
+            assertSame(secondTarget, assertInstanceOf(AcquireResult.Ready.class, b.poll()).target());
+            assertFalse(a.isCurrent(second));
+            assertFalse(b.isCurrent(first));
+            assertThrows(IllegalArgumentException.class,
+                () -> cache.findReady(ordinary, content, intrinsicKey, current()));
+            a.close();
+            cache.tick();
+            assertInstanceOf(AcquireResult.Ready.class, b.poll());
+            b.close();
+        }
+    }
+
     @BeforeAll
     static void establishRenderOwner() {
         ClientConfig.init().setConfig(CommentedConfig.inMemory());
@@ -92,168 +169,62 @@ class ModelRenderTargetCacheTest {
         var original = limit.get();
         limit.set(count);
         var closes = new AtomicInteger();
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> closes.incrementAndGet())) {
+        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> closes.incrementAndGet(), failure -> {
+            throw new AssertionError(failure);
+        })) {
             var activeId = hash(90);
             var activeContent = content(activeId);
             var activeTarget = target();
-            var active = cache.getOrStart(request(activeId), activeContent, key(), (ignored, dispatch) -> ready(activeTarget),
-                current(), OWNER, WorkPriority.BACKGROUND);
+            var active = cache.getOrStart(request(activeId), activeContent, key(),
+                (ignored, dispatch) -> ready(activeTarget), current(), OWNER, WorkPriority.BACKGROUND);
             cache.tick();
             var shared = cache.findReady(request(activeId), activeContent, key(), current()).orElseThrow();
             var requiredId = hash(91);
+            var requiredContent = content(requiredId);
             var requiredTarget = target();
-            var required = cache.getOrStartRequired(request(requiredId), content(requiredId), key(),
-                ignored -> readyResult(requiredTarget), current(), OWNER, Runnable::run);
+            var required = cache.getOrStartRequiredAsync(request(requiredId), requiredContent, key(),
+                (ignored, dispatch) -> CompletableFuture.completedFuture(readyResult(requiredTarget)), current(), OWNER,
+                Runnable::run);
             var contents = new java.util.ArrayList<ModelContent>();
             for (int index = 0; index <= count; ++index) {
                 var id = hash(200 + index);
                 var content = content(id);
                 contents.add(content);
                 var target = target();
-                var lease = cache.getOrStart(request(id), content, key(), (ignored, dispatch) -> ready(target), current(), OWNER, WorkPriority.BACKGROUND);
+                var lease = cache.getOrStart(request(id), content, key(), (ignored, dispatch) -> ready(target),
+                    current(), OWNER, WorkPriority.BACKGROUND);
                 cache.tick();
                 lease.close();
                 cache.tick();
             }
-            assertEquals(count, cache.unusedCount());
-            assertEquals(count + 2, cache.readyCount());
+            assertTrue(cache.findReady(request(hash(200)), contents.get(0), key(), current()).isEmpty());
+            assertTrue(hasReady(cache, request(activeId), activeContent, key(), current()));
             active.close();
             cache.tick();
-            assertEquals(count, cache.unusedCount());
+            assertTrue(hasReady(cache, request(activeId), activeContent, key(), current()));
             assertSame(activeTarget, assertInstanceOf(AcquireResult.Ready.class, shared.poll()).target());
             if (count > 0) {
                 var id = hash(200 + count);
-                var reused = cache.findReady(request(id), contents.get(count), key(), current()).orElseThrow();
+                try (var reused = cache.findReady(request(id), contents.get(count), key(), current()).orElseThrow()) {
+                    assertInstanceOf(AcquireResult.Ready.class, reused.poll());
+                }
                 cache.tick();
-                assertEquals(count - 1, cache.unusedCount());
-                reused.close();
-                cache.tick();
-                assertEquals(count, cache.unusedCount());
             }
             limit.set(0);
             cache.tick();
-            assertEquals(0, cache.unusedCount());
-            assertEquals(2, cache.readyCount());
+            assertTrue(cache.findReady(request(hash(200 + count)), contents.get(count), key(), current()).isEmpty());
+            assertTrue(hasReady(cache, request(activeId), activeContent, key(), current()));
             assertInstanceOf(AcquireResult.Ready.class, required.poll());
             shared.close();
             cache.tick();
-            assertEquals(1, cache.readyCount());
+            assertTrue(cache.findReady(request(activeId), activeContent, key(), current()).isEmpty());
             assertInstanceOf(AcquireResult.Ready.class, required.poll());
             required.close();
             cache.tick();
-            assertEquals(0, cache.readyCount());
+            assertTrue(cache.findReady(request(requiredId), requiredContent, key(), current()).isEmpty());
             assertEquals(0, closes.get());
         } finally {
             limit.set(original);
-        }
-    }
-
-    @Test
-    void offlineMemoryFailureCannotBecomeAnOptionalCacheMiss() {
-        var id = hash(115);
-        var memory = new OutOfMemoryError("injected offline preparation");
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {})) {
-            var pending = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
-            var result = cache.getOrStartCached(request(id), content(id), key(),
-                (cancelled, dispatch) -> pending, current(), OWNER, WorkPriority.BACKGROUND);
-            pending.complete(new ModelRenderTargetLoader.LoadResult.Failed(
-                new ResourceFailure(ResourceFailure.Kind.TRANSIENT, memory)));
-            cache.tick();
-            assertSame(memory, assertThrows(java.util.concurrent.CompletionException.class, result::join).getCause());
-            assertEquals(0, cache.loadingCount());
-            cache.tick();
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void wrappedCompilerMemoryFailureCannotBecomeAnOptionalCacheMiss(boolean cacheOnly) {
-        var id = hash(116);
-        var memory = new OutOfMemoryError("injected compiler allocation");
-        var compilerFailure = new org.codehaus.commons.compiler.InternalCompilerException("compiler allocation", memory);
-        var backendFailure = new dev.semaweave.compilation.BackendException(
-            dev.semaweave.compilation.BackendException.FailureKind.INTERNAL,
-            new dev.semaweave.backend.janino.JaninoJavaCompilerBackend().descriptor(), List.of(), 0, compilerFailure);
-        var failure = com.elfmcys.ysm.format.AssetLoadException.access("Expression compiler is unavailable", backendFailure);
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {})) {
-            var pending = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
-            var result = cacheOnly
-                ? cache.getOrStartCached(request(id), content(id), key(),
-                    (cancelled, dispatch) -> pending, current(), OWNER, WorkPriority.BACKGROUND)
-                : cache.getOrStartOffline(request(id), content(id), key(),
-                    (cancelled, dispatch) -> pending, current(), OWNER, WorkPriority.BACKGROUND);
-            pending.complete(ModelRenderTargetLoader.failure(failure));
-            cache.tick();
-            // A necessary compiler failure must end this acquisition, rather than authorize another preparation.
-            assertSame(failure, assertThrows(java.util.concurrent.CompletionException.class, result::join).getCause());
-            assertEquals(0, cache.loadingCount());
-            assertEquals(0, cache.readyCount());
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void ordinaryCompilerAccessFailureRemainsAnOptionalCacheMiss(boolean cacheOnly) {
-        var id = hash(117);
-        var compilerFailure = new org.codehaus.commons.compiler.InternalCompilerException("compiler unavailable",
-            new IllegalStateException("ordinary backend failure"));
-        var backendFailure = new dev.semaweave.compilation.BackendException(
-            dev.semaweave.compilation.BackendException.FailureKind.INTERNAL,
-            new dev.semaweave.backend.janino.JaninoJavaCompilerBackend().descriptor(), List.of(), 0, compilerFailure);
-        var failure = com.elfmcys.ysm.format.AssetLoadException.access("Expression compiler is unavailable", backendFailure);
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {})) {
-            var pending = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
-            var result = cacheOnly
-                ? cache.getOrStartCached(request(id), content(id), key(),
-                    (cancelled, dispatch) -> pending, current(), OWNER, WorkPriority.BACKGROUND)
-                : cache.getOrStartOffline(request(id), content(id), key(),
-                    (cancelled, dispatch) -> pending, current(), OWNER, WorkPriority.BACKGROUND);
-            pending.complete(ModelRenderTargetLoader.failure(failure));
-            cache.tick();
-            assertTrue(result.join().isEmpty());
-            assertEquals(0, cache.loadingCount());
-        }
-    }
-
-    @Test
-    void memoryFailureUsesTheAcquisitionTerminalWithoutContentOrContractFailure() throws Exception {
-        var id = hash(113);
-        var memory = new OutOfMemoryError("injected");
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {},
-            failure -> { throw new AssertionError("Memory failure is not a loader contract violation", failure); })) {
-            var pending = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
-            var lease = cache.getOrStart(request(id), content(id), key(), (cancelled, dispatch) -> pending,
-                current(), OWNER, WorkPriority.BACKGROUND);
-            pending.completeExceptionally(new java.util.concurrent.CompletionException(memory));
-            cache.tick();
-            var failed = assertInstanceOf(AcquireResult.Failed.class, lease.poll()).failure();
-            assertEquals(ResourceFailure.Kind.TRANSIENT, failed.kind());
-            assertSame(memory, failed.cause());
-            assertEquals(0, cache.loadingCount());
-            lease.close();
-            var nextTarget = readyResult(target());
-            var next = cache.getOrStart(request(hash(114)), content(hash(114)), key(),
-                (cancelled, dispatch) -> CompletableFuture.completedFuture(nextTarget), current(), OWNER, WorkPriority.BACKGROUND);
-            cache.tick();
-            assertInstanceOf(AcquireResult.Ready.class, next.poll());
-            next.close();
-        }
-    }
-
-    @Test
-    void synchronousMemoryFailureUsesTheSameTerminal() {
-        var id = hash(118);
-        var memory = new OutOfMemoryError("injected synchronous loader");
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {},
-            failure -> { throw new AssertionError("Unexpected contract failure", failure); })) {
-            var lease = cache.getOrStart(request(id), content(id), key(), (cancelled, dispatch) -> { throw memory; },
-                current(), OWNER, WorkPriority.BACKGROUND);
-            cache.tick();
-            var failed = assertInstanceOf(AcquireResult.Failed.class, lease.poll()).failure();
-            assertSame(memory, failed.cause());
-            assertEquals(ResourceFailure.Kind.TRANSIENT, failed.kind());
-            assertEquals(0, cache.loadingCount());
-            lease.close();
         }
     }
 
@@ -262,30 +233,29 @@ class ModelRenderTargetCacheTest {
         var limit = ClientConfig.MODEL_RETENTION_COUNT;
         var original = limit.get();
         limit.set(2);
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-        })) {
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
             var firstContent = content(hash(81));
             var secondContent = content(hash(82));
             var activeContent = content(hash(83));
             var firstTarget = target();
             var secondTarget = target();
             var activeTarget = target();
-            var first = cache.getOrStart(request(hash(81)), firstContent, key(), (ignored, dispatch) -> ready(firstTarget),
-                current(), OWNER, WorkPriority.BACKGROUND);
-            var second = cache.getOrStart(request(hash(82)), secondContent, key(), (ignored, dispatch) -> ready(secondTarget),
-                current(), OWNER, WorkPriority.BACKGROUND);
-            var active = cache.getOrStart(request(hash(83)), activeContent, key(), (ignored, dispatch) -> ready(activeTarget),
-                current(), OWNER, WorkPriority.BACKGROUND);
+            var first = cache.getOrStart(request(hash(81)), firstContent, key(),
+                (ignored, dispatch) -> ready(firstTarget), current(), OWNER, WorkPriority.BACKGROUND);
+            var second = cache.getOrStart(request(hash(82)), secondContent, key(),
+                (ignored, dispatch) -> ready(secondTarget), current(), OWNER, WorkPriority.BACKGROUND);
+            var active = cache.getOrStart(request(hash(83)), activeContent, key(),
+                (ignored, dispatch) -> ready(activeTarget), current(), OWNER, WorkPriority.BACKGROUND);
             cache.tick();
             first.close();
             second.close();
             cache.tick();
-            assertEquals(2, cache.unusedCount());
-            assertEquals(3, cache.readyCount());
+            assertTrue(hasReady(cache, request(hash(81)), firstContent, key(), current()));
+            assertTrue(hasReady(cache, request(hash(82)), secondContent, key(), current()));
+            assertTrue(hasReady(cache, request(hash(83)), activeContent, key(), current()));
 
             limit.set(1);
             cache.tick();
-            assertEquals(1, cache.unusedCount());
             assertTrue(cache.findReady(request(hash(81)), firstContent, key(), current()).isEmpty());
             try (var reused = cache.findReady(request(hash(82)), secondContent, key(), current()).orElseThrow()) {
                 assertInstanceOf(AcquireResult.Ready.class, reused.poll());
@@ -293,12 +263,12 @@ class ModelRenderTargetCacheTest {
 
             limit.set(0);
             cache.tick();
-            assertEquals(0, cache.unusedCount());
-            assertEquals(1, cache.readyCount());
+            assertTrue(cache.findReady(request(hash(82)), secondContent, key(), current()).isEmpty());
+            assertTrue(hasReady(cache, request(hash(83)), activeContent, key(), current()));
             assertInstanceOf(AcquireResult.Ready.class, active.poll());
             active.close();
             cache.tick();
-            assertEquals(0, cache.readyCount());
+            assertTrue(cache.findReady(request(hash(83)), activeContent, key(), current()).isEmpty());
         } finally {
             limit.set(original);
         }
@@ -319,8 +289,7 @@ class ModelRenderTargetCacheTest {
         var dynamicTarget = target();
         var exactTarget = target();
 
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-        })) {
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
             var dynamicLease = cache.getOrStart(dynamicRequest, content, dynamicKey, (ignored, dispatch) -> {
                 loads.incrementAndGet();
                 return ready(dynamicTarget);
@@ -332,7 +301,7 @@ class ModelRenderTargetCacheTest {
             cache.tick();
 
             assertEquals(1, loads.get());
-            assertEquals(1, cache.readyCount());
+            assertTrue(hasReady(cache, exactRequest, content, exactKey, current()));
             assertSame(dynamicTarget, assertInstanceOf(AcquireResult.Ready.class, dynamicLease.poll()).target());
             assertSame(dynamicTarget, assertInstanceOf(AcquireResult.Ready.class, exactLease.poll()).target());
             dynamicLease.close();
@@ -352,8 +321,7 @@ class ModelRenderTargetCacheTest {
         var fullTarget = target();
         var guiTarget = target();
         var loads = new AtomicInteger();
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-        })) {
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
             var fullLease = cache.getOrStart(full, content, fullKey, (ignored, dispatch) -> {
                 loads.incrementAndGet();
                 return ready(fullTarget);
@@ -367,7 +335,8 @@ class ModelRenderTargetCacheTest {
             cache.tick();
 
             assertEquals(2, loads.get());
-            assertEquals(2, cache.readyCount());
+            assertTrue(hasReady(cache, full, content, fullKey, current()));
+            assertTrue(hasReady(cache, gui, content, guiKey, current()));
             assertSame(fullTarget, assertInstanceOf(AcquireResult.Ready.class, fullLease.poll()).target());
             assertSame(guiTarget, assertInstanceOf(AcquireResult.Ready.class, guiLease.poll()).target());
             assertFalse(fullLease.isCurrent(gui));
@@ -396,8 +365,10 @@ class ModelRenderTargetCacheTest {
                 loads.incrementAndGet();
                 return pending;
             };
-            var first = cache.getOrStart(request(hash), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
-            var second = cache.getOrStart(request(hash), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
+            var first =
+                cache.getOrStart(request(hash), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
+            var second =
+                cache.getOrStart(request(hash), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
 
             assertNotSame(first, second);
             assertEquals(1, loads.get());
@@ -405,14 +376,14 @@ class ModelRenderTargetCacheTest {
             cache.tick();
             assertSame(firstTarget, assertInstanceOf(AcquireResult.Ready.class, first.poll()).target());
             assertSame(firstTarget, assertInstanceOf(AcquireResult.Ready.class, second.poll()).target());
-            assertEquals(1, cache.readyCount());
+            assertTrue(hasReady(cache, request(hash), content, key(), current()));
 
             cache.tick();
-            assertEquals(1, cache.readyCount());
+            assertTrue(hasReady(cache, request(hash), content, key(), current()));
             first.close();
             second.close();
             cache.tick();
-            assertEquals(0, cache.readyCount());
+            assertTrue(cache.findReady(request(hash), content, key(), current()).isEmpty());
             assertEquals(0, closes.get());
 
             var replacement = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> {
@@ -456,7 +427,8 @@ class ModelRenderTargetCacheTest {
         var target = target();
         var reference = new WeakReference<>(target, collected);
         var hash = hash(84);
-        try (var lease = cache.getOrStart(request(hash), content(hash), key(), (cancelled, dispatch) -> {
+        var content = content(hash);
+        try (var lease = cache.getOrStart(request(hash), content, key(), (cancelled, dispatch) -> {
             probe.set(cancelled);
             return ready(target);
         }, current(), OWNER, WorkPriority.BACKGROUND)) {
@@ -464,7 +436,7 @@ class ModelRenderTargetCacheTest {
             assertSame(target, assertInstanceOf(AcquireResult.Ready.class, lease.poll()).target());
         }
         cache.tick();
-        assertEquals(0, cache.readyCount());
+        assertTrue(cache.findReady(request(hash), content, key(), current()).isEmpty());
         assertEquals(0, cache.loadingCount());
         return reference;
     }
@@ -526,8 +498,10 @@ class ModelRenderTargetCacheTest {
             ModelRenderTargetCache.Loader loader = (context, dispatch) -> {
                 return pending;
             };
-            var first = cache.getOrStart(request(hash), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
-            var second = cache.getOrStart(request(hash), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
+            var first =
+                cache.getOrStart(request(hash), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
+            var second =
+                cache.getOrStart(request(hash), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
 
             first.cancelPending();
             cache.tick();
@@ -552,7 +526,8 @@ class ModelRenderTargetCacheTest {
         }, failure -> {
             assertTrue(reported.compareAndSet(null, failure));
         })) {
-            var lease = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> pending, current(), OWNER, WorkPriority.BACKGROUND);
+            var lease = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> pending, current(),
+                OWNER, WorkPriority.BACKGROUND);
             var cause = new IOException("loader failed exceptionally");
 
             pending.completeExceptionally(cause);
@@ -573,9 +548,10 @@ class ModelRenderTargetCacheTest {
         var epochPending = new CountingFuture<ModelRenderTargetLoader.LoadResult>();
         var processPending = new CountingFuture<ModelRenderTargetLoader.LoadResult>();
         try (var cache = new ModelRenderTargetCache(scheduler)) {
-            cache.getOrStart(request(hash(40)), content(hash(40)), key(), (ignored, dispatch) -> epochPending, current(), epoch, WorkPriority.BACKGROUND);
-            cache.getOrStart(request(hash(41)), content(hash(41)), key(), (ignored, dispatch) -> processPending, current(),
-                process, WorkPriority.BACKGROUND);
+            cache.getOrStart(request(hash(40)), content(hash(40)), key(), (ignored, dispatch) -> epochPending,
+                current(), epoch, WorkPriority.BACKGROUND);
+            cache.getOrStart(request(hash(41)), content(hash(41)), key(), (ignored, dispatch) -> processPending,
+                current(), process, WorkPriority.BACKGROUND);
 
             cache.clearSession(epoch);
             cache.tick();
@@ -611,20 +587,54 @@ class ModelRenderTargetCacheTest {
     }
 
     @Test
+    void detachedUseCannotPublishOrReplaceAnOrdinaryFlight() throws Exception {
+        var id = hash(63);
+        var content = content(id);
+        var detachedTarget = target();
+        var ordinaryTarget = target();
+        var detachedLoading = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
+        var ordinaryLoading = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
+            var detached = cache.getOrStartDetached(request(id), content, key(),
+                (cancelled, dispatch) -> detachedLoading, OWNER, WorkPriority.BACKGROUND);
+            var ordinary = cache.getOrStart(request(id), content, key(), (cancelled, dispatch) -> ordinaryLoading,
+                current(), OWNER, WorkPriority.BACKGROUND);
+            detachedLoading.complete(readyResult(detachedTarget));
+            cache.tick();
+            assertSame(detachedTarget, assertInstanceOf(AcquireResult.Ready.class, detached.poll()).target());
+            assertInstanceOf(AcquireResult.Pending.class, ordinary.poll());
+            assertTrue(cache.findReady(request(id), content, key(), current()).isEmpty());
+            ordinaryLoading.complete(readyResult(ordinaryTarget));
+            cache.tick();
+            assertSame(ordinaryTarget, assertInstanceOf(AcquireResult.Ready.class, ordinary.poll()).target());
+            detached.close();
+            cache.tick();
+            try (var retained = cache.findReady(request(id), content, key(), current()).orElseThrow()) {
+                assertSame(ordinaryTarget, assertInstanceOf(AcquireResult.Ready.class, retained.poll()).target());
+            }
+            assertSame(ordinaryTarget, assertInstanceOf(AcquireResult.Ready.class, ordinary.poll()).target());
+            assertInstanceOf(AcquireResult.Ended.class, detached.poll());
+            ordinary.close();
+        }
+    }
+
+    @Test
     void cachedProbeDoesNotJoinOrKeepAnExistingFullFlightAlive() {
         var hash = hash(61);
         var content = content(hash);
         var fullWork = new CountingFuture<ModelRenderTargetLoader.LoadResult>();
         var cacheLoads = new AtomicInteger();
         try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var full = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> fullWork, current(), OWNER, WorkPriority.BACKGROUND);
+            var full = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> fullWork, current(),
+                OWNER, WorkPriority.BACKGROUND);
 
             var probe = cache.getOrStartCached(request(hash), content, key(), (ignored, dispatch) -> {
                 cacheLoads.incrementAndGet();
                 return new CompletableFuture<>();
             }, current(), OWNER, WorkPriority.BACKGROUND);
 
-            assertTrue(probe.join().isEmpty());
+            assertInstanceOf(AcquireResult.Missing.class, probe.poll());
+            probe.close();
             assertEquals(0, cacheLoads.get());
             full.cancelPending();
             cache.tick();
@@ -639,14 +649,16 @@ class ModelRenderTargetCacheTest {
         var probeWork = new CountingFuture<ModelRenderTargetLoader.LoadResult>();
         var loaded = target();
         try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var probe = cache.getOrStartCached(request(hash), content, key(), (ignored, dispatch) -> probeWork, current(), OWNER, WorkPriority.BACKGROUND);
-            var full =
-                cache.getOrStartOffline(request(hash), content, key(), (ignored, dispatch) -> ready(loaded), current(), OWNER, WorkPriority.BACKGROUND);
+            var probe = cache.getOrStartCached(request(hash), content, key(), (ignored, dispatch) -> probeWork,
+                current(), OWNER, WorkPriority.BACKGROUND);
+            var full = cache.getOrStartOffline(request(hash), content, key(), (ignored, dispatch) -> ready(loaded),
+                current(), OWNER, WorkPriority.BACKGROUND);
             cache.tick();
 
             assertEquals(1, probeWork.cancelCalls.get());
-            assertTrue(probe.join().isEmpty());
-            var lease = full.join().orElseThrow();
+            assertInstanceOf(AcquireResult.Failed.class, probe.poll());
+            probe.close();
+            var lease = full;
             assertSame(loaded, assertInstanceOf(AcquireResult.Ready.class, lease.poll()).target());
             lease.close();
         }
@@ -697,15 +709,14 @@ class ModelRenderTargetCacheTest {
                 return readyResult(loaded);
             }, dispatch);
         };
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-        })) {
-            var background = cache.getOrStart(request(id), content, key(), loader, current(), OWNER,
-                WorkPriority.BACKGROUND);
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
+            var background =
+                cache.getOrStart(request(id), content, key(), loader, current(), OWNER, WorkPriority.BACKGROUND);
             assertEquals(0, productions.get());
-            var local = cache.getOrStart(request(id), content, key(), loader, current(), OWNER,
-                WorkPriority.LOCAL_PLAYER);
-            var repeated = cache.getOrStart(request(id), content, key(), loader, current(), OWNER,
-                WorkPriority.LOCAL_PLAYER);
+            var local =
+                cache.getOrStart(request(id), content, key(), loader, current(), OWNER, WorkPriority.LOCAL_PLAYER);
+            var repeated =
+                cache.getOrStart(request(id), content, key(), loader, current(), OWNER, WorkPriority.LOCAL_PLAYER);
             var completed = new CountDownLatch(1);
             scheduler.dispatch(WorkPriority.LOCAL_PLAYER).execute(completed::countDown);
             assertTrue(completed.await(5, TimeUnit.SECONDS));
@@ -735,177 +746,11 @@ class ModelRenderTargetCacheTest {
     }
 
     @Test
-    void backgroundAdmissionLeavesTwoSlotsAndPromotionReleasesOnlyItsBackgroundSlot() {
-        try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var interests = new ArrayList<ResourceLease>();
-            var firstId = wideHash(1);
-            var firstContent = content(firstId);
-            interests.add(cache.getOrStart(request(firstId), firstContent, key(),
-                (cancelled, dispatch) -> new CompletableFuture<>(), current(), OWNER, WorkPriority.BACKGROUND));
-            addPending(cache, interests, 2, ModelRenderTargetCache.MAX_BACKGROUND_IN_FLIGHT - 1,
-                WorkPriority.BACKGROUND);
-            var deniedStarts = new AtomicInteger();
-            var denied = cache.getOrStart(request(wideHash(300)), content(wideHash(300)), key(),
-                (cancelled, dispatch) -> {
-                    deniedStarts.incrementAndGet();
-                    return new CompletableFuture<>();
-                }, current(), OWNER, WorkPriority.BACKGROUND);
-            interests.add(cache.getOrStart(request(firstId), firstContent, key(), (cancelled, dispatch) -> {
-                throw new AssertionError("A promoted Flight must keep its original producer");
-            }, current(), OWNER, WorkPriority.LOCAL_PLAYER));
-            addPending(cache, interests, 301, 1, WorkPriority.BACKGROUND);
-            addPending(cache, interests, 302, 1, WorkPriority.LOCAL_PLAYER);
-            var totalOverflow = cache.getOrStart(request(wideHash(303)), content(wideHash(303)), key(),
-                (cancelled, dispatch) -> {
-                    deniedStarts.incrementAndGet();
-                    return new CompletableFuture<>();
-                }, current(), OWNER, WorkPriority.LOCAL_PLAYER);
-            assertEquals(ModelRenderTargetCache.MAX_IN_FLIGHT, cache.loadingCount());
-            assertEquals(0, deniedStarts.get());
-            cache.tick();
-            assertInstanceOf(AcquireResult.Failed.class, denied.poll());
-            assertInstanceOf(AcquireResult.Failed.class, totalOverflow.poll());
-            assertEquals(ModelRenderTargetCache.MAX_IN_FLIGHT, cache.loadingCount());
-            Reference.reachabilityFence(interests);
-        }
-    }
-
-    @Test
-    void promotionAfterSchedulerShutdownDoesNotReleaseBackgroundAdmission() {
-        try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var interests = new ArrayList<ResourceLease>();
-            var id = wideHash(1);
-            var content = content(id);
-            var dispatch = new AtomicReference<ClientResourceScheduler.Dispatch>();
-            interests.add(cache.getOrStart(request(id), content, key(), (cancelled, acceptedDispatch) -> {
-                dispatch.set(acceptedDispatch);
-                return new CompletableFuture<>();
-            }, current(), OWNER, WorkPriority.BACKGROUND));
-            addPending(cache, interests, 2, ModelRenderTargetCache.MAX_BACKGROUND_IN_FLIGHT - 1,
-                WorkPriority.BACKGROUND);
-            scheduler.shutdown();
-            for (var attempt = 0; attempt < 3; attempt++) {
-                interests.add(cache.getOrStart(request(id), content, key(), (cancelled, ignored) -> {
-                    throw new AssertionError("A local interest must reuse the admitted Flight");
-                }, current(), OWNER, WorkPriority.LOCAL_PLAYER));
-            }
-            var starts = new AtomicInteger();
-            var denied = cache.getOrStart(request(wideHash(300)), content(wideHash(300)), key(),
-                (cancelled, ignored) -> {
-                    starts.incrementAndGet();
-                    return new CompletableFuture<>();
-                }, current(), OWNER, WorkPriority.BACKGROUND);
-            cache.tick();
-            assertEquals(WorkPriority.BACKGROUND, dispatch.get().priority());
-            assertEquals(0, starts.get());
-            assertInstanceOf(AcquireResult.Failed.class, denied.poll());
-            assertEquals(ModelRenderTargetCache.MAX_BACKGROUND_IN_FLIGHT, cache.loadingCount());
-            Reference.reachabilityFence(interests);
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"failure", "release", "session", "replacement"})
-    void exactRetirementReturnsBackgroundAdmissionOnce(String retirement) {
-        try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var interests = new ArrayList<ResourceLease>();
-            var id = wideHash(1);
-            var content = content(id);
-            var oldOwner = new Object();
-            var oldWork = new CancelResistantFuture<ModelRenderTargetLoader.LoadResult>();
-            var old = cache.getOrStart(request(id), content, key(), (cancelled, dispatch) -> oldWork,
-                current(), oldOwner, WorkPriority.BACKGROUND);
-            var oldTerminal = cache.terminal(old);
-            interests.add(old);
-            addPending(cache, interests, 2, ModelRenderTargetCache.MAX_BACKGROUND_IN_FLIGHT - 1,
-                WorkPriority.BACKGROUND);
-            ResourceLease replacement = null;
-            switch (retirement) {
-                case "release" -> old.close();
-                case "session" -> cache.clearSession(oldOwner);
-                case "replacement" -> {
-                    replacement = cache.getOrStart(request(id), content, key(),
-                        (cancelled, dispatch) -> new CompletableFuture<>(), current(), OWNER,
-                        WorkPriority.LOCAL_PLAYER);
-                    interests.add(replacement);
-                }
-                default -> oldWork.complete(new ModelRenderTargetLoader.LoadResult.Failed(
-                    new ResourceFailure(ResourceFailure.Kind.TRANSIENT, new IOException("controlled failure"))));
-            }
-            cache.tick();
-            assertInstanceOf(AcquireResult.Failed.class, oldTerminal.join());
-            oldWork.complete(new ModelRenderTargetLoader.LoadResult.Failed(
-                new ResourceFailure(ResourceFailure.Kind.TRANSIENT, new IOException("late old failure"))));
-            cache.tick();
-            if (replacement != null) {
-                assertInstanceOf(AcquireResult.Pending.class, replacement.poll());
-            }
-            addPending(cache, interests, 300, 1, WorkPriority.BACKGROUND);
-            var deniedStarts = new AtomicInteger();
-            var denied = cache.getOrStart(request(wideHash(301)), content(wideHash(301)), key(),
-                (cancelled, dispatch) -> {
-                    deniedStarts.incrementAndGet();
-                    return new CompletableFuture<>();
-                }, current(), OWNER, WorkPriority.BACKGROUND);
-            cache.tick();
-            assertEquals(0, deniedStarts.get());
-            assertInstanceOf(AcquireResult.Failed.class, denied.poll());
-            assertEquals(ModelRenderTargetCache.MAX_BACKGROUND_IN_FLIGHT + (replacement == null ? 0 : 1),
-                cache.loadingCount());
-            Reference.reachabilityFence(interests);
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(ints = {2, 4})
-    void queuedCompletionPromotionPreservesCandidateAndBackgroundShare(int limit) throws Exception {
-        var rejections = new AtomicInteger();
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> rejections.incrementAndGet(),
-            failure -> { throw new AssertionError(failure); }, ignored -> {
-                throw new AssertionError("Testing candidates bypass the host");
-            }, () -> limit)) {
-            var backgrounds = new ArrayList<ResourceLease>();
-            var promotedId = hash(104);
-            var promotedContent = content(promotedId);
-            var promotedTarget = target();
-            for (var index = 0; index < 3; index++) {
-                var id = hash(101 + index);
-                var loaded = target();
-                backgrounds.add(cache.getOrStart(request(id), content(id), key(),
-                    (cancelled, dispatch) -> ready(loaded), current(), OWNER, WorkPriority.BACKGROUND));
-            }
-            var promoted = cache.getOrStart(request(promotedId), promotedContent, key(),
-                (cancelled, dispatch) -> ready(promotedTarget), current(), OWNER, WorkPriority.BACKGROUND);
-            var localInterest = cache.getOrStart(request(promotedId), promotedContent, key(), (cancelled, dispatch) -> {
-                throw new AssertionError("Queued completion promotion must preserve the existing candidate");
-            }, current(), OWNER, WorkPriority.LOCAL_PLAYER);
-            var locals = new ArrayList<ResourceLease>();
-            for (var index = 0; index < limit; index++) {
-                var id = hash(110 + index);
-                var loaded = target();
-                locals.add(cache.getOrStart(request(id), content(id), key(),
-                    (cancelled, dispatch) -> ready(loaded), current(), OWNER, WorkPriority.LOCAL_PLAYER));
-            }
-            localInterest.close();
-            cache.tick();
-            assertEquals(limit, cache.readyCount());
-            assertSame(promotedTarget, assertInstanceOf(AcquireResult.Ready.class, promoted.poll()).target());
-            assertInstanceOf(AcquireResult.Ready.class, backgrounds.get(0).poll());
-            assertInstanceOf(AcquireResult.Pending.class, backgrounds.get(1).poll());
-            for (var index = 0; index < locals.size(); index++) {
-                if (index < limit - 2)
-                    assertInstanceOf(AcquireResult.Ready.class, locals.get(index).poll());
-                else
-                    assertInstanceOf(AcquireResult.Pending.class, locals.get(index).poll());
-            }
-            assertEquals(0, rejections.get());
-        }
-    }
-
-    @Test
     void cacheCloseTerminatesCapacityFailureAndRejectsQueuedOrLateCandidatesOnce() throws Exception {
         var rejections = new AtomicInteger();
-        var cache = new ModelRenderTargetCache(scheduler, ignored -> rejections.incrementAndGet());
+        var cache = new ModelRenderTargetCache(scheduler, ignored -> rejections.incrementAndGet(), failure -> {
+            throw new AssertionError(failure);
+        });
         var interests = new ArrayList<ResourceLease>();
         var late = new CancelResistantFuture<ModelRenderTargetLoader.LoadResult>();
         var lateId = hash(120);
@@ -933,64 +778,6 @@ class ModelRenderTargetCacheTest {
         assertEquals(2, rejections.get());
         assertEquals(0, cache.loadingCount());
         Reference.reachabilityFence(interests);
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"cancel", "stale", "failure"})
-    void localNonReadyDispositionStillConsumesItsSharedTickBudget(String disposition) throws Exception {
-        var rejections = new AtomicInteger();
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> rejections.incrementAndGet(),
-            failure -> { throw new AssertionError(failure); }, ignored -> {
-                throw new AssertionError("Testing candidates bypass the host");
-            }, () -> 2)) {
-            var firstTarget = target();
-            var firstId = hash(125);
-            var first = cache.getOrStart(request(firstId), content(firstId), key(),
-                (cancelled, dispatch) -> disposition.equals("failure")
-                    ? failed(ResourceFailure.Kind.TRANSIENT, new IOException("controlled failure"))
-                    : ready(firstTarget),
-                (identity, key, request) -> !disposition.equals("stale"), OWNER, WorkPriority.LOCAL_PLAYER);
-            var firstTerminal = cache.terminal(first);
-            if (disposition.equals("cancel")) {
-                first.close();
-            }
-            var secondTarget = target();
-            var second = cache.getOrStart(request(hash(126)), content(hash(126)), key(),
-                (cancelled, dispatch) -> ready(secondTarget), current(), OWNER, WorkPriority.LOCAL_PLAYER);
-            var backgroundTarget = target();
-            var background = cache.getOrStart(request(hash(127)), content(hash(127)), key(),
-                (cancelled, dispatch) -> ready(backgroundTarget), current(), OWNER, WorkPriority.BACKGROUND);
-            cache.tick();
-            assertInstanceOf(AcquireResult.Failed.class, firstTerminal.join());
-            assertInstanceOf(AcquireResult.Pending.class, second.poll());
-            assertSame(backgroundTarget, assertInstanceOf(AcquireResult.Ready.class, background.poll()).target());
-            assertEquals(disposition.equals("failure") ? 0 : 1, rejections.get());
-            cache.tick();
-            assertSame(secondTarget, assertInstanceOf(AcquireResult.Ready.class, second.poll()).target());
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void schedulerRejectionTerminatesAsTransientWithoutAContractViolation(boolean continuation) {
-        scheduler.shutdown();
-        var violations = new AtomicInteger();
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-        }, ignored -> violations.incrementAndGet())) {
-            ModelRenderTargetLoader.LoadResult result = new ModelRenderTargetLoader.LoadResult.Failed(
-                new ResourceFailure(ResourceFailure.Kind.TRANSIENT, new IOException("unused")));
-            var lease = cache.getOrStart(request(hash(128)), content(hash(128)), key(), (cancelled, dispatch) -> {
-                if (continuation) {
-                    return CompletableFuture.completedFuture(result).thenApplyAsync(value -> value, dispatch);
-                }
-                return CompletableFuture.supplyAsync(() -> result, dispatch);
-            }, current(), OWNER, WorkPriority.LOCAL_PLAYER);
-            cache.tick();
-            assertEquals(ResourceFailure.Kind.TRANSIENT,
-                assertInstanceOf(AcquireResult.Failed.class, lease.poll()).failure().kind());
-            assertEquals(0, cache.loadingCount());
-            assertEquals(0, violations.get());
-        }
     }
 
     @ParameterizedTest
@@ -1047,40 +834,6 @@ class ModelRenderTargetCacheTest {
         assertEquals(0, violations.get());
     }
 
-    @ParameterizedTest
-    @CsvSource({"false,exceptional", "true,exceptional", "false,null", "true,null"})
-    void cancellationBeforeLoaderReturnIgnoresItsLateFailureOrMissingOutcome(boolean required, String completion)
-        throws Exception {
-        var violations = new AtomicInteger();
-        var host = new ArrayDeque<Runnable>();
-        var id = hash(130);
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-            throw new AssertionError("A failed loader has no candidate to dispose");
-        }, ignored -> violations.incrementAndGet())) {
-            ModelRenderTargetCache.Loader loader = (cancelled, dispatch) -> {
-                cache.clearSession(OWNER);
-                cache.tick();
-                assertTrue(cancelled.getAsBoolean());
-                return completion.equals("exceptional")
-                    ? CompletableFuture.failedFuture(new IOException("late loader failure"))
-                    : CompletableFuture.completedFuture(null);
-            };
-            var lease = required
-                ? cache.getOrStartRequiredAsync(request(id), content(id), key(), loader, current(), OWNER, host::add)
-                : cache.getOrStart(request(id), content(id), key(), loader, current(), OWNER, WorkPriority.LOCAL_PLAYER);
-            var terminal = cache.terminal(lease);
-            var cancelled = assertInstanceOf(AcquireResult.Failed.class, terminal.join());
-            assertInstanceOf(CancellationException.class, cancelled.failure().cause());
-            cache.tick();
-            assertSame(cancelled, terminal.join());
-            assertSame(cancelled, lease.poll());
-            assertEquals(0, violations.get());
-            assertEquals(0, cache.loadingCount());
-            assertTrue(host.isEmpty());
-            lease.close();
-        }
-    }
-
     private static void addPending(ModelRenderTargetCache cache, List<ResourceLease> interests, int start, int count,
         WorkPriority priority) {
         for (var marker = start; marker < start + count; marker++) {
@@ -1105,9 +858,9 @@ class ModelRenderTargetCacheTest {
         var content = content(hash);
         var pending = new CountingFuture<ModelRenderTargetLoader.LoadResult>();
         var loaded = target();
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-        })) {
-            var lease = cache.getOrStart(request(hash), content, key(), (context, dispatch) -> pending, current(), OWNER, WorkPriority.BACKGROUND);
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
+            var lease = cache.getOrStart(request(hash), content, key(), (context, dispatch) -> pending, current(),
+                OWNER, WorkPriority.BACKGROUND);
             var terminal = cache.terminal(lease);
 
             pending.complete(readyResult(loaded));
@@ -1129,7 +882,9 @@ class ModelRenderTargetCacheTest {
         var replacementTarget = target();
         var rejected = new AtomicInteger();
         var loads = new AtomicInteger();
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> rejected.incrementAndGet())) {
+        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> rejected.incrementAndGet(), failure -> {
+            throw new AssertionError(failure);
+        })) {
             var old = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> {
                 loads.incrementAndGet();
                 return oldPending;
@@ -1159,11 +914,13 @@ class ModelRenderTargetCacheTest {
         var offlinePending = new CountingFuture<ModelRenderTargetLoader.LoadResult>();
         var normalPending = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
         try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var offline =
-                cache.getOrStartOffline(request(hash), content, key(), (context, dispatch) -> offlinePending, current(), OWNER, WorkPriority.BACKGROUND);
-            var normal = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> normalPending, current(), OWNER, WorkPriority.BACKGROUND);
+            var offline = cache.getOrStartOffline(request(hash), content, key(), (context, dispatch) -> offlinePending,
+                current(), OWNER, WorkPriority.BACKGROUND);
+            var normal = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> normalPending,
+                current(), OWNER, WorkPriority.BACKGROUND);
 
-            assertTrue(offline.join().isEmpty());
+            assertInstanceOf(AcquireResult.Failed.class, offline.poll());
+            offline.close();
             assertEquals(1, offlinePending.cancelCalls.get());
             assertInstanceOf(AcquireResult.Pending.class, normal.poll());
         }
@@ -1177,14 +934,18 @@ class ModelRenderTargetCacheTest {
         var current = new AtomicReference<>(content.representation().identity());
         ModelRenderTargetCache.CurrentLookup lookup = (identity, key, request) -> identity.equals(current.get());
         try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var lease = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> ready(loaded), lookup, OWNER, WorkPriority.BACKGROUND);
+            var lease = cache.getOrStart(request(hash), content, key(), (ignored, dispatch) -> ready(loaded), lookup,
+                OWNER, WorkPriority.BACKGROUND);
             cache.tick();
 
-            current.set(new ModelFileIdentity(hash, hash(80)));
+            current.set(new ModelFileIdentity(hash, Hash256.parse(hash(80).toString().substring(5))));
 
             assertFalse(lease.isCurrent(request(hash)));
             assertSame(loaded, assertInstanceOf(AcquireResult.Ready.class, lease.poll()).target());
-            assertEquals(1, cache.readyCount());
+            try (var retained =
+                cache.findReady(request(hash), content, key(), (identity, k, req) -> true).orElseThrow()) {
+                assertSame(loaded, assertInstanceOf(AcquireResult.Ready.class, retained.poll()).target());
+            }
         }
     }
 
@@ -1216,29 +977,32 @@ class ModelRenderTargetCacheTest {
     }
 
     @Test
-    void closedHandleCannotBeObserved() throws Exception {
+    void closedHandleObservesEnded() throws Exception {
         var hash = hash(10);
         var loaded = target();
         try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var lease =
-                cache.getOrStart(request(hash), content(hash), key(), (ignored, dispatch) -> ready(loaded), current(), OWNER, WorkPriority.BACKGROUND);
+            var lease = cache.getOrStart(request(hash), content(hash), key(), (ignored, dispatch) -> ready(loaded),
+                current(), OWNER, WorkPriority.BACKGROUND);
             lease.close();
-            assertThrows(IllegalStateException.class, lease::poll);
+            assertInstanceOf(AcquireResult.Ended.class, lease.poll());
+            assertFalse(lease.isCurrent(request(hash)));
         }
     }
 
     @Test
     void ordinaryTerminalWaitsForTheOwnerTickBeforeExposure() throws Exception {
         var loaded = target();
+        var id = hash(11);
+        var content = content(id);
         try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var lease = cache.getOrStart(request(hash(11)), content(hash(11)), key(), (ignored, dispatch) -> ready(loaded),
-                current(), OWNER, WorkPriority.BACKGROUND);
+            var lease = cache.getOrStart(request(id), content, key(), (ignored, dispatch) -> ready(loaded), current(),
+                OWNER, WorkPriority.BACKGROUND);
 
             assertInstanceOf(AcquireResult.Pending.class, lease.poll());
-            assertEquals(0, cache.readyCount());
+            assertTrue(cache.findReady(request(id), content, key(), current()).isEmpty());
 
             cache.tick();
-            assertEquals(1, cache.readyCount());
+            assertTrue(hasReady(cache, request(id), content, key(), current()));
             assertSame(loaded, assertInstanceOf(AcquireResult.Ready.class, lease.poll()).target());
         }
     }
@@ -1246,17 +1010,19 @@ class ModelRenderTargetCacheTest {
     @Test
     void requiredBootstrapPublishesOnTheOwnerWithoutWaitingForTick() throws Exception {
         var loaded = target();
+        var id = hash(12);
+        var content = content(id);
         var admissions = new AtomicInteger();
         var hostTasks = new ArrayDeque<Runnable>();
         try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var lease = cache.getOrStartRequired(request(hash(12)), content(hash(12)), key(), ignored -> {
+            var lease = cache.getOrStartRequiredAsync(request(id), content, key(), (ignored, dispatch) -> {
                 admissions.incrementAndGet();
-                return readyResult(loaded);
+                return CompletableFuture.completedFuture(readyResult(loaded));
             }, current(), OWNER, hostTasks::add);
 
             assertEquals(1, admissions.get());
             assertInstanceOf(AcquireResult.Pending.class, lease.poll());
-            assertEquals(0, cache.readyCount());
+            assertTrue(cache.findReady(request(id), content, key(), current()).isEmpty());
             hostTasks.remove().run();
             assertSame(loaded, assertInstanceOf(AcquireResult.Ready.class, lease.poll()).target());
         }
@@ -1291,9 +1057,9 @@ class ModelRenderTargetCacheTest {
                     lease.close();
                     cache.tick();
                 }
-                case "replacement" -> replacement.set(cache.getOrStart(request(id), content, key(),
-                    (cancelled, dispatch) -> new CompletableFuture<>(), current(), new Object(),
-                    WorkPriority.LOCAL_PLAYER));
+                case "replacement" -> replacement.set(
+                    cache.getOrStart(request(id), content, key(), (cancelled, dispatch) -> new CompletableFuture<>(),
+                        current(), new Object(), WorkPriority.LOCAL_PLAYER));
                 default -> throw new AssertionError("Unknown test retirement: " + retirement);
             }
             var cancelled = assertInstanceOf(AcquireResult.Failed.class, terminal.join());
@@ -1304,7 +1070,12 @@ class ModelRenderTargetCacheTest {
             assertSame(cancelled, terminal.join());
             assertEquals(1, rejections.get());
             assertEquals(0, violations.get());
-            assertEquals(0, cache.readyCount());
+            if (retirement.equals("close")) {
+                assertThrows(IllegalStateException.class,
+                    () -> cache.findReady(request(id), content, key(), current()));
+            } else {
+                assertTrue(cache.findReady(request(id), content, key(), current()).isEmpty());
+            }
             if (replacement.get() != null) {
                 assertInstanceOf(AcquireResult.Pending.class, replacement.get().poll());
                 replacement.get().close();
@@ -1313,12 +1084,6 @@ class ModelRenderTargetCacheTest {
         }
         assertEquals(1, rejections.get());
         assertEquals(0, violations.get());
-    }
-
-    @Test
-    void ordinarySuccessCapAppliesAtTheReadyCommitForDesktopAndMobile() throws Exception {
-        assertSuccessCap(4);
-        assertSuccessCap(2);
     }
 
     @Test
@@ -1335,17 +1100,20 @@ class ModelRenderTargetCacheTest {
         }, ignored -> {
             attempts.incrementAndGet();
             throw new IOException("host failed");
-        }, () -> 4);
+        }, () -> 4, () -> 0);
         var candidate = new ModelRenderTargetLoader.ModelCandidate(closeableTarget(), prepared);
+        var id = hash(50);
+        var content = content(id);
         try (cache) {
-            var lease = cache.getOrStart(request(hash(50)), content(hash(50)), key(),
-                (ignored, dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(candidate)),
+            var lease = cache.getOrStart(request(id), content, key(),
+                (ignored, dispatch) -> CompletableFuture
+                    .completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(candidate)),
                 current(), OWNER, WorkPriority.BACKGROUND);
 
             cache.tick();
 
             assertEquals(1, attempts.get());
-            assertEquals(0, cache.readyCount());
+            assertTrue(cache.findReady(request(id), content, key(), current()).isEmpty());
             assertInstanceOf(AcquireResult.Failed.class, lease.poll());
             assertThrows(IllegalStateException.class, () -> image.getPixelRGBA(0, 0));
         }
@@ -1368,11 +1136,12 @@ class ModelRenderTargetCacheTest {
             return new HostTexturePublisher.PublishedTextureBinding(id, textureManager, List.of());
         };
         var cache = new ModelRenderTargetCache(scheduler, ModelRenderTarget::close, ignored -> {
-        }, publisher, () -> 4);
+        }, publisher, () -> 4, () -> 0);
         var candidate = new ModelRenderTargetLoader.ModelCandidate(closeableTarget(), prepared);
         try (cache) {
             var lease = cache.getOrStart(request(hash(51)), content(hash(51)), key(),
-                (ignored, dispatch) -> CompletableFuture.completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(candidate)),
+                (ignored, dispatch) -> CompletableFuture
+                    .completedFuture(new ModelRenderTargetLoader.LoadResult.Ready(candidate)),
                 current(), OWNER, WorkPriority.BACKGROUND);
 
             assertInstanceOf(AcquireResult.Pending.class, lease.poll());
@@ -1392,8 +1161,7 @@ class ModelRenderTargetCacheTest {
         var oldWork = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
         var newWork = new CompletableFuture<ModelRenderTargetLoader.LoadResult>();
         var loads = new AtomicInteger();
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-        })) {
+        try (var cache = new ModelRenderTargetCache(scheduler)) {
             var oldLease = cache.getOrStart(request(hash(81)), local, key(), (ignored, dispatch) -> {
                 loads.incrementAndGet();
                 return oldWork;
@@ -1437,25 +1205,6 @@ class ModelRenderTargetCacheTest {
         };
     }
 
-    private void assertSuccessCap(int limit) throws Exception {
-        try (var cache = new ModelRenderTargetCache(scheduler, ignored -> {
-        }, ignored -> {
-        }, ignored -> {
-            throw new AssertionError("Testing candidates bypass the host");
-        }, () -> limit)) {
-            for (var marker = 60; marker < 65; marker++) {
-                var hash = hash(marker);
-                var target = target();
-                cache.getOrStart(request(hash), content(hash), key(), (ignored, dispatch) -> ready(target), current(), OWNER, WorkPriority.BACKGROUND);
-            }
-
-            cache.tick();
-            assertEquals(limit, cache.readyCount());
-            cache.tick();
-            assertEquals(Math.min(5, limit * 2), cache.readyCount());
-        }
-    }
-
     private static ModelRenderTargetCache.CurrentLookup current() {
         return (content, key, request) -> true;
     }
@@ -1474,7 +1223,7 @@ class ModelRenderTargetCacheTest {
             .completedFuture(new ModelRenderTargetLoader.LoadResult.Failed(new ResourceFailure(kind, cause)));
     }
 
-    private static ResourceRequest request(Hash256 modelId) {
+    private static ResourceRequest request(ModelId modelId) {
         return new ResourceRequest(modelId, "player", "default", PROFILE);
     }
 
@@ -1482,34 +1231,37 @@ class ModelRenderTargetCacheTest {
         return new RenderTargetKey("player", "default", PROFILE);
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
-    private static Hash256 wideHash(int marker) {
+    private static ModelId wideHash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         ByteBuffer.wrap(bytes).putInt(marker);
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
     private static ModelRenderTarget target() throws InstantiationException {
-        return (ModelRenderTarget)UnsafeUtil.getUnsafe().allocateInstance(ModelRenderTarget.class);
+        return closeableTarget();
     }
 
     private static ModelRenderTarget closeableTarget() throws InstantiationException {
-        return new ModelRenderTarget(hash(99), "test", new RenderTargetResources() {},
-            (CommonAsset)UnsafeUtil.getUnsafe().allocateInstance(CommonAsset.class),
-            com.elfmcys.ysm.expression.aot.TestExpressionModules.create(),
+        var assets = new CommonAsset(Map.of(),
+            TargetSoundResources.empty(new ModelFileIdentity(hash(99), new Hash256(new byte[Hash256.SIZE]))));
+        return new ModelRenderTarget(hash(99), "test", new RenderTargetResources() {}, assets,
+            com.elfmcys.ysm.expression.aot.TestExpressionModules
+                .store(com.elfmcys.ysm.expression.aot.TestExpressionModules.create(), Map.of()),
             (ModelInfoView)UnsafeUtil.getUnsafe().allocateInstance(ModelInfoView.class));
     }
 
-    private static ModelContent content(Hash256 modelId) {
-        var representation = representation(new ModelFileIdentity(modelId, hash(NEXT_CONTAINER_ID.getAndIncrement())));
+    private static ModelContent content(ModelId modelId) {
+        var representation = representation(new ModelFileIdentity(modelId,
+            Hash256.parse(hash(NEXT_CONTAINER_ID.getAndIncrement()).toString().substring(5))));
         return new ModelContent() {
             @Override
-            public Hash256 modelId() {
+            public ModelId modelId() {
                 return modelId;
             }
 
@@ -1530,6 +1282,16 @@ class ModelRenderTargetCacheTest {
         };
     }
 
+    private static boolean hasReady(ModelRenderTargetCache cache, ResourceRequest request, ModelContent content,
+        RenderTargetKey key, ModelRenderTargetCache.CurrentLookup currentLookup) {
+        var found = cache.findReady(request, content, key, currentLookup);
+        if (found.isEmpty()) {
+            return false;
+        }
+        found.get().close();
+        return true;
+    }
+
     private static ModelRepresentation representation(ModelFileIdentity identity) {
         try {
             var value = (ModelRepresentation)UnsafeUtil.getUnsafe().allocateInstance(ModelRepresentation.class);
@@ -1538,32 +1300,6 @@ class ModelRenderTargetCacheTest {
             return value;
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
-        }
-    }
-
-    @Test
-    void requiredBootstrapKeepsFastTerminalDispositionOnTheHostExecutor() throws Exception {
-        var loaded = target();
-        var terminalThread = new AtomicReference<Thread>();
-        Executor immediateHost = task -> {
-            var host = new Thread(task, "required-bootstrap-host");
-            host.start();
-            try {
-                host.join();
-            } catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException(error);
-            }
-        };
-        try (var cache = new ModelRenderTargetCache(scheduler)) {
-            var lease = cache.getOrStartRequired(request(hash(13)), content(hash(13)), key(),
-                ignored -> readyResult(loaded), (identity, target, request) -> {
-                    terminalThread.set(Thread.currentThread());
-                    return true;
-                }, OWNER, immediateHost);
-
-            assertEquals("required-bootstrap-host", terminalThread.get().getName());
-            assertSame(loaded, assertInstanceOf(AcquireResult.Ready.class, lease.poll()).target());
         }
     }
 

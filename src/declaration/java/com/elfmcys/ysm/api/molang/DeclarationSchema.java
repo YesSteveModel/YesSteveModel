@@ -10,7 +10,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
     boolean manual, String componentSubject, List<Dependency> dependencies, List<Member> members) {
 
     public static final String VERSION = AbiVersion.CACHE_ANIMATION;
-    private static final String FORMAT = "YSM-MOLANG-CALLABLE";
+    private static final String FORMAT = "YSM-MOLANG-CALLABLE-SCOPE";
     public static final String RESOURCE_ROOT = "META-INF/ysm/molang/";
     public DeclarationSchema {
         dependencies = List.copyOf(dependencies);
@@ -36,27 +36,29 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
             throw new IllegalArgumentException("declaration has no members");
         for (Member member : members) {
             if (!validNamespace(member.namespace()) || !member.name().matches("[a-z_][a-z0-9_]*")
-                || member.name().length() > 128 || !builtin && reserved(member.namespace())
-                || !member.adapter().matches("m[0-9]+") || !member.javaName().matches("[A-Za-z_$][A-Za-z0-9_$]*"))
+                || !builtin && reserved(member.namespace()) || !member.adapter().matches("m[0-9]+")
+                || !member.javaName().matches("[A-Za-z_$][A-Za-z0-9_$]*"))
                 throw new IllegalArgumentException("invalid member identity");
             if (!adapters.add(member.adapter()))
                 throw new IllegalArgumentException("duplicate adapter " + member.adapter());
             groups.computeIfAbsent(member.symbol(), ignored -> new ArrayList<>()).add(member);
             if (!member.isStatic() && !member.subject().equals(componentSubject))
                 throw new IllegalArgumentException("member context must exactly match EntityComponent<E>");
+            if (member.isStatic() && !member.injectContext()
+                && !member.subject().equals("net.minecraft.world.entity.Entity"))
+                throw new IllegalArgumentException("static declaration without context must accept every entity");
+            if (!Set.of("SUBJECT", "ORIGIN").contains(member.scope()))
+                throw new IllegalArgumentException("invalid invocation scope");
+            if (member.scope().equals("SUBJECT") && !member.isStatic())
+                throw new IllegalArgumentException("instance declarations require alwaysOrigin = true");
             if (!Set.of("CONTEXT", "ACTION").contains(member.effect()))
                 throw new IllegalArgumentException("invalid declaration effect");
-            if (!member.contextFreeTarget().isEmpty()
-                && (!member.contextFreeTarget().matches("[A-Za-z_$][A-Za-z0-9_$]*") || !member.isStatic()
-                    || !member.effect().equals("CONTEXT") || !member.shape().equals("FIXED")
-                    || !primitiveScalar(member.result()) || member.fixed().stream().anyMatch(v -> !primitiveScalar(v))))
-                throw new IllegalArgumentException("invalid context-free target declaration");
-            if (member.minimum() < 0 || member.maximum() > 255 || member.minimum() > member.maximum()
+            if (member.minimum() < 0 || member.minimum() > member.maximum()
                 || member.defaults().size() > member.fixed().size()
                 || member.tail() != null && (!member.defaults().isEmpty() || member.minimum() < member.fixed().size())
                 || member.tail() == null && (member.maximum() != member.fixed().size()
                     || member.minimum() != member.fixed().size() - member.defaults().size()))
-                throw new IllegalArgumentException("contradictory or unbounded declaration arity");
+                throw new IllegalArgumentException("contradictory declaration arity");
             for (int i = 0; i < member.defaults().size(); i++)
                 literal(member.fixed().get(member.fixed().size() - member.defaults().size() + i),
                     member.defaults().get(i));
@@ -65,18 +67,19 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
             if (member.tail() != null)
                 member.tail().validateParameter();
             member.result().validateResult();
-            if (member.nullableRecord() && !member.result().kind().equals("RECORD"))
-                throw new IllegalArgumentException("MolangNullable only applies to a record return");
+            if (member.nullableReturn() && !member.result().kind().equals("RECORD")
+                && !member.result().kind().equals("ENTITY") && !member.result().carrier().equals("float"))
+                throw new IllegalArgumentException(
+                    "MolangNullable only applies to a primitive float, record or Entity return");
         }
         for (List<Member> group : groups.values()) {
             Member first = group.get(0);
             Set<String> signatures = new HashSet<>();
             for (Member member : group) {
-                if (group.size() > 1
-                    && (first.isStatic() != member.isStatic() || !first.subject().equals(member.subject())
-                        || !first.effect().equals(member.effect())
-                        || !first.result().logicalIdentity().equals(member.result().logicalIdentity())
-                        || first.mayReturnMissing() != member.mayReturnMissing()))
+                if (group.size() > 1 && (first.isStatic() != member.isStatic() || !first.scope().equals(member.scope())
+                    || !first.subject().equals(member.subject()) || !first.effect().equals(member.effect())
+                    || !first.result().logicalIdentity().equals(member.result().logicalIdentity())
+                    || first.mayReturnMissing() != member.mayReturnMissing()))
                     throw new IllegalArgumentException("inconsistent overload group " + member.symbol());
                 String signature = member.fixed().stream().map(Value::logicalIdentity).toList() + "/"
                     + (member.tail() == null ? "fixed" : member.tail().logicalIdentity());
@@ -86,12 +89,8 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
         }
     }
 
-    private static boolean primitiveScalar(Value v) {
-        return Set.of("float", "int", "boolean").contains(v.carrier());
-    }
-
     private static boolean validNamespace(String namespace) {
-        return namespace.matches("[a-z][a-z0-9_]*") && namespace.length() <= 64;
+        return namespace.matches("[a-z][a-z0-9_]*");
     }
 
     private static boolean reserved(String namespace) {
@@ -152,7 +151,9 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
         }
 
         void validateResult() {
-            if (kind.equals("RECORD")) {
+            if (kind.equals("ENTITY")) {
+                validateEntity();
+            } else if (kind.equals("RECORD")) {
                 validateRecord();
             } else if (array()) {
                 String expected =
@@ -165,14 +166,21 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
                         throw new IllegalArgumentException("FloatList requires F32");
                 } else if (element.kind().equals("RECORD")) {
                     element.validateRecord();
+                } else if (element.kind().equals("ENTITY")) {
+                    element.validateEntity();
                 } else if (element.kind().equals("STRING")) {
                     element.validateScalar(false);
                 } else {
-                    throw new IllegalArgumentException("List requires String or a flat record");
+                    throw new IllegalArgumentException("List requires String, Entity or a flat record");
                 }
             } else {
                 validateScalar(true);
             }
+        }
+
+        private void validateEntity() {
+            if (!carrier.equals("net.minecraft.world.entity.Entity") || element != null || !fields.isEmpty())
+                throw new IllegalArgumentException("only exact Entity references are accepted");
         }
 
         private void validateRecord() {
@@ -189,8 +197,8 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
     }
 
     public record Member(String namespace, String name, String javaName, String descriptor, String adapter,
-        String subject, boolean isStatic, String contextFreeTarget, String effect, int minimum, int maximum, List<Value> fixed,
-        List<String> defaults, Value tail, Value result, boolean nullableRecord) {
+        String subject, boolean isStatic, boolean injectContext, String effect, String scope, int minimum, int maximum,
+        List<Value> fixed, List<String> defaults, Value tail, Value result, boolean nullableReturn) {
         public Member {
             fixed = List.copyOf(fixed);
             defaults = List.copyOf(defaults);
@@ -205,7 +213,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
         }
 
         public boolean mayReturnMissing() {
-            return nullableRecord || result.boxed() || result.kind().equals("FLOAT");
+            return nullableReturn || result.boxed();
         }
     }
 
@@ -240,8 +248,9 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
                 out.writeUTF(m.adapter());
                 out.writeUTF(m.subject());
                 out.writeBoolean(m.isStatic());
-                out.writeUTF(m.contextFreeTarget());
+                out.writeBoolean(m.injectContext());
                 out.writeUTF(m.effect());
+                out.writeUTF(m.scope());
                 out.writeInt(m.minimum());
                 out.writeInt(m.maximum());
                 out.writeInt(m.fixed().size());
@@ -254,7 +263,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
                 if (m.tail() != null)
                     writeValue(out, m.tail());
                 writeValue(out, m.result());
-                out.writeBoolean(m.nullableRecord());
+                out.writeBoolean(m.nullableReturn());
             }
             return bytes.toByteArray();
         } catch (IOException failure) {
@@ -263,9 +272,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
     }
 
     public static DeclarationSchema decode(InputStream input) throws IOException {
-        byte[] bytes = input.readNBytes(1_048_577);
-        if (bytes.length > 1_048_576)
-            throw new IOException("declaration resource limit exceeded");
+        byte[] bytes = input.readAllBytes();
         var in = new DataInputStream(new ByteArrayInputStream(bytes));
         if (!in.readUTF().equals(FORMAT))
             throw new IOException("declaration format mismatch");
@@ -275,25 +282,25 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
         boolean builtin = in.readBoolean(), manual = in.readBoolean();
         String subject = in.readUTF();
         var dependencies = new ArrayList<Dependency>();
-        for (int n = count(in, 255); n > 0; n--)
+        for (int n = count(in, 4); n > 0; n--)
             dependencies.add(new Dependency(in.readUTF(), in.readUTF()));
         var members = new ArrayList<Member>();
-        for (int n = count(in, 4096); n > 0; n--) {
+        for (int n = count(in, 35); n > 0; n--) {
             String memberNamespace = in.readUTF(), name = in.readUTF(), method = in.readUTF(),
                 descriptor = in.readUTF(), adapter = in.readUTF(), e = in.readUTF();
             boolean stat = in.readBoolean();
-            String target = in.readUTF();
-            String effect = in.readUTF();
+            boolean injectContext = in.readBoolean();
+            String effect = in.readUTF(), scope = in.readUTF();
             int min = in.readInt(), max = in.readInt();
             var fixed = new ArrayList<Value>();
-            for (int f = count(in, 255); f > 0; f--)
+            for (int f = count(in, 11); f > 0; f--)
                 fixed.add(readValue(in, 1, false));
             var defaults = new ArrayList<String>();
-            for (int d = count(in, 255); d > 0; d--)
+            for (int d = count(in, 2); d > 0; d--)
                 defaults.add(in.readUTF());
             Value tail = in.readBoolean() ? readValue(in, 1, false) : null;
-            members.add(new Member(memberNamespace, name, method, descriptor, adapter, e, stat, target, effect, min, max,
-                fixed, defaults, tail, readValue(in, 1, true), in.readBoolean()));
+            members.add(new Member(memberNamespace, name, method, descriptor, adapter, e, stat, injectContext, effect,
+                scope, min, max, fixed, defaults, tail, readValue(in, 1, true), in.readBoolean()));
         }
         if (in.available() != 0)
             throw new IOException("trailing declaration bytes");
@@ -305,10 +312,10 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
         }
     }
 
-    private static int count(DataInputStream in, int maximum) throws IOException {
+    private static int count(DataInputStream in, int minimumBytes) throws IOException {
         int value = in.readInt();
-        if (value < 0 || value > maximum)
-            throw new IOException("declaration count limit exceeded");
+        if (value < 0 || (long)value * minimumBytes > in.available())
+            throw new IOException("invalid declaration count or truncated input");
         return value;
     }
 
@@ -332,7 +339,7 @@ public record DeclarationSchema(String owner, String helper, String namespace, S
         String kind = in.readUTF(), carrier = in.readUTF(), prefix = in.readUTF();
         Value element = in.readBoolean() ? readValue(in, depth + 1, false) : null;
         var fields = new ArrayList<Field>();
-        for (int n = count(in, 8192); n > 0; n--)
+        for (int n = count(in, 13); n > 0; n--)
             fields.add(new Field(in.readUTF(), readValue(in, depth + 1, false)));
         return new Value(kind, carrier, prefix, element, fields);
     }

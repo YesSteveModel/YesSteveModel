@@ -12,7 +12,7 @@
 
 ## DD.hierarchical-bone-animation
 
-- Claim: 动画通过骨骼的旋转、缩放和位移驱动由 BoneTree 组织的体素 geometry。
+- Claim: 动画通过骨骼的旋转、缩放和位移，驱动由 BoneTree 组织的体素几何体。
 - Rationale: 模型沿用基岩版的骨骼创作体系，父子部件需要共同运动；父姿态传递给子骨骼才能让创作者按层级组织完整动作。
 
 ### BC.child-bones-inherit-pose

@@ -7,10 +7,12 @@ import org.jetbrains.annotations.Nullable;
 public final class ControllerExecutionState {
     private final com.elfmcys.ysm.api.molang.MolangInputs.Target target = new Target(this);
 
-    private record Target(ControllerExecutionState state) implements com.elfmcys.ysm.api.molang.MolangInputs.Target {}
+    private record Target(ControllerExecutionState state) implements com.elfmcys.ysm.api.molang.MolangInputs.Target {
+    }
 
     public com.elfmcys.ysm.api.molang.MolangInputs.Controller input() {
-        return new com.elfmcys.ysm.api.molang.MolangInputs.Controller(target, allAnimationsFinished, anyAnimationFinished);
+        return new com.elfmcys.ysm.api.molang.MolangInputs.Controller(target, allAnimationsFinished,
+            anyAnimationFinished);
     }
 
     public static ControllerExecutionState resolve(com.elfmcys.ysm.api.molang.MolangInputs.Controller input) {
@@ -23,6 +25,7 @@ public final class ControllerExecutionState {
     public com.elfmcys.ysm.geckolib3.core.controller.CodedAnimationController<?> codedController() {
         return codedController;
     }
+
     private SoundInstanceManager soundManager;
     private boolean allAnimationsFinished;
     private boolean anyAnimationFinished;

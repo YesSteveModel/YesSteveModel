@@ -12,6 +12,68 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class DerivedStorageWorkTest {
     @Test
+    void threadConstructionFailureLeavesNoAcceptedWorkAndAllowsAnotherSubmission() throws Exception {
+        var failure = new OutOfMemoryError("injected thread construction failure");
+        var attempts = new AtomicInteger();
+        var work = new DerivedStorageWork(2, runnable -> {
+            if (attempts.getAndIncrement() == 0)
+                throw failure;
+            return new Thread(runnable, "derived-storage-recovery");
+        });
+        verifyRejectedStartup(work, failure);
+    }
+
+    @Test
+    void threadStartFailureLeavesNoAcceptedWorkAndAllowsAnotherSubmission() throws Exception {
+        var failure = new OutOfMemoryError("injected thread start failure");
+        var attempts = new AtomicInteger();
+        var work = new DerivedStorageWork(2, runnable -> {
+            if (attempts.getAndIncrement() != 0)
+                return new Thread(runnable, "derived-storage-recovery");
+            return new Thread(runnable) {
+                @Override
+                public synchronized void start() {
+                    throw failure;
+                }
+            };
+        });
+        verifyRejectedStartup(work, failure);
+    }
+
+    @Test
+    void threadStartFailureCanBeClosedWithoutWaitingForAnUnstartedWorker() {
+        var failure = new IllegalThreadStateException("injected rejected start");
+        var work = new DerivedStorageWork(1, runnable -> new Thread(runnable) {
+            @Override
+            public synchronized void start() {
+                throw failure;
+            }
+        });
+        assertSame(failure, assertThrows(IllegalThreadStateException.class,
+            () -> work.submit(gate -> fail("Rejected work must never run"))));
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), work::close);
+        assertEquals(new DerivedStorageWork.Snapshot(0, 0, 0, 0, 0, true), work.snapshot());
+        assertNull(work.submit(gate -> fail("Closed admission")));
+    }
+
+    private static void verifyRejectedStartup(DerivedStorageWork work, OutOfMemoryError failure) throws Exception {
+        var rejectedRuns = new AtomicInteger();
+        assertSame(failure,
+            assertThrows(OutOfMemoryError.class, () -> work.submit(gate -> rejectedRuns.incrementAndGet())));
+        assertEquals(new DerivedStorageWork.Snapshot(0, 0, 0, 0, 0, false), work.snapshot());
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), work::awaitIdle);
+        var accepted = work.submit(gate -> gate.commit(() -> {
+        }));
+        assertNotNull(accepted);
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), work::awaitIdle);
+        assertEquals(DerivedStorageWork.Outcome.SUCCEEDED, accepted.outcome());
+        assertEquals(0, rejectedRuns.get());
+        assertEquals(new DerivedStorageWork.Snapshot(0, 1, 0, 0, 0, false), work.snapshot());
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), work::close);
+        assertTrue(work.snapshot().closed());
+    }
+
+    @Test
     void defaultAdmissionKeepsSixteenJobsAndOneWorker() throws Exception {
         var release = new CountDownLatch(1);
         try (var work = new DerivedStorageWork()) {
@@ -21,13 +83,15 @@ class DerivedStorageWorkTest {
                 worker.set(Thread.currentThread());
                 entered.countDown();
                 awaitUninterruptibly(release);
-                gate.commit(() -> {});
+                gate.commit(() -> {
+                });
             }));
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             for (int i = 1; i < 16; i++) {
                 assertNotNull(work.submit(gate -> {
                     assertSame(worker.get(), Thread.currentThread());
-                    gate.commit(() -> {});
+                    gate.commit(() -> {
+                    });
                 }));
             }
             assertEquals(16, work.snapshot().jobs());
@@ -74,16 +138,17 @@ class DerivedStorageWorkTest {
                 var target = root.resolve(failure).resolve("exact");
                 Files.createDirectories(target.getParent());
                 Files.writeString(target, "old");
-                var cache = new AtomicSharedCache(root.resolve(failure), replacement -> {
-                    if (failure.equals("move"))
-                        throw new IOException("Injected move failure");
-                    replacement.run();
-                }, file -> {
-                    file.force();
-                    if (failure.equals("flush"))
-                        throw new IOException("Injected staging flush failure");
-                });
-                var job = work.submit(gate -> cache.replaceValidated("test", "exact", target,
+                var cache = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                    .track(new AtomicSharedCache(root.resolve(failure), replacement -> {
+                        if (failure.equals("move"))
+                            throw new IOException("Injected move failure");
+                        replacement.run();
+                    }, file -> {
+                        file.force();
+                        if (failure.equals("flush"))
+                            throw new IOException("Injected staging flush failure");
+                    }));
+                var job = work.submit(gate -> TestCacheFiles.write(cache,
                     file -> !failure.equals("validate") && new String(file.readAllBytes()).equals("new"), file -> {
                         file.writeBytes("new".getBytes());
                         if (failure.equals("write"))
@@ -107,12 +172,12 @@ class DerivedStorageWorkTest {
     @Test
     void shutdownSealsCommitBeforeWaitingForTheBorrow(@TempDir Path root) throws Exception {
         var work = new DerivedStorageWork(2);
-        var cache = new AtomicSharedCache(root);
+        var cache = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(root));
         var target = root.resolve("exact");
         Files.writeString(target, "old");
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
-        var job = work.submit(gate -> cache.replaceValidated("test", "exact", target, file -> true, file -> {
+        var job = work.submit(gate -> TestCacheFiles.write(cache, file -> true, file -> {
             file.writeBytes("new".getBytes());
             entered.countDown();
             awaitUninterruptibly(release);

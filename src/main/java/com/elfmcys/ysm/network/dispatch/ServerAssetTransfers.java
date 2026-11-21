@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.dispatch;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.storage.PreviewStorage;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.buffer.ArrayStorage;
@@ -63,8 +64,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -105,13 +104,6 @@ public final class ServerAssetTransfers implements AutoCloseable {
 
     public ServerAssetTransfers(ServerModelSession owner, ResourceDispatchWorker dispatch, TransportPort transport,
         BooleanSupplier restrictedAuth, Consumer<ResourceTransferFailureProto> failureSink,
-        ServerResourceRuntime serverResources, PreviewStore previews) {
-        this(owner, dispatch, transport, restrictedAuth, failureSink, serverResources,
-            ServerAssetTransfers::catalogRoot, Objects.requireNonNull(previews, "previews"));
-    }
-
-    public ServerAssetTransfers(ServerModelSession owner, ResourceDispatchWorker dispatch, TransportPort transport,
-        BooleanSupplier restrictedAuth, Consumer<ResourceTransferFailureProto> failureSink,
         ServerResourceRuntime serverResources, PreviewStorage previews, Management management) {
         this(owner, dispatch, transport, restrictedAuth, failureSink, serverResources,
             ServerAssetTransfers::catalogRoot, Objects.requireNonNull(previews, "previews"));
@@ -134,7 +126,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
         this(owner, dispatch, transport, restrictedAuth, failureSink, serverResources, roots, null);
     }
 
-    ServerAssetTransfers(ServerModelSession owner, ResourceDispatchWorker dispatch, TransportPort transport,
+    private ServerAssetTransfers(ServerModelSession owner, ResourceDispatchWorker dispatch, TransportPort transport,
         BooleanSupplier restrictedAuth, Consumer<ResourceTransferFailureProto> failureSink,
         ServerResourceRuntime serverResources, RootResolver roots, PreviewStorage previews) {
         this.owner = Objects.requireNonNull(owner, "owner");
@@ -401,10 +393,9 @@ public final class ServerAssetTransfers implements AutoCloseable {
                 if (!managementCurrent(lease))
                     return;
                 var identity = record.binding().content().representation().identity();
-                var entry =
-                    MissingPreviewEntryProto.newBuilder().setModelId(ByteBuffer.wrap(identity.modelId().bytes()))
-                        .setContainerId(ByteBuffer.wrap(identity.containerId().bytes()))
-                        .setHierarchyPath(record.location().value());
+                var entry = MissingPreviewEntryProto.newBuilder().setModelId(identity.modelId().toString())
+                    .setContainerId(ByteBuffer.wrap(identity.containerId().bytes()))
+                    .setHierarchyPath(record.location().value());
                 try {
                     if (hasPreview(record))
                         continue;
@@ -419,11 +410,11 @@ public final class ServerAssetTransfers implements AutoCloseable {
     }
 
     public boolean accept(PreviewUploadRequestProto request) {
-        if (request.dataTransferId() == 0 || request.modelId().remaining() != Hash256.SIZE
+        if (request.dataTransferId() == 0 || !ModelId.isValid(request.modelId())
             || request.containerId().remaining() != Hash256.SIZE || request.encodedSize() <= 0
             || request.encodedSize() > PreviewStore.MAX_STORED_BYTES || !fitsFrame(request))
             return false;
-        var identity = new ModelFileIdentity(hash(request.modelId()), hash(request.containerId()));
+        var identity = new ModelFileIdentity(ModelId.parse(request.modelId()), hash(request.containerId()));
         if (duplicateManagement(request.dataTransferId(), ManagedKind.UPLOAD, identity, request.encodedSize()))
             return true;
         var lease = beginManagement(request.dataTransferId(), ManagedKind.UPLOAD, identity, request.encodedSize());
@@ -718,7 +709,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
             lease.state = LeaseState.FAILED;
             releaseManagement(lease);
         }
-        releaseAcquisitions(lease.acquisitions);
+        releaseAcquisitions(lease);
         lease.packets.forEach(CancellablePacket::cancel);
         fail(lease.transferId, reason);
     }
@@ -811,7 +802,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
         for (var disposed = 0; disposed < OWNER_EVENTS_PER_TICK; disposed++) {
             var event = ownerEvents.poll();
             if (event == null) {
-                return;
+                break;
             }
             Runnable release = () -> {
             };
@@ -820,13 +811,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
                 release = retained.release;
             }
             try {
-                if (event instanceof ChunkAcquisitionComplete completed) {
-                    completeChunkAcquisition(completed.lease, completed.plans, completed.failure);
-                } else if (event instanceof PresentationAcquisitionComplete completed) {
-                    completePresentationAcquisition(completed.lease, completed.plans, completed.failure);
-                } else if (event instanceof PreviewAcquisitionComplete completed) {
-                    completePreviewAcquisition(completed);
-                } else if (event instanceof ManagementProbed probed) {
+                if (event instanceof ManagementProbed probed) {
                     completeManagementProbe(probed);
                 } else if (event instanceof UploadFinished finished) {
                     completeUpload(finished);
@@ -837,6 +822,13 @@ public final class ServerAssetTransfers implements AutoCloseable {
                 }
             } finally {
                 release.run();
+            }
+        }
+        synchronized (this) {
+            for (var lease : List.copyOf(active.values())) {
+                if (lease.state == LeaseState.ACQUIRING
+                    && (lease.chunkPlans != null || lease.presentationPlans != null))
+                    advanceAcquisition(lease);
             }
         }
     }
@@ -863,10 +855,6 @@ public final class ServerAssetTransfers implements AutoCloseable {
             if (event instanceof RetainedManagementFact retained)
                 retained.release.run();
         }
-    }
-
-    synchronized int activeCount() {
-        return active.size();
     }
 
     private PresentationPlan presentationPlan(PresentationMember member, boolean restricted) {
@@ -1006,302 +994,147 @@ public final class ServerAssetTransfers implements AutoCloseable {
         };
     }
 
-    private void acquireChunks(TransferLease lease, List<ChunkPlan> plans) {
-        var acquisitions = new ArrayList<CompletableFuture<ServerResourceRuntime.BytesLease>>(plans.size());
-        var failed = false;
-        synchronized (this) {
-            if (active.get(lease.transferId) != lease || lease.state != LeaseState.ACQUIRING) {
-                return;
-            }
-            try {
-                for (var plan : plans) {
-                    acquisitions.add(serverResources.acquireChunk(plan.content, plan.chunk));
-                }
-                lease.acquisitions = List.copyOf(acquisitions);
-            } catch (RuntimeException failure) {
-                active.remove(lease.transferId, lease);
-                releaseManagement(lease);
-                lease.state = LeaseState.FAILED;
-                failed = true;
-            }
-        }
-        if (failed) {
-            releaseAcquisitions(acquisitions);
-            fail(lease.transferId, unavailable());
+    private synchronized void acquireChunks(TransferLease lease, List<ChunkPlan> plans) {
+        if (active.get(lease.transferId) != lease || lease.state != LeaseState.ACQUIRING)
             return;
-        }
-        CompletableFuture.allOf(lease.acquisitions.toArray(CompletableFuture[]::new))
-            .whenComplete((ignored, failure) -> enqueueOwnerEvent(new ChunkAcquisitionComplete(lease, plans, failure)));
+        lease.chunkPlans = plans;
+        for (var plan : plans)
+            lease.acquisitions.add(lease.managedRequest == null ? serverResources.acquireChunk(plan.content, plan.chunk)
+                : serverResources.acquireChunk(plan.content, plan.chunk, lease.managedRequest.budget.retain()));
+        advanceAcquisition(lease);
     }
 
-    private void acquirePresentation(TransferLease lease, List<PresentationPlan> plans, long knownBytes) {
-        var acquisitions = new ArrayList<CompletableFuture<ServerResourceRuntime.BytesLease>>();
-        RuntimeException failure = null;
-        synchronized (this) {
-            if (active.get(lease.transferId) != lease || lease.state != LeaseState.ACQUIRING)
-                return;
-            try {
-                for (var plan : plans) {
-                    if (plan.chunk != null)
-                        acquisitions.add(serverResources.acquireChunk(plan.content, plan.chunk));
-                }
-            } catch (RuntimeException rejected) {
-                failure = rejected;
-            }
-            lease.acquisitions = List.copyOf(acquisitions);
-        }
-        if (failure != null) {
-            enqueueOwnerEvent(new PresentationAcquisitionComplete(lease, plans, acquisitionFailure(failure)));
+    private synchronized void acquirePresentation(TransferLease lease, List<PresentationPlan> plans, long knownBytes) {
+        if (active.get(lease.transferId) != lease || lease.state != LeaseState.ACQUIRING)
             return;
+        lease.presentationPlans = plans;
+        lease.storedBytes = knownBytes;
+        for (var plan : plans) {
+            if (plan.chunk != null)
+                lease.acquisitions.add(serverResources.acquireChunk(plan.content, plan.chunk));
         }
-        acquireNextPreview(lease, plans, 0, knownBytes);
+        advanceAcquisition(lease);
     }
 
-    private void acquireNextPreview(TransferLease lease, List<PresentationPlan> plans, int start, long storedBytes) {
-        synchronized (this) {
-            if (active.get(lease.transferId) != lease || lease.state != LeaseState.ACQUIRING)
-                return;
-            for (var index = start; index < plans.size(); index++) {
-                var plan = plans.get(index);
-                if (!plan.standalonePreview)
-                    continue;
-                final CompletableFuture<Optional<ServerResourceRuntime.BytesLease>> acquisition;
-                try {
-                    acquisition = serverResources.acquirePreview(plan.content);
-                } catch (RuntimeException rejected) {
-                    enqueueOwnerEvent(new PresentationAcquisitionComplete(lease, plans, acquisitionFailure(rejected)));
+    private void advanceAcquisition(TransferLease lease) {
+        while (lease.acquisitionIndex < lease.acquisitions.size()) {
+            var use = lease.acquisitions.get(lease.acquisitionIndex);
+            switch (use.state()) {
+                case PENDING -> {
+                    advancePreviews(lease);
                     return;
                 }
-                var acquisitions = new ArrayList<>(lease.previewAcquisitions);
-                acquisitions.add(acquisition);
-                lease.previewAcquisitions = List.copyOf(acquisitions);
-                var next = index + 1;
-                acquisition.whenComplete((ignored, failure) -> enqueueOwnerEvent(
-                    new PreviewAcquisitionComplete(lease, plans, next, storedBytes, acquisition, failure)));
-                return;
+                case READY -> lease.acquisitionIndex++;
+                case FAILED -> {
+                    acquisitionFailed(lease, acquisitionFailure(use.failure()));
+                    return;
+                }
+                default -> throw new IllegalStateException("Chunk use ended before transfer adoption");
             }
-            CompletableFuture.allOf(lease.acquisitions.toArray(CompletableFuture[]::new))
-                .whenComplete((ignored, failure) -> enqueueOwnerEvent(new PresentationAcquisitionComplete(lease, plans,
-                    failure == null ? null : acquisitionFailure(failure))));
         }
+        if (advancePreviews(lease))
+            completeAcquisition(lease);
     }
 
-    private void completePreviewAcquisition(PreviewAcquisitionComplete completed) {
-        var lease = completed.lease;
-        long storedBytes = completed.storedBytes;
-        ResourceFailureReason failure = null;
-        synchronized (this) {
-            if (active.get(lease.transferId) != lease || lease.state != LeaseState.ACQUIRING)
-                return;
-            if (completed.failure != null) {
-                failure = acquisitionFailure(completed.failure);
-            } else {
-                var source = completed.acquisition.join().orElse(null);
-                if (source != null)
-                    storedBytes = Math.addExact(storedBytes, source.size());
-                if (storedBytes > MAX_PRESENTATION_STORED_BYTES)
-                    failure = itemTooLarge();
+    private boolean advancePreviews(TransferLease lease) {
+        if (lease.presentationPlans == null)
+            return true;
+        while (true) {
+            if (lease.previewIndex < lease.previewAcquisitions.size()) {
+                var use = lease.previewAcquisitions.get(lease.previewIndex);
+                switch (use.state()) {
+                    case PENDING -> {
+                        return false;
+                    }
+                    case READY -> lease.storedBytes = Math.addExact(lease.storedBytes, use.size());
+                    case MISSING -> {
+                    }
+                    case FAILED -> {
+                        acquisitionFailed(lease, acquisitionFailure(use.failure()));
+                        return false;
+                    }
+                    default -> throw new IllegalStateException("Preview use ended before transfer adoption");
+                }
+                lease.previewIndex++;
+                if (lease.storedBytes > MAX_PRESENTATION_STORED_BYTES) {
+                    acquisitionFailed(lease, itemTooLarge());
+                    return false;
+                }
             }
+            while (lease.nextPreviewPlan < lease.presentationPlans.size()) {
+                var plan = lease.presentationPlans.get(lease.nextPreviewPlan++);
+                if (plan.standalonePreview) {
+                    lease.previewAcquisitions.add(serverResources.acquirePreview(plan.content));
+                    break;
+                }
+            }
+            if (lease.previewIndex == lease.previewAcquisitions.size())
+                return true;
         }
-        if (failure != null)
-            completePresentationAcquisition(lease, completed.plans, failure);
-        else
-            acquireNextPreview(lease, completed.plans, completed.next, storedBytes);
     }
 
     private static ResourceFailureReason acquisitionFailure(Throwable failure) {
-        while (failure instanceof java.util.concurrent.CompletionException && failure.getCause() != null)
-            failure = failure.getCause();
         return failure instanceof ServerResourceRuntime.BusyException ? busy() : unavailable();
     }
 
-    private void completePresentationAcquisition(TransferLease lease, List<PresentationPlan> plans,
-        ResourceFailureReason failure) {
-        List<CompletableFuture<ServerResourceRuntime.BytesLease>> acquisitionsToRelease = List.of();
-        List<CompletableFuture<Optional<ServerResourceRuntime.BytesLease>>> previewsToRelease = List.of();
-        List<ServerResourceRuntime.BytesLease> sources = null;
-        List<Optional<ServerResourceRuntime.BytesLease>> previewSources = null;
-        ResourceFailureReason notifyFailure = null;
-        synchronized (this) {
-            if (active.get(lease.transferId) != lease || lease.state != LeaseState.ACQUIRING) {
-                acquisitionsToRelease = lease.acquisitions;
-                previewsToRelease = lease.previewAcquisitions;
-            } else if (failure != null) {
-                active.remove(lease.transferId, lease);
-                releaseManagement(lease);
-                lease.state = LeaseState.FAILED;
-                acquisitionsToRelease = lease.acquisitions;
-                previewsToRelease = lease.previewAcquisitions;
-                notifyFailure = failure;
-            } else {
-                var acquired = new ArrayList<ServerResourceRuntime.BytesLease>(lease.acquisitions.size());
-                var acquiredPreviews = new ArrayList<Optional<ServerResourceRuntime.BytesLease>>();
-                try {
-                    for (var acquisition : lease.acquisitions)
-                        acquired
-                            .add(Objects.requireNonNull(acquisition.join(), "presentation acquisition returned null"));
-                    for (var acquisition : lease.previewAcquisitions)
-                        acquiredPreviews.add(acquisition.join());
-                    sources = List.copyOf(acquired);
-                    previewSources = List.copyOf(acquiredPreviews);
-                } catch (RuntimeException sourceFailure) {
-                    active.remove(lease.transferId, lease);
-                    releaseManagement(lease);
-                    lease.state = LeaseState.FAILED;
-                    acquisitionsToRelease = lease.acquisitions;
-                    previewsToRelease = lease.previewAcquisitions;
-                    notifyFailure = acquisitionFailure(sourceFailure);
-                }
-            }
-            lease.acquisitions = List.of();
-            lease.previewAcquisitions = List.of();
-        }
-        releaseAcquisitions(acquisitionsToRelease);
-        releasePreviewAcquisitions(previewsToRelease);
-        if (notifyFailure != null) {
-            fail(lease.transferId, notifyFailure);
-            return;
-        }
-        if (sources == null)
-            return;
+    private void acquisitionFailed(TransferLease lease, ResourceFailureReason reason) {
+        retireAcquiring(lease, LeaseState.FAILED);
+        releaseAcquisitions(lease);
+        fail(lease.transferId, reason);
+    }
 
-        var packets = new ArrayList<CancellablePacket>(plans.size());
-        var sourceIndex = 0;
-        var previewIndex = 0;
+    private void completeAcquisition(TransferLease lease) {
+        var packets = new ArrayList<CancellablePacket>();
         try {
-            for (var plan : plans) {
-                CancellablePacket packet;
-                if (plan.chunk != null) {
-                    packet = presentationPacket(lease.transferId, plan, sources.get(sourceIndex), lease);
-                    sourceIndex++;
-                } else if (plan.standalonePreview) {
-                    var source = previewSources.get(previewIndex).orElse(null);
-                    packet = source == null ? emptyPresentationPacket(lease.transferId, plan.member, lease)
-                        : presentationPacket(lease.transferId, plan, source, lease);
-                    previewIndex++;
-                } else {
-                    packet = presentationPacket(lease.transferId, plan, lease);
+            if (lease.chunkPlans != null) {
+                for (var index = 0; index < lease.chunkPlans.size(); index++) {
+                    var plan = lease.chunkPlans.get(index);
+                    packets.add(RangePacket.lease(lease.acquisitions.get(index), plan.fragments, lease::packetClosed,
+                        lease::productionFailed));
                 }
-                if (packet == null)
-                    throw new IllegalStateException("Presentation source became unavailable");
-                packets.add(packet);
+            } else {
+                var sourceIndex = 0;
+                var previewIndex = 0;
+                for (var plan : lease.presentationPlans) {
+                    CancellablePacket packet;
+                    if (plan.chunk != null) {
+                        packet =
+                            presentationPacket(lease.transferId, plan, lease.acquisitions.get(sourceIndex++), lease);
+                    } else if (plan.standalonePreview) {
+                        var source = lease.previewAcquisitions.get(previewIndex++);
+                        packet = source.state() == ServerResourceRuntime.State.MISSING
+                            ? emptyPresentationPacket(lease.transferId, plan.member, lease)
+                            : presentationPacket(lease.transferId, plan, source, lease);
+                    } else {
+                        packet = presentationPacket(lease.transferId, plan, lease);
+                    }
+                    if (packet == null)
+                        throw new IllegalStateException("Presentation source became unavailable");
+                    packets.add(packet);
+                }
             }
         } catch (RuntimeException constructionFailure) {
             closePackets(packets);
-            closeBytesLeases(sources.subList(sourceIndex, sources.size()));
-            previewSources.subList(previewIndex, previewSources.size())
-                .forEach(source -> source.ifPresent(ServerResourceRuntime.BytesLease::close));
-            if (retireAcquiring(lease, LeaseState.FAILED))
-                fail(lease.transferId, unavailable());
+            acquisitionFailed(lease, unavailable());
             return;
+        } finally {
+            // Packets retain their own Ready uses before this acquisition owner exits.
+            releaseAcquisitions(lease);
         }
         if (submit(lease, packets) == SubmitResult.REJECTED)
             fail(lease.transferId, busy());
     }
 
-    private void completeChunkAcquisition(TransferLease lease, List<ChunkPlan> plans, Throwable failure) {
-        List<CompletableFuture<ServerResourceRuntime.BytesLease>> acquisitionsToRelease = List.of();
-        List<ServerResourceRuntime.BytesLease> sources = null;
-        ResourceFailureReason notifyFailure = null;
-        synchronized (this) {
-            if (active.get(lease.transferId) != lease || lease.state != LeaseState.ACQUIRING) {
-                acquisitionsToRelease = lease.acquisitions;
-                lease.acquisitions = List.of();
-            } else if (failure != null) {
-                active.remove(lease.transferId, lease);
-                releaseManagement(lease);
-                lease.state = LeaseState.FAILED;
-                acquisitionsToRelease = lease.acquisitions;
-                lease.acquisitions = List.of();
-                notifyFailure = acquisitionFailure(failure);
-            } else {
-                var acquired = new ArrayList<ServerResourceRuntime.BytesLease>(plans.size());
-                try {
-                    for (var acquisition : lease.acquisitions) {
-                        acquired.add(Objects.requireNonNull(acquisition.join(), "chunk acquisition returned null"));
-                    }
-                    lease.acquisitions = List.of();
-                    sources = List.copyOf(acquired);
-                } catch (RuntimeException sourceFailure) {
-                    active.remove(lease.transferId, lease);
-                    releaseManagement(lease);
-                    lease.state = LeaseState.FAILED;
-                    acquisitionsToRelease = lease.acquisitions;
-                    lease.acquisitions = List.of();
-                    notifyFailure = acquisitionFailure(sourceFailure);
-                }
-            }
-        }
-        releaseAcquisitions(acquisitionsToRelease);
-        if (notifyFailure != null) {
-            fail(lease.transferId, notifyFailure);
-            return;
-        }
-        if (sources == null) {
-            return;
-        }
-
-        var packets = new ArrayList<CancellablePacket>(plans.size());
-        try {
-            for (var index = 0; index < plans.size(); index++) {
-                var plan = plans.get(index);
-                packets.add(RangePacket.lease(sources.get(index), plan.fragments, lease::packetClosed,
-                    lease::productionFailed));
-            }
-        } catch (RuntimeException constructionFailure) {
-            closePackets(packets);
-            closeBytesLeases(sources.subList(packets.size(), sources.size()));
-            if (retireAcquiring(lease, LeaseState.FAILED)) {
-                fail(lease.transferId, unavailable());
-            }
-            return;
-        }
-        if (submit(lease, packets) == SubmitResult.REJECTED) {
-            fail(lease.transferId, busy());
-        }
+    private static void releaseAcquisitions(List<ServerResourceRuntime.BytesLease> acquisitions) {
+        acquisitions.forEach(ServerResourceRuntime.BytesLease::close);
+        acquisitions.clear();
     }
 
-    private static void releaseAcquisitions(List<CompletableFuture<ServerResourceRuntime.BytesLease>> acquisitions) {
-        for (var acquisition : acquisitions) {
-            if (!acquisition.isDone() && acquisition.cancel(false)) {
-                continue;
-            }
-            try {
-                var value = acquisition.getNow(null);
-                if (value != null) {
-                    value.close();
-                }
-            } catch (RuntimeException ignored) {
-                // Failed source acquisition owns no lease.
-            }
-        }
-    }
-
-    private static void
-        releasePreviewAcquisitions(List<CompletableFuture<Optional<ServerResourceRuntime.BytesLease>>> acquisitions) {
-        for (var acquisition : acquisitions) {
-            if (!acquisition.isDone() && acquisition.cancel(false))
-                continue;
-            try {
-                var value = acquisition.getNow(Optional.empty());
-                value.ifPresent(ServerResourceRuntime.BytesLease::close);
-            } catch (RuntimeException ignored) {
-                // Failed source acquisition owns no lease.
-            }
-        }
-    }
-
-    private void releaseAcquisitions(TransferLease lease) {
-        final List<CompletableFuture<ServerResourceRuntime.BytesLease>> chunks;
-        final List<CompletableFuture<Optional<ServerResourceRuntime.BytesLease>>> previews;
-        synchronized (this) {
-            chunks = lease.acquisitions;
-            previews = lease.previewAcquisitions;
-            lease.acquisitions = List.of();
-            lease.previewAcquisitions = List.of();
-        }
-        releaseAcquisitions(chunks);
-        releasePreviewAcquisitions(previews);
+    private synchronized void releaseAcquisitions(TransferLease lease) {
+        releaseAcquisitions(lease.acquisitions);
+        releaseAcquisitions(lease.previewAcquisitions);
+        lease.chunkPlans = null;
+        lease.presentationPlans = null;
     }
 
     private CancellablePacket filePacket(Object sourceLease, Path path, long offset, int size,
@@ -1468,7 +1301,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
             return null;
         }
         try {
-            var modelId = hash(request.modelId());
+            var modelId = ModelId.parse(request.modelId());
             var containerId = hash(request.containerId());
             var chunks = new ArrayList<ChunkDescriptor>(count);
             String previous = null;
@@ -1543,7 +1376,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
             if (value.slot() < 0 || value.slot() <= previous) {
                 throw new IllegalArgumentException("Presentation slots are not canonical");
             }
-            output.add(PresentationMember.model(PresentationKind.PREVIEW, value.slot(), hash(value.modelId()),
+            output.add(PresentationMember.model(PresentationKind.PREVIEW, value.slot(), ModelId.parse(value.modelId()),
                 hash(value.containerId()), "", new Hash256(new byte[Hash256.SIZE]), 0, 0, ""));
             previous = value.slot();
         }
@@ -1555,7 +1388,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
             if (value.slot() < 0 || value.slot() <= previous) {
                 throw new IllegalArgumentException("Presentation slots are not canonical");
             }
-            output.add(PresentationMember.model(PresentationKind.ICON, value.slot(), hash(value.modelId()),
+            output.add(PresentationMember.model(PresentationKind.ICON, value.slot(), ModelId.parse(value.modelId()),
                 hash(value.containerId()), normalizedName(value.name()), hash(value.expectedHash()),
                 boundedSize(value.storedSize(), AssetContainerConstant.MAX_FILE_SIZE, false),
                 boundedSize(value.decodedSize(), MAX_PRESENTATION_DECODE_BYTES, true), nonBlank(value.encoding())));
@@ -1663,16 +1496,6 @@ public final class ServerAssetTransfers implements AutoCloseable {
             .orElseThrow(() -> new IllegalArgumentException("No catalog root for " + rootKind));
     }
 
-    private static void closeBytesLeases(List<? extends ServerResourceRuntime.BytesLease> leases) {
-        for (var lease : leases) {
-            try {
-                lease.close();
-            } catch (RuntimeException failure) {
-                YesSteveModel.LOGGER.error("Failed to close chunk source", failure);
-            }
-        }
-    }
-
     private static void closePackets(List<? extends CancellablePacket> packets) {
         for (var packet : packets) {
             try {
@@ -1712,22 +1535,9 @@ public final class ServerAssetTransfers implements AutoCloseable {
         Path root(CatalogRoot kind);
     }
 
-    private sealed interface OwnerEvent permits ChunkAcquisitionComplete, PresentationAcquisitionComplete, PreviewAcquisitionComplete, PacketClosed, ProductionFailed, ManagementProbed, UploadFinished, RetainedManagementFact {}
+    private sealed interface OwnerEvent permits PacketClosed, ProductionFailed, ManagementProbed, UploadFinished, RetainedManagementFact {}
 
     private record RetainedManagementFact(OwnerEvent event, Runnable release) implements OwnerEvent {
-    }
-
-    private record ChunkAcquisitionComplete(TransferLease lease, List<ChunkPlan> plans,
-        Throwable failure) implements OwnerEvent {
-    }
-
-    private record PresentationAcquisitionComplete(TransferLease lease, List<PresentationPlan> plans,
-        ResourceFailureReason failure) implements OwnerEvent {
-    }
-
-    private record PreviewAcquisitionComplete(TransferLease lease, List<PresentationPlan> plans, int next,
-        long storedBytes, CompletableFuture<Optional<ServerResourceRuntime.BytesLease>> acquisition,
-        Throwable failure) implements OwnerEvent {
     }
 
     private record PacketClosed(TransferLease lease) implements OwnerEvent {
@@ -1739,8 +1549,14 @@ public final class ServerAssetTransfers implements AutoCloseable {
     private final class TransferLease {
         private final long transferId;
         private List<CancellablePacket> packets;
-        private List<CompletableFuture<ServerResourceRuntime.BytesLease>> acquisitions;
-        private List<CompletableFuture<Optional<ServerResourceRuntime.BytesLease>>> previewAcquisitions;
+        private final List<ServerResourceRuntime.BytesLease> acquisitions = new ArrayList<>();
+        private final List<ServerResourceRuntime.BytesLease> previewAcquisitions = new ArrayList<>();
+        private List<ChunkPlan> chunkPlans;
+        private List<PresentationPlan> presentationPlans;
+        private int acquisitionIndex;
+        private int previewIndex;
+        private int nextPreviewPlan;
+        private long storedBytes;
         private ManagedRequest managedRequest;
         private int remaining;
         private int physicalRemaining;
@@ -1750,8 +1566,6 @@ public final class ServerAssetTransfers implements AutoCloseable {
         private TransferLease(long transferId) {
             this.transferId = transferId;
             packets = List.of();
-            acquisitions = List.of();
-            previewAcquisitions = List.of();
             state = LeaseState.ACQUIRING;
         }
 
@@ -1798,7 +1612,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
     private record MetadataRequest(long transferId, List<Hash256> containerIds) {
     }
 
-    private record ModelRequest(long transferId, Hash256 modelId, Hash256 containerId, List<ChunkDescriptor> chunks,
+    private record ModelRequest(long transferId, ModelId modelId, Hash256 containerId, List<ChunkDescriptor> chunks,
         ModelChunkPurpose purpose) {
     }
 
@@ -1811,7 +1625,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
     private static final class PresentationMember {
         private final PresentationKind kind;
         private final int slot;
-        private final Hash256 modelId;
+        private final ModelId modelId;
         private final Hash256 containerId;
         private final String name;
         private final String hierarchy;
@@ -1821,7 +1635,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
         private final String encoding;
         private ResourceFailureReason failure = invalidRequest();
 
-        private PresentationMember(PresentationKind kind, int slot, Hash256 modelId, Hash256 containerId, String name,
+        private PresentationMember(PresentationKind kind, int slot, ModelId modelId, Hash256 containerId, String name,
             String hierarchy, Hash256 hash, int storedSize, int decodedSize, String encoding) {
             this.kind = kind;
             this.slot = slot;
@@ -1835,7 +1649,7 @@ public final class ServerAssetTransfers implements AutoCloseable {
             this.encoding = encoding;
         }
 
-        private static PresentationMember model(PresentationKind kind, int slot, Hash256 modelId, Hash256 containerId,
+        private static PresentationMember model(PresentationKind kind, int slot, ModelId modelId, Hash256 containerId,
             String name, Hash256 hash, int storedSize, int decodedSize, String encoding) {
             return new PresentationMember(kind, slot, modelId, containerId, name, null, hash, storedSize, decodedSize,
                 encoding);

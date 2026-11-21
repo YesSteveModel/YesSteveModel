@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.util;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
 import com.elfmcys.ysm.proto.mixel.manifest.info.PropertiesProto;
@@ -35,7 +36,8 @@ class ProtoUtilSourceTest {
     @ParameterizedTest
     @EnumSource(BufferType.class)
     void parsedFieldsOutliveTheModifiedAndClosedInputOwner(BufferType type) throws Exception {
-        var expected = PropertiesProto.newBuilder().setModelId(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})).setFree(true)
+        var expected = PropertiesProto.newBuilder()
+            .setModelId("hash:" + java.util.HexFormat.of().formatHex(new byte[] {1, 2, 3, 4})).setFree(true)
             .setOriginVer("2.0").build();
         var wire = ProtoUtil.serializeToArray(expected);
         var backing = allocate(type, wire.length + 6);

@@ -36,7 +36,9 @@ class DirectoryAccessTest {
         try {
             assertThrows(IOException.class, snapshot::open);
             assertEquals("source-bytes", Files.readString(source.resolve("original")));
-        } finally { Files.delete(root.resolve("branch")); }
+        } finally {
+            Files.delete(root.resolve("branch"));
+        }
     }
 
     @Test
@@ -51,7 +53,9 @@ class DirectoryAccessTest {
                 assertThrows(IOException.class,
                     () -> directory.directory(Path.of("linked/existing/missing/tail"), true));
                 assertFalse(Files.exists(source.resolve("missing")));
-            } finally { Files.delete(root.resolve("linked")); }
+            } finally {
+                Files.delete(root.resolve("linked"));
+            }
         }
     }
 
@@ -73,8 +77,8 @@ class DirectoryAccessTest {
     @Test
     void snapshotRejectsAReplacedAncestorEvenWhenTheLeafIdentitySurvives() throws Exception {
         var root = Files.createDirectory(temp.resolve("cache"));
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.readAttributes(root,
-            java.nio.file.attribute.BasicFileAttributes.class).fileKey() != null);
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+            Files.readAttributes(root, java.nio.file.attribute.BasicFileAttributes.class).fileKey() != null);
         var branch = Files.createDirectories(root.resolve("branch/leaf"));
         DirectoryAccess.Snapshot snapshot;
         try (var directory = DirectoryAccess.open(root);
@@ -111,14 +115,15 @@ class DirectoryAccessTest {
     @Test
     void returnedChannelsUseJdkLockOwnershipAndReleaseOnClose() throws Exception {
         var root = Files.createDirectory(temp.resolve("cache"));
-        try (var directory = DirectoryAccess.open(root);
-            var first = directory.file("lock", true, true, true);
+        try (var directory = DirectoryAccess.open(root); var first = directory.file("lock", true, true, true);
             var second = directory.file("lock", true, false, false)) {
             var owned = first.lock();
             assertThrows(java.nio.channels.OverlappingFileLockException.class, second::tryLock);
             first.close();
             assertFalse(owned.isValid());
-            try (var next = second.tryLock()) { assertNotNull(next); }
+            try (var next = second.tryLock()) {
+                assertNotNull(next);
+            }
         }
     }
 
@@ -147,7 +152,9 @@ class DirectoryAccessTest {
                     try (var names = Files.list(source)) {
                         assertEquals(List.of("original"), names.map(p -> p.getFileName().toString()).toList());
                     }
-                } finally { Files.delete(root); }
+                } finally {
+                    Files.delete(root);
+                }
             }
         }
     }
@@ -155,21 +162,20 @@ class DirectoryAccessTest {
     @Test
     void borrowedFileCloseCannotEndTheOwnersValidationAndCommit() throws Exception {
         var root = temp.resolve("cache");
-        var target = root.resolve("object");
-        new AtomicSharedCache(root).replaceValidated("test", "key", target,
-            file -> new String(file.readAllBytes()).equals("complete"), file -> {
-                try (file; var stream = file.outputStream()) {
-                    stream.write("complete".getBytes());
-                }
-            }, AtomicSharedCache.AtomicReplacement::run);
+        var cache = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(root));
+        var target = TestCacheFiles.write(cache, file -> new String(file.readAllBytes()).equals("complete"), file -> {
+            try (file; var stream = file.outputStream()) {
+                stream.write("complete".getBytes());
+            }
+        }, AtomicSharedCache.AtomicReplacement::run);
         assertEquals("complete", Files.readString(target));
     }
 
     @Test
     void cleanupCannotDeleteAReplacementWithTheSameName() throws Exception {
         var root = Files.createDirectory(temp.resolve("cache"));
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.readAttributes(root,
-            java.nio.file.attribute.BasicFileAttributes.class).fileKey() != null,
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+            Files.readAttributes(root, java.nio.file.attribute.BasicFileAttributes.class).fileKey() != null,
             "Same-type replacement is observable only when the provider supplies a file key");
         try (var directory = DirectoryAccess.open(root)) {
             Object identity;

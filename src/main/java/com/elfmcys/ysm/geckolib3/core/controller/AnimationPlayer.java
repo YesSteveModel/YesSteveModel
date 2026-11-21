@@ -33,12 +33,17 @@ import java.util.*;
 /**
  * Owns one playback timeline, its keyframe cursors, and its mutable pose queues.
  *
- * <p>Execution: confined to the owning entity's serial execution window. A shared resolution cache
- * does not grant permission to share this player's timeline or queues.
+ * <p>
+ * Execution: confined to the owning entity's serial execution window. A shared resolution cache does not grant
+ * permission to share this player's timeline or queues.
  *
- * <p>Ownership: animation definitions are borrowed from the resource window. Queue getters expose live mutable state for immediate pose consumption.
+ * <p>
+ * Ownership: animation definitions are borrowed from the resource window. Queue getters expose live mutable state for
+ * immediate pose consumption.
  *
- * <p>Seam: implements [playback state](docs/architecture/animation/controllers-and-playback.md#播放状态) and depends on [resolution and playback lifetimes](docs/architecture/animation/controllers-and-playback.md#解析缓存与播放寿命).
+ * <p>
+ * Seam: implements [playback state](docs/architecture/animation/controllers-and-playback.md#播放状态) and depends on
+ * [resolution and playback lifetimes](docs/architecture/animation/controllers-and-playback.md#解析缓存与播放寿命).
  */
 public class AnimationPlayer {
     /**
@@ -129,9 +134,10 @@ public class AnimationPlayer {
     /**
      * Selects a playback request without restarting an unchanged stable request.
      *
-     * <p>Ensures: an unstable request is resolved again. The same resolved animation preserves its timeline;
-     * a different result resets the old playback before scheduling the new animation.
-     * A stable absence remains idle until source invalidation or an explicit reload.
+     * <p>
+     * Ensures: an unstable request is resolved again. The same resolved animation preserves its timeline; a different
+     * result resets the old playback before scheduling the new animation. A stable absence remains idle until source
+     * invalidation or an explicit reload.
      *
      * @param animationName the requested name, or null to reset playback
      * @param loopTypeOverride the loop override, or null to use the animation's declared loop type
@@ -167,11 +173,13 @@ public class AnimationPlayer {
     /**
      * Advances the timeline and fills pose queues inside the caller's open evaluation.
      *
-     * <p>Requires: the borrowed evaluation belongs to this player's current owner and installation.
-     * The caller consumes the queues before another update, reset, or model replacement.
+     * <p>
+     * Requires: the borrowed evaluation belongs to this player's current owner and installation. The caller consumes
+     * the queues before another update, reset, or model replacement.
      *
-     * <p>Execution: installs the animation context only for this call and clears that context on every exit.
-     * executeEvents controls keyframe dispatch and does not elevate the evaluation's fixed ACTION permission.
+     * <p>
+     * Execution: installs the animation context only for this call and clears that context on every exit. executeEvents
+     * controls keyframe dispatch and does not elevate the evaluation's fixed ACTION permission.
      *
      * @param renderTicks the owner's animation time in ticks, including the interpolation fraction
      * @param evaluation the current owner evaluation, borrowed for this call
@@ -580,6 +588,9 @@ public class AnimationPlayer {
         // Committed playback belongs to its sound owner after this controller ends.
         soundKeyFrameExecutor = null;
         reset();
+        this.currentAnim = null;
+        this.instructionKeyFrameExecutor = null;
+        this.activeBoneAnimQueues.clear();
         this.boneAnimQueues.clear();
     }
 

@@ -13,6 +13,10 @@ public class SwemCompatInner {
     private static final EnumMap<SWEMHorseEntityBase.Gait, String> CACHE =
         Maps.newEnumMap(SWEMHorseEntityBase.Gait.class);
 
+    static boolean isRiding(LivingEntity livingEntity) {
+        return livingEntity.getVehicle() instanceof SWEMHorseEntityBase;
+    }
+
     @Nullable
     @SuppressWarnings("all")
     static String getAnimation(LivingEntity livingEntity) {

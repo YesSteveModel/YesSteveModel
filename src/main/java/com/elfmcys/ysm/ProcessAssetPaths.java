@@ -13,7 +13,8 @@ public final class ProcessAssetPaths {
     }
 
     public synchronized AssetPaths get() {
-        if (selected == null) selected = Objects.requireNonNull(factory.get());
+        if (selected == null)
+            selected = Objects.requireNonNull(factory.get());
         return selected;
     }
 }

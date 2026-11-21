@@ -1,235 +1,171 @@
 package com.elfmcys.ysm.model.storage;
 
-import com.elfmcys.ysm.model.domain.Hash256;
-import com.elfmcys.ysm.model.domain.ModelFileIdentity;
-import com.google.common.io.LittleEndianDataInputStream;
-import com.google.common.io.LittleEndianDataOutputStream;
-
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.EOFException;
+import com.elfmcys.ysm.natives.storage.NativeCacheCatalog;
+import com.elfmcys.ysm.natives.storage.CacheStorageTypes.*;
+import com.elfmcys.ysm.natives.storage.StorageResult;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-/** Atomic whole-file index for converted raw sources. */
+/** Scope source facts and converted ownership. The root gate orders mutations with retention and deletion. */
 public final class ConvertedSourceIndexStore {
-    private static final byte[] MAGIC = "YSMCIDX2".getBytes(StandardCharsets.US_ASCII);
-    private static final int MAX_ENTRIES = 100_000;
-    private static final int MAX_STRING_BYTES = 64 * 1024;
-    private static final String INDEX_FILE = "index.bin";
-
     private final ConvertedScope scope;
     private final AtomicSharedCache cache;
-    private final String fullModVersion;
-
-    public ConvertedSourceIndexStore(Path cacheRoot, String version) {
-        this(ConvertedScope.of(cacheRoot.toAbsolutePath().normalize().getParent(), cacheRoot, version),
-            new AtomicSharedCache(cacheRoot));
-    }
+    private final CacheDatabase<NativeCacheCatalog> index;
+    private final String key;
 
     public ConvertedSourceIndexStore(ConvertedScope scope, AtomicSharedCache cache) {
         this.scope = Objects.requireNonNull(scope);
         this.cache = Objects.requireNonNull(cache);
-        fullModVersion = scope.version();
+        index = cache.catalog();
+        key = java.util.Base64.getEncoder().encodeToString(
+            scope.dataIdentity().getBytes(java.nio.charset.StandardCharsets.UTF_8)) + ":" + scope.version()
+            + ":directory-inline-1:" + com.elfmcys.ysm.format.schema.model.ModelFileConstant.CURRENT_VERSION;
     }
 
     public ConvertedScope scope() {
         return scope;
     }
 
-    public Optional<ConvertedSourceIndex> find(String rawRelativePath) throws IOException {
-        return Optional.ofNullable(read().get(ConvertedSourceIndex.normalizeRawRelativePath(rawRelativePath)));
+    public Path root() {
+        return cache.root();
+    }
+
+    public String cacheVersion() {
+        return scope.version();
+    }
+
+    public String key() {
+        return key;
+    }
+
+    public Optional<ConvertedSourceIndex> find(String source) throws IOException {
+        var canonical = ConvertedSourceIndex.normalizeRawRelativePath(source);
+        return cache.coordinator().acquire(() -> {
+            var result = StorageIndex.require(index.read((db, token) -> db.lookupSource(key, canonical, token)));
+            for (var value : result.rows()) {
+                if (value.converted().isEmpty())
+                    continue;
+                var entry = entry(value);
+                cache.coordinator().retain(Pool.CONVERTED, entry.location());
+                return Optional.of(entry);
+            }
+            return Optional.empty();
+        });
+    }
+
+    private ConvertedSourceIndex entry(Source value) {
+        var object = value.converted().orElseThrow();
+        return new ConvertedSourceIndex(value.identity(), value.source(), object.cacheVersion(), object.location(),
+            cache.path(Pool.CONVERTED, object.location().fileId()), value.observation(), value.metadata());
     }
 
     public Map<String, ConvertedSourceIndex> read() throws IOException {
-        var index = path();
-        try {
-            return readFile(index);
-        } catch (java.nio.file.NoSuchFileException absent) {
-            return Map.of();
-        } catch (MalformedIndexException | IllegalArgumentException invalid) {
-            return Map.of();
-        }
-    }
-
-    public void replace(Collection<ConvertedSourceIndex> entries) throws IOException {
-        var transaction = cache.observe(path(), true);
-        cache.withKeyLock("converted-index-transaction", scope.dataIdentity() + "\0" + fullModVersion, () -> {
-            transaction.verify();
-            replaceLocked(entries, transaction);
-            return null;
-        });
-    }
-
-    private void replaceLocked(Collection<ConvertedSourceIndex> entries, CacheDirectoryGuard.Observation transaction)
-        throws IOException {
-        Objects.requireNonNull(entries, "entries");
-        if (entries.size() > MAX_ENTRIES) {
-            throw new IllegalArgumentException("Too many converted-source index entries");
-        }
-        var unique = new LinkedHashMap<String, ConvertedSourceIndex>();
-        for (var entry : entries) {
-            Objects.requireNonNull(entry, "entry");
-            if (!entry.fullModVersion().equals(fullModVersion)) {
-                throw new IllegalArgumentException("Index entry uses a different mod version");
-            }
-            if (unique.putIfAbsent(entry.rawRelativePath(), entry) != null) {
-                throw new IllegalArgumentException("Duplicate raw relative path: " + entry.rawRelativePath());
-            }
-        }
-
-        cache.replaceValidated("converted-index", scope.dataIdentity() + "\0" + fullModVersion, path(),
-            file -> readFile(file).equals(unique), file -> writeFile(file, unique.values()), replacement -> {
-                transaction.verify();
-                replacement.run();
-            });
-    }
-
-    public void replaceScopes(Set<String> rootNamespaces, Collection<ConvertedSourceIndex> entries) throws IOException {
-        Objects.requireNonNull(rootNamespaces, "rootNamespaces");
-        var transaction = cache.observe(path(), true);
-        cache.withKeyLock("converted-index-transaction", scope.dataIdentity() + "\0" + fullModVersion, () -> {
-            transaction.verify();
-            var merged = new LinkedHashMap<>(read());
-            for (var namespace : rootNamespaces) {
-                if (!Set.of("custom", "auth", "builtin").contains(namespace))
-                    throw new IllegalArgumentException("Invalid converted-source namespace");
-                merged.keySet().removeIf(path -> path.startsWith(namespace + "/"));
-            }
-            for (var entry : entries) {
-                var namespace = entry.rawRelativePath().substring(0, entry.rawRelativePath().indexOf('/'));
-                if (!rootNamespaces.contains(namespace))
-                    throw new IllegalArgumentException("Index entry is outside the replaced namespaces");
-                if (merged.putIfAbsent(entry.rawRelativePath(), entry) != null)
-                    throw new IllegalArgumentException("Duplicate raw relative path: " + entry.rawRelativePath());
-            }
-            transaction.verify();
-            replaceLocked(merged.values(), transaction);
-            return null;
-        });
-    }
-
-    public Path path() {
-        return scope.root().resolve(INDEX_FILE);
-    }
-
-    public String fullModVersion() {
-        return fullModVersion;
-    }
-
-    private Map<String, ConvertedSourceIndex> readFile(Path path) throws IOException {
-        try (var channel = cache.openRead(path)) {
-            return readFile(channel);
-        }
-    }
-
-    private Map<String, ConvertedSourceIndex> readFile(java.nio.channels.SeekableByteChannel channel)
-        throws IOException {
-        channel.position(0);
-        try (var input = new LittleEndianDataInputStream(
-            new BufferedInputStream(java.nio.channels.Channels.newInputStream(channel)))) {
-            var magic = new byte[MAGIC.length];
-            input.readFully(magic);
-            if (!Arrays.equals(magic, MAGIC)) {
-                throw new MalformedIndexException("Invalid converted-source index magic");
-            }
-            if (!readString(input).equals(scope.dataIdentity()) || !readString(input).equals(fullModVersion))
-                throw new MalformedIndexException("Converted-source scope mismatch");
-            var count = input.readInt();
-            if (count < 0 || count > MAX_ENTRIES) {
-                throw new MalformedIndexException("Invalid converted-source index entry count");
-            }
-            var result = new LinkedHashMap<String, ConvertedSourceIndex>();
-            for (var index = 0; index < count; index++) {
-                var modelId = new Hash256(readHash(input));
-                var containerId = new Hash256(readHash(input));
-                var rawRelativePath = readString(input);
-                var entryVersion = readString(input);
-                var entry = new ConvertedSourceIndex(new ModelFileIdentity(modelId, containerId), rawRelativePath,
-                    entryVersion);
-                if (!fullModVersion.equals(entryVersion))
-                    throw new MalformedIndexException("Converted-source version mismatch");
-                if (result.putIfAbsent(rawRelativePath, entry) != null) {
-                    throw new MalformedIndexException("Duplicate converted-source path: " + rawRelativePath);
+        return cache.coordinator().acquire(() -> {
+            var entries = new LinkedHashMap<String, ConvertedSourceIndex>();
+            var after = "";
+            while (true) {
+                var cursor = after;
+                var result = StorageIndex.require(index.read((db, token) -> db.pageSources(key, cursor, token)));
+                if (result.rows().isEmpty())
+                    return Map.copyOf(entries);
+                for (var value : result.rows()) {
+                    if (value.converted().isPresent())
+                        entries.put(value.source(), entry(value));
+                    after = value.source();
                 }
             }
-            if (input.read() != -1) {
-                throw new MalformedIndexException("Trailing converted-source index data");
+        });
+    }
+
+    /** Publishes only this completed production. An instance collision is an explicit invariant failure. */
+    public ConvertedSourceIndex publish(ConvertedSourceIndex value) throws IOException {
+        if (!value.cacheVersion().equals(scope.version())
+            || !value.file().equals(cache.path(Pool.CONVERTED, value.location().fileId())))
+            throw new IllegalArgumentException("Converted publication does not belong to this schema and pool");
+        return cache.coordinator().acquire(() -> {
+            cache.coordinator().retain(Pool.CONVERTED, value.location());
+            var object = new Converted(value.location(), key, value.cacheVersion(), value.identity(), true);
+            var source = new Source(value.rawRelativePath(), value.identity(), Optional.of(object), value.observation(),
+                value.metadata());
+            var result = StorageIndex.require(index.execute((db, token) -> db.publishSource(key, source, token)));
+            if (!result.committed())
+                throw new IOException("Converted publication was rejected: " + result);
+            return value;
+        });
+    }
+
+    public java.util.concurrent.CompletionStage<StorageResult<Void>> revokeAsync(Location location) {
+        try {
+            return cache.coordinator().acquire(() -> index.submit((db, token) -> db.revokeConverted(location, token)));
+        } catch (IOException failure) {
+            return java.util.concurrent.CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    public void revoke(Location location) throws IOException {
+        cache.coordinator().acquire(() -> {
+            var result = index.execute((db, token) -> db.revokeConverted(location, token));
+            if (result.outcome() != StorageResult.Outcome.REJECTED || result.failure() != StorageResult.Failure.NONE)
+                StorageIndex.require(result);
+            return null;
+        });
+    }
+
+    public void replace(Collection<ConvertedSourceIndex> retained) throws IOException {
+        replaceScopes(Set.of("custom", "auth", "builtin"), retained);
+    }
+
+    public void replaceScopes(Set<String> namespaces, Collection<ConvertedSourceIndex> retained) throws IOException {
+        var references = new LinkedHashMap<String, com.elfmcys.ysm.model.domain.ModelFileIdentity>();
+        retained.forEach(value -> references.put(value.rawRelativePath(), value.identity()));
+        replaceScopes(namespaces, retained, references);
+    }
+
+    /** Reconciles only fully observed namespaces; other scopes and incomplete roots retain their source facts. */
+    public void replaceScopes(Set<String> namespaces, Collection<ConvertedSourceIndex> retained,
+        Map<String, com.elfmcys.ysm.model.domain.ModelFileIdentity> references) throws IOException {
+        cache.coordinator().acquire(() -> {
+            var converted = retained.stream().map(ConvertedSourceIndex::rawRelativePath)
+                .collect(java.util.stream.Collectors.toSet());
+            var batch = new ArrayList<SourceReference>(StorageResult.MAXIMUM_ROWS);
+            for (var reference : references.entrySet()) {
+                if (converted.contains(reference.getKey()))
+                    continue;
+                batch.add(new SourceReference(reference.getKey(), reference.getValue()));
+                if (batch.size() == StorageResult.MAXIMUM_ROWS) {
+                    StorageIndex.require(index.execute((db, token) -> db.publishSourceReferences(key, batch, token)));
+                    batch.clear();
+                }
             }
-            return Map.copyOf(result);
-        } catch (EOFException truncated) {
-            throw new MalformedIndexException("Truncated converted-source index", truncated);
-        }
-    }
-
-    private void writeFile(CacheFile file, Collection<ConvertedSourceIndex> entries) throws IOException {
-        var sorted = new ArrayList<>(entries);
-        sorted
-            .sort(Comparator.comparing(ConvertedSourceIndex::rawRelativePath, ConvertedSourceIndexStore::compareUtf8));
-        try (var output = new LittleEndianDataOutputStream(new BufferedOutputStream(file.outputStream()))) {
-            output.write(MAGIC);
-            writeString(output, scope.dataIdentity());
-            writeString(output, fullModVersion);
-            output.writeInt(sorted.size());
-            for (var entry : sorted) {
-                output.write(entry.modelId().bytes());
-                output.write(entry.containerId().bytes());
-                writeString(output, entry.rawRelativePath());
-                writeString(output, entry.fullModVersion());
+            if (!batch.isEmpty())
+                StorageIndex.require(index.execute((db, token) -> db.publishSourceReferences(key, batch, token)));
+            var obsolete = new java.util.ArrayList<String>();
+            var after = "";
+            while (true) {
+                var cursor = after;
+                var rows = StorageIndex.require(index.read((db, token) -> db.pageSources(key, cursor, token))).rows();
+                if (rows.isEmpty())
+                    break;
+                for (var value : rows) {
+                    var source = value.source();
+                    if (namespaces.contains(source.substring(0, source.indexOf('/')))
+                        && !references.containsKey(source))
+                        obsolete.add(source);
+                    after = source;
+                }
             }
-        }
-    }
-
-    private static byte[] readHash(LittleEndianDataInputStream input) throws IOException {
-        var hash = new byte[Hash256.SIZE];
-        input.readFully(hash);
-        return hash;
-    }
-
-    private static String readString(LittleEndianDataInputStream input) throws IOException {
-        var length = input.readInt();
-        if (length < 0 || length > MAX_STRING_BYTES) {
-            throw new MalformedIndexException("Invalid converted-source index string length");
-        }
-        var bytes = new byte[length];
-        input.readFully(bytes);
-        var value = new String(bytes, StandardCharsets.UTF_8);
-        if (!Arrays.equals(value.getBytes(StandardCharsets.UTF_8), bytes)) {
-            throw new MalformedIndexException("Invalid UTF-8 in converted-source index");
-        }
-        return value;
-    }
-
-    private static void writeString(LittleEndianDataOutputStream output, String value) throws IOException {
-        var bytes = value.getBytes(StandardCharsets.UTF_8);
-        if (bytes.length > MAX_STRING_BYTES) {
-            throw new IllegalArgumentException("Converted-source index string is too long");
-        }
-        output.writeInt(bytes.length);
-        output.write(bytes);
-    }
-
-    private static int compareUtf8(String left, String right) {
-        return Arrays.compareUnsigned(left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private static final class MalformedIndexException extends IOException {
-        private MalformedIndexException(String message) {
-            super(message);
-        }
-
-        private MalformedIndexException(String message, Throwable cause) {
-            super(message, cause);
-        }
+            for (var start = 0; start < obsolete.size(); start += 63) {
+                var page = obsolete.subList(start, Math.min(start + 63, obsolete.size()));
+                StorageIndex.require(index.execute((db, token) -> db.finishScan(key, page, token)));
+            }
+            return null;
+        });
     }
 }

@@ -1,10 +1,10 @@
 # 归约支点
 
-本页保留由 MN 子系统主导的归约支点；高扇出只作为检查信号，不直接决定删除。
+本页记录由 MN 子系统主导的归约支点。高扇出只作为排查信号，不能直接拿来决定删除机制。
 
-| 支点 | 最小改变 → 可减少部分 | 剩余义务 / 语义、性能和可靠性成本 / 最小验证 |
+| 支点 | 最小改变 → 可减少部分 | 剩余义务、性能与可靠性成本及最小验证 |
 |---|---|---|
-| V-03 表示替代规则 | 如所有来源都要求 exact → MN-03 非 exact 候选及 publication/actual 双表示例外可缩减。 | **产品语义变化**，重裁 D-IDENTITY/D-REUSE；AP-02、MN-05、NR-05、Pending/Ready、旧 lease 均有独立需求。中高成本；同源重封装会增加下载。核验替代矩阵及实际带宽，不能据 R=4 宣称可删四机制。 |
-| V-13 核实后收缩 publication 调度 | 测量 ordinary terminal 的实际 burst/host 开销，比较现有 terminal 数限额、较简单 owner 调度及上游错峰 → MN-19 排队/guard 组合可能缩减。 | MN-18 全 component sample-ready 与 exact-current 门禁不能删除；terminal 计数已覆盖 stale/失败但不限制单次 upload 耗时或 live bytes，取消限额可能增加卡顿，新增限额也会增加状态。中成本；混合 stale/失败/成功并覆盖 required bootstrap，测处置次数、峰值驻留和 owner 耗时。 |
+| V-03 表示替代规则 | 如果所有来源都要求字节精确匹配 → 可缩减 MN-03 中的非精确匹配候选，以及发布表示与实际表示分离的例外逻辑。 | 这属于**产品语义变更**，需要重新裁定 `D-IDENTITY` 与 `D-REUSE`。AP-02、MN-05、NR-05、Pending/Ready 生命周期和旧 lease 保活仍有各自独立的需求。改动成本中高，且同源重封装会增加下载流量。需核验替代矩阵与实际带宽，不能仅凭 R=4 就宣称可以删除四个机制。 |
+| V-13 核实后收缩发布调度 | 实测普通资源结束项在突发上传与宿主发布时的真实开销，对比当前的每 tick 处置条数限额、更简单的 owner 调度以及上游错峰策略 → MN-19 的排队与 guard 组合有望缩减。 | MN-18 的全组件可采样检查与当前请求精确匹配检查不可删除。现有的条数限额虽然已把过期项和失败项都计入在内，但并不限制单次上传耗时或活跃字节总量；直接取消限额可能加剧帧卡顿，而引入新维度限额又会增加状态复杂度。改动成本中等；验证时需混合过期、失败、成功项并覆盖必需的默认启动路径，同时实测处置次数、峰值驻留和 owner 线程耗时。 |
 
-不因按需机制扇出较高恢复已被拒绝的入服全量下载；其数千模型带宽/驻留成本由[分发决策](../../product-decisions/decisions/model-distribution.md)明确说明。帧预算/preview 的 V-10 由 [AP 归约页](../java-assets-and-presentation/reduction-pivots.md)统一记录，授权例外的收窄条件仍受本主题 [Q-09](open-questions.md#q-09) 约束。
+不要因为按需分发机制的扇出较高，就退回已被否决的“入服全量下载”方案——数千个模型带来的带宽和内存驻留成本已在[分发决策](../../product-decisions/decisions/model-distribution.md)中明确说明。涉及帧预算与预览的 V-10 统一记录在 [AP 归约页](../java-assets-and-presentation/reduction-pivots.md)。

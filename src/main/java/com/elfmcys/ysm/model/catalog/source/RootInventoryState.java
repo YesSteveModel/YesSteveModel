@@ -9,7 +9,9 @@ import java.util.Objects;
 
 public sealed interface RootInventoryState permits RootInventoryState.Complete, RootInventoryState.Incomplete {
     CatalogRootIdentity root();
+
     Map<ModelSourceKey, SourceObservation> sources();
+
     Map<ModelPackSourceKey, PackObservation> packs();
 
     default List<ModelScanError> errors() {

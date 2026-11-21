@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.remote;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.SharedBuffer;
 import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -27,7 +28,6 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -52,28 +52,29 @@ import java.util.function.Function;
 /**
  * Stores validated exact metadata and chunks in one guarded remote cache region.
  *
- * <p><b>Invariant:</b> Metadata admission establishes the prefix's structure, identity and references;
- * unread payloads still require their own verified read. Validated cache bytes carry no grants or session
- * eligibility. Network fetchers remain request inputs and do not become persistent content authority.
+ * <p>
+ * <b>Invariant:</b> Metadata admission establishes the prefix's structure, identity and references; unread payloads
+ * still require their own verified read. Validated cache bytes carry no grants or session eligibility. Network fetchers
+ * remain request inputs and do not become persistent content authority.
  *
- * <p><b>Execution:</b> Metadata probes and commits use synchronous local I/O. Directory guards check
- * the observed operation, not arbitrary later path mutation. The storage owner must preserve its directory
- * identity for the operation; a source admitted earlier can still fail during a later read.
+ * <p>
+ * <b>Execution:</b> Metadata probes and commits use synchronous local I/O. Directory guards check the observed
+ * operation, not arbitrary later path mutation. The storage owner must preserve its directory identity for the
+ * operation; a source admitted earlier can still fail during a later read.
  *
- * <p><b>Seam:</b> [exact remote storage](docs/architecture/model-management/storage/overview.md#精确缓存与持久工作).
+ * <p>
+ * <b>Seam:</b> [exact remote storage](docs/architecture/model-management/storage/overview.md#精确缓存与持久工作).
  */
 public final class RemoteModelStore implements AutoCloseable {
-    private static final String METADATA_FILE = "metadata.bin";
-    private static final String METADATA_DIRECTORY = "metadata";
-    private static final String CHUNK_SUFFIX = ".bin";
-    private static final String ZSTD_CHUNK_SUFFIX = "-zst.bin";
     private static final String ZSTD_ENCODING = "zstd";
 
     private final Path root;
     private final CacheRegion region;
-    private final CacheDirectoryGuard guard;
+    private final boolean ownsRegion;
     private final AtomicSharedCache cache;
     private final CacheReadObserver afterCacheRead;
+    private final com.elfmcys.ysm.model.storage.StorageIndex<com.elfmcys.ysm.natives.storage.NativeCacheRemote> index;
+    private java.util.function.LongSupplier deliveryClock = () -> java.time.Instant.now().getEpochSecond();
     private final Map<ChunkFlightKey, ChunkFlight> chunkFlights = new HashMap<>();
     private boolean closed;
 
@@ -89,20 +90,21 @@ public final class RemoteModelStore implements AutoCloseable {
     private RemoteModelStore(Path root, AtomicMove atomicMove, CacheReadObserver afterCacheRead, CacheRegion region)
         throws IOException {
         var configuredRoot = root.toAbsolutePath().normalize();
-        guard = CacheDirectoryGuard.open(configuredRoot);
+        var guard = CacheDirectoryGuard.open(configuredRoot);
         this.root = guard.root();
-        this.region = region == null ? new CacheRegion(this.root.getParent()) : region;
+        this.ownsRegion = region == null;
+        this.region = ownsRegion ? new CacheRegion(this.root) : region;
         this.cache = new AtomicSharedCache(guard, Objects.requireNonNull(atomicMove, "atomicMove")::move);
         this.afterCacheRead = Objects.requireNonNull(afterCacheRead, "afterCacheRead");
+        this.index = this.region.cache().remoteIndex();
         if (!Files.isWritable(this.root)) {
             throw AssetLoadException.access("Remote model store is not writable: " + this.root);
         }
     }
 
     public static RemoteModelStore create(ModelStorageInfra storage) throws IOException {
-        return new RemoteModelStore(storage.remote().root().resolve("remote"), AtomicSharedCache.AtomicReplacement::run,
-            ignored -> {
-            }, storage.remote());
+        return new RemoteModelStore(storage.remote().root(), AtomicSharedCache.AtomicReplacement::run, ignored -> {
+        }, storage.remote());
     }
 
     ContentStorageBinding storageBinding() {
@@ -113,12 +115,12 @@ public final class RemoteModelStore implements AutoCloseable {
         return root;
     }
 
-    public void publishChunk(Hash256 modelId, AssetContainerView.ChunkInfo chunk, byte[] storedBytes)
+    public void publishChunk(ModelId modelId, AssetContainerView.ChunkInfo chunk, byte[] storedBytes)
         throws IOException {
         publishChunk(modelId, chunk, ArrayBuffer.borrow(storedBytes));
     }
 
-    public void publishChunk(Hash256 modelId, AssetContainerView.ChunkInfo chunk, UniBuffer storedBytes)
+    public void publishChunk(ModelId modelId, AssetContainerView.ChunkInfo chunk, UniBuffer storedBytes)
         throws IOException {
         requireOpen();
         Objects.requireNonNull(modelId, "modelId");
@@ -128,12 +130,13 @@ public final class RemoteModelStore implements AutoCloseable {
         }
         ChunkDecoding.validateStored(storedBytes, chunk);
         try {
-            publishAtomic(chunkPath(modelId, new Hash256(chunk.hash()), chunk.encoding()), storedBytes, temporary -> {
-                try (var persisted = read(temporary, BufferType.NATIVE)) {
-                    ChunkDecoding.validateStored(persisted, chunk);
-                }
-                return true;
-            });
+            publishAtomic(com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.CHUNK,
+                chunkKey(modelId, new Hash256(chunk.hash()), chunk.encoding()), storedBytes, temporary -> {
+                    try (var persisted = read(temporary, BufferType.NATIVE)) {
+                        ChunkDecoding.validateStored(persisted, chunk);
+                    }
+                    return true;
+                });
         } catch (IOException error) {
             throw AssetLoadException.access("Failed to publish remote chunk", error);
         }
@@ -144,29 +147,27 @@ public final class RemoteModelStore implements AutoCloseable {
      *
      * @param identity the non-null exact model/container/manifest tuple
      * @return empty for missing or invalid cached metadata; otherwise content bound to this storage region
-     * @throws IOException if cache access fails; callers must not report an access failure as legal absence
+     * @throws IOException if the read was interrupted, closed, or its channel could not close
      */
     public synchronized Optional<RemoteModelContent> probeMetadata(ModelFileIdentity identity) throws IOException {
         requireOpen();
         Objects.requireNonNull(identity, "identity");
-        var path = metadataPath(identity);
         try {
+            var path = metadataPath(identity);
             try (var metadataPrefix = read(path, BufferType.NATIVE)) {
-                return Optional.of(validateMetadata(identity, metadataPrefix));
+                var content = validateMetadata(identity, metadataPrefix);
+                delivered(identity.containerId());
+                return Optional.of(content);
             }
-        } catch (NoSuchFileException missing) {
-            return Optional.empty();
-        } catch (AssetLoadException invalid) {
-            if (invalid.reason() == AssetLoadException.Reason.ACCESS) {
-                throw invalid;
-            }
+        } catch (IOException invalid) {
+            com.elfmcys.ysm.model.storage.CacheReadFailure.miss(identity, invalid);
             return Optional.empty();
         }
     }
 
     /**
-     * Validates the exact metadata prefix before atomically publishing its cache file.
-     * Success does not establish complete model-body availability or content activation.
+     * Validates the exact metadata prefix before atomically publishing its cache file. Success does not establish
+     * complete model-body availability or content activation.
      *
      * @param identity the non-null expected model/container/manifest tuple
      * @param metadataPrefix the non-null complete prefix borrowed through validation and persistence
@@ -183,17 +184,19 @@ public final class RemoteModelStore implements AutoCloseable {
         }
         var content = validateMetadata(identity, metadataPrefix);
         try {
-            publishAtomic(metadataPath(identity), metadataPrefix, temporary -> {
-                try (var persisted = read(temporary, BufferType.NATIVE)) {
-                    var verified = validateMetadata(identity, persisted);
-                    verified.representation().close();
-                }
-                return true;
-            });
+            publishAtomic(com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.METADATA, metadataKey(identity),
+                metadataPrefix, temporary -> {
+                    try (var persisted = read(temporary, BufferType.NATIVE)) {
+                        var verified = validateMetadata(identity, persisted);
+                        verified.representation().close();
+                    }
+                    return true;
+                }, identity);
         } catch (IOException | SecurityException access) {
             content.representation().close();
             throw AssetLoadException.access("Failed to commit remote metadata prefix", access);
         }
+        delivered(identity.containerId());
         return content;
     }
 
@@ -204,8 +207,8 @@ public final class RemoteModelStore implements AutoCloseable {
     <T> CompletableFuture<T> loadRenderTarget(RemoteModelContent content, String targetId, String textureName,
         BooleanSupplier cancelled, RemoteChunkFetcher fetcher, Executor workers, Function<ModelContent, T> load) {
         return loadChunks(content, cancelled, fetcher, workers,
-            () -> com.elfmcys.ysm.format.schema.model.RenderTargetChunkPlan.chunks(content.representation().view(),
-                targetId, textureName),
+            retained -> com.elfmcys.ysm.format.schema.model.RenderTargetChunkPlan
+                .chunks(retained.representation().view(), targetId, textureName),
             load);
     }
 
@@ -213,7 +216,7 @@ public final class RemoteModelStore implements AutoCloseable {
         RemoteChunkFetcher fetcher, Executor workers, List<AssetContainerView.ChunkInfo> chunks,
         Function<ModelContent, T> load) {
         var immutableChunks = List.copyOf(chunks);
-        return loadChunks(content, cancelled, fetcher, workers, () -> immutableChunks, load);
+        return loadChunks(content, cancelled, fetcher, workers, ignored -> immutableChunks, load);
     }
 
     private <T> CompletableFuture<T> loadChunks(RemoteModelContent content, BooleanSupplier cancelled,
@@ -223,18 +226,35 @@ public final class RemoteModelStore implements AutoCloseable {
         Objects.requireNonNull(workers, "workers");
         Objects.requireNonNull(chunks, "chunks");
         Objects.requireNonNull(load, "load");
-        var probe = CompletableFuture.supplyAsync(() -> {
-            try {
-                return probeChunks(content, chunks.get(), cancelled, load);
-            } catch (IOException | RuntimeException failure) {
-                throw new CompletionException(failure);
-            }
-        }, workers);
+        final ModelContent.PreparationInputs inputs;
+        try {
+            inputs = content.retainPreparationInputs();
+        } catch (IOException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        try {
+            return loadRetainedChunks((RemoteModelContent)inputs.content(), cancelled, fetcher, workers, chunks, load,
+                inputs);
+        } catch (Throwable failure) {
+            inputs.close();
+            throw failure;
+        }
+    }
+
+    private <T> CompletableFuture<T> loadRetainedChunks(RemoteModelContent content, BooleanSupplier cancelled,
+        RemoteChunkFetcher fetcher, Executor workers, ChunkPlan chunks, Function<ModelContent, T> load,
+        ModelContent.PreparationInputs inputs) {
+        var result = new CompletableFuture<T>();
         var transfer = new AtomicReference<CompletableFuture<Void>>();
         var transferCancellationRequested = new AtomicBoolean();
-        var result = probe.thenCompose(outcome -> {
+        BooleanSupplier stopped = () -> transferCancellationRequested.get() || cancelled.getAsBoolean();
+        var probe = new CompletableFuture<RenderTargetProbe<T>>();
+        var work = probe.thenCompose(outcome -> {
             if (outcome.missing.isEmpty()) {
                 return CompletableFuture.completedFuture(outcome.loaded);
+            }
+            if (stopped.getAsBoolean()) {
+                return CompletableFuture.failedFuture(new CancellationException("Model activation was cancelled"));
             }
             if (fetcher == null) {
                 return CompletableFuture.failedFuture(AssetLoadException.access("Remote chunk fetcher is unavailable"));
@@ -272,21 +292,38 @@ public final class RemoteModelStore implements AutoCloseable {
             };
             return fetching.thenApplyAsync(ignored -> {
                 try {
-                    return persistAndLoad(content, outcome.missing, received, cancelled, load);
+                    return persistAndLoad(content, outcome.missing, received, stopped, load);
                 } catch (IOException | RuntimeException failure) {
                     throw new CompletionException(failure);
                 }
             }, continuation);
+        });
+        work.whenComplete((value, failure) -> {
+            try {
+                inputs.close();
+            } finally {
+                if (failure != null)
+                    result.completeExceptionally(failure);
+                else
+                    result.complete(value);
+            }
         });
         result.whenComplete((ignored, failure) -> {
             if (!result.isCancelled()) {
                 return;
             }
             transferCancellationRequested.set(true);
-            probe.cancel(false);
+            // The probe and a claimed continuation own inputs until their real completion, not result cancellation.
             var fetching = transfer.get();
             if (fetching != null) {
                 fetching.cancel(false);
+            }
+        });
+        workers.execute(() -> {
+            try {
+                probe.complete(probeChunks(content, chunks.get(content), stopped, load));
+            } catch (Throwable failure) {
+                probe.completeExceptionally(failure);
             }
         });
         return result;
@@ -307,6 +344,7 @@ public final class RemoteModelStore implements AutoCloseable {
                 content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
                 // A verified hit remains subject to the load's own exact read validation.
             } catch (IOException unavailable) {
+                com.elfmcys.ysm.model.storage.CacheReadFailure.miss(chunk.type(), unavailable);
                 missing.add(chunk);
             }
         }
@@ -358,7 +396,9 @@ public final class RemoteModelStore implements AutoCloseable {
                 if (cancelled.getAsBoolean()) {
                     throw new CancellationException("Model activation was cancelled");
                 }
-                return load.apply(prepared);
+                var result = load.apply(prepared);
+                delivered(content.representation().containerId());
+                return result;
             } finally {
                 prepared.closeReceived();
             }
@@ -384,6 +424,9 @@ public final class RemoteModelStore implements AutoCloseable {
             try {
                 return content.chunks().readPayload(chunk, BufferType.NATIVE);
             } catch (IOException unavailable) {
+                if (!com.elfmcys.ysm.model.storage.CacheReadFailure.recoverable(unavailable))
+                    throw new CompletionException(unavailable);
+                YesSteveModel.LOGGER.debug("Remote chunk cache missed: {}", chunk.type(), unavailable);
                 return null;
             }
         }, workers);
@@ -462,11 +505,14 @@ public final class RemoteModelStore implements AutoCloseable {
         }
         var failure = AssetLoadException.access("Remote model store is closed");
         active.forEach(flight -> flight.ownerClosed(failure));
+        if (ownsRegion)
+            region.close();
+        cache.close();
     }
 
     private synchronized void requireOpen() throws IOException {
         if (closed) {
-            throw AssetLoadException.access("Remote model store is closed");
+            throw new java.nio.channels.ClosedChannelException();
         }
     }
 
@@ -483,7 +529,7 @@ public final class RemoteModelStore implements AutoCloseable {
             return new RemoteModelContent(representation, chunks, chunks, this);
         } catch (AssetLoadException failure) {
             throw failure;
-        } catch (IOException | RuntimeException invalid) {
+        } catch (IOException invalid) {
             throw AssetLoadException.content("Invalid remote metadata prefix", invalid);
         }
     }
@@ -492,54 +538,74 @@ public final class RemoteModelStore implements AutoCloseable {
         return new StoreChunkDataSource(identity);
     }
 
-    Path metadataPath(ModelFileIdentity identity) {
-        return ownedPath(metadataRoot(identity).resolve(METADATA_FILE));
+    private static String metadataKey(ModelFileIdentity identity) {
+        return identity.modelId() + "/" + identity.containerId();
     }
 
-    /** A preparation hint only; the card task still verifies the payload before decoding. */
-    synchronized boolean hasCachedChunk(Hash256 modelId, AssetContainerView.ChunkInfo chunk) throws IOException {
+    private static String chunkKey(ModelId model, Hash256 hash, String encoding) {
+        return model + "/" + hash + "/" + encoding;
+    }
+
+    Path metadataPath(ModelFileIdentity identity) throws IOException {
+        var file =
+            index.find(com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.METADATA, metadataKey(identity))
+                .orElseThrow(() -> new NoSuchFileException("Remote metadata has no index relation"));
+        return cache.path(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.REMOTE, file.location().fileId());
+    }
+
+    synchronized boolean hasCachedChunk(ModelId model, AssetContainerView.ChunkInfo chunk) throws IOException {
         requireOpen();
-        return chunk.hash() != null && Files.isRegularFile(chunkPath(modelId, new Hash256(chunk.hash()),
-            chunk.encoding()), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        if (chunk.hash() == null)
+            return false;
+        var entry = index.find(com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.CHUNK,
+            chunkKey(model, new Hash256(chunk.hash()), chunk.encoding()));
+        return entry.isPresent();
     }
 
-    Path chunkPath(Hash256 modelId, Hash256 hash, String encoding) {
-        return ownedPath(
-            modelRoot(modelId).resolve(hash + (ZSTD_ENCODING.equals(encoding) ? ZSTD_CHUNK_SUFFIX : CHUNK_SUFFIX)));
+    Path chunkPath(ModelId model, Hash256 hash, String encoding) throws IOException {
+        var file = index
+            .find(com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.CHUNK, chunkKey(model, hash, encoding))
+            .orElseThrow(() -> new NoSuchFileException("Remote chunk has no index relation"));
+        return cache.path(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.REMOTE, file.location().fileId());
     }
 
-    /** Verified remote content of one model. */
-    private Path modelRoot(Hash256 modelId) {
-        return root.resolve(modelId.toString());
+    private void publishAtomic(com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind kind, String key,
+        UniBuffer bytes, AtomicSharedCache.CacheValidator validator) throws IOException {
+        publishAtomic(kind, key, bytes, validator, null);
     }
 
-    /** Verified remote metadata of one exact container. */
-    private Path metadataRoot(ModelFileIdentity identity) {
-        return modelRoot(identity.modelId()).resolve(METADATA_DIRECTORY).resolve(identity.containerId().toString());
-    }
-
-    private void publishAtomic(Path target, UniBuffer bytes, AtomicSharedCache.CacheValidator validator)
-        throws IOException {
-        cache.replaceValidated("remote", root.relativize(target).toString(), target, validator, temporary -> {
-            try (var channel = temporary) {
+    private void publishAtomic(com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind kind, String key,
+        UniBuffer bytes, AtomicSharedCache.CacheValidator validator, ModelFileIdentity identity) throws IOException {
+        try (var staging = cache.reserve(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.REMOTE)) {
+            try (var channel = staging.file()) {
                 var source = bytes.nio();
                 while (source.hasRemaining())
                     channel.write(source);
                 channel.force();
             }
-        }, replacement -> {
-            synchronized (RemoteModelStore.this) {
-                requireOpen();
-                replacement.run();
-            }
-        });
+            staging.publish(validator, replacement -> {
+                synchronized (RemoteModelStore.this) {
+                    requireOpen();
+                    replacement.run();
+                    if (identity == null) {
+                        index.publish(kind, key, staging.location());
+                    } else {
+                        var file = new com.elfmcys.ysm.natives.storage.CacheStorageTypes.File(staging.location(),
+                            com.elfmcys.ysm.buffer.SharedArrayBuffer.copyOf(ArrayBuffer.borrow(new byte[0])));
+                        com.elfmcys.ysm.model.storage.StorageIndex
+                            .require(index.execute((db, token) -> db.publishMetadata(key, file, identity, token)));
+                    }
+                }
+            });
+        }
     }
 
-    private Path ownedPath(Path candidate) {
-        var normalized = candidate.toAbsolutePath().normalize();
-        if (!normalized.startsWith(root))
-            throw new IllegalArgumentException("Remote cache path escapes its root");
-        return normalized;
+    void deliveryClock(java.util.function.LongSupplier clock) {
+        deliveryClock = Objects.requireNonNull(clock);
+    }
+
+    private void delivered(Hash256 container) {
+        region.delivered(container, deliveryClock.getAsLong());
     }
 
     private record RenderTargetProbe<T>(T loaded, List<AssetContainerView.ChunkInfo> missing) {
@@ -554,7 +620,7 @@ public final class RemoteModelStore implements AutoCloseable {
 
     @FunctionalInterface
     private interface ChunkPlan {
-        List<AssetContainerView.ChunkInfo> get() throws IOException;
+        List<AssetContainerView.ChunkInfo> get(RemoteModelContent content) throws IOException;
     }
 
     private final class StoreChunkDataSource implements ChunkDataSource {
@@ -591,7 +657,7 @@ public final class RemoteModelStore implements AutoCloseable {
             try {
                 return SharedBuffer
                     .adopt(Zstd.decompressAndValidate(stored, chunk.decodeSize(), chunk.hash(), bufferType));
-            } catch (RuntimeException invalid) {
+            } catch (Zstd.InvalidDataException invalid) {
                 throw AssetLoadException.content("Invalid cached zstd chunk: " + chunk.type(), invalid);
             }
         }
@@ -618,11 +684,13 @@ public final class RemoteModelStore implements AutoCloseable {
             if (chunk.hash() == null || chunk.hash().length != Hash256.SIZE) {
                 throw AssetLoadException.content("Remote chunk has no content hash");
             }
-            var path = chunkPath(identity.modelId(), new Hash256(chunk.hash()), chunk.encoding());
             AssetLoadException cachedFailure;
-            try (var scope = com.elfmcys.ysm.util.ScopeGuard.create(read(path, bufferType))) {
+            try (var scope = com.elfmcys.ysm.util.ScopeGuard
+                .create(read(chunkPath(identity.modelId(), new Hash256(chunk.hash()), chunk.encoding()), bufferType))) {
                 validateCached(scope.get(), chunk);
-                return SharedBuffer.adopt(scope.release());
+                var delivered = SharedBuffer.adopt(scope.release());
+                RemoteModelStore.this.delivered(identity.containerId());
+                return delivered;
             } catch (NoSuchFileException missing) {
                 cachedFailure = AssetLoadException.access("Remote chunk is not cached: " + chunk.type(), missing);
             } catch (AssetLoadException failure) {
@@ -641,7 +709,7 @@ public final class RemoteModelStore implements AutoCloseable {
                         Zstd.decompressAndValidate(stored, chunk.decodeSize(), chunk.hash(), BufferType.NATIVE)) {
                         // A cached zstd representation may have a different compressed size.
                     }
-                } catch (RuntimeException error) {
+                } catch (Zstd.InvalidDataException error) {
                     throw AssetLoadException.content("Invalid cached zstd chunk: " + chunk.type(), error);
                 }
             } else {
@@ -653,7 +721,7 @@ public final class RemoteModelStore implements AutoCloseable {
     private BufferStorage read(Path path, BufferType type) throws IOException {
         final FileChannel opened;
         try {
-            opened = guard.observe(path, false).open(java.util.Set.of(StandardOpenOption.READ));
+            opened = cache.openRead(path);
         } catch (NoSuchFileException missing) {
             throw missing;
         } catch (IOException | SecurityException error) {

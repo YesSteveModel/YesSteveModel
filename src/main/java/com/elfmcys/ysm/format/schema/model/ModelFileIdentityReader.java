@@ -3,7 +3,7 @@ package com.elfmcys.ysm.format.schema.model;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
 import com.elfmcys.ysm.format.container.AssetContainerView;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.version.VersionCompatibility;
 import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
@@ -50,10 +50,11 @@ public final class ModelFileIdentityReader {
         }
 
         var encodedModelId = assetView.getSchemaProperty(ModelFileConstant.PROP_MODEL_ID);
-        if (!isLowerHexModelId(encodedModelId)) {
-            throw new IOException("Model identity property must contain exactly 64 lowercase hexadecimal characters");
+        try {
+            return new ModelFileIdentity(ModelId.parse(encodedModelId), assetView.getContainerId());
+        } catch (IllegalArgumentException failure) {
+            throw new IOException("Invalid ModelId property", failure);
         }
-        return new ModelFileIdentity(Hash256.parse(encodedModelId), assetView.getContainerId());
     }
 
     static boolean supportsVersion(String currentText, String candidateText) {
@@ -63,19 +64,6 @@ public final class ModelFileIdentityReader {
             return version.getMajorVersion() <= supported.getMajorVersion()
                 && version.getMinorVersion() <= supported.getMinorVersion();
         });
-    }
-
-    private static boolean isLowerHexModelId(String value) {
-        if (value == null || value.length() != Hash256.SIZE * 2) {
-            return false;
-        }
-        for (var index = 0; index < value.length(); index++) {
-            var character = value.charAt(index);
-            if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'))) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static final class AccessClassifyingChannel implements SeekableByteChannel {

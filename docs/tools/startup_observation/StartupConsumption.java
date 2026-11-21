@@ -106,8 +106,8 @@ public final class StartupConsumption {
                 second.updateModelAndTexture(entry.modelHash(), "default");
                 var a = first.getExpressionRuntime();
                 var b = second.getExpressionRuntime();
-                require(a.module().orElseThrow() == target.expressions(), "first required module identity");
-                require(b.module().orElseThrow() == target.expressions(), "second required module identity");
+                require(a.store().orElseThrow() == target.animationStore(), "first required store identity");
+                require(b.store().orElseThrow() == target.animationStore(), "second required store identity");
                 var route = new ConfigActionRoute("extra_config", 0);
                 var ai = first.getAnimationProcessor().invocationInputs(first.createIngressAnimationEvent());
                 var bi = second.getAnimationProcessor().invocationInputs(second.createIngressAnimationEvent());
@@ -116,14 +116,17 @@ public final class StartupConsumption {
                 a.writeConfigBoolean(ai, ag, route, true);
                 require(a.readConfigBoolean(ai, ag, route), "first persistent value=true");
                 require(!b.readConfigBoolean(bi, bg, route), "second persistent value=false");
-                var ap = new AnimationPlayer(first, 0);
-                var bp = new AnimationPlayer(second, 0);
+                var ap = animationPlayer(first);
+                var bp = animationPlayer(second);
                 ap.setAnimation("idle");
                 bp.setAnimation("idle");
-                var rawProgram = target.expressions().requireFloatProgram(
-                    new com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation("player",
-                        "animation/main/idle/bone/molang/rotation/0/pre/0",
-                        com.elfmcys.ysm.expression.inventory.ProgramRole.ANIMATION_SAMPLE, ""));
+                com.elfmcys.ysm.expression.aot.FloatExpression.Program rawProgram;
+                try (var preparation = target.animationStore().prepare()) {
+                    rawProgram = preparation.requireFloatProgram(
+                        new com.elfmcys.ysm.expression.inventory.ModelProgramInventory.SemanticLocation("player",
+                            "animation/main/idle/bone/molang/rotation/0/pre/0",
+                            com.elfmcys.ysm.expression.inventory.ProgramRole.ANIMATION_SAMPLE, ""));
+                }
                 var rotation = first.getAnimation("idle").boneAnimations.stream()
                     .filter(bone -> bone.boneName.equals("molang")).findFirst().orElseThrow().rotationKeyFrames.get(0);
                 a.update(ai, evaluation -> {
@@ -170,6 +173,17 @@ public final class StartupConsumption {
                 second.retire();
             }
         }
+    }
+
+    private static AnimationPlayer animationPlayer(com.elfmcys.ysm.client.entity.AnimatableEntity<?> owner)
+        throws ReflectiveOperationException {
+        var cacheType = Class.forName("com.elfmcys.ysm.geckolib3.core.controller.ControllerAnimationCache");
+        var cacheConstructor = cacheType.getDeclaredConstructor(com.elfmcys.ysm.client.entity.AnimatableEntity.class);
+        cacheConstructor.setAccessible(true);
+        var playerConstructor = AnimationPlayer.class
+            .getDeclaredConstructor(com.elfmcys.ysm.client.entity.AnimatableEntity.class, float.class, cacheType);
+        playerConstructor.setAccessible(true);
+        return playerConstructor.newInstance(owner, 0f, cacheConstructor.newInstance(owner));
     }
 
     public static void requiredFailure(ModelSystem system, HostAvailability availability) {

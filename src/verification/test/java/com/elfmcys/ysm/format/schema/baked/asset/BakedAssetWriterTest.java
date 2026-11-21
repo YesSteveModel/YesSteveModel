@@ -2,6 +2,9 @@ package com.elfmcys.ysm.format.schema.baked.asset;
 
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
+import com.elfmcys.ysm.expression.inventory.ExpressionSet;
+import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
+import com.elfmcys.ysm.expression.inventory.ProgramRole;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.format.container.InlineChunkReader;
@@ -13,10 +16,13 @@ import com.elfmcys.ysm.proto.baked.asset.BakedAnimationEntryProto;
 import com.elfmcys.ysm.proto.baked.asset.BakedAssetManifestProto;
 import com.elfmcys.ysm.proto.baked.asset.BakedAnimationProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.LoopType;
+import com.elfmcys.ysm.proto.mixel.common.ProgramProto;
 import com.elfmcys.ysm.testutil.ProtobufJavaOracle;
 import com.elfmcys.ysm.util.ProtoBytes;
 import com.elfmcys.ysm.util.ProtoUtil;
 import com.google.protobuf.DynamicMessage;
+import dev.semaweave.ProgramKey;
+import dev.semaweave.program.ReadOnlyBytes;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -25,11 +31,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -52,13 +58,8 @@ class BakedAssetWriterTest {
             var manifest = readManifest(channel);
             var protobufManifest = readProtobufJava(channel,
                 container.getChunkInfo(BakedAssetConstant.MANIFEST_CHUNK_NAME), "ysm.baked.asset.BakedAssetManifest");
-            assertEquals(source.size() + 3, container.getChunkTable().size());
-            var artifact = container.getChunkInfo(BakedAssetConstant.EXPRESSION_CHUNK_NAME);
-            assertEquals("zstd", artifact.encoding());
-            assertEquals(1, artifact.decodeSize());
-            var view = new BakedAssetView(channel);
-            assertArrayEquals(new byte[] {1}, view.readExpression(channel, 1));
-            assertThrows(IOException.class, () -> view.readExpression(channel, 0));
+            assertEquals(source.size() + 2, container.getChunkTable().size());
+            assertNull(container.getChunkInfo("expression"));
             assertEquals(source.size(), manifest.animations().size());
             assertEquals(source.size(), protobufManifest.getRepeatedFieldCount(
                 ProtobufJavaOracle.field(protobufManifest.getDescriptorForType(), "animations")));
@@ -88,15 +89,16 @@ class BakedAssetWriterTest {
     }
 
     @Test
-    void writesEmptyAnimationSetWithItsManifestAndArtifact(@TempDir Path temp) throws Exception {
+    void writesEmptyAnimationSetWithItsManifest(@TempDir Path temp) throws Exception {
         var file = writeAsset(temp.resolve("empty.ysm-cache"), List.of());
 
         try (var channel = FileChannel.open(file, StandardOpenOption.READ)) {
             var container = AssetContainerReader.read(channel);
-            assertEquals(3, container.getChunkTable().size());
+            assertEquals(2, container.getChunkTable().size());
             assertEquals(0, readManifest(channel).animations().size());
         }
-        var store = open(file).animationSet(file).bind(List.of(), null, null);
+        var store = com.elfmcys.ysm.model.resource.client.AnimationStore
+            .fromIndices(open(file).animationSet(file).bind(List.of(), null), null);
         assertTrue(store.keySet().isEmpty());
         assertNull(store.state("missing"));
     }
@@ -118,6 +120,66 @@ class BakedAssetWriterTest {
         try (var channel = FileChannel.open(file, StandardOpenOption.READ)) {
             assertThrows(IOException.class, () -> view.readAnimation(channel, "main", "broken"));
         }
+    }
+
+    @Test
+    void retainsSeparateSourceDescriptorsAndReadsProgramEnvelopesOnDemand(@TempDir Path temp) throws Exception {
+        var malformed = ProgramProto.newBuilder().setFormat(123).setBytecode(ByteBuffer.wrap(new byte[] {1})).build();
+        var empty = ProgramProto.newBuilder().build();
+        var descriptors = List.of(descriptor(0, "function/local", malformed), descriptor(1, "function/default", empty));
+        var file = temp.resolve("inputs.ysm-cache");
+        try (var writer = new BakedAssetWriter();
+            var channel = FileChannel.open(file, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            writer.setData(CONTAINER_ID, TARGET_ID, INPUT_HASH, Map.of("main", List.of(animation("walk"))), descriptors,
+                Map.of(0, malformed, 1, empty));
+            writer.write(channel);
+        }
+        var view = open(file);
+        var inputs = view.animationSet(file);
+        assertEquals(descriptors, inputs.descriptors());
+        assertEquals(malformed, inputs.loadProgram(0));
+        assertEquals(empty, inputs.loadProgram(1));
+        assertThrows(IOException.class, () -> inputs.loadProgram(2));
+        try (var phase = inputs.source().openReadPhase()) {
+            assertEquals("walk", phase.load("main", "walk").name());
+            assertEquals(empty, phase.loadProgram(1));
+        }
+
+        int offset;
+        try (var channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            offset = AssetContainerReader.read(channel).getChunkInfo(BakedAssetConstant.PROGRAM_CHUNK_PREFIX + "000000")
+                .offset();
+        }
+        corruptByte(file, offset);
+        var damaged = open(file).animationSet(file);
+        assertEquals(descriptors, damaged.descriptors());
+        assertEquals("walk", damaged.source().load("main", "walk").name());
+        assertEquals(empty, damaged.loadProgram(1));
+        assertThrows(IOException.class, () -> damaged.loadProgram(0));
+    }
+
+    @Test
+    void rejectsProgramPayloadAndDescriptorMismatches(@TempDir Path temp) throws Exception {
+        var program = ProgramProto.newBuilder().setFormat(1).setBytecode(ByteBuffer.wrap(new byte[] {1})).build();
+        var valid = descriptor(0, "function/local", program);
+        try (var writer = new BakedAssetWriter()) {
+            var wrongHash = new ProgramInputDescriptor(0, valid.location(), valid.key(), hash(9), valid.byteLength());
+            assertThrows(IOException.class, () -> writer.setData(CONTAINER_ID, TARGET_ID, INPUT_HASH, Map.of(),
+                List.of(wrongHash), Map.of(0, program)));
+        }
+        try (var writer = new BakedAssetWriter()) {
+            var gap =
+                new ProgramInputDescriptor(1, valid.location(), valid.key(), valid.contentHash(), valid.byteLength());
+            assertThrows(IOException.class,
+                () -> writer.setData(CONTAINER_ID, TARGET_ID, INPUT_HASH, Map.of(), List.of(gap), Map.of(1, program)));
+        }
+        var old = temp.resolve("old-combined.ysm-cache");
+        try (var writer = new TestAssetWriter("ysm/baked-asset");
+            var channel = FileChannel.open(old, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            writer.manifest(manifest());
+            writer.write(channel);
+        }
+        assertRejected(old);
     }
 
     @Test
@@ -162,32 +224,22 @@ class BakedAssetWriterTest {
 
     @Test
     void publishesOnlyAfterACompleteCandidateValidates(@TempDir Path temp) throws Exception {
-        var cacheRoot = temp.resolve("cache");
-        var cache = new AtomicSharedCache(cacheRoot);
-        var target = cacheRoot.resolve("test").resolve("asset.ysm-cache");
-        var targetWasHidden = new AtomicBoolean();
-
-        cache.materialize("test", "asset", target,
-            candidate -> new BakedAssetView(candidate).matches(CONTAINER_ID, TARGET_ID, INPUT_HASH), candidate -> {
-                assertFalse(Files.exists(target));
-                writeAsset(candidate, List.of(animation("walk")));
-                targetWasHidden.set(!Files.exists(target));
-            });
-
-        assertTrue(targetWasHidden.get());
-        assertTrue(Files.isRegularFile(target));
-        assertTrue(open(target).matches(CONTAINER_ID, TARGET_ID, INPUT_HASH));
-
-        var failedTarget = cacheRoot.resolve("test").resolve("failed.ysm-cache");
-        assertThrows(IOException.class,
-            () -> cache.materialize("test", "failed", failedTarget, ignored -> false, candidate -> {
-                writeAsset(candidate, List.of(animation("walk")));
-                throw new IOException("write failed before commit");
-            }));
-        assertFalse(Files.exists(failedTarget));
-        try (var files = Files.list(failedTarget.getParent())) {
-            assertFalse(
-                files.anyMatch(path -> path.getFileName().toString().startsWith(failedTarget.getFileName() + ".tmp-")));
+        try (var cache = new AtomicSharedCache(temp.resolve("cache"));
+            var staging = cache.reserve(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.BAKE)) {
+            var target =
+                cache.path(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.BAKE, staging.location().fileId());
+            writeAsset(staging.file(), List.of(animation("walk")));
+            assertFalse(Files.exists(target));
+            staging.publish(candidate -> new BakedAssetView(candidate).matches(CONTAINER_ID, TARGET_ID, INPUT_HASH),
+                AtomicSharedCache.AtomicReplacement::run);
+            assertTrue(open(target).matches(CONTAINER_ID, TARGET_ID, INPUT_HASH));
+            try (var failed = cache.reserve(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.BAKE)) {
+                writeAsset(failed.file(), List.of(animation("walk")));
+                assertThrows(IOException.class,
+                    () -> failed.publish(ignored -> false, AtomicSharedCache.AtomicReplacement::run));
+                assertFalse(Files.exists(cache.path(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Pool.BAKE,
+                    failed.location().fileId())));
+            }
         }
     }
 
@@ -201,7 +253,8 @@ class BakedAssetWriterTest {
     private static void writeAsset(com.elfmcys.ysm.model.storage.CacheFile file, List<BakedAnimationProto> animations)
         throws IOException {
         try (var writer = new BakedAssetWriter()) {
-            writer.setData(CONTAINER_ID, TARGET_ID, INPUT_HASH, java.util.Map.of("main", animations), new byte[] {1});
+            writer.setData(CONTAINER_ID, TARGET_ID, INPUT_HASH, java.util.Map.of("main", animations), List.of(),
+                java.util.Map.of());
             writer.write(file);
         }
     }
@@ -210,7 +263,8 @@ class BakedAssetWriterTest {
         Files.createDirectories(file.getParent());
         try (var writer = new BakedAssetWriter(); var channel = FileChannel.open(file, StandardOpenOption.CREATE,
             StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
-            writer.setData(CONTAINER_ID, TARGET_ID, INPUT_HASH, java.util.Map.of("main", animations), new byte[] {1});
+            writer.setData(CONTAINER_ID, TARGET_ID, INPUT_HASH, java.util.Map.of("main", animations), List.of(),
+                java.util.Map.of());
             writer.write(channel);
         }
         return file;
@@ -269,6 +323,14 @@ class BakedAssetWriterTest {
         return BakedAnimationProto.newBuilder().setName(name).setLength(0).setLoop(LoopType.UNSPECIFIED).build();
     }
 
+    private static ProgramInputDescriptor descriptor(int id, String location, ProgramProto program) throws IOException {
+        var bytes = ProtoUtil.serializeToArray(program);
+        return new ProgramInputDescriptor(id,
+            new ModelProgramInventory.SemanticLocation(TARGET_ID, ExpressionSet.MAIN, location,
+                ProgramRole.USER_FUNCTION, "callable"),
+            new ProgramKey(ReadOnlyBytes.copyOf(new byte[] {(byte)id})), ModelHashing.blake3(bytes), bytes.length);
+    }
+
     private static Hash256 hash(int value) {
         var bytes = new byte[Hash256.SIZE];
         Arrays.fill(bytes, (byte)value);
@@ -297,7 +359,11 @@ class BakedAssetWriterTest {
 
     private static final class TestAssetWriter extends AssetFileWriter {
         private TestAssetWriter() {
-            setSchemaId(BakedAssetConstant.SCHEMA_ID);
+            this(BakedAssetConstant.SCHEMA_ID);
+        }
+
+        private TestAssetWriter(String schema) {
+            setSchemaId(schema);
             setProperty(BakedAssetConstant.PROP_VERSION, BakedAssetConstant.CURRENT_VERSION.toString());
         }
 
@@ -306,9 +372,6 @@ class BakedAssetWriterTest {
         }
 
         private void manifest(BakedAssetManifestProto manifest) throws IOException {
-            try (var bytes = ArrayBuffer.move(new byte[] {1})) {
-                addRawChunk(BakedAssetConstant.EXPRESSION_CHUNK_NAME, bytes, 9);
-            }
             addProtoChunk(BakedAssetConstant.MANIFEST_CHUNK_NAME, manifest, 0);
         }
     }

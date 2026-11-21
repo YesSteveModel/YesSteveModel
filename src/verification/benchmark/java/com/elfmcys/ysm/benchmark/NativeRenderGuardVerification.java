@@ -23,8 +23,8 @@ public final class NativeRenderGuardVerification {
                 var expectedCount = workload.state.getTotalVertexCount();
                 var before = workload.sink.vertices;
                 damagePose(workload.state);
-                require(!NativeRenderer.render(workload.sink, workload.pose, workload.state, expectedCount, 0x00F000F0,
-                    0, -1, RenderContextType.LEVEL), "real JNI failure must report rejection");
+                require(!NativeRenderer.render(workload.sink, workload.pose, workload.state, 0x00F000F0, 0, -1,
+                    RenderContextType.LEVEL), "real JNI failure must report rejection");
                 require(expectedCount > 0 && workload.sink.vertices == before,
                     "real JNI failure must submit no vertices");
                 require(!workload.state.isValid() && workload.state.getTotalVertexCount() == 0,

@@ -8,14 +8,17 @@ import java.nio.ByteOrder;
 /**
  * Owns one allocation from the native buffer allocator.
  *
- * <p>Execution: the fixed owner ends all reads, writes, and JNI borrows before close().
- * Storage has no Cleaner or closed-state guard; close is a single release obligation.
+ * <p>
+ * Execution: the fixed owner ends all reads, writes, and JNI borrows before close(). Storage has no Cleaner or
+ * closed-state guard; close is a single release obligation.
  *
- * <p>Ownership: nio() and slices borrow the allocation and do not acquire release authority.
- * Keeping such a view reachable does not prevent explicit close.
+ * <p>
+ * Ownership: nio() and slices borrow the allocation and do not acquire release authority. Keeping such a view reachable
+ * does not prevent explicit close.
  *
- * <p>Seam: implements owning allocation transfer in the
- * [JNI buffer handoff](docs/architecture/native-runtime/implementation/jni-and-memory.md#buffer-传递).
+ * <p>
+ * Seam: implements owning allocation transfer in the [JNI buffer
+ * handoff](docs/architecture/native-runtime/implementation/jni-and-memory.md#buffer-传递).
  */
 public final class NativeHeapBuffer implements NativeStorage {
     private final long base;
@@ -46,11 +49,13 @@ public final class NativeHeapBuffer implements NativeStorage {
     }
 
     /**
-     * <p>Requires: ownedMem is the native allocator's owning base view, not a slice or another
-     * allocator's buffer. No other owner may free that base address.
+     * <p>
+     * Requires: ownedMem is the native allocator's owning base view, not a slice or another allocator's buffer. No
+     * other owner may free that base address.
      *
-     * <p>Ownership: consumes the allocation on entry for a valid carrier, including wrapper
-     * allocation failure. The remaining range becomes this Storage's accessible range.
+     * <p>
+     * Ownership: consumes the allocation on entry for a valid carrier, including wrapper allocation failure. The
+     * remaining range becomes this Storage's accessible range.
      *
      * @return the allocation owner; the supplied view must no longer be used independently
      * @throws IllegalArgumentException if ownedMem is not direct

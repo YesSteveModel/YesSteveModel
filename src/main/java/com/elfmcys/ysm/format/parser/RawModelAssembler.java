@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.format.schema.model.ModelOriginVersion;
 import com.elfmcys.ysm.format.parser.pojo.animation.AnimationFile;
@@ -131,11 +132,12 @@ final class RawModelAssembler implements Closeable {
             try (var common = writeCommonAssets(info, sourceManifest)) {
                 writeContainerImages(info, sourceManifest.properties);
 
-                var modelHash = new Hash256(source.aggregateHash());
+                var declared = sourceManifest.declaredModelId();
+                var modelHash = declared == null ? ModelId.fromHash(new Hash256(source.aggregateHash())) : declared;
                 if (dryRun) {
                     return new Result(modelHash, null, List.copyOf(diagnostics), originVer);
                 }
-                var hashId = modelHash.toString();
+                var hashId = ModelHashing.blake3(modelHash.bytes()).toString();
                 ModelInfoBuilder.setProperties(Objects.requireNonNull(info, "info"), sourceManifest.properties,
                     originVer, modelHash);
                 Objects.requireNonNull(manifest, "manifest").setInfo(info.build());
@@ -168,6 +170,7 @@ final class RawModelAssembler implements Closeable {
                 }
             });
         manifest.normalize();
+        manifest.declaredModelId();
         return manifest;
     }
 
@@ -614,6 +617,6 @@ final class RawModelAssembler implements Closeable {
         }
     }
 
-    record Result(Hash256 modelHash, @Nullable Path output, List<RawModelDiagnostic> diagnostics, String originVer) {
+    record Result(ModelId modelHash, @Nullable Path output, List<RawModelDiagnostic> diagnostics, String originVer) {
     }
 }

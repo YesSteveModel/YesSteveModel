@@ -18,7 +18,7 @@ public final class AdmissionRuntimeFixture {
             "net/minecraftforge/fml/ModList",
             "package net.minecraftforge.fml; public final class ModList {public static ModList get(){return new ModList();}public boolean isLoaded(String id){return true;}}",
             "com/elfmcys/ysm/YesSteveModel",
-            "package com.elfmcys.ysm; public final class YesSteveModel {public static final org.apache.logging.log4j.Logger LOGGER=org.apache.logging.log4j.LogManager.getLogger(\"ysm-fixture\");public static boolean isAvailable(){return true;}}");
+            "package com.elfmcys.ysm; public final class YesSteveModel {public static net.minecraftforge.fml.ModContainer MOD;public static final org.apache.logging.log4j.Logger LOGGER=org.apache.logging.log4j.LogManager.getLogger(\"ysm-fixture\");public static boolean isAvailable(){return true;}}");
         var arguments = new java.util.ArrayList<String>(
             java.util.List.of("--release", "17", "-proc:none", "-d", output.toString()));
         for (var entry : definitions.entrySet()) {

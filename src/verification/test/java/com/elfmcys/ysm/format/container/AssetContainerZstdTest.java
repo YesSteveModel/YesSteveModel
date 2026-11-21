@@ -96,7 +96,9 @@ class AssetContainerZstdTest {
             assertTrue(error.getMessage().contains("encoding=zstd"));
             assertTrue(error.getMessage().contains("encodedSize=" + chunk.size()));
             assertTrue(error.getMessage().contains("decodedSize=" + chunk.decodeSize()));
-            assertTrue(error.getMessage().contains("nativeStatus=Native zstd decompression returned no result"));
+            assertTrue(error.getMessage().contains("nativeStatus="));
+            org.junit.jupiter.api.Assertions.assertInstanceOf(com.elfmcys.ysm.natives.Zstd.InvalidDataException.class,
+                error.getCause());
         }
     }
 

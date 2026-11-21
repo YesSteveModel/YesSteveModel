@@ -35,12 +35,15 @@ public final class ModelInfoView {
     private final Map<String, ExtraAnimationButtonProto> extraAnimationButtons;
     private final Map<String, ExtraAnimationClassifyProto> extraAnimationClassifications;
     private final int originVer;
+    private final dev.semaweave.compilation.CompilerOptions expressionOptions;
 
     public ModelInfoView(InfoProto info, RenderTargetProto player, AssetFileView view) {
         this.view = Objects.requireNonNull(view, "view");
         this.info = Objects.requireNonNull(info, "info");
         this.settings = info.settings();
         this.originVer = ModelOriginVersion.fromModVersion(info.properties().originVer());
+        this.expressionOptions = new dev.semaweave.compilation.CompilerOptions(
+            ModelOriginVersion.usesDivZeroFallback(info.properties().originVer()));
         this.player = Objects.requireNonNull(player, "player");
 
         var languages = new HashMap<String, Map<String, String>>(info.languageFiles().size());
@@ -113,6 +116,10 @@ public final class ModelInfoView {
 
     public boolean hasMetadata() {
         return info.hasMetadata();
+    }
+
+    public dev.semaweave.compilation.CompilerOptions expressionOptions() {
+        return expressionOptions;
     }
 
     public int originVer() {

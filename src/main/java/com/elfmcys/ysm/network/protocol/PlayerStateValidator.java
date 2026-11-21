@@ -1,19 +1,11 @@
 package com.elfmcys.ysm.network.protocol;
 
-import com.elfmcys.ysm.proto.network.AnimationStateProto;
-import com.elfmcys.ysm.proto.network.EffectStateSetProto;
-import com.elfmcys.ysm.proto.network.EntityRefProto;
-import com.elfmcys.ysm.proto.network.GameplayStateProto;
-import com.elfmcys.ysm.proto.network.ModelSelectionStateProto;
-import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
-import com.elfmcys.ysm.proto.network.PlayerStateUpdateProto;
-import com.elfmcys.ysm.proto.network.RoamingStateProto;
-import com.elfmcys.ysm.proto.network.StateWriteMode;
+import com.elfmcys.ysm.proto.network.*;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 
-/** Structural and resource-limit validation performed before a player-state packet is enqueued. */
+/** Validates packet shape. Selection owners decode roaming against their current dictionary. */
 public final class PlayerStateValidator {
     private static final int MAX_TEXTURE_BYTES = 256;
     private static final int MAX_ANIMATION_BYTES = 256;
@@ -23,37 +15,56 @@ public final class PlayerStateValidator {
 
     private PlayerStateValidator() {}
 
-    public static boolean validReport(PlayerStateReportProto report) {
-        return validMode(report.mode()) && validEntity(report.subject())
-            && (!report.hasGameplay() || validGameplay(report.gameplayUnsafe()))
-            && (!report.hasEffects() || validEffects(report.effectsUnsafe()))
-            && (!report.hasAnimation() || validAnimation(report.animationUnsafe()))
-            && (!report.hasRoaming() || validRoaming(report.roamingUnsafe()));
+    public static boolean validFlags(PlayerFlagsProto message) {
+        return message.entityId() >= 0 && message.hasState();
     }
 
-    public static boolean validUpdate(PlayerStateUpdateProto update) {
-        return validMode(update.mode()) && validEntity(update.subject())
-            && (update.mode() != StateWriteMode.FULL || update.hasModel())
-            && (!update.hasModel() || validModel(update.modelUnsafe()))
-            && (!update.hasGameplay() || validGameplay(update.gameplayUnsafe()))
-            && (!update.hasEffects() || validEffects(update.effectsUnsafe()))
-            && (!update.hasAnimation() || validAnimation(update.animationUnsafe()))
-            && (!update.hasRoaming() || validRoaming(update.roamingUnsafe()));
+    public static boolean validSelectionState(SelectionStateProto state, boolean full) {
+        return validSelectionStateShape(state, full) && (!state.hasRoaming() || validRoaming(state.roamingUnsafe()));
     }
 
-    private static boolean validMode(StateWriteMode mode) {
-        return mode == StateWriteMode.FULL || mode == StateWriteMode.DELTA;
-    }
-
-    private static boolean validEntity(EntityRefProto entity) {
-        return entity != null && !entity.hasPlayerId() && entity.entityId() >= 0;
-    }
-
-    private static boolean validModel(ModelSelectionStateProto model) {
-        if (!ModelReferenceCodec.valid(model.model())) {
+    /** Leaves roaming validation to the decoder that has the current selection dictionary. */
+    public static boolean validSelectionStateShape(SelectionStateProto state, boolean full) {
+        if (full && (!state.hasTextureId() || !state.hasAnimation() || !state.hasRoaming()))
             return false;
-        }
-        return utf8Length(model.textureId()) <= MAX_TEXTURE_BYTES;
+        if (!full && !state.hasTextureId() && !state.hasAnimation() && !state.hasRoaming())
+            return false;
+        return (!state.hasTextureId() || utf8Length(state.textureIdUnsafe()) <= MAX_TEXTURE_BYTES)
+            && (!state.hasAnimation() || validAnimation(state.animationUnsafe()));
+    }
+
+    public static boolean validEntityState(EntityStateProto state, boolean full) {
+        if (full && (!state.hasGameplay() || !state.hasEffects()))
+            return false;
+        if (!full && !state.hasGameplay() && !state.hasEffects())
+            return false;
+        if (state.hasGameplay() && !validGameplay(state.gameplayUnsafe())
+            || state.hasEffects() && !validEffects(state.effectsUnsafe()))
+            return false;
+        if (!full)
+            return true;
+        var g = state.gameplayUnsafe();
+        return g.hasFlying() && g.hasExperienceLevel() && g.hasFoodLevel() && g.hasHealth() && g.hasMaxHealth()
+            && g.hasMoveXQ7() && g.hasMoveYQ7() && g.hasMoveZQ7() && g.hasShieldCooldown();
+    }
+
+    public static boolean validSync(SelectionStateSyncProto message) {
+        return validSyncShape(message)
+            && (!message.hasState() || !message.state().hasRoaming() || validRoaming(message.state().roamingUnsafe()));
+    }
+
+    /** Leaves state roaming to the selection decoder; event arguments are validated here. */
+    public static boolean validSyncShape(SelectionStateSyncProto message) {
+        if (message.entityId() < 0 || message.intentId() < 0)
+            return false;
+        if (message.hasState())
+            return validSelectionStateShape(message.state(), false);
+        if (message.intentId() == 0 || !message.hasSync() || message.sync().arguments().size() > 16)
+            return false;
+        for (float value : message.sync().arguments())
+            if (!Float.isFinite(value))
+                return false;
+        return true;
     }
 
     private static boolean validGameplay(GameplayStateProto state) {
@@ -91,19 +102,13 @@ public final class PlayerStateValidator {
             && utf8Length(state.animationId()) <= MAX_ANIMATION_BYTES;
     }
 
-    private static boolean validRoaming(RoamingStateProto state) {
-        if (state.variables().size() > ProtocolLimits.MAX_ROAMING_VARIABLES) {
+    public static boolean validRoaming(RoamingStateProto state) {
+        try {
+            SelectionCodec.read(state);
+            return true;
+        } catch (IllegalArgumentException invalid) {
             return false;
         }
-        var names = new HashSet<String>();
-        for (var variable : state.variables()) {
-            if (variable.name().isBlank()
-                || utf8Length(variable.name()) > ProtocolLimits.MAX_ROAMING_VARIABLE_NAME_BYTES
-                || !Float.isFinite(variable.value_()) || !names.add(variable.name())) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static int utf8Length(String value) {

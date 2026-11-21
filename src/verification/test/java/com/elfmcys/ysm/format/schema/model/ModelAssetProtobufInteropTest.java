@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.schema.model;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
@@ -57,16 +58,16 @@ class ModelAssetProtobufInteropTest {
             protobufTextures.hasField(ProtobufJavaOracle.field(protobufTextures.getDescriptorForType(), "normal")));
         assertTrue(
             protobufTextures.hasField(ProtobufJavaOracle.field(protobufTextures.getDescriptorForType(), "specular")));
-        assertArrayEquals(hash(),
-            ((ByteString)field(messageField(messageField(protobufManifest, "info"), "properties"), "model_id"))
-                .toByteArray());
+        assertEquals("hash:" + java.util.HexFormat.of().formatHex(hash()),
+            field(messageField(messageField(protobufManifest, "info"), "properties"), "model_id"));
 
         var modifiedManifest = replaceNestedString(protobufManifest, "info", "metadata", "name", "protobuf-java");
         var quickbufManifest = ManifestProto.parseFrom(ProtoSource.newInstance(modifiedManifest.toByteArray()));
         assertEquals("protobuf-java", quickbufManifest.info().metadataUnsafe().name());
         assertFalse(quickbufManifest.renderTargets().get(0).textures().get("main").hasNormal());
         assertTrue(quickbufManifest.renderTargets().get(0).textures().get("main").hasSpecular());
-        assertArrayEquals(hash(), ProtoBytes.copy(quickbufManifest.info().properties().modelId()));
+        assertEquals("hash:" + java.util.HexFormat.of().formatHex(hash()),
+            quickbufManifest.info().properties().modelId());
 
         var geometry = geometry();
         var protobufGeometry =
@@ -199,8 +200,8 @@ class ModelAssetProtobufInteropTest {
                 .setDisablePreviewRotation(true).build())
             .setMetadata(MetadataProto.newBuilder().setName(name).setTips("tip")
                 .setLicense(LicenseProto.newBuilder().setType("CC0-1.0").setDesc("public domain").build()).build())
-            .setProperties(PropertiesProto.newBuilder().setModelId(ByteBuffer.wrap(hash())).setFree(true)
-                .setOriginVer("1.0").build())
+            .setProperties(PropertiesProto.newBuilder().setModelId("hash:" + java.util.HexFormat.of().formatHex(hash()))
+                .setFree(true).setOriginVer("1.0").build())
             .build();
         return ManifestProto.newBuilder().addRenderTargets(target)
             .setCommonAssets(CommonProto.newBuilder().setStringsBlobId(3).build()).setInfo(info).build();

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.storage;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.format.parser.ModelParser;
 import com.elfmcys.ysm.format.parser.RawCompileResult;
 import com.elfmcys.ysm.format.schema.model.ModelFileIdentityReader;
@@ -50,13 +51,18 @@ class ConvertedObjectStoreTest {
     }
 
     @Test
-    void convertedStoreKeepsItsDocumentedLayout() {
-        var cacheRoot = temp.resolve("cache");
-        var store = new ConvertedObjectStore(cacheRoot);
-
-        assertEquals(cacheRoot.resolve("converted/.tmp"), store.temporaryRoot());
-        assertEquals(cacheRoot.resolve("converted/objects").resolve(identity.modelId().toString())
-            .resolve(identity.containerId() + ".mxc"), store.objectPath(identity.modelId(), identity.containerId()));
+    void convertedStoreUsesIndependentInstances() throws Exception {
+        var root = temp.resolve("cache");
+        var store = store(root);
+        var first = commit(store, new RawCompileResult(identity.modelId(), stagedFixture(root)),
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture")));
+        var second = commit(store, new RawCompileResult(identity.modelId(), stagedFixture(root)),
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture")));
+        assertEquals(identity, first.identity());
+        assertEquals(identity, second.identity());
+        assertNotEquals(first.instance(), second.instance());
+        assertNotEquals(first.file(), second.file());
+        assertTrue(first.file().startsWith(root.resolve("f/c")));
     }
 
     @Test
@@ -67,27 +73,26 @@ class ConvertedObjectStoreTest {
         var bytes = Files.readAllBytes(fixture);
         bytes[bytes.length - 1] ^= 1;
         Files.write(target, bytes);
-        var entry = new ConvertedSourceIndex(identity, "custom/raw", "test-version");
+        var entry = entry(identity, target);
 
-        assertTrue(new ConvertedObjectStore(cacheRoot).findIdentity(entry).isPresent());
+        assertTrue(store(cacheRoot).findIdentity(entry).isPresent());
         assertTrue(Files.exists(target));
     }
 
     @Test
     void tupleMismatchIsAMissWithoutDeletingTheExactObject() throws Exception {
         var cacheRoot = temp.resolve("cache");
-        var expectedModel = different(identity.modelId());
+        var expectedModel = ModelId.parse("different/model");
         var expectedContainer = different(identity.containerId());
         var target = container(cacheRoot, expectedModel, expectedContainer);
         var sibling = target.resolveSibling("keep.mxc");
         Files.createDirectories(target.getParent());
         Files.copy(fixture, target);
         Files.writeString(sibling, "keep");
-        var entry = new ConvertedSourceIndex(new ModelFileIdentity(expectedModel, expectedContainer), "custom/raw",
-            "test-version");
+        var entry = entry(new ModelFileIdentity(expectedModel, expectedContainer), target);
         var original = Files.readAllBytes(target);
 
-        assertTrue(new ConvertedObjectStore(cacheRoot).findIdentity(entry).isEmpty());
+        assertTrue(store(cacheRoot).findIdentity(entry).isEmpty());
         assertArrayEquals(original, Files.readAllBytes(target));
         assertTrue(Files.exists(sibling));
     }
@@ -98,8 +103,8 @@ class ConvertedObjectStoreTest {
         var target = container(cacheRoot, identity.modelId(), identity.containerId());
         Files.createDirectories(target.getParent());
         Files.copy(fixture, target);
-        var entry = new ConvertedSourceIndex(identity, "custom/raw", "test-version");
-        var store = new ConvertedObjectStore(cacheRoot);
+        var entry = entry(identity, target);
+        var store = store(cacheRoot);
         assertTrue(store.findIdentity(entry, "3.0.0").isPresent());
         assertTrue(store.findIdentity(entry, "0.0.0").isEmpty());
         assertTrue(Files.exists(target));
@@ -117,11 +122,11 @@ class ConvertedObjectStoreTest {
             commitReached.set(true);
             throw new IOException("injected atomic move failure");
         });
-        var store = new ConvertedObjectStore(cacheRoot, cache);
+        var store = new ConvertedObjectStore(com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(cache));
 
-        assertThrows(IOException.class,
-            () -> store.commit(new RawCompileResult(identity.modelId(), stagedFixture(cacheRoot)),
-                new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("fixture"))));
+        assertThrows(CompletionException.class,
+            () -> commit(store, new RawCompileResult(identity.modelId(), stagedFixture(cacheRoot)),
+                new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture"))));
 
         assertTrue(commitReached.get(), "The failure must reach the atomic replacement seam");
         assertArrayEquals(previous, Files.readAllBytes(target));
@@ -135,16 +140,17 @@ class ConvertedObjectStoreTest {
     void concurrentQualifiedWritersLeaveACompletelyVerifiedObject() throws Exception {
         var cacheRoot = temp.resolve("cache");
         var compiled = new RawCompileResult(identity.modelId(), stagedFixture(cacheRoot));
-        var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("fixture"));
-        var first = CompletableFuture.runAsync(() -> commit(new ConvertedObjectStore(cacheRoot), compiled, location));
-        var second = CompletableFuture.runAsync(() -> commit(new ConvertedObjectStore(cacheRoot), compiled, location));
-
+        var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture"));
+        var firstStore = store(cacheRoot);
+        var secondStore = store(cacheRoot);
+        var first = CompletableFuture.supplyAsync(() -> commit(firstStore, compiled, location));
+        var second = CompletableFuture.supplyAsync(() -> commit(secondStore, compiled, location));
         CompletableFuture.allOf(first, second).join();
-
-        var target = container(cacheRoot, identity.modelId(), identity.containerId());
-        try (var verified = ManagedContainer.verifyFile(target)) {
-            assertEquals(identity, verified.identity());
-        }
+        assertNotEquals(first.join().instance(), second.join().instance());
+        for (var result : java.util.List.of(first.join(), second.join()))
+            try (var verified = ManagedContainer.verifyFile(result.file())) {
+                assertEquals(identity, verified.identity());
+            }
     }
 
     @Test
@@ -152,23 +158,33 @@ class ConvertedObjectStoreTest {
         var cacheRoot = temp.resolve("cache");
         var target = container(cacheRoot, identity.modelId(), identity.containerId());
 
-        assertThrows(IOException.class,
-            () -> new ConvertedObjectStore(cacheRoot).commit(
+        assertThrows(CompletionException.class,
+            () -> commit(store(cacheRoot),
                 new RawCompileResult(identity.modelId(), cacheRoot.resolve("converted/.tmp/missing.ysm")),
-                new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("missing"))));
+                new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("missing"))));
         assertTrue(Files.notExists(target));
     }
 
-    private static Path stagedFixture(Path root) throws IOException {
-        var staged = root.resolve("converted/.tmp/fixture.mxc");
-        Files.createDirectories(staged.getParent());
-        if (!Files.exists(staged))
-            Files.copy(fixture, staged);
-        return staged;
+    private static ConvertedObjectStore store(Path root) {
+        return new ConvertedObjectStore(
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(root)));
     }
 
-    private static Path container(Path cacheRoot, Hash256 modelId, Hash256 containerId) {
-        return new ConvertedObjectStore(cacheRoot).objectPath(modelId, containerId);
+    private static Path stagedFixture(Path root) {
+        return fixture;
+    }
+
+    private static Path container(Path cacheRoot, ModelId modelId, Hash256 containerId) {
+        return cacheRoot.resolve("f/c/0000000000000001");
+    }
+
+    private static ConvertedSourceIndex entry(ModelFileIdentity expected, Path file) throws IOException {
+        try (var metadata = ManagedContainer.verifyFile(fixture)) {
+            return new ConvertedSourceIndex(expected, "custom/raw", "test-version",
+                new com.elfmcys.ysm.natives.storage.CacheStorageTypes.Location(1, java.util.UUID.randomUUID()), file,
+                com.elfmcys.ysm.buffer.ArrayBuffer.move(new byte[] {1}).shareArray(),
+                metadata.metadataPrefix().orElseThrow().shareArray());
+        }
     }
 
     private static Hash256 different(Hash256 value) {
@@ -177,9 +193,11 @@ class ConvertedObjectStoreTest {
         return new Hash256(bytes);
     }
 
-    private static void commit(ConvertedObjectStore store, RawCompileResult compiled, CatalogLocation location) {
-        try {
-            store.commit(compiled, location);
+    private static ConvertedObjectStore.Stored commit(ConvertedObjectStore store, RawCompileResult compiled,
+        CatalogLocation location) {
+        try (var staging = store.stage()) {
+            staging.file().writeBytes(Files.readAllBytes(compiled.stagedContainer()));
+            return store.commit(new RawCompileResult(compiled.modelHash(), staging.path()), location, staging);
         } catch (IOException failure) {
             throw new CompletionException(failure);
         }

@@ -206,7 +206,7 @@ class ModelAudioContentPathTest {
 
     private static ManagedContainer open(Path file) throws Exception {
         return ManagedContainer.openDirect(file,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("audio-u2")));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("audio-u2")));
     }
 
     private static Path copyRawFixture(Path destination) throws Exception {

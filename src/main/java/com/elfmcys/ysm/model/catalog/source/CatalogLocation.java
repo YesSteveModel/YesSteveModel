@@ -8,7 +8,7 @@ import java.util.Objects;
 /** Canonical catalog address. An empty entry denotes the namespace directory. */
 public record CatalogLocation(CatalogRoot root, String entry) implements Comparable<CatalogLocation> {
 
-    public static final CatalogLocation DEFAULT = new CatalogLocation(CatalogRoot.BUILTIN, "default");
+    public static final CatalogLocation BUILTIN_DEFAULT = new CatalogLocation(CatalogRoot.BUILTIN, "default");
 
     public CatalogLocation {
         Objects.requireNonNull(root, "root");
@@ -34,9 +34,7 @@ public record CatalogLocation(CatalogRoot root, String entry) implements Compara
     }
 
     public String value() {
-        if (equals(DEFAULT))
-            return "default";
-        return entry.isEmpty() ? root.prefix() : entryPrefix(root) + entry;
+        return root.prefix() + entry;
     }
 
     public String parent() {
@@ -53,12 +51,10 @@ public record CatalogLocation(CatalogRoot root, String entry) implements Compara
 
     public static CatalogLocation directory(String value) {
         Objects.requireNonNull(value, "address");
-        if (value.equals(DEFAULT.value()))
-            return DEFAULT;
         for (var root : CatalogRoot.values()) {
             if (value.equals(root.prefix()))
                 return new CatalogLocation(root, "");
-            var prefix = entryPrefix(root);
+            var prefix = root.prefix();
             if (value.startsWith(prefix)) {
                 var location = new CatalogLocation(root, new ModelPath(value.substring(prefix.length())));
                 if (!value.equals(location.value()))
@@ -67,10 +63,6 @@ public record CatalogLocation(CatalogRoot root, String entry) implements Compara
             }
         }
         throw new IllegalArgumentException("Invalid catalog address");
-    }
-
-    private static String entryPrefix(CatalogRoot root) {
-        return root.prefix() + (root == CatalogRoot.BUILTIN ? "" : "/");
     }
 
     public static int compareUtf8(String left, String right) {

@@ -1,8 +1,7 @@
 package com.elfmcys.ysm.capability;
 
-import com.elfmcys.ysm.model.domain.Hash256;
-import it.unimi.dsi.fastutil.ints.IntSet;
-import it.unimi.dsi.fastutil.objects.Object2FloatMap;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import it.unimi.dsi.fastutil.objects.Object2FloatOpenHashMap;
 import java.util.Objects;
 import java.util.Optional;
@@ -10,125 +9,119 @@ import java.util.function.Consumer;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerPlayer;
 
-/** Persistent player model selection and synchronization state. */
+/** The player owner holds one selection independently of connection negotiation. */
 public final class ModelInfoCapability {
-    private Hash256 modelId;
-    private String selectTexture = "";
+    private CommittedSelection selection;
     private boolean mandatory;
-    private boolean ignoreGrants;
     private boolean disabled;
     private boolean dirty;
-    private final RoamingVariableStore roamingVariables = new RoamingVariableStore();
+    private boolean flagsDirty;
     private ServerDrivenPlayerPropertiesTracker propertiesTracker = new ServerDrivenPlayerPropertiesTracker();
 
-    public void setModelAndTexture(Hash256 modelId, String selectTexture) {
-        var keepIgnoreGrants = modelId != null && Objects.equals(this.modelId, modelId) && ignoreGrants;
-        if (Objects.equals(this.modelId, modelId) && this.selectTexture.equals(selectTexture)
-            && ignoreGrants == keepIgnoreGrants) {
-            return;
-        }
-        this.modelId = modelId;
-        this.selectTexture = selectTexture;
-        ignoreGrants = keepIgnoreGrants;
+    public CommittedSelection selection() {
+        return selection;
+    }
+
+    public void commitSelection(CommittedSelection next) {
+        selection = Objects.requireNonNull(next);
         markDirty();
     }
 
-    public void setCommandSelection(Hash256 modelId, String selectTexture, boolean ignoreGrants) {
-        Objects.requireNonNull(modelId, "modelId");
-        Objects.requireNonNull(selectTexture, "selectTexture");
-        if (modelId.equals(this.modelId) && selectTexture.equals(this.selectTexture) && mandatory
-            && this.ignoreGrants == ignoreGrants) {
+    public void retireProducer(Object producer) {
+        if (selection != null && selection.accepts(producer, selection.intentId()))
+            commitSelection(CommittedSelection.appearance(selection.model(), selection.texture()));
+    }
+
+    public void setModelAndTexture(ModelId modelId, String texture) {
+        setModelSelection(modelId == null ? null : PublishedModelId.model(modelId), texture);
+    }
+
+    public void setModelSelection(PublishedModelId modelId, String texture) {
+        if (Objects.equals(getModelId(), modelId) && getSelectTexture().equals(texture))
             return;
-        }
-        this.modelId = modelId;
-        this.selectTexture = selectTexture;
+        selection = modelId == null ? null : CommittedSelection.appearance(modelId, texture);
+        markDirty();
+    }
+
+    public void setCommandSelection(ModelId modelId, String texture) {
+        setCommandSelection(PublishedModelId.model(modelId), texture);
+    }
+
+    public void setCommandSelection(PublishedModelId modelId, String texture) {
+        commitSelection(CommittedSelection.appearance(modelId, texture));
         mandatory = true;
-        this.ignoreGrants = ignoreGrants;
-        markDirty();
-    }
-
-    public boolean ignoresGrantsFor(Hash256 modelId) {
-        return ignoreGrants && Objects.equals(this.modelId, modelId);
-    }
-
-    void clearIgnoreGrants() {
-        if (ignoreGrants) {
-            ignoreGrants = false;
-            markDirty();
-        }
     }
 
     public void moveFrom(ModelInfoCapability source) {
-        modelId = source.modelId;
-        selectTexture = source.selectTexture;
+        selection = source.selection;
+        source.selection = null;
         mandatory = source.mandatory;
-        ignoreGrants = source.ignoreGrants;
         disabled = source.disabled;
         propertiesTracker = source.propertiesTracker;
-        roamingVariables.moveFrom(source.roamingVariables);
         markDirty();
+        flagsDirty = true;
     }
 
-    public Hash256 getModelId() {
-        return modelId;
+    public PublishedModelId getModelId() {
+        return selection == null ? null : selection.model();
+    }
+
+    public ModelId getContentModelId() {
+        if (getModelId() instanceof PublishedModelId.Model model)
+            return model.hash();
+        return getModelId() == null ? null
+            : com.elfmcys.ysm.model.service.ServerModelService.current()
+                .flatMap(com.elfmcys.ysm.model.service.ServerModelService::catalog)
+                .flatMap(catalog -> catalog.find(getModelId())).map(model -> model.modelId()).orElse(null);
     }
 
     public String getSelectTexture() {
-        return selectTexture;
+        return selection == null ? "" : selection.texture();
     }
 
-    public void setSelectTexture(String selectTexture) {
-        this.selectTexture = selectTexture;
-        markDirty();
+    public void setSelectTexture(String value) {
+        if (selection != null)
+            selection.texture(value);
     }
 
-    public void setDisabled(boolean disabled) {
-        if (this.disabled != disabled) {
-            this.disabled = disabled;
-            markDirty();
+    public void setDisabled(boolean value) {
+        if (disabled != value) {
+            disabled = value;
+            flagsDirty = true;
         }
+    }
+
+    public boolean consumeFlagsDirty() {
+        var value = flagsDirty;
+        flagsDirty = false;
+        return value;
     }
 
     public void playAnimation(ServerPlayer player, String animation) {
-        propertiesTracker.setExtraAnimation(player, !dirty, animation);
+        propertiesTracker.setExtraAnimation(player, true, animation);
     }
 
     public void stopAnimation(ServerPlayer player) {
-        propertiesTracker.setExtraAnimation(player, !dirty, "");
-    }
-
-    public void executeWithMolangVars(Consumer<Object2FloatOpenHashMap<String>> consumer) {
-        roamingVariables.execute(modelId, consumer);
-    }
-
-    public Optional<Object2FloatOpenHashMap<String>> getMolangVars() {
-        return roamingVariables.get(modelId);
-    }
-
-    public void updateRoamingVars(ServerPlayer player, int modelKey, Object2FloatMap<String> variables) {
-        roamingVariables.update(modelKey, variables);
-        propertiesTracker.updateMolangVars(player, !dirty, modelKey, variables);
+        playAnimation(player, "");
     }
 
     public void applyClientAnimation(String animation) {
-        propertiesTracker.acceptClientAnimation(animation);
+        if (selection != null)
+            selection.animation(animation);
     }
 
-    public void applyClientRoaming(int modelKey, Object2FloatMap<String> variables, boolean full) {
-        if (full) {
-            roamingVariables.replace(modelKey, variables);
-        } else {
-            roamingVariables.update(modelKey, variables);
-        }
-        propertiesTracker.acceptClientRoaming();
+    public void executeWithMolangVars(Consumer<Object2FloatOpenHashMap<String>> consumer) {
+        getMolangVars().ifPresent(consumer);
     }
 
-    public void trimRoamingStorage(IntSet retainedHashes) {
-        roamingVariables.trim(retainedHashes);
-    }
-
-    RoamingVariableStore roamingVariables() {
-        return roamingVariables;
+    public Optional<Object2FloatOpenHashMap<String>> getMolangVars() {
+        if (selection == null)
+            return Optional.empty();
+        var values = selection.roaming().snapshot();
+        var named = new Object2FloatOpenHashMap<String>(values.ids().length);
+        for (int i = 0; i < values.ids().length; i++)
+            named.put(selection.dictionary().names()[values.ids()[i]], values.values()[i]);
+        return Optional.of(named);
     }
 
     public ServerDrivenPlayerPropertiesTracker getPropertiesTracker() {
@@ -144,16 +137,13 @@ public final class ModelInfoCapability {
     }
 
     public boolean consumeDirty() {
-        var changed = dirty;
+        var value = dirty;
         dirty = false;
-        return changed;
+        return value;
     }
 
-    public void setMandatory(boolean mandatory) {
-        if (this.mandatory != mandatory) {
-            this.mandatory = mandatory;
-            markDirty();
-        }
+    public void setMandatory(boolean value) {
+        mandatory = value;
     }
 
     public boolean isMandatory() {
@@ -162,29 +152,26 @@ public final class ModelInfoCapability {
 
     public CompoundTag serializeNBT() {
         var tag = new CompoundTag();
-        tag.putString("model_hash", modelId == null ? "" : modelId.toString());
-        tag.putString("select_texture", selectTexture);
+        tag.putString("model_id", getModelId() == null ? "" : getModelId().toString());
+        tag.putString("select_texture", getSelectTexture());
         tag.putBoolean("mandatory", mandatory);
-        tag.putBoolean("ignore_grants", ignoreGrants);
         tag.putBoolean("disabled", disabled);
-        tag.put("molang_storage", roamingVariables.serialize());
         return tag;
     }
 
     public void deserializeNBT(CompoundTag tag) {
-        var storedHash = tag.getString("model_hash");
+        PublishedModelId id;
         try {
-            modelId = storedHash.isEmpty() ? null : Hash256.parse(storedHash);
-        } catch (IllegalArgumentException invalidHash) {
-            modelId = null;
+            var value = tag.getString("model_id");
+            id = value.isEmpty() ? null : PublishedModelId.parse(value);
+        } catch (IllegalArgumentException invalid) {
+            id = null;
         }
-        selectTexture = tag.getString("select_texture");
-        if (selectTexture.length() > 4 && selectTexture.toLowerCase().endsWith(".png")) {
-            selectTexture = selectTexture.substring(0, selectTexture.length() - 4);
-        }
+        var texture = tag.getString("select_texture");
+        if (texture.length() > 4 && texture.toLowerCase(java.util.Locale.ROOT).endsWith(".png"))
+            texture = texture.substring(0, texture.length() - 4);
+        selection = id == null ? null : CommittedSelection.appearance(id, texture);
         mandatory = tag.getBoolean("mandatory");
-        ignoreGrants = modelId != null && tag.getBoolean("ignore_grants");
         disabled = tag.getBoolean("disabled");
-        roamingVariables.deserialize(tag.getCompound("molang_storage"));
     }
 }

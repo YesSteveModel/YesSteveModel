@@ -13,7 +13,7 @@ import com.elfmcys.ysm.model.resource.client.ResourceRequest;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.model.service.ClientModelService;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.network.NetworkHandler;
 import com.elfmcys.ysm.util.RenderUtil;
 import com.google.common.collect.Lists;
@@ -43,7 +43,7 @@ public class PlayerTextureScreen extends ModelScreen {
 
     protected @Nullable CustomGuiPlayerEntity previewEntity;
     protected final ModelRenderTarget model;
-    protected final Hash256 modelHash;
+    protected final ModelId modelHash;
     protected final String modelPath;
     private final PlayerModelScreen parent;
     private final List<String> textures;
@@ -217,7 +217,7 @@ public class PlayerTextureScreen extends ModelScreen {
         }
     }
 
-    protected void selectTexture(Hash256 hash, String path, String texture, @Nullable ModelRenderTarget renderTarget) {
+    protected void selectTexture(ModelId hash, String path, String texture, @Nullable ModelRenderTarget renderTarget) {
         if (!hasCurrentWorld() || previewEntity == null)
             return;
         selectedTexture = texture;

@@ -13,9 +13,7 @@ import java.util.Map;
 
 /** Animation-set cache format identity and default resident binding. */
 public final class BakedAnimationCache {
-    public static final String CACHE_SUFFIX = ".anim.ysm-cache";
-    public static final String CACHE_ABI =
-        "animation-" + AbiVersion.CACHE_ANIMATION + "/" + dev.semaweave.EngineAbi.current().packageName();
+    public static final String CACHE_ABI = "animation-input-v1:" + AbiVersion.CACHE_ANIMATION;
 
     private BakedAnimationCache() {}
 
@@ -23,7 +21,7 @@ public final class BakedAnimationCache {
         return CACHE_ABI;
     }
 
-    public static AnimationStore bindResident(
+    public static AnimationStore.Index bindResident(
         Iterable<? extends java.util.Map.Entry<String, AnimationFileProto>> animationFiles,
         AnimationProtoMapper.ProgramBinder programBinder, BoundAnimationObserver observer) throws IOException {
         var domains = animationDomains(animationFiles);
@@ -38,7 +36,7 @@ public final class BakedAnimationCache {
             observer.accept(animation, value);
             bound.put(animation.name(), value);
         }
-        return AnimationStore.eager(bound);
+        return AnimationStore.Index.eager(bound);
     }
 
     @FunctionalInterface

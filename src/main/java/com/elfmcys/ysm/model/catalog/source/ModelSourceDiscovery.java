@@ -40,7 +40,7 @@ public final class ModelSourceDiscovery {
             } catch (NoSuchFileException absent) {
                 if (source.createIfMissing()) {
                     Files.createDirectories(configured);
-                } else if (source.rootKind() == CatalogRootKind.AUTH) {
+                } else if (source.rootKind() == CatalogRootKind.MODELS) {
                     return new RootInventoryState.Complete(identity, models, packs);
                 } else {
                     throw absent;

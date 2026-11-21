@@ -13,6 +13,7 @@ import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.catalog.content.DefaultAnimationKey;
 import com.elfmcys.ysm.model.catalog.source.ModelSourceDiscovery;
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.model.storage.ModelHashing;
@@ -99,7 +100,7 @@ public final class BuiltinModelIndexTool {
         }
         Files.createDirectories(workDirectory);
 
-        final Hash256 scanned;
+        final ModelId scanned;
         try (var vfs = new Directory(defaultRoot)) {
             scanned = ModelParser.scanModelHash(vfs);
         }
@@ -131,10 +132,10 @@ public final class BuiltinModelIndexTool {
         throws IOException {
         Files.deleteIfExists(indexFile);
         var discovery = discoverRawDirectories(builtinRoot);
-        var hashes = new LinkedHashMap<ModelPath, Hash256>();
+        var hashes = new LinkedHashMap<ModelPath, ModelId>();
         for (var source : discovery.models()) {
             var path = ModelPath.relativeTo(builtinRoot, source);
-            final Hash256 scanned;
+            final ModelId scanned;
             try (var vfs = new Directory(source)) {
                 scanned = ModelParser.scanModelHash(vfs);
             }
@@ -214,7 +215,8 @@ public final class BuiltinModelIndexTool {
             var compiledSets = new int[1];
             var materialized = BuiltinModelMaterializer.materialize(handle, (targetId, inventory) -> {
                 if (!inventory.programs().isEmpty()) {
-                    verifyAotCompilation(host, compiler, inventory, path + "/" + targetId, analysis)
+                    verifyAotCompilation(host, compiler, inventory, path + "/" + targetId,
+                        handle.view().getMetadata().expressionOptions(), analysis)
                         .forEach(value -> replacements.add(path + "/" + value));
                     compiledTargets.add(targetId);
                     compiledSets[0]++;
@@ -267,7 +269,8 @@ public final class BuiltinModelIndexTool {
 
     private static List<String> verifyAotCompilation(ExpressionHost host,
         DefaultExpressionAotCompiler<MolangContext> compiler, ModelProgramInventory.Result inventory, String target,
-        java.util.Map<dev.semaweave.compilation.EngineMetrics.AnalysisCounter, Long> analysis) throws Exception {
+        CompilerOptions options, java.util.Map<dev.semaweave.compilation.EngineMetrics.AnalysisCounter, Long> analysis)
+        throws Exception {
         var builder = CompilationUnit
             .builder(host.compilationPolicy(), PortableProgramCodecs.v1(), ExpressionIdentityHash.SHA_256)
             .addPrograms(inventory.programs());
@@ -275,8 +278,8 @@ public final class BuiltinModelIndexTool {
         var unit = builder.build();
         analysis.clear();
         long started = System.nanoTime();
-        var artifact = compiler.compile(TaskContext.NONE, unit, host.hostAbi(), host.registry(),
-            CompilerOptions.DEFAULT, host.expressionBinding().bindingPlan(), ExpressionIdentityHash.SHA_256);
+        var artifact = compiler.compile(TaskContext.NONE, unit, host.hostAbi(), host.registry(), options,
+            host.expressionBinding().bindingPlan(), ExpressionIdentityHash.SHA_256);
         var resources = new LinkedHashMap<String, Object>();
         resources.put("target", target);
         resources.put("set", inventory.bindings().get(0).location().set().id());
@@ -284,7 +287,6 @@ public final class BuiltinModelIndexTool {
         resources.put("identity", artifact.manifest().identity().artifactFingerprint().toString());
         resources.put("metrics", artifact.report().metrics());
         resources.put("analysis", new java.util.EnumMap<>(analysis));
-        resources.put("limits", host.compilationPolicy().compilerLimits());
         resources.put("staticInputPrograms", unit.programs().size());
         resources.put("typedMethods", artifact.report().optimizations().values().get("typed-methods"));
         resources.put("variants",
@@ -313,7 +315,7 @@ public final class BuiltinModelIndexTool {
         }).toList();
     }
 
-    static BuiltinModelIndex createDefaultContract(Hash256 defaultHash,
+    static BuiltinModelIndex createDefaultContract(ModelId defaultHash,
         Map<DefaultAnimationKey, Hash256> currentAnimations) throws IOException {
         return BuiltinModelIndex.of(Map.of(DEFAULT_PATH, defaultHash), currentAnimations, Map.of());
     }
@@ -326,7 +328,7 @@ public final class BuiltinModelIndexTool {
         return ManagedContainer.openIndexed(new CatalogIndexEntry(identity, location, file));
     }
 
-    static BuiltinModelIndex createIndex(Map<ModelPath, Hash256> modelHashes, BuiltinModelIndex defaultContract,
+    static BuiltinModelIndex createIndex(Map<ModelPath, ModelId> modelHashes, BuiltinModelIndex defaultContract,
         Map<DefaultAnimationKey, Set<Hash256>> history) throws IOException {
         requireDefaultOnlyContract(defaultContract);
         var scannedDefault = modelHashes.get(DEFAULT_PATH);

@@ -458,5 +458,22 @@
   "message.yes_steve_model.gen_preview.query_failed": "缺图查询失败：%s",
   "message.yes_steve_model.gen_preview.success": "成功",
   "message.yes_steve_model.gen_preview.failed": "失败",
-  "message.yes_steve_model.gen_preview.skipped": "跳过"
+  "message.yes_steve_model.gen_preview.skipped": "跳过",
+  "message.yes_steve_model.selection.failure.preparation": "无法准备所选模型。",
+  "message.yes_steve_model.selection.failure.preferences": "无法恢复该模型的偏好，未发送选择请求。",
+  "message.yes_steve_model.selection.failure.send": "模型选择请求发送失败。",
+  "message.yes_steve_model.selection.failure.rejected": "服务器拒绝了模型选择。",
+  "message.yes_steve_model.selection.failure.installation": "所选模型安装失败。",
+  "message.yes_steve_model.selection.failure.timeout": "模型选择等待超时。",
+  "message.yes_steve_model.preferences.failure": "玩家偏好读取或保存失败。",
+  "message.yes_steve_model.preferences.clear.saved": "Roaming 已在本地清除并保存。",
+  "message.yes_steve_model.preferences.clear.failed": "Roaming 已在本地清除，但保存失败。",
+  "commands.ysm.cache.help": "/%s cache prune-next [all]：安排本进程下次启动时清理，仍需满足安全条件。all 还清理全局 converted 和 bake 缓存的其他 schema 版本。",
+  "commands.ysm.cache.local": "实例缓存",
+  "commands.ysm.cache.global": "全局缓存",
+  "commands.ysm.cache.local_global": "实例/全局缓存",
+  "commands.ysm.cache.scheduled": "%s：已安排下次启动时清理。仍需满足进程排他和活动对象保护条件。",
+  "commands.ysm.cache.scheduled_all": "%s：已安排下次启动时清理，包含 converted 和 bake 缓存的其他 schema 版本。活动对象仍受保护。",
+  "commands.ysm.cache.failure": "%s：无法安排清理：%s",
+  "commands.ysm.cache.global_disabled": "全局缓存未启用，未保存全局清理请求。"
 }

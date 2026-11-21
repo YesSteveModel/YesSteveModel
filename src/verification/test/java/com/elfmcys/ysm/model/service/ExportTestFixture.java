@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.service;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
 import com.elfmcys.ysm.format.parser.DefaultAnimationFilter;
@@ -48,7 +49,8 @@ public final class ExportTestFixture {
             var id = new byte[32];
             id[0] = (byte)marker;
             var info = source.modelFile().getManifest().info().toBuilder();
-            info.setProperties(info.build().properties().toBuilder().setModelId(ByteBuffer.wrap(id)).build());
+            info.setProperties(info.build().properties().toBuilder()
+                .setModelId("hash:" + java.util.HexFormat.of().formatHex(id)).build());
             info.setThumbnailSource(preview);
             writer.setManifest(source.modelFile().getManifest().toBuilder().setInfo(info.build()).build());
             for (var chunk : source.modelFile().getFileView().getAssetView().getChunkTable().values()) {

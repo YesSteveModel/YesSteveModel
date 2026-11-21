@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.aot;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.expression.host.BuiltinDeclarations;
 import com.elfmcys.ysm.expression.host.ComponentScope;
 import com.elfmcys.ysm.expression.host.ExpressionBinding;
@@ -16,17 +17,14 @@ import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import dev.semaweave.CompiledModuleInstance;
 import dev.semaweave.CompiledModuleResource;
 import dev.semaweave.CompiledRoamingState;
-import dev.semaweave.ProgramId;
 import dev.semaweave.ProgramKey;
 import dev.semaweave.RegistryRuntimeLinkage;
 import dev.semaweave.ResourceLease;
-import dev.semaweave.RoamingPayload;
 import dev.semaweave.RoamingRole;
 import dev.semaweave.RuntimeDiagnostics;
 import dev.semaweave.RuntimeLinkage;
 import dev.semaweave.RuntimeSymbolTable;
 import dev.semaweave.SymbolKey;
-import dev.semaweave.compilation.BakedConstantTable;
 import dev.semaweave.compilation.CompilationReport;
 import dev.semaweave.compilation.ProgramRef;
 import dev.semaweave.compilation.TransientAccessRequest;
@@ -36,15 +34,19 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Target-generation owner for one verified resource and its immutable program bindings. */
+/** Execution backend owned by one AnimationStore after assembly. */
 public final class RenderTargetExpressionModule implements AutoCloseable {
     private static final AtomicLong NEXT_GENERATION_ID = new AtomicLong();
 
     private final BakedAnimationSet animations;
+    private final InterpretedExpressionPrograms interpretedPrograms;
+    private final com.elfmcys.ysm.model.domain.Hash256 containerId;
+    private final String targetId;
+    private final com.elfmcys.ysm.expression.inventory.ExpressionSet set;
+    private final dev.semaweave.identity.Fingerprint configFingerprint;
     private final ExpressionArtifactIdentity identity;
     private final CompiledModuleResource<MolangContext> resource;
     private final ExpressionHost host;
-    private final BakedConstantTable constants;
     private final CompilationReport compilationReport;
     private final Map<ProgramKey, ModelProgramInventory.SemanticLocation> programLocations;
     private final ExpressionBinding expressionBinding;
@@ -52,41 +54,45 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
     private final Map<SymbolKey, ProgramKey> userFunctions;
     private final ExpressionArtifactStore.Source source;
     private final MolangEventCatalog eventCatalog;
-    private final java.util.Set<String> roamingFields;
+    private final java.util.List<String> roamingFields;
     private final HostLinkage productionLinkage;
     private final long generationId;
     private boolean closed;
 
     RenderTargetExpressionModule(ExpressionArtifactIdentity identity, CompiledModuleResource<MolangContext> resource,
-        ExpressionHost host, BakedConstantTable constants, CompilationReport compilationReport,
+        ExpressionHost host, CompilationReport compilationReport,
         Map<ProgramKey, ModelProgramInventory.SemanticLocation> programLocations,
         Map<ModelProgramInventory.SemanticLocation, ProgramRef> programs, Map<SymbolKey, ProgramKey> userFunctions,
         ExpressionArtifactStore.Source source, MolangEventCatalog eventCatalog, HostLinkage productionLinkage) {
-        this(identity, resource, host, constants, compilationReport, programLocations, programs, userFunctions, source,
+        this(identity, resource, host, compilationReport, programLocations, programs, userFunctions, source,
             eventCatalog, productionLinkage, identity.expressionBinding());
     }
 
     RenderTargetExpressionModule(ExpressionArtifactIdentity identity, CompiledModuleResource<MolangContext> resource,
-        ExpressionHost host, BakedConstantTable constants, CompilationReport compilationReport,
+        ExpressionHost host, CompilationReport compilationReport,
         Map<ProgramKey, ModelProgramInventory.SemanticLocation> programLocations,
         Map<ModelProgramInventory.SemanticLocation, ProgramRef> programs, Map<SymbolKey, ProgramKey> userFunctions,
         ExpressionArtifactStore.Source source, MolangEventCatalog eventCatalog, HostLinkage productionLinkage,
         ExpressionBinding expressionBinding) {
-        this(identity, resource, host, constants, compilationReport, programLocations, programs, userFunctions, source,
+        this(identity, resource, host, compilationReport, programLocations, programs, userFunctions, source,
             eventCatalog, productionLinkage, expressionBinding, BakedAnimationSet.empty());
     }
 
     RenderTargetExpressionModule(ExpressionArtifactIdentity identity, CompiledModuleResource<MolangContext> resource,
-        ExpressionHost host, BakedConstantTable constants, CompilationReport compilationReport,
+        ExpressionHost host, CompilationReport compilationReport,
         Map<ProgramKey, ModelProgramInventory.SemanticLocation> programLocations,
         Map<ModelProgramInventory.SemanticLocation, ProgramRef> programs, Map<SymbolKey, ProgramKey> userFunctions,
         ExpressionArtifactStore.Source source, MolangEventCatalog eventCatalog, HostLinkage productionLinkage,
         ExpressionBinding expressionBinding, BakedAnimationSet animations) {
         this.animations = Objects.requireNonNull(animations, "animations");
+        this.interpretedPrograms = null;
         this.identity = Objects.requireNonNull(identity, "identity");
+        this.containerId = identity.containerId();
+        this.targetId = identity.targetId();
+        this.set = identity.set();
+        this.configFingerprint = identity.configFingerprint();
         this.resource = Objects.requireNonNull(resource, "resource");
         this.host = Objects.requireNonNull(host, "host");
-        this.constants = Objects.requireNonNull(constants, "constants");
         this.compilationReport = Objects.requireNonNull(compilationReport, "compilationReport");
         this.programLocations = Map.copyOf(programLocations);
         for (var replacement : compilationReport.replacements()) {
@@ -103,17 +109,80 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
         this.userFunctions = Map.copyOf(userFunctions);
         this.source = Objects.requireNonNull(source, "source");
         this.eventCatalog = Objects.requireNonNull(eventCatalog, "eventCatalog");
-        this.roamingFields = java.util.Set.copyOf(resource.newRoamingState(RoamingRole.CONSUMER).fields());
+        this.roamingFields = resource.roamingFieldNames();
         this.productionLinkage = Objects.requireNonNull(productionLinkage, "productionLinkage");
         this.generationId = NEXT_GENERATION_ID.incrementAndGet();
     }
 
+    RenderTargetExpressionModule(com.elfmcys.ysm.model.resource.client.render.AnimationInputIdentity inputIdentity,
+        BakedAnimationSet animations, ExpressionHost host, ExpressionBinding binding,
+        ModelProgramInventory.Prepared sources, MolangEventCatalog eventCatalog, HostLinkage linkage,
+        dev.semaweave.identity.Fingerprint configFingerprint, ExpressionArtifactStore.Source source) {
+        this.identity = null;
+        this.resource = null;
+        this.animations = animations;
+        this.host = host;
+        this.containerId = inputIdentity.containerId();
+        this.targetId = inputIdentity.targetId();
+        this.set = inputIdentity.set();
+        this.configFingerprint = configFingerprint;
+        this.compilationReport = null;
+        this.expressionBinding = binding;
+        this.programs = Map.of();
+        this.userFunctions = Map.of();
+        this.source = source;
+        this.eventCatalog = eventCatalog;
+        this.productionLinkage = linkage;
+        this.roamingFields = java.util.List.of();
+        this.generationId = NEXT_GENERATION_ID.incrementAndGet();
+        var locations = new java.util.LinkedHashMap<ProgramKey, ModelProgramInventory.SemanticLocation>();
+        animations.descriptors().forEach(value -> locations.put(value.key(), value.location()));
+        this.programLocations = Map.copyOf(locations);
+        this.interpretedPrograms =
+            new InterpretedExpressionPrograms(host, binding, animations, sources, inputIdentity.sourceOptions());
+    }
+
+    public boolean interpreted() {
+        return interpretedPrograms != null;
+    }
+
+    public Object executionGeneration() {
+        return interpreted() ? interpretedPrograms.generation() : generation();
+    }
+
+    public String targetId() {
+        return targetId;
+    }
+
+    public com.elfmcys.ysm.model.domain.Hash256 containerId() {
+        return containerId;
+    }
+
+    public com.elfmcys.ysm.expression.inventory.ExpressionSet set() {
+        return set;
+    }
+
+    public int boundInterpreterProgramCount() {
+        return interpreted() ? interpretedPrograms.boundProgramCount() : 0;
+    }
+
+    public InterpreterRuntimeUse openInterpreter(ComponentScope components, RoamingRole role) {
+        requireOpen();
+        return interpretedPrograms.open(components, role);
+    }
+
+    public void reportInterpreterPreparation() {
+        if (interpreted())
+            interpretedPrograms.reportPreparation();
+    }
+
     public java.util.List<String> publishedSymbols() {
-        return host.declarations().stream().flatMap(d -> d.members().stream()).map(m -> m.schema().symbol())
-            .distinct().sorted().toList();
+        return host.declarations().stream().flatMap(d -> d.members().stream()).map(m -> m.schema().symbol()).distinct()
+            .sorted().toList();
     }
 
     public ExpressionArtifactIdentity identity() {
+        requireAot();
         return identity;
     }
 
@@ -125,12 +194,12 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
         return eventCatalog;
     }
 
-    public SharedExpressionSemantics sharedSemantics(com.elfmcys.ysm.model.domain.Hash256 consumerModelId) {
-        return SharedExpressionSemantics.create(consumerModelId, identity.targetId(), identity.configFingerprint(),
+    public SharedExpressionSemantics sharedSemantics(ModelId consumerModelId) {
+        return SharedExpressionSemantics.create(consumerModelId, targetId, configFingerprint,
             eventCatalog.fingerprint());
     }
 
-    public java.util.Set<String> roamingFields() {
+    public java.util.List<String> roamingFields() {
         return roamingFields;
     }
 
@@ -139,6 +208,7 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
     }
 
     public CompilationReport compilationReport() {
+        requireAot();
         return compilationReport;
     }
 
@@ -158,8 +228,13 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
             throw new IllegalArgumentException("component holder belongs to another owner");
         }
         try {
-            try (var ignored = newInstance(holder)) {
-                // Construction proves the generated root can bind this exact object graph.
+            if (interpreted()) {
+                try (var ignored = openInterpreter(holder, RoamingRole.PRODUCER)) {
+                }
+            } else {
+                try (var ignored = newInstance(holder)) {
+                    // Construction proves the generated root can bind this exact object graph.
+                }
             }
             return holder;
         } catch (RuntimeException | Error failure) {
@@ -199,8 +274,7 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
     }
 
     public ProgramRef requireProgram(String location, ProgramRole role, String discriminator) {
-        return requireProgram(new ModelProgramInventory.SemanticLocation(identity.targetId(), identity.set(), location,
-            role, discriminator));
+        return requireProgram(new ModelProgramInventory.SemanticLocation(targetId, set, location, role, discriminator));
     }
 
     java.util.Set<dev.semaweave.LocalName> transientInstanceSlots() {
@@ -228,16 +302,6 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
         return resource.newRoamingState(Objects.requireNonNull(role, "role"));
     }
 
-    public synchronized void validateRoamingFull(RoamingPayload payload) {
-        requireOpen();
-        resource.newRoamingState(RoamingRole.CONSUMER).validateFull(Objects.requireNonNull(payload, "payload"));
-    }
-
-    public synchronized void validateRoamingPatch(RoamingPayload payload) {
-        requireOpen();
-        resource.newRoamingState(RoamingRole.CONSUMER).validatePatch(Objects.requireNonNull(payload, "payload"));
-    }
-
     public synchronized CompiledModuleInstance<MolangContext> newInstance(RuntimeLinkage<MolangContext> linkage,
         CompiledRoamingState roamingState) {
         requireOpen();
@@ -252,10 +316,6 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
 
     ExpressionHost host() {
         return host;
-    }
-
-    BakedConstantTable constants() {
-        return constants;
     }
 
     /** Creates one entity-owned instance from the holder admitted with this target. */
@@ -280,20 +340,9 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
         RegistryRuntimeLinkage<MolangContext> registry = RegistryRuntimeLinkage
             .create(components.providers(host, expressionBinding.bindingPlan()), RuntimeSymbolTable.empty());
         return new RuntimeLinkage<>() {
-
-            @Override
-            public dev.semaweave.ContextType<MolangContext> contextType() {
-                return host.contextType();
-            }
-
             @Override
             public RegistryRuntimeLinkage<MolangContext> registry() {
                 return registry;
-            }
-
-            @Override
-            public BakedConstantTable constants() {
-                return RenderTargetExpressionModule.this.constants;
             }
 
             @Override
@@ -301,50 +350,40 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
                 return RuntimeDiagnostics.none();
             }
 
-            @Override
-            public ResourceLease<MolangContext> retainResource() {
-                return resource.retain();
-            }
         };
     }
 
-    public AnimationStore animations(Iterable<String> files, AnimationStore fallback) {
+    public AnimationStore.Index animationIndex(Iterable<String> files) {
         requireOpen();
-        return animations.bind(files, this, fallback);
+        return animations.bind(files, this);
     }
 
-    private ModelProgramInventory.SemanticLocation animationLocation(int id, ProgramRole role) {
+    public TransientExpressionSession.CompilationInputs
+        prepareTransientInputs(TransientExpressionSession.Privilege privilege) {
         requireOpen();
-        var programId = new ProgramId(id);
-        if (id >= resource.programs().size()) {
-            throw new IllegalArgumentException("Invalid baked animation program id: " + id);
-        }
-        var descriptor = resource.programs().descriptor(programId);
-        var location = programLocations.get(descriptor.key());
-        if (location == null || location.role() != role) {
-            throw new IllegalArgumentException("Invalid baked animation program id: " + id);
-        }
-        return location;
+        requireAot();
+        return TransientExpressionSession.prepare(this, privilege);
     }
 
-    public FloatExpression.Program requireFloatProgram(int id) {
-        return requireFloatProgram(animationLocation(id, ProgramRole.ANIMATION_SAMPLE));
+    public Diagnostics diagnostics() {
+        return new Diagnostics(identity, source, compilationReport, programLocations, publishedSymbols());
     }
 
-    public VoidProgram requireVoidProgram(int id) {
-        return requireVoidProgram(animationLocation(id, ProgramRole.ANIMATION_INSTRUCTION));
+    public record Diagnostics(ExpressionArtifactIdentity identity, ExpressionArtifactStore.Source source,
+        CompilationReport compilationReport, Map<ProgramKey, ModelProgramInventory.SemanticLocation> programLocations,
+        java.util.List<String> publishedSymbols) {
     }
 
     public FloatExpression.Program requireFloatProgram(ModelProgramInventory.SemanticLocation location) {
-        return new FloatExpression.Program(location, requireProgram(location), generation());
+        return new FloatExpression.Program(location, binding(location));
     }
 
     public BooleanProgram requireBooleanProgram(ModelProgramInventory.SemanticLocation location) {
-        return new BooleanProgram(location, requireProgram(location), generation());
+        return new BooleanProgram(location, binding(location));
     }
 
     public VoidProgram requireVoidProgram(ModelProgramInventory.SemanticLocation location) {
-        return new VoidProgram(location, requireProgram(location), generation());
+        return new VoidProgram(location, binding(location));
     }
 
     public EventProgram requireEventProgram(ModelProgramInventory.SemanticLocation location) {
@@ -353,10 +392,17 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
     }
 
     public UserFunctionProgram requireUserFunctionProgram(ModelProgramInventory.SemanticLocation location) {
-        return new UserFunctionProgram(location, requireProgram(location), generation());
+        return new UserFunctionProgram(location, binding(location));
+    }
+
+    private ProgramBinding binding(ModelProgramInventory.SemanticLocation location) {
+        requireOpen();
+        return interpreted() ? interpretedPrograms.reference(location)
+            : new ProgramBinding.Aot(requireProgram(location), generation());
     }
 
     public dev.semaweave.compilation.ResourceGenerationToken generation() {
+        requireAot();
         return resource.generation();
     }
 
@@ -371,6 +417,11 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
         }
     }
 
+    private void requireAot() {
+        if (interpreted())
+            throw new IllegalStateException("Interpreter module has no AOT artifact or resource");
+    }
+
     @Override
     public void close() {
         synchronized (this) {
@@ -379,6 +430,9 @@ public final class RenderTargetExpressionModule implements AutoCloseable {
             }
             closed = true;
         }
-        resource.close();
+        if (interpreted())
+            interpretedPrograms.close();
+        else
+            resource.close();
     }
 }

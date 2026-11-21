@@ -17,14 +17,16 @@ import java.util.function.Consumer;
 /**
  * Owns a native frame state and publishes its matching Java model and locator map.
  *
- * <p>Execution: the entity owner serializes extraction, locator consumption, rendering, and close.
- * Locator callbacks run inline and must not replace, extract, or close the state during the visit.
+ * <p>
+ * Execution: the entity owner serializes extraction, locator consumption, rendering, and close. Locator callbacks run
+ * inline and must not replace, extract, or close the state during the visit.
  *
- * <p>Ownership: the owner retains the installed model's resource lifetime through consumption.
- * This class keeps a model reference but does not acquire a resource lease for a borrowed result.
+ * <p>
+ * Ownership: the owner retains the installed model's resource lifetime through consumption. This class keeps a model
+ * reference but does not acquire a resource lease for a borrowed result.
  *
- * <p>Seam: implements Java publication in the
- * [frame state contract](docs/architecture/rendering/overview.md#帧状态发布与借用).
+ * <p>
+ * Seam: implements Java publication in the [frame state contract](docs/architecture/rendering/overview.md#帧状态发布与借用).
  */
 public final class GeoModelState implements Closeable {
     private final NativeModelState nativeState = NativeModelState.create();
@@ -33,11 +35,13 @@ public final class GeoModelState implements Closeable {
     private GeoModel model;
 
     /**
-     * <p>Requires: animatedModel's binding and complete attribute array stay unchanged during the call.
-     * The owner has ended consumption of the previous result.
+     * <p>
+     * Requires: animatedModel's binding and complete attribute array stay unchanged during the call. The owner has
+     * ended consumption of the previous result.
      *
-     * <p>Failure: false or a Java publication exception leaves no consumable result.
-     * The previous result is revoked before extraction starts; it is not a fallback frame.
+     * <p>
+     * Failure: false or a Java publication exception leaves no consumable result. The previous result is revoked before
+     * extraction starts; it is not a fallback frame.
      *
      * @return true after native views and the matching locator map are fully published, including empty geometry
      */
@@ -100,16 +104,16 @@ public final class GeoModelState implements Closeable {
     }
 
     /**
-     * @return the embedded state for the owner's current consumption window; no independent close
-     *     or publication authority transfers to the caller
+     * @return the embedded state for the owner's current consumption window; no independent close or publication
+     *         authority transfers to the caller
      */
     public NativeModelState getNativeState() {
         return nativeState;
     }
 
     /**
-     * Uses the locator visit contract, or calls applyDefaultPose then visitor once for an empty group.
-     * The default branch restores the pushed frame in finally; both callbacks must balance their own stack changes.
+     * Uses the locator visit contract, or calls applyDefaultPose then visitor once for an empty group. The default
+     * branch restores the pushed frame in finally; both callbacks must balance their own stack changes.
      */
     public void visitLocatorGroupOrDefault(GeoLocator locator, PoseStack poseStack, Consumer<PoseStack> visitor,
         Consumer<PoseStack> applyDefaultPose) {
@@ -127,12 +131,15 @@ public final class GeoModelState implements Closeable {
     }
 
     /**
-     * <p>Requires: this state is valid and locator belongs to its model's locator type.
-     * The callback preserves stack depth and consumes each temporary locator pose before returning.
+     * <p>
+     * Requires: this state is valid and locator belongs to its model's locator type. The callback preserves stack depth
+     * and consumes each temporary locator pose before returning.
      *
-     * <p>Failure: callback exceptions propagate unchanged. The original top pose and normal are restored in finally.
+     * <p>
+     * Failure: callback exceptions propagate unchanged. The original top pose and normal are restored in finally.
      *
-     * <p>Execution: invokes visitor synchronously once per active locator, in the published bone order.
+     * <p>
+     * Execution: invokes visitor synchronously once per active locator, in the published bone order.
      */
     public void visitLocatorGroup(GeoLocator locator, PoseStack poseStack, Consumer<PoseStack> visitor) {
         if (model.locatorType() != locator.type()) {

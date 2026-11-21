@@ -16,16 +16,19 @@ import java.util.function.BiFunction;
 /**
  * Owns execution capacity; resource owners retain cancellation and cleanup responsibility.
  *
- * <p>Execution: queue operations, promotion, withdrawal, and shutdown are serialized internally.
- * One worker serves local-player work; the remaining workers serve background work. Tasks in one
- * dispatch may run concurrently. Worker count is bounded; the queues do not impose an admission quota.
+ * <p>
+ * Execution: queue operations, promotion, withdrawal, and shutdown are serialized internally. One worker serves
+ * local-player work; the remaining workers serve background work. Tasks in one dispatch may run concurrently. Worker
+ * count is bounded; the queues do not impose an admission quota.
  *
- * <p>Requires: submitted actions own frozen inputs and complete finite work without waiting for
- * network, host callbacks, other workers, or a Flight. Each action publishes its domain terminal
- * result and releases its inputs even if execution fails; logging an escaped failure is not completion.
+ * <p>
+ * Requires: submitted actions own frozen inputs and complete finite work without waiting for network, host callbacks,
+ * other workers, or a Flight. Each action publishes its domain terminal result and releases its inputs even if
+ * execution fails; logging an escaped failure is not completion.
  *
- * <p>Seam: implements [scheduling versus domain completion](docs/architecture/runtime/overview.md#调度与领域终态交接) and
- * [priority isolation](docs/architecture/runtime/overview.md#客户端资源调度).
+ * <p>
+ * Seam: implements [scheduling versus domain completion](docs/architecture/runtime/overview.md#调度与领域终态交接) and [priority
+ * isolation](docs/architecture/runtime/overview.md#客户端资源调度).
  */
 public final class ClientResourceScheduler {
     private static final PromotionLink NO_PROMOTION = () -> {
@@ -87,8 +90,8 @@ public final class ClientResourceScheduler {
     }
 
     /**
-     * Rejects later submissions and wakes workers to drain accepted actions; does not cancel or await them.
-     * Repeated calls are harmless. Domain owners must separately terminate work they withdraw.
+     * Rejects later submissions and wakes workers to drain accepted actions; does not cancel or await them. Repeated
+     * calls are harmless. Domain owners must separately terminate work they withdraw.
      */
     public void shutdown() {
         synchronized (lock) {
@@ -100,8 +103,9 @@ public final class ClientResourceScheduler {
     /**
      * Waits for every worker to exit without a timeout.
      *
-     * <p>Requires: shutdown has been requested and the caller is not one of these workers. Returning
-     * proves executor termination, not that a domain owner delivered every result.
+     * <p>
+     * Requires: shutdown has been requested and the caller is not one of these workers. Returning proves executor
+     * termination, not that a domain owner delivered every result.
      *
      * @throws InterruptedException if the waiting caller is interrupted
      */
@@ -201,8 +205,9 @@ public final class ClientResourceScheduler {
         /**
          * Accepts one non-null action and returns its withdrawal handle. The action may start before return.
          *
-         * <p>Ownership: acceptance transfers execution responsibility only. Rejection leaves the input and
-         * terminal-result obligations with the submitter; action failure is logged on its worker.
+         * <p>
+         * Ownership: acceptance transfers execution responsibility only. Rejection leaves the input and terminal-result
+         * obligations with the submitter; action failure is logged on its worker.
          *
          * @throws RejectedExecutionException if shutdown has sealed submission
          */
@@ -245,9 +250,9 @@ public final class ClientResourceScheduler {
         }
 
         /**
-         * Forwards current and future promotion to a distinct dispatch from this scheduler.
-         * The caller owns the returned link and closes it when the dependency ends. Closing a link
-         * removes forwarding only; it does not undo promotion or cancel dependent work.
+         * Forwards current and future promotion to a distinct dispatch from this scheduler. The caller owns the
+         * returned link and closes it when the dependency ends. Closing a link removes forwarding only; it does not
+         * undo promotion or cancel dependent work.
          *
          * @throws IllegalArgumentException if dependency is this dispatch or belongs to another scheduler
          */
@@ -291,8 +296,8 @@ public final class ClientResourceScheduler {
         /**
          * Atomically withdraws an unclaimed action without running it or closing its inputs.
          *
-         * @return true if this call withdrew the action and the original owner must settle its result
-         *         and inputs; false if already claimed or withdrawn, which does not prove completion
+         * @return true if this call withdrew the action and the original owner must settle its result and inputs; false
+         *         if already claimed or withdrawn, which does not prove completion
          */
         public boolean withdraw() {
             synchronized (lock) {

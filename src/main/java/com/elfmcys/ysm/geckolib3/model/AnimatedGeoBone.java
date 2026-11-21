@@ -51,6 +51,10 @@ public class AnimatedGeoBone implements BoneView {
         return bone;
     }
 
+    public int getBoneIndex() {
+        return baseOffset / AnimatedGeoModel.BONE_ATTRIBUTE_COUNT;
+    }
+
     void bindBoneData(GeoBone bone) {
         this.bone = bone;
     }

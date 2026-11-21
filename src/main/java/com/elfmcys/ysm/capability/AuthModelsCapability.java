@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.capability;
 
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.google.common.collect.Sets;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
@@ -9,9 +9,9 @@ import net.minecraft.nbt.Tag;
 import java.util.Set;
 
 public class AuthModelsCapability {
-    private Set<Hash256> authModels = Sets.newHashSet();
+    private Set<ModelId> authModels = Sets.newHashSet();
 
-    public void addModel(Hash256 modelHash) {
+    public void addModel(ModelId modelHash) {
         authModels.add(modelHash);
     }
 
@@ -19,19 +19,19 @@ public class AuthModelsCapability {
         this.authModels = source.authModels;
     }
 
-    public void removeModel(Hash256 modelHash) {
+    public void removeModel(ModelId modelHash) {
         authModels.remove(modelHash);
     }
 
-    public boolean containModel(Hash256 modelHash) {
+    public boolean containModel(ModelId modelHash) {
         return authModels.contains(modelHash);
     }
 
-    public Set<Hash256> getAuthModels() {
+    public Set<ModelId> getAuthModels() {
         return authModels;
     }
 
-    public void setAuthModels(Set<Hash256> authModels) {
+    public void setAuthModels(Set<ModelId> authModels) {
         this.authModels = Sets.newHashSet(authModels);
     }
 
@@ -41,7 +41,7 @@ public class AuthModelsCapability {
 
     public ListTag serializeNBT() {
         ListTag listTag = new ListTag();
-        for (Hash256 modelHash : authModels) {
+        for (ModelId modelHash : authModels) {
             listTag.add(StringTag.valueOf(modelHash.toString()));
         }
         return listTag;
@@ -51,7 +51,7 @@ public class AuthModelsCapability {
         this.authModels.clear();
         for (Tag tag : nbt) {
             try {
-                authModels.add(Hash256.parse(tag.getAsString()));
+                authModels.add(ModelId.parse(tag.getAsString()));
             } catch (IllegalArgumentException ignored) {
                 // Old path-based authorization entries are intentionally not migrated.
             }

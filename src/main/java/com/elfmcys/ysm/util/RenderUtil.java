@@ -64,7 +64,11 @@ public final class RenderUtil {
         Entity vehicle = entity.getVehicle();
         if (vehicle != null) {
             vehicle.getCapability(VehicleAnimatableCapabilityProvider.CAP).ifPresent(vehicleCap -> {
-                if (!vehicleCap.isAssigned() || !vehicleCap.hasMatchingInstallation()) {
+                if (!vehicleCap.isAssigned()) {
+                    return;
+                }
+                vehicleCap.waitForRenderUpdate();
+                if (!vehicleCap.hasMatchingInstallation()) {
                     return;
                 }
                 int index = vehicle.getPassengers().indexOf(entity);
@@ -327,8 +331,8 @@ public final class RenderUtil {
         float posX, float posY, float scale, float partialTick, TAnimatable entity,
         GeoReplacedEntityRenderer<T, TAnimatable> renderer, boolean disableRotation, boolean disableEquipment,
         GuiModelFraming framing, float width, float height) {
-        var input = com.elfmcys.ysm.client.gui.GuiFrameInput.capture(entity.getEntity(), partialTick,
-            disableRotation, disableEquipment, false, false, 0);
+        var input = com.elfmcys.ysm.client.gui.GuiFrameInput.capture(entity.getEntity(), partialTick, disableRotation,
+            disableEquipment, false, false, 0);
         renderModelInGuiStateful(posX, posY, scale, entity, renderer, input, null, false, framing, width, height);
     }
 
@@ -372,7 +376,8 @@ public final class RenderUtil {
             RenderSystem.runAsFancy(() -> {
                 if (prepared)
                     renderer.renderPreparedReplacement(entity, data, null, 0, input.partialTick(), poseStack,
-                        drawBuffer, 0xf000f0, () -> {});
+                        drawBuffer, 0xf000f0, () -> {
+                        });
                 else
                     renderer.renderAnimatableEntity(entity, 0, input.partialTick(), poseStack, drawBuffer, 0xf000f0);
             });
@@ -382,24 +387,40 @@ public final class RenderUtil {
         } finally {
             Throwable failure = primary;
             try {
-                if (bufferSource != null) bufferSource.endBatch();
-            } catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
+                if (bufferSource != null)
+                    bufferSource.endBatch();
+            } catch (Throwable error) {
+                failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
+            }
             try {
-                if (shadowDisabled) dispatcher.setRenderShadow(true);
-            } catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
-            try { applied.close(); }
-            catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
+                if (shadowDisabled)
+                    dispatcher.setRenderShadow(true);
+            } catch (Throwable error) {
+                failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
+            }
+            try {
+                applied.close();
+            } catch (Throwable error) {
+                failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
+            }
             try {
                 if (viewPushed) {
                     viewStack.popPose();
                     RenderSystem.applyModelViewMatrix();
                 }
-            } catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
-            try { Lighting.setupFor3DItems(); }
-            catch (Throwable error) { failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error); }
+            } catch (Throwable error) {
+                failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
+            }
+            try {
+                Lighting.setupFor3DItems();
+            } catch (Throwable error) {
+                failure = com.elfmcys.ysm.client.gui.GuiFrameTasks.append(failure, error);
+            }
             if (failure != primary) {
-                if (failure instanceof Error error) throw error;
-                if (failure instanceof RuntimeException error) throw error;
+                if (failure instanceof Error error)
+                    throw error;
+                if (failure instanceof RuntimeException error)
+                    throw error;
             }
         }
     }

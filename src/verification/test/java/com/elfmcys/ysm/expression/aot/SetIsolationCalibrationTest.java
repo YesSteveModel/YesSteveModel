@@ -1,6 +1,9 @@
 package com.elfmcys.ysm.expression.aot;
 
-import com.elfmcys.ysm.api.molang.PreparedEffect;
+import com.elfmcys.ysm.model.resource.client.render.AnimationInputStore;
+
+import static com.elfmcys.ysm.expression.TestRoamingPayloads.fromMap;
+
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
@@ -18,7 +21,6 @@ import com.elfmcys.ysm.proto.mixel.asset.strings.data.UserFunctionProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import dev.semaweave.RoamingPayload;
 import dev.semaweave.RoamingRole;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -27,7 +29,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Map;
-import java.util.TreeMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -35,9 +36,9 @@ final class SetIsolationCalibrationTest {
     @Test
     void commonLifecycleHasOneBodyOwnerAndDeferredAndCodedCallbacksStayInTheirSet(@TempDir Path root) throws Exception {
         var host = ExpressionHost.create(HostAvailability.none());
-        var factory = new RenderTargetExpressionModuleFactory(
-            track(new ExpressionArtifactStore(root, track(new AtomicSharedCache(root)))), host,
-            new ExpressionEngineMetrics());
+        var expressionCache = track(new AtomicSharedCache(root));
+        var factory = new RenderTargetExpressionModuleFactory(track(new ExpressionArtifactStore(root, expressionCache)),
+            new AnimationInputStore(root, expressionCache), host, new ExpressionEngineMetrics());
         var strings = StringDataProto.newBuilder().addUserFunctions(function("@player_init", "v.lifecycle=1;"))
             .addUserFunctions(function("@player_update", "v.lifecycle=2;"))
             .addUserFunctions(function("@sync", "v.sync=args[0];"))
@@ -86,10 +87,10 @@ final class SetIsolationCalibrationTest {
                             "function/@player_ctrl_main", ProgramRole.EVENT_CODED_CONTROLLER, "player_ctrl_main:0"))));
                 return null;
             });
-            assertEquals(10F, watch(body, bodyRuntime, "v.deferred"));
-            assertEquals(20F, watch(arm, armRuntime, "v.deferred"));
-            assertEquals(2F, watch(body, bodyRuntime, "v.lifecycle"));
-            assertEquals(3F, watch(body, bodyRuntime, "v.sync"));
+            assertEquals(10F, watch(bodyRuntime, "v.deferred"));
+            assertEquals(20F, watch(armRuntime, "v.deferred"));
+            assertEquals(2F, watch(bodyRuntime, "v.lifecycle"));
+            assertEquals(3F, watch(bodyRuntime, "v.sync"));
             assertTrue(body.compilationReport().replacements().isEmpty());
             assertTrue(arm.compilationReport().replacements().isEmpty());
         }
@@ -100,8 +101,7 @@ final class SetIsolationCalibrationTest {
             "function/@" + name, role, name + ":0"));
     }
 
-    private static Object watch(RenderTargetExpressionModule module, EntityExpressionRuntime runtime, String expression)
-        throws Exception {
+    private static Object watch(EntityExpressionRuntime runtime, String expression) throws Exception {
         try (var watch = runtime.compileTransient(runtime.generation(), "return " + expression + ";",
             TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
             "fixture:common", () -> false)) {
@@ -112,9 +112,9 @@ final class SetIsolationCalibrationTest {
     @Test
     void borrowedDefaultFunctionsKeepTheirOriginWhenLocalCommonNamesCollide(@TempDir Path root) throws Exception {
         var host = ExpressionHost.create(HostAvailability.none());
-        var factory = new RenderTargetExpressionModuleFactory(
-            track(new ExpressionArtifactStore(root, track(new AtomicSharedCache(root)))), host,
-            new ExpressionEngineMetrics());
+        var expressionCache = track(new AtomicSharedCache(root));
+        var factory = new RenderTargetExpressionModuleFactory(track(new ExpressionArtifactStore(root, expressionCache)),
+            new AnimationInputStore(root, expressionCache), host, new ExpressionEngineMetrics());
         var origin = "fallback/" + new Hash256(new byte[32]) + "/player/main/";
         var local = animation("return fn.offset();");
         var borrowed = animation("return fn.nested();");
@@ -162,16 +162,15 @@ final class SetIsolationCalibrationTest {
             fixture = JsonParser.parseReader(input).getAsJsonObject();
         }
         var host = ExpressionHost.create(HostAvailability.none());
-        var factory = new RenderTargetExpressionModuleFactory(
-            track(new ExpressionArtifactStore(root, track(new AtomicSharedCache(root)))), host,
-            new ExpressionEngineMetrics());
+        var expressionCache = track(new AtomicSharedCache(root));
+        var factory = new RenderTargetExpressionModuleFactory(track(new ExpressionArtifactStore(root, expressionCache)),
+            new AnimationInputStore(root, expressionCache), host, new ExpressionEngineMetrics());
         try (var body = module(factory, fixture, "body"); var arm = module(factory, fixture, "arm");
             var bodyRuntime = new EntityExpressionRuntime(); var armRuntime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(bodyRuntime, body, Map.of(), RoamingRole.PRODUCER);
             TestExpressionModules.replace(armRuntime, arm, Map.of(), RoamingRole.CONSUMER);
-            var payload = new RoamingPayload(new TreeMap<>(Map.of("shared", 3F)));
-            bodyRuntime.initializeRoaming(payload);
-            armRuntime.initializeRoaming(payload);
+            bodyRuntime.initializeRoaming(fromMap(Map.of("shared", 3F), body.roamingFields()));
+            armRuntime.initializeRoaming(fromMap(Map.of("shared", 3F), arm.roamingFields()));
             var bodyProgram = program(body, "main");
             var armProgram = program(arm, "fp_arm");
             assertNotSame(bodyProgram.generation(), armProgram.generation());
@@ -181,10 +180,12 @@ final class SetIsolationCalibrationTest {
             float armValue = armRuntime.update(inputs(), evaluation -> evaluation.evaluate(armProgram));
             assertEquals(103F, bodyValue);
             assertEquals(203F, armValue);
-            assertEquals(1F, ordinary(body, bodyRuntime));
-            assertEquals("arm", ordinary(arm, armRuntime));
-            armRuntime.roamingState().orElseThrow().write("shared", 5);
-            assertEquals(3F, bodyRuntime.roamingState().orElseThrow().read("shared"));
+            assertEquals(1F, ordinary(bodyRuntime));
+            assertEquals("arm", ordinary(armRuntime));
+            armRuntime.roamingState().orElseThrow()
+                .write((short)armRuntime.roamingState().orElseThrow().fieldNames().indexOf("shared"), 5);
+            assertEquals(3F, bodyRuntime.roamingState().orElseThrow()
+                .read((short)bodyRuntime.roamingState().orElseThrow().fieldNames().indexOf("shared")));
             float changedArmValue = armRuntime.update(inputs(), evaluation -> evaluation.evaluate(armProgram));
             assertEquals(205F, changedArmValue);
         }
@@ -219,8 +220,7 @@ final class SetIsolationCalibrationTest {
             "animation/" + set + "/idle/blend-weight", ProgramRole.ANIMATION_SAMPLE, ""));
     }
 
-    private static Object ordinary(RenderTargetExpressionModule module, EntityExpressionRuntime runtime)
-        throws Exception {
+    private static Object ordinary(EntityExpressionRuntime runtime) throws Exception {
         try (var watch = runtime.compileTransient(runtime.generation(), "return v.kind;",
             TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH, "fixture:kind",
             () -> false)) {
@@ -230,9 +230,7 @@ final class SetIsolationCalibrationTest {
 
     private static EntityExpressionRuntime.InvocationInputs inputs() {
         return new EntityExpressionRuntime.InvocationInputs(new InvocationInputs<net.minecraft.world.entity.Entity>() {
-            @Override
-            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
-        }, (commands, provenance) -> () -> {
-        }, () -> false);
+
+        });
     }
 }

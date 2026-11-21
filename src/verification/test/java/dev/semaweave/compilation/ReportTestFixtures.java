@@ -14,6 +14,6 @@ public final class ReportTestFixtures {
         var codes = new TreeMap<String, Long>();
         var encoded =
             ArtifactV1Codec.encodeReport(metrics, optimizations, Map.of(), codes, List.of(), List.of(), List.of());
-        return new CompilationReport(metrics, optimizations, Map.of(), codes, List.of(), List.of(), List.of(), encoded);
+        return new CompilationReport(metrics, optimizations, Map.of(), codes, List.of(), List.of(), encoded);
     }
 }

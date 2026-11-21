@@ -1,34 +1,7 @@
 package com.elfmcys.ysm.network.protocol;
 
 import com.elfmcys.ysm.network.frame.FrameCodec;
-import com.elfmcys.ysm.proto.network.ChunkFragmentProto;
-import com.elfmcys.ysm.proto.network.ConfigActionEventProto;
-import com.elfmcys.ysm.proto.network.EmitMolangSyncProto;
-import com.elfmcys.ysm.proto.network.IconFragmentProto;
-import com.elfmcys.ysm.proto.network.MetadataPrefixFragmentProto;
-import com.elfmcys.ysm.proto.network.MetadataPrefixRequestProto;
-import com.elfmcys.ysm.proto.network.ModelChunkRequestProto;
-import com.elfmcys.ysm.proto.network.MolangSyncEventProto;
-import com.elfmcys.ysm.proto.network.PackCoverFragmentProto;
-import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
-import com.elfmcys.ysm.proto.network.PlayerStateUpdateProto;
-import com.elfmcys.ysm.proto.network.PresentationPageRequestProto;
-import com.elfmcys.ysm.proto.network.PreviewFragmentProto;
-import com.elfmcys.ysm.proto.network.PrivilegedTransientEventProto;
-import com.elfmcys.ysm.proto.network.ProjectileModelStateProto;
-import com.elfmcys.ysm.proto.network.ResourceTransferCancelProto;
-import com.elfmcys.ysm.proto.network.ResourceTransferFailureProto;
-import com.elfmcys.ysm.proto.network.SelectModelRequestProto;
-import com.elfmcys.ysm.proto.network.SelectModelResultProto;
-import com.elfmcys.ysm.proto.network.ServerHelloProto;
-import com.elfmcys.ysm.proto.network.SessionDeltaFragmentProto;
-import com.elfmcys.ysm.proto.network.SessionFullFragmentProto;
-import com.elfmcys.ysm.proto.network.SessionResponseProto;
-import com.elfmcys.ysm.proto.network.StarredModelsSnapshotProto;
-import com.elfmcys.ysm.proto.network.SubmitConfigActionRequestProto;
-import com.elfmcys.ysm.proto.network.SwingHandRequestProto;
-import com.elfmcys.ysm.proto.network.UpdateStarredModelRequestProto;
-import com.elfmcys.ysm.proto.network.VehicleModelStateProto;
+import com.elfmcys.ysm.proto.network.*;
 import org.junit.jupiter.api.Test;
 import us.hebi.quickbuf.ProtoMessage;
 
@@ -72,10 +45,8 @@ class ProtocolMessageRegistryTest {
                 ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN),
             row(8, MessageDirection.SERVER_TO_CLIENT, ResourceTransferFailureProto.class,
                 ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN),
-            row(9, MessageDirection.CLIENT_TO_SERVER, SelectModelRequestProto.class,
-                ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN),
-            row(10, MessageDirection.SERVER_TO_CLIENT, SelectModelResultProto.class,
-                ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN),
+            row(9, MessageDirection.BOTH, SelectionChangeProto.class, ProtocolLimits.MAX_PLAYER_STATE_BYTES),
+            row(10, MessageDirection.BOTH, SelectionStateSyncProto.class, ProtocolLimits.MAX_PLAYER_STATE_BYTES),
             row(11, MessageDirection.SERVER_TO_CLIENT, MetadataPrefixFragmentProto.class,
                 ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN),
             row(12, MessageDirection.SERVER_TO_CLIENT, ChunkFragmentProto.class,
@@ -86,21 +57,13 @@ class ProtocolMessageRegistryTest {
                 ProtocolMessageSpec.AttachmentPolicy.CONDITIONAL),
             row(15, MessageDirection.SERVER_TO_CLIENT, PackCoverFragmentProto.class,
                 ProtocolMessageSpec.AttachmentPolicy.CONDITIONAL),
-            row(16, MessageDirection.CLIENT_TO_SERVER, PlayerStateReportProto.class,
-                ProtocolLimits.MAX_PLAYER_STATE_BYTES),
-            row(17, MessageDirection.SERVER_TO_CLIENT, PlayerStateUpdateProto.class,
-                ProtocolLimits.MAX_PLAYER_STATE_BYTES),
-            row(18, MessageDirection.SERVER_TO_CLIENT, StarredModelsSnapshotProto.class,
-                ProtocolLimits.MAX_MODEL_SET_BYTES),
-            row(19, MessageDirection.CLIENT_TO_SERVER, UpdateStarredModelRequestProto.class,
-                ProtocolLimits.MAX_STAR_UPDATE_BYTES),
-            row(21, MessageDirection.SERVER_TO_CLIENT, PrivilegedTransientEventProto.class,
-                ProtocolLimits.MAX_TRANSIENT_EVENT_BYTES),
+            row(16, MessageDirection.BOTH, EntityStateSyncProto.class, ProtocolLimits.MAX_PLAYER_STATE_BYTES),
+            row(17, MessageDirection.SERVER_TO_CLIENT, EntityTrackProto.class, ProtocolLimits.MAX_PLAYER_STATE_BYTES),
+            row(18, MessageDirection.SERVER_TO_CLIENT, PlayerFlagsProto.class, 64),
+            row(19, MessageDirection.SERVER_TO_CLIENT, SelectionDirectiveProto.class, 512),
+            row(20, MessageDirection.SERVER_TO_CLIENT, SelectionInvalidatedProto.class, 16),
             row(22, MessageDirection.CLIENT_TO_SERVER, SubmitConfigActionRequestProto.class,
                 ProtocolLimits.MAX_ENTITY_ACTION_BYTES),
-            row(23, MessageDirection.CLIENT_TO_SERVER, EmitMolangSyncProto.class, ProtocolLimits.MAX_STAR_UPDATE_BYTES),
-            row(24, MessageDirection.SERVER_TO_CLIENT, MolangSyncEventProto.class,
-                ProtocolLimits.MAX_MOLANG_SYNC_BYTES),
             row(25, MessageDirection.CLIENT_TO_SERVER, SwingHandRequestProto.class,
                 ProtocolLimits.MAX_SWING_HAND_BYTES),
             row(26, MessageDirection.SERVER_TO_CLIENT, ProjectileModelStateProto.class,
@@ -123,7 +86,8 @@ class ProtocolMessageRegistryTest {
                 com.elfmcys.ysm.proto.network.PreviewUploadFragmentProto.class, 64,
                 ProtocolMessageSpec.AttachmentPolicy.REQUIRED),
             row(36, MessageDirection.SERVER_TO_CLIENT, com.elfmcys.ysm.proto.network.PreviewRepairResultProto.class,
-                64));
+                64),
+            row(37, MessageDirection.SERVER_TO_CLIENT, ServerFlagsProto.class, 64));
 
         for (var row : expected) {
             var actual = ProtocolMessages.REGISTRY.find(row.id).orElseThrow();
@@ -132,8 +96,7 @@ class ProtocolMessageRegistryTest {
             assertEquals(row.maxEncodedBytes, actual.maxEncodedBytes());
             assertEquals(row.attachmentPolicy, actual.attachmentPolicy());
         }
-        assertEquals(36, ProtocolMessages.REGISTRY.messages().size());
-        assertFalse(ProtocolMessages.REGISTRY.find(20).isPresent());
+        assertEquals(expected.size(), ProtocolMessages.REGISTRY.messages().size());
     }
 
     @Test
@@ -147,23 +110,12 @@ class ProtocolMessageRegistryTest {
     }
 
     @Test
-    void expressionIngressHasTypedDirectionsAndOnlyPrivilegedMessageCarriesSource() {
+    void expressionIngressHasTypedDirections() {
         assertMessage(ProtocolMessages.SUBMIT_CONFIG_ACTION_REQUEST_ID, MessageDirection.CLIENT_TO_SERVER,
             SubmitConfigActionRequestProto.class);
         assertMessage(ProtocolMessages.CONFIG_ACTION_EVENT_ID, MessageDirection.SERVER_TO_CLIENT,
             ConfigActionEventProto.class);
-        assertMessage(ProtocolMessages.EMIT_MOLANG_SYNC_ID, MessageDirection.CLIENT_TO_SERVER,
-            EmitMolangSyncProto.class);
-        assertMessage(ProtocolMessages.MOLANG_SYNC_EVENT_ID, MessageDirection.SERVER_TO_CLIENT,
-            MolangSyncEventProto.class);
-        assertMessage(ProtocolMessages.PRIVILEGED_TRANSIENT_EVENT_ID, MessageDirection.SERVER_TO_CLIENT,
-            PrivilegedTransientEventProto.class);
-
-        for (var type : List.of(SubmitConfigActionRequestProto.class, ConfigActionEventProto.class,
-            EmitMolangSyncProto.class, MolangSyncEventProto.class)) {
-            assertFalse(
-                java.util.Arrays.stream(type.getMethods()).anyMatch(method -> method.getName().equals("getSource")));
-        }
+        assertMessage(ProtocolMessages.SELECTION_STATE_SYNC_ID, MessageDirection.BOTH, SelectionStateSyncProto.class);
     }
 
     private static void assertMessage(int id, MessageDirection direction, Class<?> type) {

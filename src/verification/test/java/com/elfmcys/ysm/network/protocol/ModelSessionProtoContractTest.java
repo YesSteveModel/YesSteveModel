@@ -29,7 +29,6 @@ class ModelSessionProtoContractTest {
         assertEquals(3, com.elfmcys.ysm.proto.network.CollectionOperationType.REMOVE.getNumber());
         assertEquals(4, com.elfmcys.ysm.proto.network.CollectionOperationType.CLEAR.getNumber());
         assertEquals(6, com.elfmcys.ysm.proto.network.ResourceFailureReason.UNAVAILABLE.getNumber());
-        assertEquals(4, com.elfmcys.ysm.proto.network.SelectionStatus.INVALID_REQUEST.getNumber());
         assertEquals(2, com.elfmcys.ysm.proto.network.PresentationDelivery.UNAVAILABLE.getNumber());
         assertEquals(3, com.elfmcys.ysm.proto.network.PresentationDelivery.ABSENT.getNumber());
     }

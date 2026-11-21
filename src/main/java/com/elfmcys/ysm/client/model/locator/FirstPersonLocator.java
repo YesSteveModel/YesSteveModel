@@ -19,16 +19,12 @@ public class FirstPersonLocator extends GeoLocatorType {
         super(new ResourceLocation(YesSteveModel.MOD_ID, "first_person"));
     }
 
+    /** Initializes and freezes declarations on the bootstrap owner before resource workers can read them. */
     public static void init() {
         if (INSTANCE == null) {
-            synchronized (FirstPersonLocator.class) {
-                if (INSTANCE == null) {
-                    INSTANCE = new FirstPersonLocator();
-                    YesSteveModel
-                        .postEvent(new RegisterModelLocatorEvent(ModelKind.HUMANOID_FIRST_PERSON, INSTANCE::register));
-                    INSTANCE.freeze();
-                }
-            }
+            INSTANCE = new FirstPersonLocator();
+            YesSteveModel.postEvent(new RegisterModelLocatorEvent(ModelKind.HUMANOID_FIRST_PERSON, INSTANCE::register));
+            INSTANCE.freeze();
         }
     }
 

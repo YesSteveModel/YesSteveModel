@@ -12,14 +12,9 @@ message MolangVariable {
   float value = 2;
 }
 
-enum StateWriteMode {
-  STATE_WRITE_MODE_UNSPECIFIED = 0;
-  STATE_WRITE_MODE_FULL = 1;
-  STATE_WRITE_MODE_DELTA = 2;
-}
 message ModelReference {
   oneof value {
-    bytes model_hash = 1;
+    string model_id = 1;
     bool builtin_default = 2;
   }
 }

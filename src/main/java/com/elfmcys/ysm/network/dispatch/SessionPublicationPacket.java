@@ -39,6 +39,8 @@ public final class SessionPublicationPacket implements LogicalPacket {
                     throw new IllegalArgumentException("ITEM_TOO_LARGE");
                 }
                 acquired.add(new Part(spec.id(), protobuf));
+                com.elfmcys.ysm.network.NetworkDiagnostics.message("publication-encoded",
+                    com.elfmcys.ysm.network.protocol.MessageDirection.SERVER_TO_CLIENT, value, "publication");
             }
             parts = List.copyOf(acquired);
         } catch (Throwable error) {

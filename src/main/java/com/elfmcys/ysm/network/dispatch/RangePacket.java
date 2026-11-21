@@ -22,14 +22,17 @@ import us.hebi.quickbuf.ProtoMessage;
 /**
  * Produces bounded fragments from one owned byte, lease or file-range capability.
  *
- * <p><b>Ownership:</b> Successful construction owns its source until idempotent close. The caller owns
- * the packet until dispatch admission succeeds. Cancel seals production eligibility but does not close
- * a source still borrowed by dispatch. Close also invokes the request's release hook, even if source close fails.
+ * <p>
+ * <b>Ownership:</b> Successful construction owns its source until idempotent close. The caller owns the packet until
+ * dispatch admission succeeds. Cancel seals production eligibility but does not close a source still borrowed by
+ * dispatch. Close also invokes the request's release hook, even if source close fails.
  *
- * <p><b>Failure:</b> Source admission does not guarantee later range I/O. Production failure belongs
- * to the accepted request and must not become legal absence or a successful send.
+ * <p>
+ * <b>Failure:</b> Source admission does not guarantee later range I/O. Production failure belongs to the accepted
+ * request and must not become legal absence or a successful send.
  *
- * <p><b>Seam:</b> [range production failure](docs/architecture/network/overview.md#失败归属).
+ * <p>
+ * <b>Seam:</b> [range production failure](docs/architecture/network/overview.md#失败归属).
  */
 final class RangePacket implements CancellablePacket {
     static final int FRAGMENT_BYTES = 24 * 1024;
@@ -52,6 +55,7 @@ final class RangePacket implements CancellablePacket {
         return new RangePacket(new BytesSource(bytes.clone()), fragments, closeHook, productionFailure);
     }
 
+    /** Retains an independent Ready use; construction failure leaves the caller's use unchanged. */
     static RangePacket lease(ServerResourceRuntime.BytesLease lease, FragmentFactory fragments, Runnable closeHook,
         Consumer<RuntimeException> productionFailure) {
         Objects.requireNonNull(lease, "lease");
@@ -62,7 +66,7 @@ final class RangePacket implements CancellablePacket {
         if (size <= 0) {
             throw new IllegalArgumentException("Leased byte range packet is empty");
         }
-        return new RangePacket(new LeaseSource(lease, size), fragments, closeHook, productionFailure);
+        return new RangePacket(new LeaseSource(lease.retain(), size), fragments, closeHook, productionFailure);
     }
 
     static RangePacket file(Object sourceLease, Path path, long fileOffset, int size, FragmentFactory fragments,

@@ -1,6 +1,6 @@
 # REQ.create-and-select-models
 
-- Claim: 玩家与创作者必须能添加、热加载、浏览、选择和调试自定义模型，并在使用模型时获知受到模组处理流程保护的来源创作者署名。
+- Claim: 玩家与创作者必须能添加、热加载、浏览、选择和调试自定义模型；在使用模型时，也能看到由模组处理流程保护的来源创作者署名。
 - Decision-status: Complete
 - Motivation: [PG.creator-controlled-content](../shared.md#pgcreator-controlled-content)
 

@@ -1,14 +1,12 @@
 package com.elfmcys.ysm.expression.host;
 
-import com.elfmcys.ysm.api.molang.PreparedEffect;
-
 import net.minecraft.world.entity.Entity;
 
 /**
- * Invocation-scoped production input source. Implementations capture the exact entity and render inputs; they
- * must not consult a process-global current entity.
+ * Invocation-scoped production input source. Implementations capture the exact entity and render inputs; they must not
+ * consult a process-global current entity.
  */
-public interface InvocationInputs<E extends Entity> extends EntityView, RenderView, EffectValidator {
+public interface InvocationInputs<E extends Entity> extends EntityView, RenderView {
     @Override
     default E entity() {
         throw new IllegalStateException("production input has no Minecraft subject");
@@ -27,8 +25,4 @@ public interface InvocationInputs<E extends Entity> extends EntityView, RenderVi
         return this;
     }
 
-    @Override
-    default void prevalidateEffect(PreparedEffect effect, MolangContext<?> scope) {
-        effect.validate();
-    }
 }

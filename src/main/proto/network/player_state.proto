@@ -4,24 +4,72 @@ package ysm.network;
 
 import "network/common.proto";
 
-message PlayerStateReport {
-  EntityRef subject = 1;
-  StateWriteMode mode = 2;
-  optional GameplayState gameplay = 3;
-  optional EffectStateSet effects = 4;
-  optional AnimationState animation = 5;
-  optional RoamingState roaming = 6;
+message SelectionChange {
+  optional Selection selection = 1;
 }
 
-message PlayerStateUpdate {
-  EntityRef subject = 1;
-  StateWriteMode mode = 2;
-  optional ModelSelectionState model = 3;
-  optional GameplayState gameplay = 4;
-  optional EffectStateSet effects = 5;
-  optional AnimationState animation = 6;
-  optional RoamingState roaming = 7;
+message Selection {
+  int32 entity_id = 1;
+  optional ModelReference model = 2;
+  uint64 intent_id = 3;
+  repeated string roaming_names = 4;
+  optional SelectionState state = 5;
 }
+
+message SelectionStateSync {
+  int32 entity_id = 1;
+  uint64 intent_id = 2;
+  oneof payload {
+    SelectionState state = 3;
+    SyncArguments sync = 4;
+  }
+}
+
+message SyncArguments {
+  repeated float arguments = 1 [packed = true];
+}
+
+message SelectionState {
+  optional string texture_id = 1;
+  optional AnimationState animation = 2;
+  optional RoamingState roaming = 3;
+}
+
+message EntityStateSync {
+  int32 entity_id = 1;
+  optional EntityState state = 2;
+}
+
+message EntityState {
+  optional GameplayState gameplay = 1;
+  optional EffectStateSet effects = 2;
+}
+
+message EntityTrack {
+  optional Selection selection = 1;
+  optional EntityState state = 2;
+  optional PlayerFlagsState flags = 3;
+}
+
+message PlayerFlagsState {
+  bool disabled = 1;
+}
+
+message PlayerFlags {
+  int32 entity_id = 1;
+  optional PlayerFlagsState state = 2;
+}
+
+message ServerFlags {
+  bool can_switch_model = 1;
+}
+
+message SelectionDirective {
+  optional ModelReference model = 1;
+  string texture_id = 2;
+}
+
+message SelectionInvalidated {}
 
 message GameplayState {
   optional bool flying = 1;
@@ -52,12 +100,6 @@ message AnimationState {
 }
 
 message RoamingState {
-  fixed32 model_key = 1;
-  repeated MolangVariable variables = 2;
-}
-
-message ModelSelectionState {
-  ModelReference model = 1;
-  string texture_id = 2;
-  bool disabled = 3;
+  repeated uint32 ids = 1 [packed = true];
+  repeated float values = 2 [packed = true];
 }

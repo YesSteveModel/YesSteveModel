@@ -17,52 +17,38 @@ import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
 
 public class PlayerModelResources implements RenderTargetResources {
     private final FifoHashMap<String, PlayerModelVariant> variants;
-    private final AnimationStore animations;
-    private final AnimationStore fpArmAnimations;
+    private final AnimationStore.View animations;
+    private final AnimationStore.View fpArmAnimations;
     private final ConditionManager conditionManager;
     private final FPArmConditionManager fpArmConditionManager;
-    private final Object2ReferenceMap<String, AnimationControllerData> animationControllers;
-    private final Object2ReferenceMap<String, AnimationControllerData> fpArmAnimationControllers;
     private final String defaultTextureName;
     private final PlayerModelVariant defaultVariant;
     private final BiConsumer<CustomPlayerEntity, AnimationData> playerControllerFactory;
     private final BiConsumer<CustomFirstPersonArmEntity, AnimationData> fpArmControllerFactory;
 
-    public PlayerModelResources(FifoHashMap<String, PlayerModelVariant> variants, AnimationStore animations,
-        AnimationStore fpArmAnimations, ConditionManager conditionManager, FPArmConditionManager fpArmConditionManager,
-        Object2ReferenceMap<String, AnimationControllerData> animationControllers, String defaultTextureName,
-        CommonAsset assets) {
-        this(variants, animations, fpArmAnimations, conditionManager, fpArmConditionManager, animationControllers,
-            animationControllers, defaultTextureName, assets, assets);
-    }
-
-    public PlayerModelResources(FifoHashMap<String, PlayerModelVariant> variants, AnimationStore animations,
-        AnimationStore fpArmAnimations, ConditionManager conditionManager, FPArmConditionManager fpArmConditionManager,
-        Object2ReferenceMap<String, AnimationControllerData> animationControllers,
-        Object2ReferenceMap<String, AnimationControllerData> fpArmAnimationControllers, String defaultTextureName,
-        CommonAsset assets, CommonAsset armAssets) {
+    public PlayerModelResources(FifoHashMap<String, PlayerModelVariant> variants, AnimationStore.View animations,
+        AnimationStore.View fpArmAnimations, ConditionManager conditionManager,
+        FPArmConditionManager fpArmConditionManager, String defaultTextureName) {
         this.variants = variants;
         this.animations = animations;
         this.fpArmAnimations = fpArmAnimations;
         this.conditionManager = conditionManager;
-        this.animationControllers = animationControllers;
-        this.fpArmAnimationControllers = fpArmAnimationControllers;
         this.fpArmConditionManager = fpArmConditionManager;
         this.defaultTextureName = defaultTextureName;
         this.defaultVariant = Objects.requireNonNull(variants.get(defaultTextureName), "defaultVariant");
-        this.playerControllerFactory = PlayerControllerCollection.build(this, assets);
-        this.fpArmControllerFactory = FPArmControllerCollection.build(this, armAssets);
+        this.playerControllerFactory = PlayerControllerCollection.build(this);
+        this.fpArmControllerFactory = FPArmControllerCollection.build(this);
     }
 
     public FifoHashMap<String, PlayerModelVariant> variants() {
         return variants;
     }
 
-    public AnimationStore animations() {
+    public AnimationStore.View animations() {
         return animations;
     }
 
-    public AnimationStore fpArmAnimations() {
+    public AnimationStore.View fpArmAnimations() {
         return fpArmAnimations;
     }
 
@@ -75,11 +61,11 @@ public class PlayerModelResources implements RenderTargetResources {
     }
 
     public Object2ReferenceMap<String, AnimationControllerData> animationControllers() {
-        return animationControllers;
+        return animations.controllers();
     }
 
     public Object2ReferenceMap<String, AnimationControllerData> fpArmAnimationControllers() {
-        return fpArmAnimationControllers;
+        return fpArmAnimations.controllers();
     }
 
     public String defaultTextureName() {

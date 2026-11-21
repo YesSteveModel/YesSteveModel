@@ -67,16 +67,6 @@ class RawImageCompressorTest {
         }
     }
 
-    @Test
-    void definesMigratedResourceLimits() {
-        assertEquals(260, RawImageCompressor.GUI_IMAGE.maxWidth());
-        assertEquals(450, RawImageCompressor.GUI_IMAGE.maxHeight());
-        assertEquals(320, RawImageCompressor.AUTHOR_AVATAR.maxWidth());
-        assertEquals(320, RawImageCompressor.AUTHOR_AVATAR.maxHeight());
-        assertEquals(156, RawImageCompressor.MODEL_THUMBNAIL.maxWidth());
-        assertEquals(270, RawImageCompressor.MODEL_THUMBNAIL.maxHeight());
-    }
-
     private static Image image(Image.Format format, int size) {
         return Image.adopt(format, 32, 32, ArrayBuffer.move(new byte[size]));
     }

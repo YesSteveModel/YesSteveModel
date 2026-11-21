@@ -37,6 +37,7 @@ public class YesSteveModel {
         NativeLibUtil.load();
         // Platform detection must finish before platform-dependent defaults are registered.
         initConfig();
+        com.elfmcys.ysm.command.CommandArguments.TYPES.register(EVENT_BUS);
         if (!NativeLibUtil.isAvailable()) {
             LOGGER.error(getUnavailableMessageString());
             return;

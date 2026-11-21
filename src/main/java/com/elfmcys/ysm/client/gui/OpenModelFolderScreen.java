@@ -21,7 +21,7 @@ public class OpenModelFolderScreen extends ModelScreen {
         this.clearWidgets();
         this.addRenderableWidget(
             Button.builder(Component.translatable("gui.yes_steve_model.open_model_folder.open"), b -> {
-                Util.getPlatform().openFile(ModelCatalogSources.customPath().toFile());
+                Util.getPlatform().openFile(ModelCatalogSources.modelsPath().toFile());
             }).bounds(x, y, 150, 20).build());
         this.addRenderableWidget(Button.builder(Component.translatable("gui.yes_steve_model.model.return"), b -> {
             showScreen(this.screen);

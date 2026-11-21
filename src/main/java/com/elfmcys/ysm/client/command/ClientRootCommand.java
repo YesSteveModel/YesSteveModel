@@ -39,6 +39,8 @@ public class ClientRootCommand {
         root.then(MolangCommand.get());
         root.then(SimpleWatchCommand.get());
         root.then(DebugCommand.get());
+        root.then(com.elfmcys.ysm.client.command.sub.RoamingCommand.get());
+        root.then(com.elfmcys.ysm.client.command.sub.ClientCacheCommand.get());
         dispatcher.register(root);
     }
 
@@ -59,7 +61,9 @@ public class ClientRootCommand {
                     }
 
                     // 其他上下文变量
-                    for (var symbol : cap.getExpressionRuntime().module().map(com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule::publishedSymbols).orElse(java.util.List.of())) {
+                    for (var symbol : cap.getExpressionRuntime().metadata()
+                        .map(com.elfmcys.ysm.model.resource.client.AnimationStore.Metadata::publishedSymbols)
+                        .orElse(java.util.List.of())) {
                         var sourceName = sourceName(symbol);
                         if (sourceName != null) {
                             vars.add(sourceName);
@@ -67,7 +71,7 @@ public class ClientRootCommand {
                     }
 
                     // 自定义函数
-                    for (var name : target.assets().userFunctions().keySet()) {
+                    for (var name : target.animationStore().functions().keySet()) {
                         vars.add(String.format("fn.%s", name));
                     }
 

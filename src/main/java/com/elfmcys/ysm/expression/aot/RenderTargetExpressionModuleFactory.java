@@ -4,7 +4,7 @@ import com.elfmcys.ysm.compatibility.AbiVersion;
 
 import com.elfmcys.ysm.model.resource.client.BakeProfile;
 import com.elfmcys.ysm.model.resource.client.ModelResourcePurpose;
-import com.elfmcys.ysm.model.resource.client.render.BakedAnimationMapper;
+import com.elfmcys.ysm.model.resource.client.render.AnimationInputStore;
 import com.elfmcys.ysm.expression.frontend.MolangNames;
 import com.elfmcys.ysm.expression.host.ExpressionHost;
 import com.elfmcys.ysm.expression.host.ExpressionIdentityHash;
@@ -19,7 +19,6 @@ import com.elfmcys.ysm.expression.inventory.ProgramRole;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
-import com.elfmcys.ysm.proto.baked.asset.BakedAnimationProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.proto.mixel.asset.strings.StringDataProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
@@ -59,9 +58,9 @@ import java.util.function.BooleanSupplier;
 /** Complete off-thread compile/cache/verify/load/bind pipeline for one target candidate. */
 public final class RenderTargetExpressionModuleFactory {
     private static final int MAX_FAILURES = 64;
-    private static final CompilerOptions OPTIONS = CompilerOptions.DEFAULT;
 
     private final ExpressionArtifactStore artifacts;
+    private final AnimationInputStore animationInputs;
     private final ExpressionHost host;
     private final MolangEventCatalog eventCatalog;
     private final HostLinkage productionLinkage;
@@ -73,14 +72,16 @@ public final class RenderTargetExpressionModuleFactory {
     private final LinkedHashMap<FailureKey, AssetLoadException> deterministicFailures =
         new LinkedHashMap<>(16, 0.75f, true);
 
-    public RenderTargetExpressionModuleFactory(ExpressionArtifactStore artifacts, ExpressionHost host,
-        ExpressionEngineMetrics metrics) {
-        this(artifacts, host, MolangEventCatalog.production(), HostLinkage.production(host), metrics);
+    public RenderTargetExpressionModuleFactory(ExpressionArtifactStore artifacts, AnimationInputStore animationInputs,
+        ExpressionHost host, ExpressionEngineMetrics metrics) {
+        this(artifacts, animationInputs, host, MolangEventCatalog.production(), HostLinkage.production(host), metrics);
     }
 
-    public RenderTargetExpressionModuleFactory(ExpressionArtifactStore artifacts, ExpressionHost host,
-        MolangEventCatalog eventCatalog, HostLinkage productionLinkage, ExpressionEngineMetrics metrics) {
+    public RenderTargetExpressionModuleFactory(ExpressionArtifactStore artifacts, AnimationInputStore animationInputs,
+        ExpressionHost host, MolangEventCatalog eventCatalog, HostLinkage productionLinkage,
+        ExpressionEngineMetrics metrics) {
         this.artifacts = Objects.requireNonNull(artifacts, "artifacts");
+        this.animationInputs = Objects.requireNonNull(animationInputs, "animationInputs");
         this.host = Objects.requireNonNull(host, "host");
         this.eventCatalog = Objects.requireNonNull(eventCatalog, "eventCatalog");
         this.productionLinkage = Objects.requireNonNull(productionLinkage, "productionLinkage");
@@ -88,12 +89,12 @@ public final class RenderTargetExpressionModuleFactory {
         compiler = new DefaultExpressionAotCompiler<>(backend, metrics);
         loader = ModuleLoaders.standard(metrics);
         builtinOnly = host.builtinOnly() == host ? this : new RenderTargetExpressionModuleFactory(artifacts,
-            host.builtinOnly(), eventCatalog, HostLinkage.production(host.builtinOnly()), metrics);
+            animationInputs, host.builtinOnly(), eventCatalog, HostLinkage.production(host.builtinOnly()), metrics);
     }
 
-    public RenderTargetExpressionModuleFactory withArtifacts(ExpressionArtifactStore store) {
-        return artifacts == store ? this
-            : new RenderTargetExpressionModuleFactory(store, host, eventCatalog, productionLinkage, metrics);
+    public RenderTargetExpressionModuleFactory withStores(ExpressionArtifactStore store, AnimationInputStore inputs) {
+        return artifacts == store && animationInputs == inputs ? this
+            : new RenderTargetExpressionModuleFactory(store, inputs, host, eventCatalog, productionLinkage, metrics);
     }
 
     public RenderTargetExpressionModuleFactory forDefaultModel(boolean defaultModel) {
@@ -117,7 +118,17 @@ public final class RenderTargetExpressionModuleFactory {
     }
 
     /** A negative probe avoids preparing input for a partition that has no cached artifact. */
-    public boolean mayHaveCachedArtifacts(Hash256 containerId, ExpressionBinding binding, ModelResourcePurpose purpose) {
+    public boolean mayHaveCachedArtifacts(Hash256 containerId, ExpressionBinding binding,
+        ModelResourcePurpose purpose) {
+        if (purpose.isGui()) {
+            try {
+                return animationInputs.mayHaveInputs(containerId);
+            } catch (IOException unavailable) {
+                if (!com.elfmcys.ysm.model.storage.CacheReadFailure.recoverable(unavailable))
+                    throw new java.io.UncheckedIOException(unavailable);
+                return false;
+            }
+        }
         return artifacts.mayHaveCachedArtifacts(containerId, binding, purpose);
     }
 
@@ -136,17 +147,44 @@ public final class RenderTargetExpressionModuleFactory {
             expressionBinding, ExpressionSet.MAIN.select(definition), strings, settings, configBytes, false);
     }
 
-    public RenderTargetExpressionModule createSet(BooleanSupplier cancelled, Hash256 containerId, String targetId,
-        ExpressionSet set, ExpressionBinding expressionBinding, ModelDataProto definition, StringDataProto strings,
-        SettingsProto settings, byte[] configBytes, boolean cacheOnly) throws IOException {
-        return createSet(cancelled, containerId, targetId, set, expressionBinding, definition, strings, settings,
-            configBytes, cacheOnly, ModelResourcePurpose.FULL);
+    public com.elfmcys.ysm.model.resource.client.AnimationStore createStore(BooleanSupplier cancelled,
+        Hash256 containerId, String targetId, ExpressionSet set, ExpressionBinding expressionBinding,
+        ModelDataProto definition, StringDataProto strings, SettingsProto settings, byte[] configBytes,
+        boolean cacheOnly) throws IOException {
+        return createStore(cancelled, containerId, targetId, set, expressionBinding, definition, strings, settings,
+            configBytes, cacheOnly, ModelResourcePurpose.FULL, CompilerOptions.DEFAULT);
+    }
+
+    public com.elfmcys.ysm.model.resource.client.AnimationStore createStore(BooleanSupplier cancelled,
+        Hash256 containerId, String targetId, ExpressionSet set, ExpressionBinding expressionBinding,
+        ModelDataProto definition, StringDataProto strings, SettingsProto settings, byte[] configBytes,
+        boolean cacheOnly, ModelResourcePurpose purpose, CompilerOptions options) throws IOException {
+        var module = createSet(cancelled, containerId, targetId, set, expressionBinding, definition, strings, settings,
+            configBytes, cacheOnly, purpose, options);
+        try {
+            return new com.elfmcys.ysm.model.resource.client.AnimationStore(module, purpose);
+        } catch (Throwable failure) {
+            try {
+                module.close();
+            } catch (Throwable cleanup) {
+                if (cleanup != failure)
+                    failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
     }
 
     public RenderTargetExpressionModule createSet(BooleanSupplier cancelled, Hash256 containerId, String targetId,
         ExpressionSet set, ExpressionBinding expressionBinding, ModelDataProto definition, StringDataProto strings,
-        SettingsProto settings, byte[] configBytes, boolean cacheOnly, ModelResourcePurpose purpose)
-        throws IOException {
+        SettingsProto settings, byte[] configBytes, boolean cacheOnly) throws IOException {
+        return createSet(cancelled, containerId, targetId, set, expressionBinding, definition, strings, settings,
+            configBytes, cacheOnly, ModelResourcePurpose.FULL, CompilerOptions.DEFAULT);
+    }
+
+    public RenderTargetExpressionModule createSet(BooleanSupplier cancelled, Hash256 containerId, String targetId,
+        ExpressionSet set, ExpressionBinding expressionBinding, ModelDataProto definition, StringDataProto strings,
+        SettingsProto settings, byte[] configBytes, boolean cacheOnly, ModelResourcePurpose purpose,
+        CompilerOptions options) throws IOException {
         Objects.requireNonNull(cancelled, "cancelled");
         Objects.requireNonNull(containerId, "containerId");
         Objects.requireNonNull(set, "set");
@@ -154,10 +192,15 @@ public final class RenderTargetExpressionModuleFactory {
         Objects.requireNonNull(definition, "definition");
         Objects.requireNonNull(configBytes, "configBytes");
         Objects.requireNonNull(purpose, "purpose");
+        Objects.requireNonNull(options, "options");
         if (expressionBinding.environment() != host.declarationEnvironment()) {
             throw new IllegalArgumentException("expressionBinding belongs to another frozen host environment");
         }
-        var failureKey = FailureKey.create(containerId, targetId, set, expressionBinding, configBytes, purpose);
+        if (purpose.isGui())
+            return createInterpreted(cancelled, containerId, targetId, set, expressionBinding, definition, strings,
+                settings, configBytes, cacheOnly, options);
+        var failureKey =
+            FailureKey.create(containerId, targetId, set, expressionBinding, configBytes, purpose, options);
         var previousFailure = previousFailure(failureKey);
         if (previousFailure != null) {
             throw AssetLoadException.content("Expression target candidate previously failed deterministically",
@@ -169,15 +212,20 @@ public final class RenderTargetExpressionModuleFactory {
             requireCompatibleLinkage(targetId);
             final ExpressionArtifactLookup lookup;
             final ModelProgramInventory.Prepared prepared;
+            final AnimationInputStore.Request inputRequest;
             try {
                 prepared = ModelProgramInventory.prepare(targetId, set, definition, strings, settings, eventCatalog);
+                inputRequest = AnimationInputStore.prepare(containerId, targetId, set, definition, prepared, options);
                 lookup = ExpressionArtifactLookup.create(containerId, targetId, set, expressionBinding,
-                    prepared.sourceFingerprint(), configBytes, host, eventCatalog, productionLinkage, OPTIONS,
-                    backend.descriptor(), purpose);
+                    inputRequest.identity().sourceFingerprint(), configBytes, host, eventCatalog, productionLinkage,
+                    options, backend.descriptor(), purpose);
             } catch (ModelProgramInventory.InventoryException | IllegalArgumentException failure) {
                 throw AssetLoadException.content("Invalid expression target candidate: " + targetId, failure);
             }
             var locations = prepared.locations();
+            var inputs = animationInputs.acquire(inputRequest, cacheOnly, cancelled);
+            if (inputs == null)
+                throw AssetLoadException.access("Animation input is not locally cached");
             var stored = cacheOnly ? artifacts.loadExisting(lookup) : artifacts.loadOrCompile(lookup,
                 () -> compileCold(cancelled, lookup, targetId, set, definition, prepared, expressionBinding));
             if (stored == null)
@@ -187,17 +235,20 @@ public final class RenderTargetExpressionModuleFactory {
             var resource = loader.load(stored.artifact(), stored.identity().expected(), host.registry(),
                 host.registry().visibilityRoot(), ExpressionIdentityHash.SHA_256);
             try {
-                var bindings = bind(locations, resource);
+                var bindings = bind(locations, inputs.animations().descriptors(), resource);
                 requireActive(cancelled);
-                var module =
-                    new RenderTargetExpressionModule(stored.identity(), resource, host, stored.artifact().constants(),
-                        stored.artifact().report(), programLocations(locations), bindings, userFunctions(locations),
-                        stored.source(), eventCatalog, productionLinkage, expressionBinding, stored.animations());
+                var module = new RenderTargetExpressionModule(stored.identity(), resource, host,
+                    stored.artifact().report(), programLocations(locations), bindings, userFunctions(locations),
+                    stored.source(), eventCatalog, productionLinkage, expressionBinding, inputs.animations());
                 ResourceDiagnostics.log("Molang load success: {}/{}/{} source={} ({} ms)", containerId, targetId,
                     set.id(), stored.source(), (System.nanoTime() - loadStarted) / 1_000_000.0);
                 return module;
             } catch (Throwable failure) {
-                try { resource.close(); } catch (Throwable cleanup) { failure.addSuppressed(cleanup); }
+                try {
+                    resource.close();
+                } catch (Throwable cleanup) {
+                    failure.addSuppressed(cleanup);
+                }
                 throw failure;
             }
         } catch (CancellationException failure) {
@@ -211,6 +262,31 @@ public final class RenderTargetExpressionModuleFactory {
             throw AssetLoadException.access("Failed to access expression target: " + targetId, failure);
         } catch (RuntimeException failure) {
             throw AssetLoadException.access("Failed to verify or load expression target: " + targetId, failure);
+        }
+    }
+
+    private RenderTargetExpressionModule createInterpreted(BooleanSupplier cancelled, Hash256 containerId,
+        String targetId, ExpressionSet set, ExpressionBinding binding, ModelDataProto definition,
+        StringDataProto strings, SettingsProto settings, byte[] configBytes, boolean cacheOnly, CompilerOptions options)
+        throws IOException {
+        requireActive(cancelled);
+        requireCompatibleLinkage(targetId);
+        try (var operation = ResourceDiagnostics.operation("Molang interpreter input", targetId + '/' + set.id())) {
+            var sources = ModelProgramInventory.prepare(targetId, set, definition, strings, settings, eventCatalog);
+            var request = AnimationInputStore.prepare(containerId, targetId, set, definition, sources, options);
+            var input = animationInputs.acquire(request, cacheOnly, cancelled);
+            if (input == null)
+                throw AssetLoadException.access("Animation input is not locally cached");
+            requireActive(cancelled);
+            var configFingerprint = dev.semaweave.identity.Fingerprint.compute(ExpressionIdentityHash.SHA_256,
+                ReadOnlyBytes.copyOf(configBytes));
+            var module = new RenderTargetExpressionModule(input.identity(), input.animations(), host, binding, sources,
+                eventCatalog, productionLinkage, configFingerprint,
+                ExpressionArtifactStore.Source.valueOf(input.source().name()));
+            operation.succeeded();
+            return module;
+        } catch (ModelProgramInventory.InventoryException invalid) {
+            throw AssetLoadException.content("Invalid interpreter input index: " + targetId, invalid);
         }
     }
 
@@ -231,31 +307,12 @@ public final class RenderTargetExpressionModuleFactory {
             metrics.recordPortableProgramDecodeInventory();
             var inventory = prepared.collect();
             var unit = compilationUnit(inventory, targetId, lookup.fingerprint());
-            var expected = ExpectedArtifactIdentity.create(unit, host.hostAbi(), host.registry(), OPTIONS,
-                expressionBinding.bindingPlan(), backend.descriptor(), ExpressionIdentityHash.SHA_256);
+            var expected =
+                ExpectedArtifactIdentity.create(unit, host.hostAbi(), host.registry(), lookup.expected().options(),
+                    expressionBinding.bindingPlan(), backend.descriptor(), ExpressionIdentityHash.SHA_256);
             var identity = ExpressionArtifactIdentity.create(expected, lookup);
-            var artifact = compile(cancelled, unit, expressionBinding);
-            var ids = new LinkedHashMap<ModelProgramInventory.SemanticLocation, Integer>();
-            for (var location : prepared.locations()) {
-                ids.put(location.location(),
-                    artifact.catalog().requireId(location.key()).value());
-            }
-            var animations = new LinkedHashMap<String, java.util.List<BakedAnimationProto>>();
-            for (var file : definition.animationFiles().object2ObjectEntrySet()) {
-                var baked = new LinkedHashMap<String, BakedAnimationProto>();
-                for (var animation : file.getValue().animations()) {
-                    if (animation.name().isBlank())
-                        throw new IllegalArgumentException("Empty animation name");
-                    var value = BakedAnimationMapper.bake(animation, "animation/" + file.getKey(),
-                        location -> ids.get(new ModelProgramInventory.SemanticLocation(targetId, set, location,
-                            ProgramRole.ANIMATION_SAMPLE, "")),
-                        location -> ids.get(new ModelProgramInventory.SemanticLocation(targetId, set, location,
-                            ProgramRole.ANIMATION_INSTRUCTION, "")));
-                    baked.put(animation.name(), value);
-                }
-                animations.put(file.getKey(), java.util.List.copyOf(baked.values()));
-            }
-            var produced = new ExpressionArtifactStore.Produced(identity, artifact, animations);
+            var artifact = compile(cancelled, unit, expressionBinding, lookup.expected().options());
+            var produced = new ExpressionArtifactStore.Produced(identity, artifact);
             ResourceDiagnostics.log("Molang compile success: {}/{}/{} ({} ms)", lookup.containerId(), targetId,
                 set.id(), (System.nanoTime() - started) / 1_000_000.0);
             return produced;
@@ -294,14 +351,14 @@ public final class RenderTargetExpressionModuleFactory {
     }
 
     private dev.semaweave.compilation.CompiledArtifact compile(BooleanSupplier cancelled, CompilationUnit unit,
-        ExpressionBinding expressionBinding) throws IOException {
+        ExpressionBinding expressionBinding, CompilerOptions options) throws IOException {
         try {
-            return compiler.compile(cancelled::getAsBoolean, unit, host.hostAbi(), host.registry(), OPTIONS,
+            return compiler.compile(cancelled::getAsBoolean, unit, host.hostAbi(), host.registry(), options,
                 expressionBinding.bindingPlan(), ExpressionIdentityHash.SHA_256);
         } catch (SemanticCompilationException failure) {
             throw AssetLoadException.content("Expression cold compilation failed", failure);
         } catch (ModuleLimitException failure) {
-            throw AssetLoadException.access("Expression compilation budget rejected: " + failure.limitKind()
+            throw AssetLoadException.access("Expression representation capacity exceeded: " + failure.limitKind()
                 + " (limit=" + failure.maximum() + ", phase=" + failure.phase() + ")", failure);
         } catch (BackendException failure) {
             throw AssetLoadException.access("Expression backend compilation failed", failure);
@@ -310,7 +367,16 @@ public final class RenderTargetExpressionModuleFactory {
 
     private static Map<ModelProgramInventory.SemanticLocation, dev.semaweave.compilation.ProgramRef> bind(
         java.util.List<ModelProgramInventory.LocatedProgram> locations,
+        java.util.List<com.elfmcys.ysm.format.schema.baked.asset.ProgramInputDescriptor> inputs,
         dev.semaweave.CompiledModuleResource<MolangContext> resource) {
+        if (inputs.size() != locations.size())
+            throw new IllegalArgumentException("Animation input and AOT program sets differ");
+        for (var index = 0; index < locations.size(); index++) {
+            var location = locations.get(index);
+            var input = inputs.get(index);
+            if (!input.location().equals(location.location()) || !input.key().equals(location.key()))
+                throw new IllegalArgumentException("Animation input and AOT program sources differ");
+        }
         var expectedCatalogSize = locations.isEmpty() ? 1 : locations.size();
         if (resource.programs().size() != expectedCatalogSize) {
             throw new IllegalArgumentException(
@@ -390,13 +456,14 @@ public final class RenderTargetExpressionModuleFactory {
     }
 
     private record FailureKey(Hash256 containerId, String targetId, ExpressionSet set,
-        ExpressionBinding expressionBinding, String configHash, ModelResourcePurpose purpose) {
+        ExpressionBinding expressionBinding, String configHash, ModelResourcePurpose purpose, CompilerOptions options) {
         private static FailureKey create(Hash256 containerId, String targetId, ExpressionSet set,
-            ExpressionBinding expressionBinding, byte[] configBytes, ModelResourcePurpose purpose) {
+            ExpressionBinding expressionBinding, byte[] configBytes, ModelResourcePurpose purpose,
+            CompilerOptions options) {
             var fingerprint = dev.semaweave.identity.Fingerprint.compute(ExpressionIdentityHash.SHA_256,
                 ReadOnlyBytes.copyOf(configBytes));
             return new FailureKey(containerId, targetId, set, expressionBinding, fingerprint.value().toString(),
-                purpose);
+                purpose, options);
         }
     }
 }

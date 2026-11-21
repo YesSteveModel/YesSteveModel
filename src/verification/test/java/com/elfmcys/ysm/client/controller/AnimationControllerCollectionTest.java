@@ -29,7 +29,7 @@ class AnimationControllerCollectionTest {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException(error);
             }
-            collection.add((model, assets, animations) -> (animatable, consumer) -> {
+            collection.add((model, animations) -> (animatable, consumer) -> {
             });
         };
 
@@ -45,7 +45,7 @@ class AnimationControllerCollectionTest {
             second.get(5, TimeUnit.SECONDS);
             assertEquals(1, initializations.get());
             assertDoesNotThrow(
-                () -> collection.build(new Object(), null, new com.elfmcys.ysm.model.resource.client.AnimationStore()));
+                () -> collection.build(new Object(), com.elfmcys.ysm.model.resource.client.AnimationStore.emptyView()));
         } finally {
             releaseInitialization.countDown();
             executor.shutdownNow();

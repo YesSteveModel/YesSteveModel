@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.catalog.snapshot;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.storage.ContentStorageBinding;
 
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
@@ -12,9 +13,14 @@ import java.util.Objects;
 
 /** Reopenable exact identity discovered without materializing model content. */
 public record CatalogIndexEntry(ModelFileIdentity identity, CatalogLocation location, Path backingFile,
-    ContentStorageBinding storageBinding) {
+    ContentStorageBinding storageBinding, com.elfmcys.ysm.model.storage.ConvertedSourceIndex convertedIndex) {
     public CatalogIndexEntry(ModelFileIdentity identity, CatalogLocation location, Path backingFile) {
-        this(identity, location, backingFile, null);
+        this(identity, location, backingFile, null, null);
+    }
+
+    public CatalogIndexEntry(ModelFileIdentity identity, CatalogLocation location, Path backingFile,
+        ContentStorageBinding storageBinding) {
+        this(identity, location, backingFile, storageBinding, null);
     }
 
     public CatalogIndexEntry {
@@ -23,7 +29,7 @@ public record CatalogIndexEntry(ModelFileIdentity identity, CatalogLocation loca
         backingFile = Objects.requireNonNull(backingFile, "backingFile").toAbsolutePath().normalize();
     }
 
-    public Hash256 modelId() {
+    public ModelId modelId() {
         return identity.modelId();
     }
 

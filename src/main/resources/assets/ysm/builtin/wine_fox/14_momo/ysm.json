@@ -27,6 +27,7 @@
     ]
   },
   "properties": {
+    "origin_ver": "2.6.5",
     "extra_animation": {
       "huhupeizhi": "#huhu_config",
       "找不到狐找不到狐": "藏起来~",

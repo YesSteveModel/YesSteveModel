@@ -22,8 +22,8 @@ public final class ExportCommand {
 
     public static LiteralArgumentBuilder<CommandSourceStack> get() {
         return Commands.literal("export").requires(source -> source.hasPermission(2))
-            .then(Commands.argument(MODEL_ID, StringArgumentType.string()).suggests(CommandRegistry.ALL_MODELS)
-                .executes(context -> export(context, null))
+            .then(Commands.argument(MODEL_ID, com.elfmcys.ysm.command.ModelSelectorArgument.selector())
+                .suggests(CommandRegistry.ALL_MODELS).executes(context -> export(context, null))
                 .then(Commands.argument(EXTRA, StringArgumentType.greedyString())
                     .executes(context -> export(context, StringArgumentType.getString(context, EXTRA)))));
     }

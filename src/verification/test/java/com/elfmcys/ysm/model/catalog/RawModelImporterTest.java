@@ -200,9 +200,11 @@ class RawModelImporterTest {
         }
         var original = Files.readString(source.resolve("ysm.json"));
         var importer = new RawModelImporter(DefaultAnimationFilter.keepAll());
-        for (var origin : new String[] {null, "", "2.4.2-snapshot-32"}) {
+        for (var origin : new String[] {null, "", "2.4.2-snapshot-32", "2.6.5"}) {
             var manifest = JsonParser.parseString(original).getAsJsonObject();
-            manifest.getAsJsonObject("properties").addProperty("originVer", origin);
+            var properties = manifest.getAsJsonObject("properties");
+            properties.remove("origin_ver");
+            properties.addProperty("2.4.2-snapshot-32".equals(origin) ? "originVer" : "origin_ver", origin);
             Files.writeString(source.resolve("ysm.json"), manifest.toString());
             var archive = temporary.resolve("source.zip");
             try (var output = new ZipOutputStream(Files.newOutputStream(archive)); var paths = Files.walk(source)) {
@@ -221,6 +223,8 @@ class RawModelImporterTest {
                         var model = new ModelFileView(channel);
                         assertEquals(expected, model.getManifest().info().properties().originVer());
                         assertEquals(ModelOriginVersion.fromModVersion(expected), model.getMetadata().originVer());
+                        assertEquals(ModelOriginVersion.usesDivZeroFallback(expected),
+                            model.getMetadata().expressionOptions().divZeroFallback());
                     }
                 }
             }

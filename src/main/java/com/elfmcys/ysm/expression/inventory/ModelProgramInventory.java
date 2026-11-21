@@ -16,7 +16,6 @@ import com.elfmcys.ysm.proto.mixel.asset.strings.StringDataProto;
 import com.elfmcys.ysm.proto.mixel.common.ProgramProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
 import com.elfmcys.ysm.util.ProtoUtil;
-import dev.semaweave.CompilerLimits;
 import dev.semaweave.LocalName;
 import dev.semaweave.ProgramEntrySignature;
 import dev.semaweave.ProgramKey;
@@ -134,6 +133,32 @@ public final class ModelProgramInventory {
             return locations;
         }
 
+        /** Returns source envelopes without decoding unrelated program bodies. */
+        public List<RawProgram> rawPrograms() {
+            return candidates.stream().map(value -> new RawProgram(value.location(), value.candidate().proto()))
+                .toList();
+        }
+
+        /** Applies source-local event and default-namespace lowering only to the consumed input. */
+        public dev.semaweave.interpreter.InterpreterSource interpreterSource(int id) throws InventoryException {
+            var located = candidates.get(id);
+            var value = located.candidate();
+            var facts = value.facts();
+            return new dev.semaweave.interpreter.InterpreterSource(located.location().key(), facts.encoded(),
+                facts.signature(), new DiagnosticLocation(collector.targetId + '/' + value.location()),
+                value.role().entryPermissions(), facts.roamingSlots());
+        }
+
+        public Map<dev.semaweave.SymbolKey, Integer> callableInputs() {
+            var result = new HashMap<dev.semaweave.SymbolKey, Integer>();
+            for (int id = 0; id < candidates.size(); id++) {
+                var value = candidates.get(id).candidate();
+                if (value.role() == ProgramRole.USER_FUNCTION)
+                    result.put(new dev.semaweave.SymbolKey(value.callable()), id);
+            }
+            return Map.copyOf(result);
+        }
+
         public Fingerprint sourceFingerprint() throws IOException {
             return ModelProgramInventory.sourceFingerprint(model, strings, settings);
         }
@@ -163,6 +188,9 @@ public final class ModelProgramInventory {
                     pending.size(), pending.size(), 0, collector.callableEntries, collector.eventEntries,
                     collector.rejectedSuffixes.size()));
         }
+    }
+
+    public record RawProgram(LocatedProgram location, ProgramProto program) {
     }
 
     private record ProgramFacts(EncodedProgram encoded, ProgramEntrySignature signature, EncodedProgram fallback,
@@ -477,9 +505,6 @@ public final class ModelProgramInventory {
             if (countCandidate) {
                 sourceCandidates++;
             }
-            if (!proto.hasBytecode() || !proto.bytecode().hasRemaining()) {
-                throw new InventoryException("invalid EncodedProgram at " + location);
-            }
             var sourcePath = location.substring(location.indexOf('/') + 1);
             candidates.add(new Candidate(proto, role, location, discriminator, callable, eventRoute, eventOrder,
                 borrowedFunctions.getOrDefault(borrowedOrigin(sourcePath), Map.of())));
@@ -742,12 +767,7 @@ public final class ModelProgramInventory {
         append(canonical, role.name());
         append(canonical, discriminator);
         var bytes = canonical.toByteArray();
-        var digest = sha256().digest(bytes);
-        // Keep structural ordering for bounded analysis; the full digest distinguishes long origins.
-        int prefixLength = Math.min(bytes.length, com.elfmcys.ysm.expression.host.ExpressionPolicy.COMPILER_LIMITS.maxProgramKeyBytes() - digest.length);
-        var key = java.util.Arrays.copyOf(bytes, prefixLength + digest.length);
-        System.arraycopy(digest, 0, key, prefixLength, digest.length);
-        return new ProgramKey(ReadOnlyBytes.copyOf(key));
+        return new ProgramKey(ReadOnlyBytes.copyOf(bytes));
     }
 
     private static void append(ByteArrayOutputStream output, String value) {

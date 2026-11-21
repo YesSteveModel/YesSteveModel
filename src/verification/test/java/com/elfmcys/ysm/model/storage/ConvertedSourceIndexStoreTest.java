@@ -1,114 +1,190 @@
 package com.elfmcys.ysm.model.storage;
 
-import com.elfmcys.ysm.model.domain.Hash256;
-import com.elfmcys.ysm.model.domain.ModelFileIdentity;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import static org.junit.jupiter.api.Assertions.*;
 
 class ConvertedSourceIndexStoreTest {
     @TempDir
     Path temp;
 
     @Test
-    void exactMappingRoundTripsAsOneAtomicIndex() throws Exception {
-        var store = store("1.2.3");
-        var custom = entry(1, 11, "custom/group/model", "1.2.3");
-        var auth = entry(2, 12, "auth/model", "1.2.3");
-
-        store.replace(List.of(auth, custom));
-
-        assertEquals(custom, store.find("custom/group/model").orElseThrow());
-        assertEquals(auth, store.find("auth/model").orElseThrow());
-        assertEquals(Set.of("custom/group/model", "auth/model"), store.read().keySet());
-        assertEquals(store.scope().root().resolve("index.bin"), store.path());
+    void switchingToDirectKeepsTheSourceIdentityButDropsItsOldConvertedRelation() throws Exception {
+        try (var cache = new AtomicSharedCache(temp.resolve("cache"))) {
+            var store = new ConvertedSourceIndexStore(ConvertedScope.of(temp, "v1"), cache);
+            var previous = store.publish(StorageContainerFixture.produce(store.scope(), cache, "models/model"));
+            var resolver = new com.elfmcys.ysm.model.catalog.source.ModelSourceResolver(
+                new com.elfmcys.ysm.model.catalog.RawModelImporter(
+                    com.elfmcys.ysm.format.parser.DefaultAnimationFilter.keepAll()),
+                store, new ConvertedObjectStore(cache));
+            var location = new com.elfmcys.ysm.model.catalog.source.CatalogLocation(
+                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS,
+                new com.elfmcys.ysm.model.domain.ModelPath("model"));
+            resolver.replaceIndex(Set.of("models"), List.of(),
+                List.of(new com.elfmcys.ysm.model.catalog.snapshot.CatalogIndexEntry(previous.identity(), location,
+                    temp.resolve("direct.mxc"))));
+            assertTrue(store.find("models/model").isEmpty());
+            var source = StorageIndex
+                .require(cache.catalog().read((db, token) -> db.pageSources(store.key(), "", token))).rows().get(0);
+            assertEquals(previous.identity(), source.identity());
+            assertTrue(source.converted().isEmpty());
+        }
     }
 
     @Test
-    void indexHeaderRejectsADifferentDataScopeWithoutMutatingIt() throws Exception {
-        var first = store("1.2.3");
-        first.replace(List.of(entry(1, 11, "custom/model", "1.2.3")));
-        var bytes = Files.readAllBytes(first.path());
-        assertArrayEquals("YSMCIDX2".getBytes(StandardCharsets.US_ASCII), java.util.Arrays.copyOf(bytes, 8));
-        var foreignScope = ConvertedScope.of(temp.resolve("different-data"), temp.resolve("cache"), "1.2.3");
-        var foreign = new ConvertedSourceIndexStore(foreignScope, new AtomicSharedCache(temp.resolve("cache")));
-        Files.createDirectories(foreign.path().getParent());
-        Files.write(foreign.path(), bytes);
-        assertTrue(foreign.read().isEmpty());
-        assertArrayEquals(bytes, Files.readAllBytes(foreign.path()));
-        assertEquals(1, first.read().size());
+    void metadataOnlyDirectAndBuiltinReferencesSurviveOtherScopeScansAndConvertedRevocation() throws Exception {
+        try (var cache = new AtomicSharedCache(temp.resolve("cache"))) {
+            var store = new ConvertedSourceIndexStore(ConvertedScope.of(temp.resolve("data"), "v1"), cache);
+            var other = new ConvertedSourceIndexStore(ConvertedScope.of(temp.resolve("other"), "v1"), cache);
+            var converted = store.publish(StorageContainerFixture.produce(store.scope(), cache, "models/raw"));
+            var identity = converted.identity();
+            store.replaceScopes(Set.of("models", "builtin"), List.of(converted),
+                java.util.Map.of("models/raw", identity, "models/direct", identity, "builtin/default", identity));
+            other.replaceScopes(Set.of("models"), List.of(), java.util.Map.of("models/other", identity));
+            store.revoke(converted.location());
+            store.replaceScopes(Set.of("models"), List.of(), java.util.Map.of());
+            var rows = StorageIndex.require(cache.catalog().read((db, token) -> db.pageSources(store.key(), "", token)))
+                .rows();
+            assertEquals(List.of("builtin/default"),
+                rows.stream().map(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Source::source).toList());
+            var otherRows = StorageIndex
+                .require(cache.catalog().read((db, token) -> db.pageSources(other.key(), "", token))).rows();
+            assertEquals(List.of("models/other"),
+                otherRows.stream().map(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Source::source).toList());
+            var references =
+                StorageIndex.require(cache.catalog().read((db, token) -> db.references(identity.containerId(), token)))
+                    .rows().get(0);
+            assertEquals(com.elfmcys.ysm.natives.storage.CacheStorageTypes.ReferenceState.REFERENCED,
+                references.state());
+            assertTrue(references.incompleteDomains() > 0, "a complete scope scan cannot prove root-wide coverage");
+        }
     }
 
     @Test
-    void scopedReplacementPreservesOtherManagementNamespaces() throws Exception {
-        var store = store("1.2.3");
-        var custom = entry(1, 11, "custom/old", "1.2.3");
-        var auth = entry(2, 12, "auth/kept", "1.2.3");
-        var replacement = entry(3, 13, "custom/new", "1.2.3");
-        store.replace(List.of(custom, auth));
-
-        store.replaceScopes(Set.of("custom"), List.of(replacement));
-
-        assertTrue(store.find("custom/old").isEmpty());
-        assertEquals(replacement, store.find("custom/new").orElseThrow());
-        assertEquals(auth, store.find("auth/kept").orElseThrow());
+    void lateOldInstanceFeedbackCannotRevokeReplacement() throws Exception {
+        try (var cache = new AtomicSharedCache(temp.resolve("cache"))) {
+            var scope = ConvertedScope.of(temp.resolve("data"), "v1");
+            var store = new ConvertedSourceIndexStore(scope, cache);
+            var first = store.publish(StorageContainerFixture.produce(scope, cache, "custom/model"));
+            var fresh = store.publish(StorageContainerFixture.produce(scope, cache, "custom/model"));
+            store.revoke(first.location());
+            assertEquals(fresh, store.find("custom/model").orElseThrow());
+            assertTrue(Files.exists(first.file()));
+        }
     }
 
     @Test
-    void rejectsDuplicatePathsAndForeignVersions() {
-        var store = store("1.2.3");
-        assertThrows(IllegalArgumentException.class,
-            () -> store.replace(List.of(entry(1, 11, "custom/model", "1.2.3"), entry(2, 12, "custom/model", "1.2.3"))));
-        assertThrows(IllegalArgumentException.class,
-            () -> store.replace(List.of(entry(1, 11, "custom/model", "other"))));
+    void exactInstancesReopenAndScanNeverRepublishesAnOldSnapshot() throws Exception {
+        try (var work = new DatabaseWork()) {
+            var cache =
+                com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(temp.resolve("cache")));
+            cache.databaseWork(work);
+            var scope = ConvertedScope.of(temp.resolve("data"), "v1");
+            var store = new ConvertedSourceIndexStore(scope, cache);
+            var old = StorageContainerFixture.produce(scope, cache, "custom/model");
+            store.publish(old);
+            var reopened = new ConvertedSourceIndexStore(scope, cache).find("custom/model").orElseThrow();
+            assertEquals(old.instance(), reopened.instance());
+            assertEquals(old.file(), reopened.file());
+            try (var verified = ManagedContainer.readConvertedMetadata(reopened, cache)) {
+                assertEquals(old.identity(), verified.identity());
+            }
+            store.revoke(old.location());
+            store.replaceScopes(Set.of("custom"), List.of(old));
+            assertTrue(store.find("custom/model").isEmpty());
+            assertTrue(Files.exists(old.file()));
+            var replacement = StorageContainerFixture.produce(scope, cache, "custom/model");
+            assertEquals(old.identity(), replacement.identity());
+            assertNotEquals(old.instance(), replacement.instance());
+            store.publish(replacement);
+            store.revoke(old.location());
+            assertEquals(replacement.instance(), store.find("custom/model").orElseThrow().instance());
+            assertEquals(cache.root(), store.root());
+            assertFalse(Files.exists(cache.root().resolve("index.bin")));
+        }
     }
 
     @Test
-    void malformedExactIndexIsPreservedAndVersionsHaveIndependentMappings() throws Exception {
-        var first = store("1.2.3");
-        first.replace(List.of(entry(1, 11, "custom/model", "1.2.3")));
-        assertTrue(store("2.0.0").read().isEmpty());
-        assertTrue(Files.exists(first.path()));
-
-        Files.write(first.path(), new byte[] {1, 2, 3});
-
-        assertTrue(first.read().isEmpty());
-        assertArrayEquals(new byte[] {1, 2, 3}, Files.readAllBytes(first.path()));
+    void completeNamespacesRetireOnlyTheirObsoleteRelationsAndProfilesStayIsolated() throws Exception {
+        try (var work = new DatabaseWork()) {
+            var cache =
+                com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(temp.resolve("cache")));
+            cache.databaseWork(work);
+            var scope = ConvertedScope.of(temp.resolve("data"), "v1");
+            var store = new ConvertedSourceIndexStore(scope, cache);
+            var custom = StorageContainerFixture.produce(scope, cache, "custom/model");
+            var auth = StorageContainerFixture.produce(scope, cache, "auth/model");
+            store.publish(custom);
+            store.publish(auth);
+            var other = new ConvertedSourceIndexStore(ConvertedScope.of(temp.resolve("other"), "v1"), cache);
+            assertTrue(other.read().isEmpty());
+            assertTrue(
+                new ConvertedSourceIndexStore(ConvertedScope.of(temp.resolve("data"), "v2"), cache).read().isEmpty());
+            store.replaceScopes(Set.of("custom"), List.of());
+            assertTrue(store.find("custom/model").isEmpty());
+            assertEquals(auth.instance(), store.find("auth/model").orElseThrow().instance());
+            assertTrue(Files.exists(custom.file()));
+        }
     }
 
     @Test
-    void foreignEntryVersionIsAMissAndTheIndexIsNotDeleted() throws Exception {
-        var store = store("1.2.3");
-        store.replace(List.of(entry(1, 11, "custom/model", "1.2.3")));
-        var bytes = Files.readAllBytes(store.path());
-        bytes[bytes.length - 1] = '4';
-        Files.write(store.path(), bytes);
-        assertTrue(store.read().isEmpty());
-        assertArrayEquals(bytes, Files.readAllBytes(store.path()));
+    void keysetPagesObserveEveryRelationBeyondTheRowAndByteBound() throws Exception {
+        try (var work = new DatabaseWork()) {
+            var cache =
+                com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(temp.resolve("cache")));
+            cache.databaseWork(work);
+            var scope = ConvertedScope.of(temp.resolve("data"), "v1");
+            var store = new ConvertedSourceIndexStore(scope, cache);
+            var fixture = StorageContainerFixture.produce(scope, cache, "custom/fixture");
+            for (var n = 0; n < 70; n++) {
+                // Different relations may reference the same already verified immutable instance.
+                var entry = new ConvertedSourceIndex(fixture.identity(), "custom/" + String.format("%03d", n), "v1",
+                    fixture.location(), fixture.file(), fixture.observation(), fixture.metadata());
+                store.publish(entry);
+            }
+            assertEquals(70, store.read().size());
+            store.replaceScopes(Set.of("custom"), List.of());
+            assertTrue(store.read().isEmpty());
+        }
     }
 
-    private ConvertedSourceIndexStore store(String version) {
-        return new ConvertedSourceIndexStore(temp.resolve("cache"), version);
+    @Test
+    void directSourceScanCrossesTheBatchBoundary() throws Exception {
+        try (var cache = new AtomicSharedCache(temp.resolve("cache"))) {
+            var store = new ConvertedSourceIndexStore(ConvertedScope.of(temp, "v1"), cache);
+            var identity = StorageContainerFixture.produce(store.scope(), cache, "models/fixture").identity();
+            var references = new LinkedHashMap<String, com.elfmcys.ysm.model.domain.ModelFileIdentity>();
+            for (int i = 0; i <= 64; i++)
+                references.put("models/" + String.format("%02d", i), identity);
+
+            store.replaceScopes(Set.of("models"), List.of(), references);
+            var first = StorageIndex
+                .require(cache.catalog().read((db, token) -> db.pageSources(store.key(), "", token))).rows();
+            assertEquals(64, first.size());
+            var last = StorageIndex
+                .require(cache.catalog().read((db, token) -> db.pageSources(store.key(), "models/63", token))).rows();
+            assertEquals(List.of("models/64"),
+                last.stream().map(com.elfmcys.ysm.natives.storage.CacheStorageTypes.Source::source).toList());
+            assertEquals(identity, last.get(0).identity());
+        }
     }
 
-    private static ConvertedSourceIndex entry(int modelSeed, int containerSeed, String path, String version) {
-        return new ConvertedSourceIndex(new ModelFileIdentity(hash(modelSeed), hash(containerSeed)), path, version);
-    }
-
-    private static Hash256 hash(int seed) {
-        var bytes = new byte[Hash256.SIZE];
-        bytes[0] = (byte)seed;
-        return new Hash256(bytes);
+    @Test
+    void incompatibleDatabaseIsPreservedAndNeverReportedAsMissing() throws Exception {
+        var root = Files.createDirectories(temp.resolve("cache"));
+        var file =
+            Files.write(Files.createDirectories(root.resolve("f")).resolve("catalog.sqlite"), new byte[] {1, 2, 3});
+        try (var work = new DatabaseWork()) {
+            var cache = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new AtomicSharedCache(root));
+            cache.databaseWork(work);
+            var store = new ConvertedSourceIndexStore(ConvertedScope.of(temp.resolve("data"), "v1"), cache);
+            assertThrows(java.io.IOException.class, store::read);
+            assertArrayEquals(new byte[] {1, 2, 3}, Files.readAllBytes(file));
+        }
     }
 }

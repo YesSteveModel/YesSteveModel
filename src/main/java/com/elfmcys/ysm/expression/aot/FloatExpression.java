@@ -12,13 +12,17 @@ public sealed interface FloatExpression {
     record Literal(float value) implements FloatExpression {
     }
 
-    record Program(ModelProgramInventory.SemanticLocation location, ProgramRef reference,
-        ResourceGenerationToken generation) implements FloatExpression, EventProgram {
+    record Program(ModelProgramInventory.SemanticLocation location,
+        ProgramBinding binding) implements FloatExpression, EventProgram {
+        public Program(ModelProgramInventory.SemanticLocation location, ProgramRef reference,
+            ResourceGenerationToken generation) {
+            this(location, new ProgramBinding.Aot(reference, generation));
+        }
+
         public Program {
             Objects.requireNonNull(location, "location");
-            Objects.requireNonNull(reference, "reference");
-            Objects.requireNonNull(generation, "generation");
-            if (reference.shape() != ProgramShape.F32 || location.role().shape() != ProgramShape.F32) {
+            Objects.requireNonNull(binding, "binding");
+            if (binding.shape() != ProgramShape.F32 || location.role().shape() != ProgramShape.F32) {
                 throw new IllegalArgumentException("float program shape mismatch at " + location);
             }
         }

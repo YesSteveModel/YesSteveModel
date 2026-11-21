@@ -24,29 +24,38 @@ import org.apache.commons.lang3.SerializationException;
 /**
  * Parses and validates container metadata. Chunk payload I/O belongs to ChunkDataSource implementations.
  *
- * <p>Ensures: normal return establishes supported container version, table structure, and preamble
- * verification. It does not establish schema semantics, payload availability, or ordinary chunk hashes.
+ * <p>
+ * Ensures: normal return establishes supported container version, table structure, and preamble verification. It does
+ * not establish schema semantics, payload availability, or ordinary chunk hashes.
  *
- * <p>Execution: synchronous, position-changing I/O on a borrowed channel. Callers exclude concurrent
- * channel use and close; the returned descriptor does not retain that channel.
+ * <p>
+ * Execution: synchronous, position-changing I/O on a borrowed channel. Callers exclude concurrent channel use and
+ * close; the returned descriptor does not retain that channel.
  *
- * <p>Failure: malformed or unsupported input can produce IOException or unchecked format exceptions;
- * callers must not interpret access failure as evidence that stored content is corrupt.
+ * <p>
+ * Failure: malformed or unsupported input produces IOException; callers must not interpret access failure as evidence
+ * that stored content is corrupt.
  *
- * <p>Seam: implements the container layer of
- * [validation](docs/architecture/asset-pipeline/overview.md#分层验证与发布).
+ * <p>
+ * Seam: implements the container layer of [validation](docs/architecture/asset-pipeline/overview.md#分层验证与发布).
  */
 public final class AssetContainerReader {
     private AssetContainerReader() {}
 
     @SuppressWarnings("UnstableApiUsage")
     public static AssetContainerView read(SeekableByteChannel file) throws IOException {
-        if (file.size() > AssetContainerConstant.MAX_FILE_SIZE) {
-            throw new IOException("File size too large");
+        try {
+            return readVerifiedPreamble(file);
+        } catch (SerializationException | NotImplementedException invalid) {
+            throw com.elfmcys.ysm.format.AssetLoadException.content("Invalid container preamble", invalid);
         }
+    }
 
+    private static AssetContainerView readVerifiedPreamble(SeekableByteChannel file) throws IOException {
         var headLen = AssetContainerConstant.HEAD.length;
-        var reader = beginRead(file, 0, headLen + AssetContainerConstant.MAX_SUMMARY_SIZE + 1, 4 * 1024);
+        // Summary read-ahead must fit inside the mandatory header that follows its terminator.
+        var reader = beginRead(file, 0, headLen + AssetContainerConstant.MAX_SUMMARY_SIZE + 1,
+            AssetContainerConstant.HEADER_SIZE);
         var head = new byte[headLen];
         reader.readFully(head);
         if (Arrays.compare(AssetContainerConstant.HEAD, head) != 0) {
@@ -155,8 +164,8 @@ public final class AssetContainerReader {
         if (reader.read() != -1) {
             throw new SerializationException("Chunk table size overflow");
         }
-        if (currentOffset < file.size()) {
-            throw new SerializationException("Illegal trailing data");
+        if (currentOffset > AssetContainerConstant.MAX_FILE_SIZE) {
+            throw new SerializationException("Container descriptor exceeds maximum file size");
         }
 
         var verification = chunkTable.get(AssetContainerConstant.VERIFICATION_CHUNK_TYPE);
@@ -186,7 +195,7 @@ public final class AssetContainerReader {
                 if (!Blake3.validateHash(verificationInput, hash)) {
                     throw new SerializationException("Container verification failed");
                 }
-            } else if (verification.encoding().equals(AssetContainerConstant.ED25519_NAME)) {
+            } else if (verification.encoding().equals(AssetContainerConstant.SIGN_NAME)) {
                 throw new NotImplementedException("Ed25519 signature is not implemented");
             } else {
                 throw new SerializationException("Unknown verification method");
@@ -205,8 +214,8 @@ public final class AssetContainerReader {
     }
 
     /**
-     * Reads the supplied array range without retaining it. The range must contain the complete verified
-     * preamble but need not contain ordinary chunk payloads; descriptor offsets remain container-relative.
+     * Reads the supplied array range without retaining it. The range must contain the complete verified preamble but
+     * need not contain ordinary chunk payloads; descriptor offsets remain container-relative.
      *
      * @param offset first byte in the array, non-negative
      * @param size byte count within the array; the caller must not mutate this range during parsing

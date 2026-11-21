@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.client.gui;
 
+import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.catalog.client.ClientCatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.client.ModelPackInfo;
 import com.elfmcys.ysm.model.catalog.client.entry.ClientFailedCatalogEntry;
@@ -17,23 +19,23 @@ class CatalogBrowserStateTest {
     @Test
     void sourcePrefixesStayOutOfNavigationAndSameNamedDirectoriesRemainIndependent() {
         var browser = new CatalogBrowserState();
-        var entries = List.of(failed(1, "global:custom/top.mxc"), failed(2, "global:custom/team/one.mxc"),
-            failed(3, "local:auth/team/two.mxc"));
+        var entries =
+            List.of(failed(1, "global:top.mxc"), failed(2, "global:team/one.mxc"), failed(3, "local:team/two.mxc"));
         browser.rebuild(new ClientCatalogSnapshot(CatalogSnapshot.empty(), entries), CatalogBrowserStateTest::pack);
         browser.enterPack("");
         filter(browser, Set.of());
-        assertEquals(List.of("global:custom/top.mxc"),
+        assertEquals(List.of("global:top.mxc"),
             browser.failed().stream().map(ClientFailedCatalogEntry::displayPath).toList());
-        assertEquals(List.of("global:custom/team", "local:auth/team"),
+        assertEquals(List.of("global:team", "local:team"),
             browser.packs().stream().map(ModelPackInfo::hierarchy).toList());
         assertEquals(List.of("team", "team"), browser.packs().stream().map(ModelPackInfo::name).toList());
-        browser.enterPack("local:auth/team");
+        browser.enterPack("local:team");
         filter(browser, Set.of());
-        assertEquals(List.of("local:auth/team/two.mxc"),
+        assertEquals(List.of("local:team/two.mxc"),
             browser.failed().stream().map(ClientFailedCatalogEntry::displayPath).toList());
         browser.backToParent();
         assertEquals("", browser.currentPack());
-        filter(browser, Set.of("global:custom/top.mxc"));
+        filter(browser, Set.of("global:top.mxc"));
         assertTrue(browser.failed().isEmpty());
     }
 
@@ -41,20 +43,19 @@ class CatalogBrowserStateTest {
     void anExplicitRootManifestRemainsARealPackWithItsOwnMembers() {
         var browser = new CatalogBrowserState();
         var descriptor =
-            new ModelPackDescriptor(CatalogRootKind.CUSTOM, "global:custom", "Root pack", "", Map.of(), null, "", 0);
+            new ModelPackDescriptor(CatalogRootKind.MODELS, "global:", "Root pack", "", Map.of(), null, "", 0);
         var snapshot = new CatalogSnapshot(Map.of(), List.of(descriptor), ModelScanReport.empty());
         browser.rebuild(
-            new ClientCatalogSnapshot(snapshot,
-                List.of(failed(1, "global:custom/top.mxc"), failed(2, "global:custom/team/one.mxc"))),
+            new ClientCatalogSnapshot(snapshot, List.of(failed(1, "global:top.mxc"), failed(2, "global:team/one.mxc"))),
             CatalogBrowserStateTest::pack);
         browser.enterPack("");
         filter(browser, Set.of());
-        assertEquals(List.of("global:custom"), browser.packs().stream().map(ModelPackInfo::hierarchy).toList());
+        assertEquals(List.of("global:"), browser.packs().stream().map(ModelPackInfo::hierarchy).toList());
         assertTrue(browser.failed().isEmpty());
-        browser.enterPack("global:custom");
+        browser.enterPack("global:");
         filter(browser, Set.of());
         assertEquals(1, browser.failed().size());
-        assertEquals(List.of("global:custom/team"), browser.packs().stream().map(ModelPackInfo::hierarchy).toList());
+        assertEquals(List.of("global:team"), browser.packs().stream().map(ModelPackInfo::hierarchy).toList());
         browser.backToParent();
         assertEquals("", browser.currentPack());
     }
@@ -70,7 +71,7 @@ class CatalogBrowserStateTest {
     private static ClientFailedCatalogEntry failed(int marker, String address) {
         var bytes = new byte[32];
         bytes[0] = (byte)marker;
-        return new ClientFailedCatalogEntry(new Hash256(bytes), new HierarchyPath(address), CatalogAccess.PUBLIC,
-            "Content validation failed");
+        return new ClientFailedCatalogEntry(ModelId.fromHash(new Hash256(bytes)), new HierarchyPath(address),
+            CatalogAccess.PUBLIC, "Content validation failed");
     }
 }

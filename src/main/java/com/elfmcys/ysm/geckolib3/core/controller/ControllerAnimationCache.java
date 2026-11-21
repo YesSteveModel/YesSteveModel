@@ -8,17 +8,22 @@ import java.util.Map;
 /**
  * Caches derived animation resolution within one controller's resource window.
  *
- * <p>Invariant: the resource resolution's cacheable flag decides whether success or absence is stable.
- * Source identity change clears all derived entries. Entries contain no mutable playback state.
+ * <p>
+ * Invariant: the resource resolution's cacheable flag decides whether success or absence is stable. Source identity
+ * change clears all derived entries. Entries contain no mutable playback state.
  *
- * <p>Execution: confined to the owning entity's execution window. Players can share this cache only inside that controller.
+ * <p>
+ * Execution: confined to the owning entity's execution window. Players can share this cache only inside that
+ * controller.
  *
- * <p>Seam: implements [resolution and playback lifetimes](docs/architecture/animation/controllers-and-playback.md#解析缓存与播放寿命).
+ * <p>
+ * Seam: implements [resolution and playback
+ * lifetimes](docs/architecture/animation/controllers-and-playback.md#解析缓存与播放寿命).
  */
 final class ControllerAnimationCache {
     private final AnimatableEntity<?> entity;
     private final Map<String, AnimationStore.Resolution> entries = new HashMap<>();
-    private AnimationStore source;
+    private AnimationStore.View source;
 
     ControllerAnimationCache(AnimatableEntity<?> entity) {
         this.entity = entity;

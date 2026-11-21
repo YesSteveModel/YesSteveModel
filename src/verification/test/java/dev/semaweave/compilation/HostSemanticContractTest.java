@@ -64,32 +64,27 @@ final class HostSemanticContractTest {
     }
 
     @Test
-    void realFrontendEnforcesOriginalLiteralSentinelsForYsmObjects() throws Exception {
+    void realFrontendAcceptsScalarObjectComparisonsFromEveryNumericSource() throws Exception {
         var host = ExpressionHost.create(HostAvailability.all());
         for (var source : List.of("ysm.texture_name == (0)", "(1) != ysm.texture_name",
-            "ysm.texture_name == q.is_jumping", "q.is_jumping != ysm.texture_name")) {
+            "ysm.texture_name == q.is_jumping", "q.is_jumping != ysm.texture_name", "ysm.texture_name == +0",
+            "ysm.texture_name == -0", "ysm.texture_name == (1-1)")) {
             var result = WholeUnitSemanticCompiler.compile(unit(host, source, Optional.of("false"), BOOL_ENTRY),
                 host.registry());
             assertTrue(result.fallbackSelections().isEmpty(), source);
         }
-        for (var source : List.of("ysm.texture_name == +0", "ysm.texture_name == -0", "ysm.texture_name == (1-1)")) {
-            var result = WholeUnitSemanticCompiler.compile(unit(host, source, Optional.of("false"), BOOL_ENTRY),
-                host.registry());
-            assertEquals(1, result.fallbackSelections().size(), source);
-            assertTrue(result.fallbackSelections().stream()
-                .allMatch(replacement -> replacement.primaryReason() == SemanticFailureReason.TYPE_MISMATCH), source);
-        }
     }
 
     @Test
-    void scalarArgumentsRejectStringButSoundKeepsItsStringOverload() throws Exception {
+    void scalarArgumentsConsumeStringPresenceButSoundKeepsItsStringOverload() throws Exception {
         var host = ExpressionHost.create(HostAvailability.all());
         var defer = WholeUnitSemanticCompiler
             .compile(unit(host, "ysm.defer(ysm.texture_name)", Optional.empty(), VOID_ENTRY), host.registry());
 
         assertTrue(defer.fallbackSelections().isEmpty());
-        assertEquals(1, defer.localRecoveries().size());
-        assertTrue(defer.programs().stream().allMatch(program -> program.effects().isEmpty()));
+        assertTrue(defer.localRecoveries().isEmpty());
+        assertTrue(defer.programs().stream().allMatch(program -> program.effects().asSortedSet().stream()
+            .anyMatch(effect -> effect.canonical().equals("ysm:action"))));
         var booleanDefer = WholeUnitSemanticCompiler
             .compile(unit(host, "ysm.defer(q.is_jumping)", Optional.empty(), VOID_ENTRY), host.registry());
         assertTrue(booleanDefer.localRecoveries().isEmpty());

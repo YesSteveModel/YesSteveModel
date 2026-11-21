@@ -90,8 +90,7 @@ class SoundPreparationIntegrationTest {
                     assertEquals(2, decoderCreates() - decoders);
                     assertReads(fixture, 1);
                     var targetA = a.publish();
-                    var prepared = (TargetSoundResources)property(
-                        ((ModelRenderTarget.StateIdentity)field(targetA, "stateIdentity")).preparation(), "sounds");
+                    var prepared = targetA.assets().soundResources();
                     long retained = fixture.sounds().values().stream().map(sound -> sound.chunkInfos().get(0))
                         .collect(Collectors.toMap(chunk -> chunk.type(), chunk -> chunk.size(), (left, right) -> left))
                         .values().stream().mapToLong(Integer::longValue).sum();
@@ -263,18 +262,6 @@ class SoundPreparationIntegrationTest {
         return (long)method.invoke(null);
     }
 
-    private static Object field(Object object, String name) throws Exception {
-        var field = object.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(object);
-    }
-
-    private static Object property(Object object, String name) throws Exception {
-        var method = object.getClass().getDeclaredMethod(name);
-        method.setAccessible(true);
-        return method.invoke(object);
-    }
-
     private static final class Fixture implements AutoCloseable {
         final Path file;
         final ManagedContainer base;
@@ -366,7 +353,8 @@ class SoundPreparationIntegrationTest {
             var cache = DerivedStorageTestScope.track(new AtomicSharedCache(cacheRoot));
             var factory = new RenderTargetExpressionModuleFactory(
                 DerivedStorageTestScope.track(new ExpressionArtifactStore(cacheRoot, cache)),
-                ExpressionHost.create(HostAvailability.all()), new ExpressionEngineMetrics());
+                new AnimationInputStore(cacheRoot, cache), ExpressionHost.create(HostAvailability.all()),
+                new ExpressionEngineMetrics());
             loader = new ModelRenderTargetLoader(new BakedModelCache(cacheRoot, cache), factory, scheduler,
                 new DefaultAnimationRuntime());
             RenderTargetStateIdentityTest.installMetadataConsumer(loader);

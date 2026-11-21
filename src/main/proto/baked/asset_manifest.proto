@@ -7,6 +7,20 @@ message BakedAssetManifest {
   string render_target_id = 3;
   bytes input_hash = 4;
   repeated BakedAnimationEntry animations = 5;
+  repeated BakedProgramInput programs = 6;
+}
+
+message BakedProgramInput {
+  uint32 id = 1;
+  string chunk_name = 2;
+  bytes content_hash = 3;
+  uint32 byte_length = 4;
+  string target_id = 5;
+  string expression_set = 6;
+  string location = 7;
+  string role = 8;
+  string discriminator = 9;
+  bytes program_key = 10;
 }
 
 message BakedAnimationEntry {

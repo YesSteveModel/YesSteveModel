@@ -1,21 +1,28 @@
 package com.elfmcys.ysm.expression.aot;
 
-import com.elfmcys.ysm.api.molang.PreparedEffect;
+import static com.elfmcys.ysm.expression.TestRoamingPayloads.named;
+
+import static com.elfmcys.ysm.expression.TestRoamingPayloads.fromMap;
+
+import com.elfmcys.ysm.model.domain.Hash256;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.elfmcys.ysm.expression.host.*;
 import com.elfmcys.ysm.geckolib3.core.processor.MinecraftRuntimeInputs;
 import com.elfmcys.ysm.model.resource.client.BakeProfile;
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
+import com.elfmcys.ysm.expression.inventory.ExpressionSet;
 import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
 import com.elfmcys.ysm.expression.inventory.ProgramRole;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
 import com.elfmcys.ysm.format.AssetLoadException;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.storage.AtomicSharedCache;
+import com.elfmcys.ysm.model.resource.client.render.AnimationInputStore;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationFileProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationProto;
@@ -71,19 +78,19 @@ class ExpressionArtifactPipelineTest {
         var entered = new java.util.concurrent.CountDownLatch(1);
         var release = new java.util.concurrent.CountDownLatch(1);
         var shared = track(new AtomicSharedCache(temp));
-        ExpressionArtifactStore.ArtifactMaterializer blocked = (key, target, validator, writer, gate) -> shared
-            .replaceValidated("baked-animation", key, target, validator, file -> {
-                entered.countDown();
-                try {
-                    if (!release.await(10, java.util.concurrent.TimeUnit.SECONDS))
-                        throw new IOException("Timed out waiting for the test release");
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException(interrupted);
-                }
-                writer.write(file);
-            }, gate);
-        var store = track(new ExpressionArtifactStore(temp, blocked, 2));
+        ExpressionArtifactStore.ArtifactMaterializer blocked = (key, target, validator, writer, gate) -> {
+            entered.countDown();
+            try {
+                if (!release.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    throw new IOException("Timed out waiting for the test release");
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException(interrupted);
+            }
+            writer.write(target.file());
+            target.publish(validator, gate);
+        };
+        var store = track(artifactStore(temp, shared, blocked, 2));
         var metrics = new ExpressionEngineMetrics();
         var input = input();
         try {
@@ -92,7 +99,7 @@ class ExpressionArtifactPipelineTest {
                 input.definition(), null, input.settings(), input.configBytes())) {
                 assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
                 assertEquals(ExpressionArtifactStore.Source.COLD, cold.source());
-                assertFalse(Files.exists(store.path(cold.identity())));
+                assertThrows(java.nio.file.NoSuchFileException.class, () -> store.path(cold.identity()));
                 assertNotNull(cold.requireProgram(new ModelProgramInventory.SemanticLocation("player",
                     "animation/main/idle/blend-weight", ProgramRole.ANIMATION_SAMPLE, "")));
                 assertEquals(0, metrics.snapshot().stageCalls(EngineMetrics.Stage.MODULE_VERIFICATION));
@@ -106,26 +113,26 @@ class ExpressionArtifactPipelineTest {
             release.countDown();
             store.awaitPersistence();
         }
-        try (var disk = factory(track(new ExpressionArtifactStore(temp, shared)), new ExpressionEngineMetrics()).create(
-            () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-            input.settings(), input.configBytes())) {
+        try (var disk = factory(track(artifactStore(temp, shared)), new ExpressionEngineMetrics()).create(() -> false,
+            input.model(), "player", "main", input.profile(), false, input.definition(), null, input.settings(),
+            input.configBytes())) {
             assertEquals(ExpressionArtifactStore.Source.DISK, disk.source());
         }
     }
 
-    private static final InvocationInputs<net.minecraft.world.entity.Entity> EMPTY_INPUTS = new InvocationInputs<net.minecraft.world.entity.Entity>() {
-        @Override
-        public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
-    };
+    private static final InvocationInputs<net.minecraft.world.entity.Entity> EMPTY_INPUTS =
+        new InvocationInputs<net.minecraft.world.entity.Entity>() {
+
+        };
 
     @Test
     void abandonedRuntimeAndWatchReleaseInstanceGenerationAndQuota(@TempDir Path temp) throws Throwable {
         var metrics = new ExpressionEngineMetrics();
         var input = input("1");
         int baseline = TransientExpressionSession.liveLeaseCount();
-        try (var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes())) {
+        try (var module = factory(track(artifactStore(temp, track(new AtomicSharedCache(temp)))), metrics).create(
+            () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+            input.settings(), input.configBytes())) {
             var references = abandonRuntimeAndWatch(module);
             long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
             while (System.nanoTime() < deadline && (references.stream().anyMatch(ref -> ref.get() != null)
@@ -186,7 +193,7 @@ class ExpressionArtifactPipelineTest {
         var otherFallback = new MolangFrontend().compile("-1.0", MolangFrontend.SourceMode.EXPRESSION,
             new MolangFrontend.SourceLocation("identity/other-fallback")).program();
         var baseExpected = expected(host, primary, fallback, CompilerOptions.DEFAULT, backend);
-        var model = new ModelFileIdentity(hash(1), hash(2));
+        var model = new ModelFileIdentity(hash(1), Hash256.parse(hash(2).toString().substring(5)));
         var base = ExpressionArtifactIdentity.create(baseExpected, model, "player", "main",
             new BakeProfile("profile-a"), false, new byte[] {1});
 
@@ -211,10 +218,14 @@ class ExpressionArtifactPipelineTest {
                 new BackendDescriptor(backend.stableId(), "different-version", backend.abiVersion(),
                     new TreeMap<>(Map.of("mode", "test")))),
             model, "player", "main", new BakeProfile("profile-a"), false, new byte[] {1}).cacheKey());
-        identities.add(ExpressionArtifactIdentity.create(baseExpected, new ModelFileIdentity(hash(3), hash(2)),
-            "player", "main", new BakeProfile("profile-a"), false, new byte[] {1}).cacheKey());
-        identities.add(ExpressionArtifactIdentity.create(baseExpected, new ModelFileIdentity(hash(1), hash(3)),
-            "player", "main", new BakeProfile("profile-a"), false, new byte[] {1}).cacheKey());
+        identities.add(ExpressionArtifactIdentity
+            .create(baseExpected, new ModelFileIdentity(hash(3), Hash256.parse(hash(2).toString().substring(5))),
+                "player", "main", new BakeProfile("profile-a"), false, new byte[] {1})
+            .cacheKey());
+        identities.add(ExpressionArtifactIdentity
+            .create(baseExpected, new ModelFileIdentity(hash(1), Hash256.parse(hash(3).toString().substring(5))),
+                "player", "main", new BakeProfile("profile-a"), false, new byte[] {1})
+            .cacheKey());
         identities.add(ExpressionArtifactIdentity
             .create(baseExpected, model, "npc", "main", new BakeProfile("profile-a"), false, new byte[] {1})
             .cacheKey());
@@ -234,8 +245,10 @@ class ExpressionArtifactPipelineTest {
             new BakeProfile("profile-a"), host.expressionBinding(), false, new byte[] {1}).cacheKey());
 
         assertEquals(9, identities.size());
-        assertEquals(base, ExpressionArtifactIdentity.create(baseExpected, new ModelFileIdentity(hash(99), hash(2)),
-            "player", "other-texture", new BakeProfile("other-bake"), true, new byte[] {1}));
+        assertEquals(base,
+            ExpressionArtifactIdentity.create(baseExpected,
+                new ModelFileIdentity(hash(99), Hash256.parse(hash(2).toString().substring(5))), "player",
+                "other-texture", new BakeProfile("other-bake"), true, new byte[] {1}));
         assertEquals(base, ExpressionArtifactIdentity.create(baseExpected, model, "player", "main",
             new BakeProfile("profile-a"), false, new byte[] {1}));
         assertEquals(17, base.expected().identity().javaFeature());
@@ -274,14 +287,14 @@ class ExpressionArtifactPipelineTest {
     void missingProductionLinkageRejectsCandidateBeforeActivationAndKeepsOldTarget(@TempDir Path temp)
         throws Exception {
         var paths = temp.resolve("cache");
-        var store = track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths))));
+        var store = track(artifactStore(paths, track(new AtomicSharedCache(paths))));
         var input = input();
         var host = ExpressionHost.create(HostAvailability.all());
         var goodMetrics = new ExpressionEngineMetrics();
-        var good = new RenderTargetExpressionModuleFactory(store, host, goodMetrics).create(() -> false, input.model(),
-            "player", "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
+        var good = pipelineFactory(store, host, goodMetrics).create(() -> false, input.model(), "player", "main",
+            input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
         var badMetrics = new ExpressionEngineMetrics();
-        var bad = new RenderTargetExpressionModuleFactory(store, host, MolangEventCatalog.production(),
+        var bad = pipelineFactory(store, host, MolangEventCatalog.production(),
             HostLinkage.production(host).without("global:o"), badMetrics);
 
         var first = assertThrows(AssetLoadException.class, () -> bad.create(() -> false, input.model(), "player",
@@ -304,7 +317,7 @@ class ExpressionArtifactPipelineTest {
     void coldMemoryAndDiskPathsBindTheSameCatalogWithoutWarmCompilation(@TempDir Path temp) throws Exception {
         var paths = temp.resolve("cache");
         var shared = track(new AtomicSharedCache(paths));
-        var store = track(new ExpressionArtifactStore(paths, shared, 2));
+        var store = track(artifactStore(paths, shared, 2));
         var metrics = new ExpressionEngineMetrics();
         var factory = factory(store, metrics);
         var exact = factory.expressionBinding();
@@ -320,7 +333,7 @@ class ExpressionArtifactPipelineTest {
         assertEquals(1, cold.programs().size());
         var afterCold = metrics.snapshot();
         assertEquals(1, afterCold.stageCalls(EngineMetrics.Stage.SEMANTIC_ANALYSIS));
-        assertEquals(1, afterCold.stageCalls(EngineMetrics.Stage.SOURCE_GENERATION));
+        assertEquals(1, afterCold.stageCalls(EngineMetrics.Stage.SYNTAX_GENERATION));
         assertEquals(1, afterCold.stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
         assertEquals(1, afterCold.portableProgramDecodes());
         cold.close();
@@ -335,8 +348,8 @@ class ExpressionArtifactPipelineTest {
         var afterMemory = metrics.snapshot();
         assertEquals(afterCold.stageCalls(EngineMetrics.Stage.SEMANTIC_ANALYSIS),
             afterMemory.stageCalls(EngineMetrics.Stage.SEMANTIC_ANALYSIS));
-        assertEquals(afterCold.stageCalls(EngineMetrics.Stage.SOURCE_GENERATION),
-            afterMemory.stageCalls(EngineMetrics.Stage.SOURCE_GENERATION));
+        assertEquals(afterCold.stageCalls(EngineMetrics.Stage.SYNTAX_GENERATION),
+            afterMemory.stageCalls(EngineMetrics.Stage.SYNTAX_GENERATION));
         assertEquals(afterCold.stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION),
             afterMemory.stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
         assertEquals(afterCold.portableProgramDecodes(), afterMemory.portableProgramDecodes());
@@ -344,7 +357,7 @@ class ExpressionArtifactPipelineTest {
 
         com.elfmcys.ysm.testutil.DerivedStorageTestScope.drain();
         var diskMetrics = new ExpressionEngineMetrics();
-        var diskFactory = factory(track(new ExpressionArtifactStore(paths, shared)), diskMetrics);
+        var diskFactory = factory(track(artifactStore(paths, shared)), diskMetrics);
         var diskExact = diskFactory.expressionBinding();
         var disk = diskFactory.create(() -> false, input.model(), "player", "main", input.profile(), diskExact, false,
             input.definition(), null, input.settings(), input.configBytes());
@@ -353,7 +366,7 @@ class ExpressionArtifactPipelineTest {
         assertEquals(coldRef.entryId(), disk.requireProgram(location).entryId());
         assertTrue(coldRef != disk.requireProgram(location));
         assertEquals(0, diskMetrics.snapshot().stageCalls(EngineMetrics.Stage.SEMANTIC_ANALYSIS));
-        assertEquals(0, diskMetrics.snapshot().stageCalls(EngineMetrics.Stage.SOURCE_GENERATION));
+        assertEquals(0, diskMetrics.snapshot().stageCalls(EngineMetrics.Stage.SYNTAX_GENERATION));
         assertEquals(0, diskMetrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
         assertEquals(0, diskMetrics.snapshot().portableProgramDecodes());
         assertTrue(diskMetrics.snapshot().stageCalls(EngineMetrics.Stage.MODULE_VERIFICATION) > 0);
@@ -365,7 +378,7 @@ class ExpressionArtifactPipelineTest {
         var paths = temp.resolve("cache");
         Files.write(paths, new byte[] {1});
         var metrics = new ExpressionEngineMetrics();
-        var store = track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths))));
+        var store = track(artifactStore(paths, track(new AtomicSharedCache(paths))));
         var factory = factory(store, metrics);
         var input = input();
 
@@ -389,14 +402,13 @@ class ExpressionArtifactPipelineTest {
         var paths = temp.resolve("cache");
         var shared = track(new AtomicSharedCache(paths));
         var writerEntries = new AtomicInteger();
-        ExpressionArtifactStore.ArtifactMaterializer interrupted = (key, target, validator, writer, gate) -> shared
-            .materialize("expression-artifact", key, target, validator, temporary -> {
-                writerEntries.incrementAndGet();
-                writer.write(temporary);
-                throw new IOException("injected persistence interruption");
-            });
+        ExpressionArtifactStore.ArtifactMaterializer interrupted = (key, target, validator, writer, gate) -> {
+            writerEntries.incrementAndGet();
+            writer.write(target.file());
+            throw new IOException("injected persistence interruption");
+        };
         var metrics = new ExpressionEngineMetrics();
-        var store = track(new ExpressionArtifactStore(paths, interrupted, 2));
+        var store = track(artifactStore(paths, shared, interrupted, 2));
         var factory = factory(store, metrics);
         var input = input();
 
@@ -406,7 +418,16 @@ class ExpressionArtifactPipelineTest {
         store.awaitPersistence();
         assertEquals(1, writerEntries.get());
         assertEquals(1, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
-        assertFalse(Files.exists(store.path(cold.identity())));
+        assertThrows(java.nio.file.NoSuchFileException.class, () -> store.path(cold.identity()));
+        var independentInputs = new AnimationInputStore(paths, shared);
+        var inputRequest = AnimationInputStore.prepare(input.model().containerId(), "player", ExpressionSet.MAIN,
+            input.definition(), null, input.settings(), cold.identity().expected().options());
+        var persistedInputs = independentInputs.acquire(inputRequest, true);
+        assertNotNull(persistedInputs);
+        assertEquals(AnimationInputStore.Source.DISK, persistedInputs.source());
+        assertEquals(inputRequest.programs().get(0), persistedInputs.animations().loadProgram(0));
+        assertEquals(1, shared.derivedWork().snapshot().succeeded());
+        assertEquals(1, shared.derivedWork().snapshot().failed());
         cold.close();
 
         var memory = factory.create(() -> false, input.model(), "player", "main", input.profile(), false,
@@ -424,29 +445,28 @@ class ExpressionArtifactPipelineTest {
             var paths = temp.resolve(corrupt ? "corrupt-temp" : "commit-failure");
             var shared = track(new AtomicSharedCache(paths));
             ExpressionArtifactStore.ArtifactMaterializer failing = (key, target, validator, writer, gate) -> {
-                shared.replaceValidated("injected", key, target, validator, candidate -> {
-                    writer.write(candidate);
-                    if (corrupt) {
-                        byte[] bytes = candidate.readAllBytes();
-                        bytes[bytes.length - 1] ^= 1;
-                        candidate.position(0).writeBytes(bytes);
-                        candidate.position(0);
-                        assertFalse(validator.validate(candidate));
-                    } else {
-                        candidate.position(0);
-                        assertTrue(validator.validate(candidate));
-                    }
-                    throw new IOException(corrupt ? "injected invalid temporary" : "injected commit failure");
-                }, AtomicSharedCache.AtomicReplacement::run);
+                var candidate = target.file();
+                writer.write(candidate);
+                if (corrupt) {
+                    byte[] bytes = candidate.readAllBytes();
+                    bytes[bytes.length - 1] ^= 1;
+                    candidate.position(0).writeBytes(bytes);
+                    candidate.position(0);
+                    assertFalse(validator.validate(candidate));
+                } else {
+                    candidate.position(0);
+                    assertTrue(validator.validate(candidate));
+                }
+                throw new IOException(corrupt ? "injected invalid temporary" : "injected commit failure");
             };
-            var store = track(new ExpressionArtifactStore(paths, failing, 2));
+            var store = track(artifactStore(paths, shared, failing, 2));
             var metrics = new ExpressionEngineMetrics();
             var factory = factory(store, metrics);
             var input = input();
             var cold = factory.create(() -> false, input.model(), "player", "main", input.profile(), false,
                 input.definition(), null, input.settings(), input.configBytes());
             assertEquals(ExpressionArtifactStore.Source.COLD, cold.source());
-            assertFalse(Files.exists(store.path(cold.identity())));
+            assertThrows(java.nio.file.NoSuchFileException.class, () -> store.path(cold.identity()));
             cold.close();
             var memory = factory.create(() -> false, input.model(), "player", "main", input.profile(), false,
                 input.definition(), null, input.settings(), input.configBytes());
@@ -454,9 +474,9 @@ class ExpressionArtifactPipelineTest {
             assertEquals(1, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
             memory.close();
             var subsequentMetrics = new ExpressionEngineMetrics();
-            var subsequent = factory(track(new ExpressionArtifactStore(paths, shared)), subsequentMetrics).create(
-                () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes());
+            var subsequent = factory(track(artifactStore(paths, shared)), subsequentMetrics).create(() -> false,
+                input.model(), "player", "main", input.profile(), false, input.definition(), null, input.settings(),
+                input.configBytes());
             assertEquals(ExpressionArtifactStore.Source.COLD, subsequent.source());
             assertEquals(1, subsequentMetrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
             subsequent.close();
@@ -469,12 +489,12 @@ class ExpressionArtifactPipelineTest {
         var validatorEntries = new AtomicInteger();
         ExpressionArtifactStore.ArtifactMaterializer interrupted = (key, target, validator, writer, gate) -> {
             validatorEntries.incrementAndGet();
-            try (var channel = java.nio.channels.FileChannel.open(target, java.nio.file.StandardOpenOption.READ)) {
-                validator.validate(com.elfmcys.ysm.model.storage.CacheFile.borrow(channel));
-            }
+            var channel = java.nio.channels.FileChannel.open(target.path(), java.nio.file.StandardOpenOption.READ);
+            channel.close();
+            validator.validate(com.elfmcys.ysm.model.storage.CacheFile.borrow(channel));
         };
         var metrics = new ExpressionEngineMetrics();
-        var store = track(new ExpressionArtifactStore(paths, interrupted, 2));
+        var store = track(artifactStore(paths, track(new AtomicSharedCache(paths)), interrupted, 2));
         var factory = factory(store, metrics);
         var input = input();
 
@@ -499,7 +519,7 @@ class ExpressionArtifactPipelineTest {
     void verifiedCandidateSurvivesValidatedTargetDisappearingBeforeFinalRead(@TempDir Path temp) throws Exception {
         var input = input();
         var seedPaths = temp.resolve("seed");
-        var seedStore = track(new ExpressionArtifactStore(seedPaths, track(new AtomicSharedCache(seedPaths))));
+        var seedStore = track(artifactStore(seedPaths, track(new AtomicSharedCache(seedPaths))));
         var seed = factory(seedStore, new ExpressionEngineMetrics()).create(() -> false, input.model(), "player",
             "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
         seedStore.awaitPersistence();
@@ -508,15 +528,15 @@ class ExpressionArtifactPipelineTest {
 
         var paths = temp.resolve("cache");
         ExpressionArtifactStore.ArtifactMaterializer disappearingHit = (key, target, validator, writer, gate) -> {
-            Files.createDirectories(target.getParent());
-            Files.write(target, envelope);
-            try (var channel = java.nio.channels.FileChannel.open(target, java.nio.file.StandardOpenOption.READ)) {
+            target.file().writeBytes(envelope);
+            try (var channel =
+                java.nio.channels.FileChannel.open(target.path(), java.nio.file.StandardOpenOption.READ)) {
                 assertTrue(validator.validate(com.elfmcys.ysm.model.storage.CacheFile.borrow(channel)));
             }
-            Files.delete(target);
+            Files.delete(target.path());
         };
         var metrics = new ExpressionEngineMetrics();
-        var store = track(new ExpressionArtifactStore(paths, disappearingHit, 2));
+        var store = track(artifactStore(paths, track(new AtomicSharedCache(paths)), disappearingHit, 2));
         var factory = factory(store, metrics);
 
         var cold = factory.create(() -> false, input.model(), "player", "main", input.profile(), false,
@@ -538,7 +558,7 @@ class ExpressionArtifactPipelineTest {
         var materializations = new AtomicInteger();
         ExpressionArtifactStore.ArtifactMaterializer materializer =
             (key, target, validator, writer, gate) -> materializations.incrementAndGet();
-        var store = track(new ExpressionArtifactStore(paths, materializer, 2));
+        var store = track(artifactStore(paths, track(new AtomicSharedCache(paths)), materializer, 2));
         var input = input();
         var host = ExpressionHost.create(HostAvailability.all());
         var lookup = lookup(input, host, MolangEventCatalog.production(), HostLinkage.production(host),
@@ -560,9 +580,10 @@ class ExpressionArtifactPipelineTest {
             .addUserFunctions(eventFunction("@defer", "v.defer=args[0];"))
             .addUserFunctions(eventFunction("@player_ctrl_main", "return 2;")).build();
         var paths = temp.resolve("cache");
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-            new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(), false,
-                ModelDataProto.newBuilder().build(), strings, input.settings(), input.configBytes());
+        var module =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                .create(() -> false, input.model(), "player", "main", input.profile(), false,
+                    ModelDataProto.newBuilder().build(), strings, input.settings(), input.configBytes());
 
         try (module) {
             assertEquals(5, module.programs().size());
@@ -584,20 +605,22 @@ class ExpressionArtifactPipelineTest {
         var input = input();
         var prefix = "fallback/" + "a".repeat(64) + "/player/main/";
         var definition = ModelDataProto.newBuilder()
-            .putAnimationFiles("main", AnimationFileProto.newBuilder()
-                .addAnimations(animation("idle", "fn.common()"))
-                .addAnimations(animation("copy", "fn.common()")).build())
-            .putAnimationFiles(prefix + "main", AnimationFileProto.newBuilder()
-                .addAnimations(animation("idle", "fn.common()")).build()).build();
+            .putAnimationFiles("main",
+                AnimationFileProto.newBuilder().addAnimations(animation("idle", "fn.common()"))
+                    .addAnimations(animation("copy", "fn.common()")).build())
+            .putAnimationFiles(prefix + "main",
+                AnimationFileProto.newBuilder().addAnimations(animation("idle", "fn.common()")).build())
+            .build();
         var strings = StringDataProto.newBuilder().addUserFunctions(eventFunction("common", "return 41;"))
             .addUserFunctions(eventFunction(prefix + "common", "return 11;")).build();
         var paths = temp.resolve("cache");
         var shared = track(new AtomicSharedCache(paths));
         for (var expectedSource : List.of(ExpressionArtifactStore.Source.COLD, ExpressionArtifactStore.Source.DISK)) {
-            var store = track(new ExpressionArtifactStore(paths, shared, 1));
-            try (var module = factory(store, new ExpressionEngineMetrics()).create(() -> false,
-                input.model(), "player", "main", input.profile(), false, definition, strings,
-                input.settings(), input.configBytes()); var runtime = new EntityExpressionRuntime()) {
+            var store = track(artifactStore(paths, shared, 1));
+            try (
+                var module = factory(store, new ExpressionEngineMetrics()).create(() -> false, input.model(), "player",
+                    "main", input.profile(), false, definition, strings, input.settings(), input.configBytes());
+                var runtime = new EntityExpressionRuntime()) {
                 assertEquals(expectedSource, module.source());
                 var local = new ModelProgramInventory.SemanticLocation("player", "animation/main/idle/blend-weight",
                     ProgramRole.ANIMATION_SAMPLE, "");
@@ -609,9 +632,12 @@ class ExpressionArtifactPipelineTest {
                 assertEquals(module.requireProgram(local).entryId(), module.requireProgram(copy).entryId());
                 assertNotEquals(module.requireProgram(local).entryId(), module.requireProgram(fallback).entryId());
                 TestExpressionModules.replace(runtime, module, Map.of());
-                float localValue = runtime.observe(inputs(), evaluation -> evaluation.evaluate(module.requireFloatProgram(local)));
-                float copiedValue = runtime.observe(inputs(), evaluation -> evaluation.evaluate(module.requireFloatProgram(copy)));
-                float fallbackValue = runtime.observe(inputs(), evaluation -> evaluation.evaluate(module.requireFloatProgram(fallback)));
+                float localValue =
+                    runtime.observe(inputs(), evaluation -> evaluation.evaluate(module.requireFloatProgram(local)));
+                float copiedValue =
+                    runtime.observe(inputs(), evaluation -> evaluation.evaluate(module.requireFloatProgram(copy)));
+                float fallbackValue =
+                    runtime.observe(inputs(), evaluation -> evaluation.evaluate(module.requireFloatProgram(fallback)));
                 assertEquals(41f, localValue);
                 assertEquals(41f, copiedValue);
                 assertEquals(11f, fallbackValue);
@@ -629,9 +655,10 @@ class ExpressionArtifactPipelineTest {
             .addUserFunctions(eventFunction("reader", "return v.sample;"))
             .addUserFunctions(eventFunction("writer", "v.sample=7;return 0;")).build();
         var paths = temp.resolve("cache");
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-            new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(), false,
-                input.definition(), strings, input.settings(), input.configBytes());
+        var module =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(),
+                    strings, input.settings(), input.configBytes());
         var runtime = new EntityExpressionRuntime();
         TestExpressionModules.replace(runtime, module, Map.of());
         var baseline = TransientExpressionSession.liveLeaseCount();
@@ -691,12 +718,12 @@ class ExpressionArtifactPipelineTest {
         var paths = temp.resolve("cache");
         var shared = track(new AtomicSharedCache(paths));
         var input = input();
-        var module = factory(track(new ExpressionArtifactStore(paths, shared)), new ExpressionEngineMetrics()).create(
+        var module = factory(track(artifactStore(paths, shared)), new ExpressionEngineMetrics()).create(() -> false,
+            input.model(), "player", "main", input.profile(), false, input.definition(), null, input.settings(),
+            input.configBytes());
+        var replacement = factory(track(artifactStore(paths, shared)), new ExpressionEngineMetrics()).create(
             () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
             input.settings(), input.configBytes());
-        var replacement = factory(track(new ExpressionArtifactStore(paths, shared)), new ExpressionEngineMetrics())
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes());
         var runtime = new EntityExpressionRuntime();
         TestExpressionModules.replace(runtime, module, Map.of());
         var baseline = TransientExpressionSession.liveLeaseCount();
@@ -722,10 +749,9 @@ class ExpressionArtifactPipelineTest {
         var metrics = new ExpressionEngineMetrics();
         var input = input("1");
         int baseline = TransientExpressionSession.liveLeaseCount();
-        try (var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes());
-            var runtime = new EntityExpressionRuntime()) {
+        try (var module = factory(track(artifactStore(temp, track(new AtomicSharedCache(temp)))), metrics).create(
+            () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+            input.settings(), input.configBytes()); var runtime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(runtime, module, Map.of());
             long installationHolds = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
             var session = runtime.compileTransient(runtime.generation(), "return 3;",
@@ -762,8 +788,7 @@ class ExpressionArtifactPipelineTest {
     }
 
     @Test
-    void compileInboxPublishCloseOrdersReturnEveryProgramOnceWithoutOpeningAccess(@TempDir Path temp)
-        throws Exception {
+    void compileInboxPublishCloseOrdersReturnEveryProgramOnceWithoutOpeningAccess(@TempDir Path temp) throws Exception {
         boolean diagnostics = com.elfmcys.ysm.util.ResourceDiagnostics.isEnabled();
         com.elfmcys.ysm.util.ResourceDiagnostics.setEnabled(true);
         var programMetrics = transientProgramMetrics();
@@ -779,19 +804,22 @@ class ExpressionArtifactPipelineTest {
         publish.setAccessible(true);
         close.setAccessible(true);
         var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
-        try (var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes());
+        var module = factory(track(artifactStore(temp, track(new AtomicSharedCache(temp)))), metrics).create(
+            () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+            input.settings(), input.configBytes());
+        try (var animations = TestExpressionModules.store(module, Map.of());
             var runtime = new EntityExpressionRuntime()) {
-            TestExpressionModules.replace(runtime, module, Map.of());
+            runtime.replace(animations, TestExpressionModules.linkage(module));
             long installation = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
+            int installationUses = animations.activeUses();
             for (int order = 0; order < 18; order++) {
                 var request = runtime.prepareTransient(runtime.generation(), "return 7;",
                     TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
                     "test:inbox-race-" + order);
-                assertEquals(installation + 1, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+                assertEquals(installationUses + 1, animations.activeUses());
+                assertEquals(installation, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
                 var session = request.compile(() -> false);
-                request.close();
+                assertEquals(installationUses + 1, animations.activeUses());
                 assertEquals(installation, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
                 assertEquals(programs + 1, TransientExpressionSession.liveLeaseCount());
                 assertEquals(programHolds + 1,
@@ -801,14 +829,20 @@ class ExpressionArtifactPipelineTest {
                 var closes = new AtomicInteger();
                 AutoCloseable delivery = () -> {
                     assertEquals(1, closes.incrementAndGet());
-                    session.close();
+                    try {
+                        session.close();
+                    } finally {
+                        request.close();
+                    }
                 };
                 java.util.concurrent.Callable<Void> publishing = () -> {
-                    if (!(boolean)publish.invoke(inbox, delivery)) delivery.close();
+                    if (!(boolean)publish.invoke(inbox, delivery))
+                        delivery.close();
                     return null;
                 };
                 java.util.concurrent.Callable<Void> closing = () -> {
-                    for (var owned : (List<?>)close.invoke(inbox)) ((AutoCloseable)owned).close();
+                    for (var owned : (List<?>)close.invoke(inbox))
+                        ((AutoCloseable)owned).close();
                     return null;
                 };
                 if (order == 0) {
@@ -819,8 +853,14 @@ class ExpressionArtifactPipelineTest {
                     publishing.call();
                 } else {
                     var start = new java.util.concurrent.CyclicBarrier(2);
-                    var worker = pool.submit(() -> { start.await(); return publishing.call(); });
-                    var retirement = pool.submit(() -> { start.await(); return closing.call(); });
+                    var worker = pool.submit(() -> {
+                        start.await();
+                        return publishing.call();
+                    });
+                    var retirement = pool.submit(() -> {
+                        start.await();
+                        return closing.call();
+                    });
                     worker.get(10, java.util.concurrent.TimeUnit.SECONDS);
                     retirement.get(10, java.util.concurrent.TimeUnit.SECONDS);
                 }
@@ -831,6 +871,7 @@ class ExpressionArtifactPipelineTest {
                     programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES));
                 assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_ACCESS_LEASES));
                 assertEquals(installation, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+                assertEquals(installationUses, animations.activeUses());
             }
         } finally {
             pool.shutdownNow();
@@ -853,20 +894,24 @@ class ExpressionArtifactPipelineTest {
         var release = new java.util.concurrent.CountDownLatch(1);
         var events = new java.util.concurrent.CopyOnWriteArrayList<String>();
         var closes = new AtomicInteger();
-        try (var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes());
+        var module = factory(track(artifactStore(temp, track(new AtomicSharedCache(temp)))), metrics).create(
+            () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+            input.settings(), input.configBytes());
+        try (var animations = TestExpressionModules.store(module, Map.of());
             var runtime = new EntityExpressionRuntime()) {
             long moduleHolds = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
-            TestExpressionModules.replace(runtime, module, Map.of());
+            runtime.replace(animations, TestExpressionModules.linkage(module));
             long installation = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
             var request = runtime.prepareTransient(runtime.generation(), "return 3;",
                 TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
                 "test:executing-watch");
-            assertEquals(installation + 1, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+            assertEquals(2, animations.activeUses());
+            assertEquals(installation, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
             var session = request.compile(() -> false);
+            assertEquals(2, animations.activeUses());
             assertEquals(installation, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
             runtime.attachTransient(request, session);
+            assertEquals(1, animations.activeUses());
             long preparedHolds = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
             var field = TransientExpressionSession.class.getDeclaredField("lease");
             field.setAccessible(true);
@@ -876,35 +921,51 @@ class ExpressionArtifactPipelineTest {
             var program = leaseType.getMethod("program").invoke(lease);
             var blockedProgram = java.lang.reflect.Proxy.newProxyInstance(programType.getClassLoader(),
                 new Class<?>[] {programType}, (proxy, method, arguments) -> {
-                    if (!method.getName().startsWith("execute")) return method.invoke(program, arguments);
+                    if (!method.getName().startsWith("execute"))
+                        return method.invoke(program, arguments);
                     entered.countDown();
                     try {
                         assertTrue(release.await(10, java.util.concurrent.TimeUnit.SECONDS));
                         return method.invoke(program, arguments);
-                    } finally { events.add("execution-exit"); }
+                    } finally {
+                        events.add("execution-exit");
+                    }
                 });
             // The Cleaner still owns the original lease; this proxy only gates the invocation.
-            field.set(session, java.lang.reflect.Proxy.newProxyInstance(leaseType.getClassLoader(),
-                new Class<?>[] {leaseType}, (proxy, method, arguments) -> method.getName().equals("program")
-                    ? blockedProgram : method.invoke(lease, arguments)));
+            field.set(session,
+                java.lang.reflect.Proxy.newProxyInstance(leaseType.getClassLoader(), new Class<?>[] {leaseType},
+                    (proxy, method, arguments) -> method.getName().equals("program") ? blockedProgram
+                        : method.invoke(lease, arguments)));
             var lifecycleType = Class.forName("com.elfmcys.ysm.client.entity.EntityExecutionLifecycle");
+            var schedulerType = Class.forName("com.elfmcys.ysm.client.entity.EntityExecutionLifecycle$Scheduler");
             var constructor = lifecycleType.getDeclaredConstructor(EntityExpressionRuntime.class, Runnable.class,
-                java.util.function.Consumer.class, java.util.concurrent.Executor.class);
+                java.util.function.Consumer.class, schedulerType);
             constructor.setAccessible(true);
+            var scheduler = java.lang.reflect.Proxy.newProxyInstance(schedulerType.getClassLoader(),
+                new Class<?>[] {schedulerType}, (proxy, method, arguments) -> {
+                    if (method.getName().equals("execute")) {
+                        new Thread((Runnable)arguments[0], "executing-watch").start();
+                        return null;
+                    }
+                    if (method.getName().equals("tryTakeQueued"))
+                        return false;
+                    throw new UnsupportedOperationException(method.getName());
+                });
             var lifecycle = constructor.newInstance(runtime, (Runnable)() -> {
                 events.add("close");
                 closes.incrementAndGet();
                 session.close();
                 session.close();
                 runtime.clear();
-            }, (java.util.function.Consumer<Throwable>)failure -> { throw new AssertionError(failure); },
-                (java.util.concurrent.Executor)task -> new Thread(task, "executing-watch").start());
+            }, (java.util.function.Consumer<Throwable>)failure -> {
+                throw new AssertionError(failure);
+            }, scheduler);
             var submit = lifecycleType.getDeclaredMethod("submit", java.util.function.Supplier.class);
             var retire = lifecycleType.getDeclaredMethod("retire");
             submit.setAccessible(true);
             retire.setAccessible(true);
-            submit.invoke(lifecycle, (java.util.function.Supplier<Object>)() -> runtime.observe(inputs(),
-                evaluation -> evaluation.executeTransient(session)));
+            submit.invoke(lifecycle, (java.util.function.Supplier<
+                Object>)() -> runtime.observe(inputs(), evaluation -> evaluation.executeTransient(session)));
             assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
             var main = Thread.currentThread();
             var gateFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
@@ -920,8 +981,11 @@ class ExpressionArtifactPipelineTest {
                         programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES));
                     assertEquals(1, metrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_ACCESS_LEASES));
                     assertEquals(preparedHolds, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
-                } catch (Throwable failure) { gateFailure.set(failure); }
-                finally { release.countDown(); }
+                } catch (Throwable failure) {
+                    gateFailure.set(failure);
+                } finally {
+                    release.countDown();
+                }
             }, "watch-close-observer");
             gate.start();
             try {
@@ -938,8 +1002,14 @@ class ExpressionArtifactPipelineTest {
                     programMetrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_PROGRAM_LEASES));
                 assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_ACCESS_LEASES));
                 assertEquals(moduleHolds, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
-            } finally { release.countDown(); session.close(); }
-        } finally { com.elfmcys.ysm.util.ResourceDiagnostics.setEnabled(diagnostics); }
+                assertEquals(0, animations.activeUses());
+            } finally {
+                release.countDown();
+                session.close();
+            }
+        } finally {
+            com.elfmcys.ysm.util.ResourceDiagnostics.setEnabled(diagnostics);
+        }
         assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
     }
 
@@ -954,14 +1024,15 @@ class ExpressionArtifactPipelineTest {
         var metrics = new ExpressionEngineMetrics();
         var input = input("1");
         int baseline = TransientExpressionSession.liveLeaseCount();
-        var factory = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics);
-        try (
-            var module = factory.create(() -> false, input.model(), "player", "main", input.profile(), false,
-                input.definition(), null, input.settings(), input.configBytes());
-            var replacement = factory.create(() -> false, input.model(), "player", "main", input.profile(), false,
-                input.definition(), null, input.settings(), input.configBytes());
+        var factory = factory(track(artifactStore(temp, track(new AtomicSharedCache(temp)))), metrics);
+        var module = factory.create(() -> false, input.model(), "player", "main", input.profile(), false,
+            input.definition(), null, input.settings(), input.configBytes());
+        var replacement = factory.create(() -> false, input.model(), "player", "main", input.profile(), false,
+            input.definition(), null, input.settings(), input.configBytes());
+        try (var animations = TestExpressionModules.store(module, Map.of());
+            var nextAnimations = TestExpressionModules.store(replacement, Map.of());
             var runtime = new EntityExpressionRuntime()) {
-            TestExpressionModules.replace(runtime, module, Map.of());
+            runtime.replace(animations, TestExpressionModules.linkage(module));
             long holds = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
             var replaced = new java.util.concurrent.atomic.AtomicBoolean();
             assertThrows(IllegalStateException.class,
@@ -969,12 +1040,15 @@ class ExpressionArtifactPipelineTest {
                     TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
                     "test:retired-during-compile", () -> {
                         if (replaced.compareAndSet(false, true)) {
-                            assertEquals(holds + 1, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
-                            TestExpressionModules.replace(runtime, replacement, Map.of());
+                            assertEquals(2, animations.activeUses());
+                            assertEquals(holds, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
+                            runtime.replace(nextAnimations, TestExpressionModules.linkage(replacement));
                         }
                         return false;
                     }));
             assertTrue(replaced.get());
+            assertEquals(0, animations.activeUses());
+            assertEquals(1, nextAnimations.activeUses());
             assertEquals(holds, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
             assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.TRANSIENT_ACCESS_LEASES));
             assertEquals(baseline, TransientExpressionSession.liveLeaseCount());
@@ -992,10 +1066,9 @@ class ExpressionArtifactPipelineTest {
         var metrics = new ExpressionEngineMetrics();
         var input = input("1");
         int baseline = TransientExpressionSession.liveLeaseCount();
-        try (var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes());
-            var runtime = new EntityExpressionRuntime()) {
+        try (var module = factory(track(artifactStore(temp, track(new AtomicSharedCache(temp)))), metrics).create(
+            () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+            input.settings(), input.configBytes()); var runtime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(runtime, module, Map.of());
             long holds = metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES);
             assertThrows(java.util.concurrent.CancellationException.class,
@@ -1062,26 +1135,28 @@ class ExpressionArtifactPipelineTest {
         var paths = temp.resolve("cache");
         for (boolean warm : modes) {
             var metrics = new ExpressionEngineMetrics();
-            var module = new RenderTargetExpressionModuleFactory(
-                track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))), host, metrics)
-                .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(),
-                    strings, input.settings(), input.configBytes());
+            var module =
+                pipelineFactory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), host, metrics).create(
+                    () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), strings,
+                    input.settings(), input.configBytes());
             assertEquals(warm ? ExpressionArtifactStore.Source.DISK : ExpressionArtifactStore.Source.COLD,
                 module.source());
             assertTrue(module.compilationReport().replacements().isEmpty());
             if (warm) {
-                for (var stage : List.of(EngineMetrics.Stage.SEMANTIC_ANALYSIS, EngineMetrics.Stage.SOURCE_GENERATION,
+                for (var stage : List.of(EngineMetrics.Stage.SEMANTIC_ANALYSIS, EngineMetrics.Stage.SYNTAX_GENERATION,
                     EngineMetrics.Stage.BACKEND_COMPILATION)) {
                     assertEquals(0, metrics.snapshot().stageCalls(stage));
                 }
                 assertEquals(0, metrics.snapshot().portableProgramDecodes());
             }
+            var animations = TestExpressionModules.store(module, Map.of());
             var runtime = new EntityExpressionRuntime();
             var owner = com.elfmcys.ysm.expression.host.TestComponentHolders.owner((Entity)subject);
             var domainCalls = new java.util.ArrayList<String>();
             var sounds = new com.elfmcys.ysm.client.sound.instance.SoundInstanceManager() {
                 public boolean playSound(com.elfmcys.ysm.client.entity.AnimatableEntity<?> target, ModelSoundId id,
-                    String name, boolean force, java.util.function.Consumer<com.elfmcys.ysm.client.sound.instance.SoundControl> configure) {
+                    String name, boolean force,
+                    java.util.function.Consumer<com.elfmcys.ysm.client.sound.instance.SoundControl> configure) {
                     org.junit.jupiter.api.Assertions.assertSame(owner, target);
                     domainCalls.add("sound:" + id + ":" + name + ":" + force);
                     return true;
@@ -1091,16 +1166,24 @@ class ExpressionArtifactPipelineTest {
                 net.minecraft.util.RandomSource.create(), sounds);
             var target = new com.elfmcys.ysm.geckolib3.core.controller.CodedAnimationController<>(owner, "oracle", 0,
                 event -> com.elfmcys.ysm.geckolib3.core.PlayState.CONTINUE) {
-                public void setBeginningTransitionLength(float seconds) { domainCalls.add("transition:" + seconds); }
+                public void setBeginningTransitionLength(float seconds) {
+                    domainCalls.add("transition:" + seconds);
+                }
+
                 public void setAnimation(String name, com.elfmcys.ysm.geckolib3.core.builder.LoopType loop) {
                     domainCalls.add("animation:" + name + ":" + loop);
                 }
-                public void indicateReload() { domainCalls.add("reload"); }
+
+                public void indicateReload() {
+                    domainCalls.add("reload");
+                }
             };
             var components = BuiltinDeclarations.createComponents(owner, host);
-            runtime.replace(module, Map.of(), components);
+            runtime.replace(animations, components);
             var controller = new com.elfmcys.ysm.expression.host.ControllerExecutionState(false, target);
-            var effects = new java.util.ArrayList<PreparedEffect>();
+            var event = new com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent<>(owner, 0, 0, 0, null,
+                new com.elfmcys.ysm.geckolib3.model.provider.data.EntityModelData(), null);
+            event.setCodedAnimationController(target);
             var inputs = new MinecraftRuntimeInputs<Entity>() {
                 public net.minecraft.world.entity.Entity entity() {
                     return subject;
@@ -1111,7 +1194,7 @@ class ExpressionArtifactPipelineTest {
                 }
 
                 public com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent<?> animationEvent() {
-                    return null;
+                    return event;
                 }
 
                 public net.minecraft.util.RandomSource randomSource() {
@@ -1126,13 +1209,8 @@ class ExpressionArtifactPipelineTest {
                     return null;
                 }
 
-                public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
             };
-            var invocation = new EntityExpressionRuntime.InvocationInputs(inputs,
-                (commands, provenance) -> () -> {
-                    effects.addAll(commands);
-                    commands.forEach(PreparedEffect::commit);
-                }, () -> false);
+            var invocation = new EntityExpressionRuntime.InvocationInputs(inputs);
             var location = new ModelProgramInventory.SemanticLocation("player", "function/@player_ctrl_swing",
                 ProgramRole.EVENT_CODED_CONTROLLER, "player_ctrl_swing:0");
             var program = module.requireFloatProgram(location);
@@ -1143,34 +1221,30 @@ class ExpressionArtifactPipelineTest {
                         "wedding-stage", () -> false)) {
                         runtime.executeTransient(invocation, session);
                     }
-                    effects.clear();
                     domainCalls.clear();
                     subject.swinging = true;
                     float result = runtime.update(invocation, evaluation -> evaluation.evaluate(program));
                     assertEquals(2, result);
                     String animation = stage == 2 ? "Attackdown4" : stage == 3 ? "Attackdown5" : "Attackdown3";
                     String sound = stage == 2 ? "swingswordtwo" : stage == 3 ? "swingswordspin" : "swingsword";
-                    assertEquals(3, effects.size());
                     assertEquals(List.of("transition:0.05", "animation:" + animation + ":null",
                         "sound:" + ModelSoundId.string(sound) + ":" + sound + ":false"), domainCalls);
                     System.out.println("WEDDING_ORACLE " + module.source() + " stage=" + stage + " result=" + result
-                        + " effects=" + effects);
+                        + " actions=" + domainCalls);
                 }
                 subject.swinging = false;
                 for (boolean finished : List.of(false, true)) {
                     controller.setAllAnimationsFinished(finished);
-                    effects.clear();
                     domainCalls.clear();
                     float result = runtime.update(invocation, evaluation -> evaluation.evaluate(program));
                     assertEquals(0, result);
-                    assertEquals(finished ? 1 : 0, effects.size());
                     assertEquals(finished ? List.of("reload") : List.of(), domainCalls);
                     System.out.println("WEDDING_ORACLE " + module.source() + " swing=false finished=" + finished
-                        + " effects=" + effects);
+                        + " actions=" + domainCalls);
                 }
             } finally {
                 runtime.close();
-                module.close();
+                animations.close();
                 components.invalidate();
             }
             com.elfmcys.ysm.testutil.DerivedStorageTestScope.drain();
@@ -1179,6 +1253,17 @@ class ExpressionArtifactPipelineTest {
 
     private static final class SwordSubject extends net.minecraft.world.entity.decoration.ArmorStand {
         private net.minecraft.world.item.ItemStack sword;
+
+        @Override
+        public java.util.UUID getUUID() {
+            return new java.util.UUID(0, 1);
+        }
+
+        // No SynchedEntityData is installed; these fixtures do not consume locomotion facts.
+        @Override
+        public boolean isDeadOrDying() {
+            return true;
+        }
 
         private SwordSubject() {
             super(net.minecraft.world.entity.EntityType.ARMOR_STAND, null);
@@ -1210,26 +1295,27 @@ class ExpressionArtifactPipelineTest {
             .addUserFunctions(eventFunction("actor", "ysm.sync(9);return 5;")).build();
         var paths = temp.resolve("cache");
         if (warm)
-            factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-                new ExpressionEngineMetrics())
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
                 .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(),
                     strings, input.settings(), input.configBytes())
                 .close();
         com.elfmcys.ysm.testutil.DerivedStorageTestScope.drain();
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-            new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(), false,
-                input.definition(), strings, input.settings(), input.configBytes());
+        var module =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(),
+                    strings, input.settings(), input.configBytes());
         assertEquals(warm ? ExpressionArtifactStore.Source.DISK : ExpressionArtifactStore.Source.COLD, module.source());
+        var animations = TestExpressionModules.store(module, Map.of());
         var runtime = new EntityExpressionRuntime();
-        runtime.replace(module, Map.of(),
-            module.prepareComponents(com.elfmcys.ysm.expression.host.TestComponentHolders.owner(subject), null));
+        runtime.replace(animations,
+            animations.prepareComponents(com.elfmcys.ysm.expression.host.TestComponentHolders.owner(subject), null));
         var model = (QueueOwner)com.elfmcys.ysm.util.UnsafeUtil.getUnsafe().allocateInstance(QueueOwner.class);
         var processor = new com.elfmcys.ysm.geckolib3.core.processor.AnimationProcessor<>(model);
         var bindingType = Class.forName("com.elfmcys.ysm.client.entity.EntityModelBinding");
         var bindingConstructor = bindingType.getDeclaredConstructor();
         bindingConstructor.setAccessible(true);
         var binding = bindingConstructor.newInstance();
-        var assignModel = bindingType.getDeclaredMethod("updateModelHash", com.elfmcys.ysm.model.domain.Hash256.class);
+        var assignModel = bindingType.getDeclaredMethod("updateModelHash", ModelId.class);
         assignModel.setAccessible(true);
         assignModel.invoke(binding, new Object[] {null});
         var holder = QueueOwner.queueHolder(new com.elfmcys.ysm.model.resource.client.ResourceLease() {
@@ -1254,13 +1340,19 @@ class ExpressionArtifactPipelineTest {
 
             public void cancelPending() {}
         });
-        var holderProcessor = holder.getClass().getDeclaredField("processor");
-        holderProcessor.setAccessible(true);
-        holderProcessor.set(holder, processor);
+        var sessionType = Class.forName("com.elfmcys.ysm.client.entity.AnimatableEntity$AnimationSession");
+        var sessionConstructor =
+            sessionType.getDeclaredConstructor(com.elfmcys.ysm.model.resource.client.AnimationStore.class);
+        sessionConstructor.setAccessible(true);
+        var animationSession = sessionConstructor.newInstance(animations);
+        var sessionProcessor = sessionType.getDeclaredField("processor");
+        sessionProcessor.setAccessible(true);
+        sessionProcessor.set(animationSession, processor);
         var current = bindingType.getDeclaredField("resourceHolder");
         current.setAccessible(true);
         current.set(binding, holder);
-        for (var field : Map.of("expressionRuntime", runtime, "entity", subject, "modelBinding", binding).entrySet()) {
+        for (var field : Map.of("expressionRuntime", runtime, "entity", subject, "modelBinding", binding,
+            "animationSession", animationSession).entrySet()) {
             var member = com.elfmcys.ysm.client.entity.AnimatableEntity.class.getDeclaredField(field.getKey());
             member.setAccessible(true);
             member.set(model, field.getValue());
@@ -1276,16 +1368,13 @@ class ExpressionArtifactPipelineTest {
         var lifecycleField = com.elfmcys.ysm.client.entity.AnimatableEntity.class.getDeclaredField("lifecycle");
         lifecycleField.setAccessible(true);
         lifecycleField.set(model, lifecycle);
-        var effects = new java.util.ArrayList<PreparedEffect>();
         var productionInputs = new InvocationInputs<Entity>() {
             public net.minecraft.world.entity.Entity entity() {
                 return subject;
             }
 
-            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
         };
-        var invocation = new EntityExpressionRuntime.InvocationInputs(productionInputs,
-            (commands, provenance) -> () -> effects.addAll(commands), () -> false);
+        var invocation = new EntityExpressionRuntime.InvocationInputs(productionInputs);
         var watches = new com.elfmcys.ysm.geckolib3.core.processor.DebugInfo();
         int programsBefore = TransientExpressionSession.liveLeaseCount();
         processor.setDebugInfo(watches);
@@ -1311,10 +1400,8 @@ class ExpressionArtifactPipelineTest {
             awaitWatch(model, processor, invocation, watches, "1.0");
             assertEquals("6.0", queued(model, processor, invocation, "return fn.actor()+1;",
                 TransientExpressionSession.Privilege.LOCAL_DEBUG));
-            assertTrue(effects.isEmpty());
             assertEquals("6.0", queued(model, processor, invocation, "return fn.actor()+1;",
                 TransientExpressionSession.Privilege.LOCAL_EXECUTE));
-            assertEquals(1, effects.size());
             var cancelledResults = new java.util.ArrayList<String>();
             model.executeTransient("return 19;", TransientExpressionSession.Privilege.LOCAL_DEBUG, true,
                 cancelledResults::add);
@@ -1331,9 +1418,10 @@ class ExpressionArtifactPipelineTest {
             assertEquals(programsBefore, TransientExpressionSession.liveLeaseCount(),
                 "Closing the inbox must close compiled but unadopted programs and active watches");
         } finally {
+            ((AutoCloseable)animationSession).close();
             ((AutoCloseable)binding).close();
             runtime.close();
-            module.close();
+            animations.close();
         }
     }
 
@@ -1420,22 +1508,21 @@ class ExpressionArtifactPipelineTest {
     void corruptEnvelopeIsRebuiltWithoutQuarantine(@TempDir Path temp) throws Exception {
         var paths = temp.resolve("cache");
         var shared = track(new AtomicSharedCache(paths));
-        var firstStore = track(new ExpressionArtifactStore(paths, shared));
+        var firstStore = track(artifactStore(paths, shared));
         var input = input();
         var first = factory(firstStore, new ExpressionEngineMetrics()).create(() -> false, input.model(), "player",
             "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
         var identity = first.identity();
         first.close();
-        var artifactPath = firstStore.path(identity);
         firstStore.awaitPersistence();
+        var artifactPath = firstStore.path(identity);
         var tampered = Files.readAllBytes(artifactPath);
         tampered[0] ^= 0x7f;
         Files.write(artifactPath, tampered);
 
         var metrics = new ExpressionEngineMetrics();
-        var rebuilt = factory(track(new ExpressionArtifactStore(paths, shared)), metrics).create(() -> false,
-            input.model(), "player", "main", input.profile(), false, input.definition(), null, input.settings(),
-            input.configBytes());
+        var rebuilt = factory(track(artifactStore(paths, shared)), metrics).create(() -> false, input.model(), "player",
+            "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
         assertEquals(ExpressionArtifactStore.Source.COLD, rebuilt.source());
         assertEquals(1, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
         rebuilt.close();
@@ -1451,24 +1538,23 @@ class ExpressionArtifactPipelineTest {
     }
 
     @Test
-    void unknownContainerHeaderIsRejectedBeforeArtifactDecode(@TempDir Path temp) throws Exception {
+    void unknownAotHeaderIsRejectedBeforeArtifactDecode(@TempDir Path temp) throws Exception {
         var paths = temp.resolve("cache");
         var shared = track(new AtomicSharedCache(paths));
-        var store = track(new ExpressionArtifactStore(paths, shared));
+        var store = track(artifactStore(paths, shared));
         var input = input();
         var first = factory(store, new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main",
             input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
+        store.awaitPersistence();
         var artifactPath = store.path(first.identity());
         first.close();
-        store.awaitPersistence();
         var bytes = Files.readAllBytes(artifactPath);
-        ByteBuffer.wrap(bytes).putInt(8, 99);
+        ByteBuffer.wrap(bytes).putLong(0, 99);
         Files.write(artifactPath, bytes);
 
         var metrics = new ExpressionEngineMetrics();
-        var rebuilt = factory(track(new ExpressionArtifactStore(paths, shared)), metrics).create(() -> false,
-            input.model(), "player", "main", input.profile(), false, input.definition(), null, input.settings(),
-            input.configBytes());
+        var rebuilt = factory(track(artifactStore(paths, shared)), metrics).create(() -> false, input.model(), "player",
+            "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
         assertEquals(ExpressionArtifactStore.Source.COLD, rebuilt.source());
         assertEquals(1, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
         rebuilt.close();
@@ -1478,25 +1564,20 @@ class ExpressionArtifactPipelineTest {
     void payloadDamageWithoutRecomputedHashIsRejectedBeforeTrustedRestoration(@TempDir Path temp) throws Exception {
         var paths = temp.resolve("cache");
         var shared = track(new AtomicSharedCache(paths));
-        var store = track(new ExpressionArtifactStore(paths, shared));
+        var store = track(artifactStore(paths, shared));
         var input = input();
         var first = factory(store, new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main",
             input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
+        store.awaitPersistence();
         var artifactPath = store.path(first.identity());
         first.close();
-        store.awaitPersistence();
         var envelope = Files.readAllBytes(artifactPath);
-        try (var channel = java.nio.channels.FileChannel.open(artifactPath)) {
-            var chunk = com.elfmcys.ysm.format.container.AssetContainerReader.read(channel)
-                .getChunkInfo(com.elfmcys.ysm.format.schema.baked.asset.BakedAssetConstant.EXPRESSION_CHUNK_NAME);
-            envelope[chunk.offset() + chunk.size() / 2] ^= 0x01;
-        }
+        envelope[AotArtifactEnvelope.HEADER_BYTES + (envelope.length - AotArtifactEnvelope.HEADER_BYTES) / 2] ^= 0x01;
         Files.write(artifactPath, envelope);
 
         var metrics = new ExpressionEngineMetrics();
-        var rebuilt = factory(track(new ExpressionArtifactStore(paths, shared)), metrics).create(() -> false,
-            input.model(), "player", "main", input.profile(), false, input.definition(), null, input.settings(),
-            input.configBytes());
+        var rebuilt = factory(track(artifactStore(paths, shared)), metrics).create(() -> false, input.model(), "player",
+            "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
         assertEquals(ExpressionArtifactStore.Source.COLD, rebuilt.source());
         assertEquals(1, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
         rebuilt.close();
@@ -1506,7 +1587,7 @@ class ExpressionArtifactPipelineTest {
     void staleExactIdentityCannotPopulateAnotherLookup(@TempDir Path temp) throws Exception {
         var paths = temp.resolve("cache");
         var shared = track(new AtomicSharedCache(paths));
-        var store = track(new ExpressionArtifactStore(paths, shared));
+        var store = track(artifactStore(paths, shared));
         var input = input();
         var player = factory(store, new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main",
             input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
@@ -1515,15 +1596,14 @@ class ExpressionArtifactPipelineTest {
         player.close();
         var npc = factory(store, new ExpressionEngineMetrics()).create(() -> false, input.model(), "npc", "main",
             input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
+        store.awaitPersistence();
         var npcPath = store.path(npc.identity());
         npc.close();
-        store.awaitPersistence();
         Files.write(npcPath, playerEnvelope);
 
         var metrics = new ExpressionEngineMetrics();
-        var rebuilt =
-            factory(track(new ExpressionArtifactStore(paths, shared)), metrics).create(() -> false, input.model(),
-                "npc", "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
+        var rebuilt = factory(track(artifactStore(paths, shared)), metrics).create(() -> false, input.model(), "npc",
+            "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes());
         assertEquals(ExpressionArtifactStore.Source.COLD, rebuilt.source());
         assertEquals("npc", rebuilt.identity().targetId());
         assertEquals(1, metrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
@@ -1531,21 +1611,24 @@ class ExpressionArtifactPipelineTest {
     }
 
     @Test
-    void frozenTransientCompilationOutlivesItsInstallationAndClosesTheLateProgram(@TempDir Path temp)
-        throws Exception {
+    void frozenTransientCompilationRetainsStoreUntilLateResultsAreDiscarded(@TempDir Path temp) throws Exception {
         var metrics = new ExpressionEngineMetrics();
         var input = input();
-        var module = factory(track(new ExpressionArtifactStore(temp, track(new AtomicSharedCache(temp)))), metrics)
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes());
+        var module = factory(track(artifactStore(temp, track(new AtomicSharedCache(temp)))), metrics).create(
+            () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+            input.settings(), input.configBytes());
+        var animations = TestExpressionModules.store(module, Map.of());
         var runtime = new EntityExpressionRuntime();
-        TestExpressionModules.replace(runtime, module, Map.of());
+        runtime.replace(animations, TestExpressionModules.linkage(module));
         int programs = TransientExpressionSession.liveLeaseCount();
         var request = runtime.prepareTransient(runtime.generation(), "return 7;",
             TransientExpressionSession.Privilege.LOCAL_DEBUG, TransientExpressionSession.Purpose.ONE_SHOT, "late");
-        var closedRequest = runtime.prepareTransient(runtime.generation(), "return 11;",
-            TransientExpressionSession.Privilege.LOCAL_DEBUG, TransientExpressionSession.Purpose.ONE_SHOT, "closed");
+        var secondRequest = runtime.prepareTransient(runtime.generation(), "return 11;",
+            TransientExpressionSession.Privilege.LOCAL_DEBUG, TransientExpressionSession.Purpose.ONE_SHOT, "second");
+        animations.close();
         runtime.close();
+        assertFalse(animations.isClosed());
+        assertEquals(2, animations.activeUses());
         var compiler = java.util.concurrent.Executors.newSingleThreadExecutor();
         try {
             var result = compiler.submit(() -> request.compile(() -> false));
@@ -1554,18 +1637,23 @@ class ExpressionArtifactPipelineTest {
                 assertEquals(programs + 1, TransientExpressionSession.liveLeaseCount());
             }
             assertEquals(programs, TransientExpressionSession.liveLeaseCount());
-            module.close();
-            var rejected = compiler.submit(() -> closedRequest.compile(() -> false));
-            var failure = assertThrows(java.util.concurrent.ExecutionException.class,
-                () -> rejected.get(30, java.util.concurrent.TimeUnit.SECONDS));
-            assertInstanceOf(dev.semaweave.compilation.TransientAccessException.class, failure.getCause());
+            assertEquals(2, animations.activeUses(), "The request owns the completed result handoff");
+            request.close();
+            assertFalse(animations.isClosed());
+            var second = compiler.submit(() -> secondRequest.compile(() -> false));
+            try (var session = second.get(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                assertThrows(IllegalStateException.class, () -> runtime.attachTransient(secondRequest, session));
+            }
             assertEquals(programs, TransientExpressionSession.liveLeaseCount());
+            assertFalse(animations.isClosed(), "Closing a late program does not discard its request");
+            secondRequest.close();
+            assertTrue(animations.isClosed());
             assertEquals(0, metrics.snapshot().active(EngineMetrics.Owner.RESOURCE_LEASES));
         } finally {
             compiler.shutdownNow();
             request.close();
-            closedRequest.close();
-            module.close();
+            secondRequest.close();
+            animations.close();
         }
     }
 
@@ -1574,9 +1662,9 @@ class ExpressionArtifactPipelineTest {
         var paths = temp.resolve("cache");
         var metrics = new ExpressionEngineMetrics();
         var input = input();
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))), metrics)
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes());
+        var module = factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), metrics).create(
+            () -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+            input.settings(), input.configBytes());
         var lease = module.retain();
         module.close();
         assertThrows(IllegalStateException.class, module::retain);
@@ -1592,9 +1680,10 @@ class ExpressionArtifactPipelineTest {
     void missingOrWrongShapeSemanticBindingIsRejected(@TempDir Path temp) throws Exception {
         var paths = temp.resolve("cache");
         var input = input();
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-            new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(), false,
-                input.definition(), null, input.settings(), input.configBytes());
+        var module =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+                    input.settings(), input.configBytes());
         try (module) {
             assertThrows(IllegalArgumentException.class,
                 () -> module.requireProgram("animation/main/missing/blend-weight", ProgramRole.ANIMATION_SAMPLE, ""));
@@ -1630,9 +1719,10 @@ class ExpressionArtifactPipelineTest {
         var input = input();
         var paths = temp.resolve("cache");
         try (
-            var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-                new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(),
-                    false, input.definition(), null, settings, ProtoUtil.serializeToArray(settings));
+            var module =
+                factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                    .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(),
+                        null, settings, ProtoUtil.serializeToArray(settings));
             var runtime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(runtime, module, Map.of());
             var route = new com.elfmcys.ysm.info.roulette.forms.ConfigActionRoute("expression", 0);
@@ -1650,10 +1740,10 @@ class ExpressionArtifactPipelineTest {
     void defaultEqualityAndFrozenWatchPresenceFollowModelDemand(@TempDir Path temp) throws Exception {
         var input = input("(v.hh==0)+(v.hhh==0)+(v.yj==0)+(r.b==0)+(null==0)+(''==null)+(null=='')+(null==null)");
         var paths = temp.resolve("cache");
-        try (
-            var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-                new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(),
-                    false, input.definition(), null, input.settings(), input.configBytes());
+        try (var module =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
+                    input.settings(), input.configBytes());
             var runtime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(runtime, module, Map.of(), RoamingRole.PRODUCER);
             var location = new ModelProgramInventory.SemanticLocation("player", "animation/main/idle/blend-weight",
@@ -1669,7 +1759,7 @@ class ExpressionArtifactPipelineTest {
                     assertEquals(true, runtime.executeTransient(inputs(), watch), source);
                 }
             }
-            var frozenDefaults = Map.of("v.hh??99", 0f, "r.b??99", 99f);
+            var frozenDefaults = Map.of("v.hh??99", 0f, "r.b??99", 0f);
             for (var entry : frozenDefaults.entrySet()) {
                 try (var watch = runtime.compileTransient(runtime.generation(), entry.getKey(),
                     TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
@@ -1685,6 +1775,37 @@ class ExpressionArtifactPipelineTest {
                     assertEquals(entry.getValue(), runtime.executeTransient(inputs(), watch), entry.getKey());
                 }
             }
+            var absentBiomeCategory =
+                Map.<String, Object>of("ysm.biome_category??'fallback'", "fallback", "ysm.biome_category()??73", 73f);
+            for (var entry : absentBiomeCategory.entrySet()) {
+                try (var watch = runtime.compileTransient(runtime.generation(), entry.getKey(),
+                    TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
+                    "test:biome-category-missing", () -> false)) {
+                    assertEquals(entry.getValue(), runtime.executeTransient(inputs(), watch), entry.getKey());
+                }
+            }
+        }
+    }
+
+    @Test
+    void computedNaNIsZeroForWorldAndGuiExpressions(@TempDir Path temp) throws Exception {
+        var paths = temp.resolve("cache");
+        var modules =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics());
+        var input = input("5 + (0 / 0)");
+        var location = new ModelProgramInventory.SemanticLocation("player", "animation/main/idle/blend-weight",
+            ProgramRole.ANIMATION_SAMPLE, "");
+        for (var purpose : com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.values()) {
+            var module = modules.createSet(() -> false, input.model().containerId(), "player", ExpressionSet.MAIN,
+                modules.expressionBinding(false), input.definition(), null, input.settings(), input.configBytes(),
+                false, purpose, CompilerOptions.DEFAULT);
+            try (var store = TestExpressionModules.store(module, Map.of());
+                var runtime = new EntityExpressionRuntime()) {
+                runtime.replace(store, TestComponentHolders.linkageScope());
+                float actual =
+                    runtime.observe(inputs(), evaluation -> evaluation.evaluate(module.requireFloatProgram(location)));
+                assertEquals(5.0f, actual, purpose.name());
+            }
         }
     }
 
@@ -1692,9 +1813,13 @@ class ExpressionArtifactPipelineTest {
     void legacyMolangDivisionByZeroRemainsZero(@TempDir Path temp) throws Exception {
         var paths = temp.resolve("cache");
         var input = input("1 / 0");
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-            new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(), false,
-                input.definition(), null, input.settings(), input.configBytes());
+        var modules =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics());
+        var module = modules.createSet(() -> false, input.model().containerId(), "player",
+            com.elfmcys.ysm.expression.inventory.ExpressionSet.MAIN, modules.expressionBinding(false),
+            input.definition(), null, input.settings(), input.configBytes(), false,
+            com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.FULL,
+            new dev.semaweave.compilation.CompilerOptions(true));
         var location = new ModelProgramInventory.SemanticLocation("player", "animation/main/idle/blend-weight",
             ProgramRole.ANIMATION_SAMPLE, "");
         var runtime = new EntityExpressionRuntime();
@@ -1716,9 +1841,10 @@ class ExpressionArtifactPipelineTest {
         var strings =
             StringDataProto.newBuilder().addUserFunctions(eventFunction("@player_update", "r.a=5;r.b=0;")).build();
         var paths = temp.resolve("cache");
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-            new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(), false,
-                ModelDataProto.newBuilder().build(), strings, input.settings(), input.configBytes());
+        var module =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                .create(() -> false, input.model(), "player", "main", input.profile(), false,
+                    ModelDataProto.newBuilder().build(), strings, input.settings(), input.configBytes());
         var location = new ModelProgramInventory.SemanticLocation("player", "function/@player_update",
             ProgramRole.EVENT_PLAYER_UPDATE, "player_update:0");
         var handlers = Map.of("player_update", List.of(module.requireEventProgram(location)));
@@ -1727,7 +1853,7 @@ class ExpressionArtifactPipelineTest {
 
         try {
             TestExpressionModules.replace(producer, module, handlers, RoamingRole.PRODUCER);
-            producer.initializeRoaming(new RoamingPayload(new TreeMap<>(Map.of("a", 1.0f))));
+            producer.initializeRoaming(fromMap(Map.of("a", 1.0f), module.roamingFields()));
             assertFalse(producer.hasRoamingDelta());
 
             producer.update(inputs(), evaluation -> {
@@ -1736,30 +1862,42 @@ class ExpressionArtifactPipelineTest {
             });
             assertTrue(producer.hasRoamingDelta());
             var delta = producer.takeRoamingDelta();
-            assertEquals(Map.of("a", 5.0f, "b", 0.0f), delta.values());
+            assertEquals(Map.of("a", 5.0f, "b", 0.0f), named(delta, module.roamingFields()));
             assertFalse(producer.hasRoamingDelta());
             var full = producer.takeRoamingFull();
-            assertEquals(Map.of("a", 5.0f, "b", 0.0f), full.values());
+            assertEquals(Map.of("a", 5.0f, "b", 0.0f), named(full, module.roamingFields()));
 
             TestExpressionModules.replace(consumer, module, handlers, RoamingRole.CONSUMER);
             consumer.initializeRoaming(full);
-            assertEquals(5.0f, consumer.roamingState().orElseThrow().read("a"));
-            assertEquals(0.0f, consumer.roamingState().orElseThrow().read("b"));
-            consumer.applyRoamingPatch(new RoamingPayload(new TreeMap<>(Map.of("a", 8.0f))));
-            assertEquals(8.0f, consumer.roamingState().orElseThrow().read("a"));
-            assertEquals(0.0f, consumer.roamingState().orElseThrow().read("b"));
+            assertEquals(5.0f, consumer.roamingState().orElseThrow()
+                .read((short)consumer.roamingState().orElseThrow().fieldNames().indexOf("a")));
+            assertEquals(0.0f, consumer.roamingState().orElseThrow()
+                .read((short)consumer.roamingState().orElseThrow().fieldNames().indexOf("b")));
+            consumer.applyRoamingPatch(fromMap(Map.of("a", 8.0f), module.roamingFields()));
+            assertEquals(8.0f, consumer.roamingState().orElseThrow()
+                .read((short)consumer.roamingState().orElseThrow().fieldNames().indexOf("a")));
+            assertEquals(0.0f, consumer.roamingState().orElseThrow()
+                .read((short)consumer.roamingState().orElseThrow().fieldNames().indexOf("b")));
             consumer.update(inputs(), evaluation -> {
                 evaluation.dispatchPlayerUpdate(true);
                 return null;
             });
-            assertEquals(5.0f, consumer.roamingState().orElseThrow().read("a"));
-            assertEquals(0.0f, consumer.roamingState().orElseThrow().read("b"));
-            consumer.applyRoamingPatch(new RoamingPayload(new TreeMap<>(Map.of("a", 8.0f))));
-            assertEquals(8.0f, consumer.roamingState().orElseThrow().read("a"));
+            assertEquals(5.0f, consumer.roamingState().orElseThrow()
+                .read((short)consumer.roamingState().orElseThrow().fieldNames().indexOf("a")));
+            assertEquals(0.0f, consumer.roamingState().orElseThrow()
+                .read((short)consumer.roamingState().orElseThrow().fieldNames().indexOf("b")));
+            consumer.applyRoamingPatch(fromMap(Map.of("a", 8.0f), module.roamingFields()));
+            assertEquals(8.0f, consumer.roamingState().orElseThrow()
+                .read((short)consumer.roamingState().orElseThrow().fieldNames().indexOf("a")));
 
-            assertThrows(IllegalArgumentException.class, () -> consumer
-                .applyRoamingPatch(new RoamingPayload(new TreeMap<>(Map.of("a", 9.0f, "unknown", 1.0f)))));
-            assertEquals(8.0f, consumer.roamingState().orElseThrow().read("a"));
+            var state = consumer.roamingState().orElseThrow();
+            short b = (short)state.fieldNames().indexOf("b");
+            state.write(b, 3.0f);
+            var patch = fromMap(Map.of("a", 9.0f), module.roamingFields());
+            consumer.applyRoamingPatch(patch);
+            assertEquals(3.0f, state.read(b));
+            consumer.applyRoamingFull(patch);
+            assertEquals(0, Float.floatToRawIntBits(state.read(b)));
         } finally {
             producer.close();
             consumer.close();
@@ -1773,9 +1911,10 @@ class ExpressionArtifactPipelineTest {
         var strings =
             StringDataProto.newBuilder().addUserFunctions(eventFunction("@player_update", "r.custom_state=5;")).build();
         var paths = temp.resolve("cache");
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-            new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(), false,
-                ModelDataProto.newBuilder().build(), strings, input.settings(), input.configBytes());
+        var module =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                .create(() -> false, input.model(), "player", "main", input.profile(), false,
+                    ModelDataProto.newBuilder().build(), strings, input.settings(), input.configBytes());
         var location = new ModelProgramInventory.SemanticLocation("player", "function/@player_update",
             ProgramRole.EVENT_PLAYER_UPDATE, "player_update:0");
         var runtime = new EntityExpressionRuntime();
@@ -1783,13 +1922,13 @@ class ExpressionArtifactPipelineTest {
         try {
             TestExpressionModules.replace(runtime, module,
                 Map.of("player_update", List.of(module.requireEventProgram(location))), RoamingRole.PRODUCER);
-            runtime.initializeRoaming(new RoamingPayload(new TreeMap<>()));
+            runtime.initializeRoaming(com.elfmcys.ysm.expression.TestRoamingPayloads.empty());
             runtime.update(inputs(), evaluation -> {
                 evaluation.dispatchPlayerUpdate(true);
                 return null;
             });
 
-            assertEquals(Map.of("custom_state", 5.0f), runtime.takeRoamingDelta().values());
+            assertEquals(Map.of("custom_state", 5.0f), named(runtime.takeRoamingDelta(), module.roamingFields()));
         } finally {
             runtime.close();
             module.close();
@@ -1807,7 +1946,7 @@ class ExpressionArtifactPipelineTest {
             StringDataProto.newBuilder().addUserFunctions(eventFunction("@player_update", tooMany.toString())).build();
         var tooManyPaths = temp.resolve("too-many");
         assertThrows(AssetLoadException.class,
-            () -> factory(track(new ExpressionArtifactStore(tooManyPaths, track(new AtomicSharedCache(tooManyPaths)))),
+            () -> factory(track(artifactStore(tooManyPaths, track(new AtomicSharedCache(tooManyPaths)))),
                 new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(),
                     false, ModelDataProto.newBuilder().build(), tooManyStrings, input.settings(), input.configBytes()));
 
@@ -1816,8 +1955,7 @@ class ExpressionArtifactPipelineTest {
             StringDataProto.newBuilder().addUserFunctions(eventFunction("@player_update", longName)).build();
         var longNamePaths = temp.resolve("long-name");
         assertThrows(AssetLoadException.class,
-            () -> factory(
-                track(new ExpressionArtifactStore(longNamePaths, track(new AtomicSharedCache(longNamePaths)))),
+            () -> factory(track(artifactStore(longNamePaths, track(new AtomicSharedCache(longNamePaths)))),
                 new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(),
                     false, ModelDataProto.newBuilder().build(), longNameStrings, input.settings(),
                     input.configBytes()));
@@ -1829,9 +1967,10 @@ class ExpressionArtifactPipelineTest {
         var strings =
             StringDataProto.newBuilder().addUserFunctions(eventFunction("@player_update", "r.custom_state=5;")).build();
         var paths = temp.resolve("cache");
-        var module = factory(track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths)))),
-            new ExpressionEngineMetrics()).create(() -> false, input.model(), "player", "main", input.profile(), false,
-                ModelDataProto.newBuilder().build(), strings, input.settings(), input.configBytes());
+        var module =
+            factory(track(artifactStore(paths, track(new AtomicSharedCache(paths)))), new ExpressionEngineMetrics())
+                .create(() -> false, input.model(), "player", "main", input.profile(), false,
+                    ModelDataProto.newBuilder().build(), strings, input.settings(), input.configBytes());
         var location = new ModelProgramInventory.SemanticLocation("player", "function/@player_update",
             ProgramRole.EVENT_PLAYER_UPDATE, "player_update:0");
         var producer = new EntityExpressionRuntime();
@@ -1840,19 +1979,20 @@ class ExpressionArtifactPipelineTest {
         try {
             TestExpressionModules.replace(producer, module,
                 Map.of("player_update", List.of(module.requireEventProgram(location))), RoamingRole.PRODUCER);
-            producer.initializeRoaming(new RoamingPayload(new TreeMap<>()));
+            producer.initializeRoaming(com.elfmcys.ysm.expression.TestRoamingPayloads.empty());
             producer.update(inputs(), evaluation -> {
                 evaluation.dispatchPlayerUpdate(true);
                 return null;
             });
 
             var full = producer.takeRoamingFull();
-            assertEquals(Map.of("custom_state", 5.0f), full.values());
+            assertEquals(Map.of("custom_state", 5.0f), named(full, module.roamingFields()));
             assertFalse(producer.hasRoamingDelta());
 
             TestExpressionModules.replace(consumer, module, Map.of(), RoamingRole.CONSUMER);
             consumer.initializeRoaming(full);
-            assertEquals(5.0f, consumer.roamingState().orElseThrow().read("custom_state"));
+            assertEquals(5.0f, consumer.roamingState().orElseThrow()
+                .read((short)consumer.roamingState().orElseThrow().fieldNames().indexOf("custom_state")));
         } finally {
             producer.close();
             consumer.close();
@@ -1868,8 +2008,8 @@ class ExpressionArtifactPipelineTest {
         var valid = animation("valid", "7");
         var file = input.definition().animationFiles().get("main").toBuilder().addAnimations(valid).build();
         var definition = input.definition().toBuilder().putAnimationFiles("main", file).build();
-        var module = factory(track(new ExpressionArtifactStore(paths, shared)), new ExpressionEngineMetrics()).create(
-            () -> false, input.model(), "player", "main", input.profile(), false, definition, null, input.settings(),
+        var module = factory(track(artifactStore(paths, shared)), new ExpressionEngineMetrics()).create(() -> false,
+            input.model(), "player", "main", input.profile(), false, definition, null, input.settings(),
             input.configBytes());
         var failedLocation = new ModelProgramInventory.SemanticLocation("player", "animation/main/idle/blend-weight",
             ProgramRole.ANIMATION_SAMPLE, "");
@@ -1893,16 +2033,15 @@ class ExpressionArtifactPipelineTest {
 
         com.elfmcys.ysm.testutil.DerivedStorageTestScope.drain();
         var warmMetrics = new ExpressionEngineMetrics();
-        var warm =
-            factory(track(new ExpressionArtifactStore(paths, shared)), warmMetrics).create(() -> false, input.model(),
-                "player", "main", input.profile(), false, definition, null, input.settings(), input.configBytes());
+        var warm = factory(track(artifactStore(paths, shared)), warmMetrics).create(() -> false, input.model(),
+            "player", "main", input.profile(), false, definition, null, input.settings(), input.configBytes());
         try {
             assertEquals(ExpressionArtifactStore.Source.DISK, warm.source());
             assertEquals(module.compilationReport().replacements(), warm.compilationReport().replacements());
             var replacement = warm.compilationReport().replacements().get(0);
             assertEquals(failedLocation, warm.programLocations().get(replacement.programKey()));
             assertEquals(0, warmMetrics.snapshot().stageCalls(EngineMetrics.Stage.SEMANTIC_ANALYSIS));
-            assertEquals(0, warmMetrics.snapshot().stageCalls(EngineMetrics.Stage.SOURCE_GENERATION));
+            assertEquals(0, warmMetrics.snapshot().stageCalls(EngineMetrics.Stage.SYNTAX_GENERATION));
             assertEquals(0, warmMetrics.snapshot().stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION));
         } finally {
             warm.close();
@@ -1910,112 +2049,39 @@ class ExpressionArtifactPipelineTest {
     }
 
     @Test
-    void hostAnalysisPolicyRejectsAsBudgetAndNewPolicyCanUseTheSameSourcesAndStore(@TempDir Path paths) throws Exception {
-        var store = track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths))));
-        var input = input("1+2");
-        var rejectedHost = ExpressionHost.create(HostAvailability.none(), ExpressionPolicy.create(
-            ExpressionPolicy.COMPILER_LIMITS.withAnalysisLimits(4_097, 1), ExpressionPolicy.EXECUTION_LIMITS));
-        var rejected = new RenderTargetExpressionModuleFactory(store, rejectedHost, new ExpressionEngineMetrics());
-        var failure = assertThrows(AssetLoadException.class, () -> rejected.create(() -> false, input.model(), "player",
-            "main", input.profile(), false, input.definition(), null, input.settings(), input.configBytes()));
-        assertTrue(failure.getMessage().contains("budget rejected"));
-        var limit = assertInstanceOf(dev.semaweave.compilation.ModuleLimitException.class, failure.getCause());
-        assertEquals(dev.semaweave.compilation.LimitKind.TYPE_ANALYSIS_OPERATIONS, limit.limitKind());
-        assertEquals(1, limit.maximum());
-        assertEquals(dev.semaweave.compilation.ModuleLimitException.Phase.ANALYSIS, limit.phase());
-        assertEquals(java.util.List.of(new dev.semaweave.ProgramId(0)), limit.programIds());
-        assertEquals(2, limit.actual());
-        assertTrue(limit.nodePath().isEmpty());
-        assertInstanceOf(dev.semaweave.compilation.ModuleLimitException.class, limit.getCause());
-        var acceptedHost = ExpressionHost.create(HostAvailability.none(), ExpressionPolicy.create(
-            ExpressionPolicy.COMPILER_LIMITS.withAnalysisLimits(4_097, 16_000_001), ExpressionPolicy.EXECUTION_LIMITS));
-        try (var module = new RenderTargetExpressionModuleFactory(store, acceptedHost, new ExpressionEngineMetrics())
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes())) {
-            assertEquals(4_097, module.host().compilationPolicy().compilerLimits().maxFunctionVersions());
-            assertEquals(16_000_001, module.host().compilationPolicy().compilerLimits().maxAnalysisOperations());
-        }
-    }
-
-    @Test
-    void persistentAndTransientConsumeTheHostNodeBudgetAndWarmPolicyRemainsIndependent(@TempDir Path paths)
-        throws Exception {
-        var input = input("1");
-        var limits = withLimit("maxDecodedNodes", 4);
-        var host = ExpressionHost.create(HostAvailability.none(), ExpressionPolicy.create(limits,
-            new dev.semaweave.ExecutionLimits(2, 3, 4, 5, 6)));
-        var store = track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths))));
-        try (var module = new RenderTargetExpressionModuleFactory(store, host, new ExpressionEngineMetrics())
-            .create(() -> false, input.model(), "player", "main", input.profile(), false, input.definition(), null,
-                input.settings(), input.configBytes())) {
-            var rejected = assertThrows(dev.semaweave.compilation.ModuleLimitException.class,
-                () -> TransientExpressionSession.compile(module, 1, "1+2+3+4", TransientExpressionSession.Privilege.LOCAL_WATCH,
-                    TransientExpressionSession.Purpose.WATCH, "test/host-budget", () -> false));
-            assertEquals(dev.semaweave.compilation.LimitKind.DECODED_NODES, rejected.limitKind());
-            assertEquals(4, rejected.maximum());
-            try (var accepted = TransientExpressionSession.compile(module, 1, "1", TransientExpressionSession.Privilege.LOCAL_WATCH,
-                TransientExpressionSession.Purpose.WATCH, "test/host-budget", () -> false)) {
-                assertEquals(host.compilationPolicy(), module.host().compilationPolicy());
-            }
-        }
-        store.awaitPersistence();
-        var warmMetrics = new ExpressionEngineMetrics();
-        {
-            var warmStore = track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths))));
-            try (var warm = new RenderTargetExpressionModuleFactory(warmStore, host, warmMetrics).create(() -> false,
-                input.model(), "player", "main", input.profile(), false, input.definition(), null, input.settings(),
-                input.configBytes())) {
-                assertEquals(ExpressionArtifactStore.Source.DISK, warm.source());
-                assertEquals(0, warmMetrics.snapshot().stageCalls(EngineMetrics.Stage.SEMANTIC_ANALYSIS));
-            }
-        }
-        var tooSmall = ExpressionHost.create(HostAvailability.none(), ExpressionPolicy.create(withLimit("maxDecodedNodes", 1),
-            ExpressionPolicy.EXECUTION_LIMITS));
-        var largerInput = input("1+2");
-        var failure = assertThrows(AssetLoadException.class,
-            () -> new RenderTargetExpressionModuleFactory(store, tooSmall, new ExpressionEngineMetrics()).create(() -> false,
-                largerInput.model(), "player", "main", largerInput.profile(), false, largerInput.definition(), null,
-                largerInput.settings(), largerInput.configBytes()));
-        assertEquals(dev.semaweave.compilation.LimitKind.DECODED_NODES,
-            assertInstanceOf(dev.semaweave.compilation.ModuleLimitException.class, failure.getCause()).limitKind());
-    }
-
-    @Test
-    void coldWarmAndTransientExecutionUseTheHostLoopBudgetAndResetTheNextEntry(@TempDir Path paths) throws Exception {
+    void coldWarmAndTransientLoopsIgnoreFunctionDepthAndKeepTheNextEntry(@TempDir Path paths) throws Exception {
         var input = input("loop(2,1);return 7;");
         var good = animation("good", "loop(1,1);return 7;");
         var file = input.definition().animationFiles().get("main").toBuilder().addAnimations(good).build();
         var definition = input.definition().toBuilder().putAnimationFiles("main", file).build();
-        var host = ExpressionHost.create(HostAvailability.none(), ExpressionPolicy.create(ExpressionPolicy.COMPILER_LIMITS,
-            new dev.semaweave.ExecutionLimits(1, 2, 3, 4, 5)));
-        var store = track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths))));
+        var host = ExpressionHost.create(HostAvailability.none(),
+            ExpressionPolicy.create(new dev.semaweave.ExecutionLimits(2)));
+        var store = track(artifactStore(paths, track(new AtomicSharedCache(paths))));
         var badLocation = new ModelProgramInventory.SemanticLocation("player", "animation/main/idle/blend-weight",
             ProgramRole.ANIMATION_SAMPLE, "");
         var goodLocation = new ModelProgramInventory.SemanticLocation("player", "animation/main/good/blend-weight",
             ProgramRole.ANIMATION_SAMPLE, "");
         for (int pass = 0; pass < 2; pass++) {
             var metrics = new ExpressionEngineMetrics();
-            var currentStore = pass == 0 ? store : track(new ExpressionArtifactStore(paths, track(new AtomicSharedCache(paths))));
-            try (var module = new RenderTargetExpressionModuleFactory(currentStore, host, metrics).create(() -> false,
-                input.model(), "player", "main", input.profile(), false, definition, null, input.settings(), input.configBytes());
+            var currentStore = pass == 0 ? store : track(artifactStore(paths, track(new AtomicSharedCache(paths))));
+            try (
+                var module = pipelineFactory(currentStore, host, metrics).create(() -> false, input.model(), "player",
+                    "main", input.profile(), false, definition, null, input.settings(), input.configBytes());
                 var runtime = new EntityExpressionRuntime()) {
                 TestExpressionModules.replace(runtime, module, Map.of());
                 runtime.observe(inputs(), evaluation -> {
-                    assertEquals(0f, evaluation.evaluate(module.requireFloatProgram(badLocation)));
-                    var failure = assertInstanceOf(ExecutionFailure.class, evaluation.failure().orElseThrow());
-                    assertEquals(ExecutionFailure.Reason.LOOP_BUDGET, failure.reason());
-                    assertEquals(1, failure.maximum().orElseThrow());
-                    assertEquals("EXECUTION", failure.phase());
+                    assertEquals(7f, evaluation.evaluate(module.requireFloatProgram(badLocation)));
+                    assertTrue(evaluation.failure().isEmpty());
+                    assertEquals(7f, evaluation.evaluate(module.requireFloatProgram(goodLocation)));
                     return null;
                 });
-                float next = runtime.observe(inputs(), evaluation -> evaluation.evaluate(module.requireFloatProgram(goodLocation)));
+                float next = runtime.observe(inputs(),
+                    evaluation -> evaluation.evaluate(module.requireFloatProgram(goodLocation)));
                 assertEquals(7f, next);
                 try (var transientProgram = runtime.compileTransient(runtime.generation(), "loop(2,1);return 7;",
                     TransientExpressionSession.Privilege.LOCAL_WATCH, TransientExpressionSession.Purpose.WATCH,
-                    "test/host-loop-budget", () -> false)) {
-                    var failure = assertThrows(ExecutionFailure.class, () -> runtime.executeTransient(inputs(), transientProgram));
-                    assertEquals(ExecutionFailure.Reason.LOOP_BUDGET, failure.reason());
-                    assertEquals(1, failure.maximum().orElseThrow());
+                    "test/independent-loop", () -> false)) {
+                    assertEquals(7f, runtime.executeTransient(inputs(), transientProgram));
                 }
                 if (pass == 1) {
                     assertEquals(ExpressionArtifactStore.Source.DISK, module.source());
@@ -2026,28 +2092,45 @@ class ExpressionArtifactPipelineTest {
         }
     }
 
-    private static dev.semaweave.CompilerLimits withLimit(String name, long value) throws Exception {
-        var fields = dev.semaweave.CompilerLimits.class.getRecordComponents();
-        Object[] values = new Object[fields.length];
-        for (int index = 0; index < fields.length; index++) {
-            values[index] = fields[index].getAccessor().invoke(ExpressionPolicy.COMPILER_LIMITS);
-            if (fields[index].getName().equals(name)) {
-                if (fields[index].getType() == int.class) values[index] = Math.toIntExact(value);
-                else values[index] = value;
-            }
-        }
-        return dev.semaweave.CompilerLimits.class.getConstructor(Arrays.stream(fields)
-            .map(java.lang.reflect.RecordComponent::getType).toArray(Class<?>[]::new)).newInstance(values);
+    private final Map<ExpressionArtifactStore, AnimationInputStore> animationInputs = new java.util.IdentityHashMap<>();
+
+    private ExpressionArtifactStore artifactStore(Path root, AtomicSharedCache cache) {
+        return rememberInputs(new ExpressionArtifactStore(root, cache), root, cache);
     }
 
-    private static RenderTargetExpressionModuleFactory factory(ExpressionArtifactStore store,
+    private ExpressionArtifactStore artifactStore(Path root, AtomicSharedCache cache, int maximumEntries) {
+        return rememberInputs(new ExpressionArtifactStore(root, cache, maximumEntries), root, cache);
+    }
+
+    private ExpressionArtifactStore artifactStore(Path root, AtomicSharedCache cache,
+        ExpressionArtifactStore.ArtifactMaterializer materializer, int maximumEntries) {
+        return rememberInputs(new ExpressionArtifactStore(root, cache, materializer, maximumEntries), root, cache);
+    }
+
+    private ExpressionArtifactStore rememberInputs(ExpressionArtifactStore artifacts, Path root,
+        AtomicSharedCache cache) {
+        animationInputs.put(artifacts, new AnimationInputStore(root, cache));
+        return artifacts;
+    }
+
+    private RenderTargetExpressionModuleFactory pipelineFactory(ExpressionArtifactStore store, ExpressionHost host,
         ExpressionEngineMetrics metrics) {
-        return new RenderTargetExpressionModuleFactory(store, ExpressionHost.create(HostAvailability.all()), metrics);
+        return new RenderTargetExpressionModuleFactory(store, animationInputs.get(store), host, metrics);
+    }
+
+    private RenderTargetExpressionModuleFactory pipelineFactory(ExpressionArtifactStore store, ExpressionHost host,
+        MolangEventCatalog events, HostLinkage linkage, ExpressionEngineMetrics metrics) {
+        return new RenderTargetExpressionModuleFactory(store, animationInputs.get(store), host, events, linkage,
+            metrics);
+    }
+
+    private RenderTargetExpressionModuleFactory factory(ExpressionArtifactStore store,
+        ExpressionEngineMetrics metrics) {
+        return pipelineFactory(store, ExpressionHost.create(HostAvailability.all()), metrics);
     }
 
     private static EntityExpressionRuntime.InvocationInputs inputs() {
-        return new EntityExpressionRuntime.InvocationInputs(EMPTY_INPUTS, (commands, provenance) -> () -> {
-        }, () -> false);
+        return new EntityExpressionRuntime.InvocationInputs(EMPTY_INPUTS);
     }
 
     private static ExpressionArtifactLookup lookup(Input input, ExpressionHost host, MolangEventCatalog eventCatalog,
@@ -2080,8 +2163,8 @@ class ExpressionArtifactPipelineTest {
             .build();
         var settings = SettingsProto.newBuilder().setDefaultTexture("").setPreviewAnimation("")
             .setDisablePreviewRotation(false).build();
-        return new Input(new ModelFileIdentity(hash(1), hash(2)), new BakeProfile("test-profile"), definition, settings,
-            ProtoUtil.serializeToArray(settings));
+        return new Input(new ModelFileIdentity(hash(1), Hash256.parse(hash(2).toString().substring(5))),
+            new BakeProfile("test-profile"), definition, settings, ProtoUtil.serializeToArray(settings));
     }
 
     private static AnimationProto animation(String name, String source) throws Exception {
@@ -2099,10 +2182,10 @@ class ExpressionArtifactPipelineTest {
         return UserFunctionProto.newBuilder().setName(name).setBody(encoded).build();
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         Arrays.fill(bytes, (byte)marker);
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
     private record Input(ModelFileIdentity model, BakeProfile profile, ModelDataProto definition,

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.session.client;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.model.catalog.content.CatalogContentBinding;
@@ -47,7 +48,7 @@ public final class RemoteCatalogActivation implements AutoCloseable {
     private final RemoteMetadataFetcher fetcher;
     private final Executor workers;
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final Map<Hash256, EntryOwner> owners = new LinkedHashMap<>();
+    private final Map<ModelId, EntryOwner> owners = new LinkedHashMap<>();
     private final Set<CompletableFuture<?>> metadataActions = new HashSet<>();
     private volatile CatalogSnapshot active;
     private RemotePublicationSnapshot publication;
@@ -71,7 +72,7 @@ public final class RemoteCatalogActivation implements AutoCloseable {
         var starts = new ArrayList<EntryOwner>();
         var retired = new ArrayList<EntryOwner>();
         var cancelledActions = new ArrayList<CompletableFuture<?>>();
-        var results = new LinkedHashMap<Hash256, CompletableFuture<ActivationSnapshot.State>>();
+        var results = new LinkedHashMap<ModelId, CompletableFuture<ActivationSnapshot.State>>();
         synchronized (this) {
             if (closed.get()) {
                 return CompletableFuture.failedFuture(new IllegalStateException("Activation owner is closed"));
@@ -111,7 +112,7 @@ public final class RemoteCatalogActivation implements AutoCloseable {
         cancelledActions.forEach(action -> action.cancel(false));
         var all = CompletableFuture.allOf(results.values().toArray(CompletableFuture[]::new));
         var batch = all.thenApply(ignored -> {
-            var states = new LinkedHashMap<Hash256, ActivationSnapshot.State>();
+            var states = new LinkedHashMap<ModelId, ActivationSnapshot.State>();
             results.forEach((modelId, result) -> states.put(modelId, result.join()));
             return new ActivationSnapshot(base.publication(), states);
         }).whenComplete((ignored, failure) -> {
@@ -138,7 +139,7 @@ public final class RemoteCatalogActivation implements AutoCloseable {
         return new ActivationSnapshot.Pending(entry);
     }
 
-    public synchronized void restart(Set<Hash256> modelIds) {
+    public synchronized void restart(Set<ModelId> modelIds) {
         Objects.requireNonNull(modelIds, "modelIds");
         modelIds.forEach(modelId -> {
             var owner = owners.remove(modelId);
@@ -196,11 +197,12 @@ public final class RemoteCatalogActivation implements AutoCloseable {
                     return new ActivationSnapshot.Ready(entry, record(entry, content));
                 }
             }
-            if (current != null && current.binding().content() instanceof ManagedContainer) {
+            if (entry.modelId().isHash() && current != null
+                && current.binding().content() instanceof ManagedContainer) {
                 return new ActivationSnapshot.Ready(entry, record(entry, current.binding().content()));
             }
             for (var candidate : candidates) {
-                if (candidate.identity().equals(entry.identity())) {
+                if (!entry.modelId().isHash() || candidate.identity().equals(entry.identity())) {
                     continue;
                 }
                 var content = openCandidate(owner, candidate);

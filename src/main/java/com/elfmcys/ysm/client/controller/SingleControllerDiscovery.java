@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.client.controller;
 
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
-import com.elfmcys.ysm.model.resource.client.CommonAsset;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 
 import java.util.function.BiFunction;
@@ -26,12 +26,11 @@ public class SingleControllerDiscovery<T extends AnimatableEntity<?>, TModel>
     }
 
     @Override
-    public ControllerFactory<T> process(TModel model, CommonAsset assets,
-        com.elfmcys.ysm.model.resource.client.AnimationStore animations) {
+    public ControllerFactory<T> process(TModel model, AnimationStore.View animations) {
         var accept = false;
-        if (hybrid && resourceAdapter.getControllers(model, assets).containsKey(controllerName)) {
+        if (hybrid && resourceAdapter.getControllers(model).containsKey(controllerName)) {
             accept = true;
-        } else if (assets.eventHandlers().containsKey(scriptName)) {
+        } else if (animations.eventHandlers().containsKey(scriptName)) {
             accept = true;
         } else if (animationNames != null) {
             for (String animationName : animationNames) {

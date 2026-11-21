@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.catalog;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
 import com.elfmcys.ysm.format.container.AssetContainerView;
@@ -120,13 +121,13 @@ public class CatalogReloadBenchmark {
         var count = Integer.parseInt(arguments[0]);
         var input = new Input();
         input.setup();
-        try {
+        try (var cache = new com.elfmcys.ysm.model.storage.AtomicSharedCache(input.temporary.resolve("cache"))) {
             var root = Files.createDirectories(input.temporary.resolve("sources"));
             populate(input.previous, root, count);
-            var cache = input.temporary.resolve("cache");
+            var scope = com.elfmcys.ysm.model.storage.ConvertedScope.of(input.temporary, "catalog-benchmark");
             var resolver = new ModelSourceResolver(new RawModelImporter(DefaultAnimationFilter.keepAll()),
-                new ConvertedSourceIndexStore(cache, "catalog-benchmark"), new ConvertedObjectStore(cache));
-            var reconciler = new CatalogReconciler(List.of(new ModelCatalogSource(CatalogRootKind.CUSTOM, root, false)),
+                new ConvertedSourceIndexStore(scope, cache), new ConvertedObjectStore(cache));
+            var reconciler = new CatalogReconciler(List.of(new ModelCatalogSource(CatalogRootKind.MODELS, root, false)),
                 resolver, Set.of(input.previous.modelId()), input.previous, CatalogIndexSnapshot.empty());
             var coordinator = new AtomicReference<Thread>();
             try (var catalog = new ReloadableModelCatalog(reconciler, reconciler.materializeBuiltins(), runnable -> {
@@ -176,7 +177,7 @@ public class CatalogReloadBenchmark {
                 var id = new byte[Hash256.SIZE];
                 ByteBuffer.wrap(id).putInt(index + 1);
                 var properties = PropertiesProto.newBuilder(source.view().getManifest().info().properties())
-                    .setModelId(ByteBuffer.wrap(id)).build();
+                    .setModelId("hash:" + java.util.HexFormat.of().formatHex(id)).build();
                 var info = InfoProto.newBuilder(source.view().getManifest().info()).setProperties(properties)
                     .setThumbnailSource(PreviewSource.GENERATED).build();
                 var manifest = ManifestProto.newBuilder(source.view().getManifest()).setInfo(info).build();

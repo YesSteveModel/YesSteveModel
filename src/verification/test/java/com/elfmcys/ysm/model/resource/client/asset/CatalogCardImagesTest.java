@@ -12,7 +12,7 @@ import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogRecord;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.resource.client.remote.RemoteModelContent;
 import com.elfmcys.ysm.model.resource.client.remote.RemoteModelStore;
@@ -55,7 +55,7 @@ class CatalogCardImagesTest {
         intrinsic = parse("/assets/ysm/builtin/default/ysm.json", root.resolve("default"), true);
         sourceModel = parse("/assets/ysm/builtin/wine_fox/22_elf/ysm.json", root.resolve("source"), false);
         var content = ManagedContainer.openDirect(sourceModel,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("source")));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("source")));
         try (var preview = TestPreviews.blank()) {
             model = ModelExporter.export(content, preview, root.resolve("model.mxc"), null);
         } finally {
@@ -64,10 +64,10 @@ class CatalogCardImagesTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"pending", "ready", "failed", "remote-missing", "resident", "builtin-resident"})
+    @ValueSource(strings = {"pending", "ready", "failed", "remote-missing", "resident"})
     void initialEagerNeverCreatesPreviewDemandOrConsumesAnExistingResult(String sourceState) throws Exception {
-        try (var f = new Fixture(temp, sourceState.equals("remote-missing"), sourceState.equals("builtin-resident"));
-            var decorations = f.page(); var previews = f.page()) {
+        try (var f = new Fixture(temp, sourceState.equals("remote-missing")); var decorations = f.page();
+            var previews = f.page()) {
             if (sourceState.equals("ready") || sourceState.endsWith("resident"))
                 f.completeLocal();
             else if (sourceState.equals("failed"))
@@ -231,9 +231,8 @@ class CatalogCardImagesTest {
         final ClientCatalogScenarioHarness catalogs;
         final RemoteModelStore store;
         final RemoteModelContent remote;
-        final Hash256 id;
+        final ModelId id;
         final ClientAssetRepository repository;
-        final boolean builtin;
         final ResidentImagesTest.Fixture images = new ResidentImagesTest.Fixture();
         final CompletableFuture<ImageSource> local = new CompletableFuture<>();
         final CompletableFuture<Optional<ImageSource>> probe = new CompletableFuture<>();
@@ -246,16 +245,11 @@ class CatalogCardImagesTest {
         int transfers;
 
         Fixture(Path root, boolean remoteSource) throws Exception {
-            this(root, remoteSource, false);
-        }
-
-        Fixture(Path root, boolean remoteSource, boolean builtin) throws Exception {
-            this.builtin = builtin;
             catalogs = ClientCatalogScenarioHarness.open(root.resolve("catalog"), intrinsic,
-                remoteSource || builtin ? List.of() : List.of(model));
+                remoteSource ? List.of() : List.of(model));
             store = new RemoteModelStore(root.resolve("remote"));
-            var content = ManagedContainer.openDirect(builtin ? intrinsic : remoteSource ? sourceModel : model,
-                new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("source")));
+            var content = ManagedContainer.openDirect(remoteSource ? sourceModel : model,
+                new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("source")));
             try {
                 id = content.modelId();
                 if (remoteSource)
@@ -267,8 +261,9 @@ class CatalogCardImagesTest {
                 content.representation().close();
             }
             if (remoteSource) {
-                var record = new CatalogRecord(new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("remote/model")),
-                    new CatalogContentBinding(id, remote));
+                var record =
+                    new CatalogRecord(new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("remote/model")),
+                        new CatalogContentBinding(id, remote));
                 var publication = new PublicationEntry(remote.representation().identity(), record.entry().path(),
                     CatalogAccess.PUBLIC, true);
                 var snapshot = new RemotePublicationSnapshot(List.of(publication), Set.of(), List.of(), Map.of());
@@ -295,10 +290,6 @@ class CatalogCardImagesTest {
         }
 
         void completeLocal() throws Exception {
-            if (builtin) {
-                local.complete(images.source());
-                return;
-            }
             ModelContent content = catalogs.manager().snapshot().find(id).orElseThrow().content();
             local.complete(content.modelFile().thumbnailSource(() -> false, content.chunks()));
         }

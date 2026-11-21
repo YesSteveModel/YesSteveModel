@@ -14,8 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ContinuousDemandTest {
     static Stream<Arguments> pageAdmissionCases() {
-        return Stream.of(-1L, 0L, 300L, 301L, 699L, 700L, 701L).flatMap(previous ->
-            Stream.of(0L, 299L, 300L, 699L, 700L).map(current -> Arguments.of(previous, current)));
+        return Stream.of(-1L, 0L, 300L, 301L, 699L, 700L, 701L)
+            .flatMap(previous -> Stream.of(0L, 299L, 300L, 699L, 700L).map(current -> Arguments.of(previous, current)));
     }
 
     @ParameterizedTest
@@ -57,14 +57,13 @@ class ContinuousDemandTest {
 
     @ParameterizedTest
     @CsvSource({"300,false,false", "301,true,false", "700,true,false", "701,true,true"})
-    void localAndNetworkEligibilityUseTheSameStartAndIndependentPreviousDurations(long previous,
-        boolean localImmediate, boolean networkImmediate) {
+    void localAndNetworkEligibilityUseTheSameStartAndIndependentPreviousDurations(long previous, boolean localImmediate,
+        boolean networkImmediate) {
         var demand = new ContinuousDemand<String>();
         demand.observe("A", 0);
         demand.observe("B", previous);
 
-        assertEquals(localImmediate,
-            demand.effectEligible(true, previous, ContinuousDemand.LOCAL_SWITCH_DWELL_MILLIS));
+        assertEquals(localImmediate, demand.effectEligible(true, previous, ContinuousDemand.LOCAL_SWITCH_DWELL_MILLIS));
         assertEquals(localImmediate,
             demand.effectEligible(true, previous + 300, ContinuousDemand.LOCAL_SWITCH_DWELL_MILLIS));
         assertTrue(demand.effectEligible(true, previous + 301, ContinuousDemand.LOCAL_SWITCH_DWELL_MILLIS));

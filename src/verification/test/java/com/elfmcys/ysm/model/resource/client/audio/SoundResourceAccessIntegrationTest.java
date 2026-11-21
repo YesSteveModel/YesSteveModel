@@ -359,7 +359,7 @@ class SoundResourceAccessIntegrationTest {
                 importer.convert(captured, Files.createDirectories(temp.resolve(name + "-output"))).stagedContainer();
         }
         var content = ManagedContainer.openDirect(container,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("audio-" + name)));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("audio-" + name)));
         var sound = content.representation().view().getCommon().sounds().get("tone");
         return new Fixture(container, content, Objects.requireNonNull(sound));
     }

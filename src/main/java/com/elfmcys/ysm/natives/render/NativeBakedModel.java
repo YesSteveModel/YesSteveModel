@@ -24,20 +24,23 @@ import org.joml.Vector4f;
 /**
  * Owns immutable native geometry; Java retains resource identity and publication authority.
  *
- * <p>Requires: bake and tryBake callers retain the model bytes and texture owner through the call.
- * Inputs must not change or be released during that borrow. Textures contain tightly packed RGBA
- * pixels; buffer overloads require at least width * height * 4 readable bytes at their base address.
+ * <p>
+ * Requires: bake and tryBake callers retain the model bytes and texture owner through the call. Inputs must not change
+ * or be released during that borrow. Textures contain tightly packed RGBA pixels; buffer overloads require at least
+ * width * height * 4 readable bytes at their base address.
  *
- * <p>Execution: operations complete synchronously on the calling thread. The owner excludes close
- * from all native handle borrows. Native extraction and rendering retain or borrow the immutable
- * backing under their own state contracts; this wrapper does not schedule host work.
+ * <p>
+ * Execution: operations complete synchronously on the calling thread. The owner excludes close from all native handle
+ * borrows. Native extraction and rendering retain or borrow the immutable backing under their own state contracts; this
+ * wrapper does not schedule host work.
  *
- * <p>Ownership: bake/read return an unshared handle with one close obligation.
- * After share(), consumers retain references and cannot explicitly close this wrapper.
- * Serialized output has an independent Storage owner.
+ * <p>
+ * Ownership: bake/read return an unshared handle with one close obligation. After share(), consumers retain references
+ * and cannot explicitly close this wrapper. Serialized output has an independent Storage owner.
  *
- * <p>Seam: implements immutable geometry ownership in the
- * [shared geometry handoff](docs/architecture/native-runtime/implementation/jni-and-memory.md#共享-geometry).
+ * <p>
+ * Seam: implements immutable geometry ownership in the [shared geometry
+ * handoff](docs/architecture/native-runtime/implementation/jni-and-memory.md#共享-geometry).
  */
 public final class NativeBakedModel extends NativeObject {
     private boolean shared;
@@ -80,10 +83,12 @@ public final class NativeBakedModel extends NativeObject {
     }
 
     /**
-     * <p>Ensures: permanently revokes explicit destruction of this wrapper; repeated share calls return the same owner.
+     * <p>
+     * Ensures: permanently revokes explicit destruction of this wrapper; repeated share calls return the same owner.
      *
-     * <p>Ownership: consumers retain this wrapper until their native borrows finish, then drop references.
-     * Only Cleaner may release the shared wrapper's handle.
+     * <p>
+     * Ownership: consumers retain this wrapper until their native borrows finish, then drop references. Only Cleaner
+     * may release the shared wrapper's handle.
      *
      * @return this wrapper, without creating another native handle
      */
@@ -309,10 +314,12 @@ public final class NativeBakedModel extends NativeObject {
     }
 
     /**
-     * <p>Requires: modelData is GeoModelProto bytes and boneCount matches that message.
+     * <p>
+     * Requires: modelData is GeoModelProto bytes and boneCount matches that message.
      *
-     * <p>Failure: native rejection throws RuntimeException. Failed Java adoption releases the
-     * unreturned handle. Success creates geometry only; it does not install resources or textures.
+     * <p>
+     * Failure: native rejection throws RuntimeException. Failed Java adoption releases the unreturned handle. Success
+     * creates geometry only; it does not install resources or textures.
      *
      * @param boneCount expected bone count in [0, 65536]
      * @param originVersion unsigned 16-bit source version
@@ -361,17 +368,20 @@ public final class NativeBakedModel extends NativeObject {
     }
 
     /**
-     * <p>Requires: the caller supplies a current native-cache payload after its cache/profile admission.
-     * The buffer owner and bytes remain unchanged until the synchronous read returns.
+     * <p>
+     * Requires: the caller supplies a current native-cache payload after its cache/profile admission. The buffer owner
+     * and bytes remain unchanged until the synchronous read returns.
      *
-     * <p>Failure: native decode rejection throws RuntimeException; failed adoption releases the result handle.
-     * Cache identity and miss/rebuild decisions remain with the Java storage owner.
+     * <p>
+     * Failure: native decode rejection throws IOException; failed adoption releases the result handle. Cache identity
+     * and miss/rebuild decisions remain with the Java storage owner.
      *
      * @param boneCount payload bone count in [0, 65536]
      * @return complete owning geometry and its bone-order mapping
+     * @throws IOException if native decoding rejects the verified cache payload
      */
     @Owned
-    public static ModelResult read(UniBuffer buffer, int boneCount) {
+    public static ModelResult read(UniBuffer buffer, int boneCount) throws IOException {
         validateBoneCount(boneCount);
         var sortedBoneIndices = new short[boneCount];
         var args = BufferArgument.packInput(buffer);
@@ -382,7 +392,7 @@ public final class NativeBakedModel extends NativeObject {
             Reference.reachabilityFence(buffer);
         }
         if (ptr == 0) {
-            throw new RuntimeException("Failed to read BakedModel");
+            throw com.elfmcys.ysm.format.AssetLoadException.content("Failed to read BakedModel");
         }
         return adoptResult(ptr, sortedBoneIndices);
     }
@@ -414,8 +424,9 @@ public final class NativeBakedModel extends NativeObject {
     }
 
     /**
-     * <p>Ownership: borrows this model during serialization, then transfers an independent allocation
-     * to the receiver. The receiver closes that Storage or transfers it to a GC owner.
+     * <p>
+     * Ownership: borrows this model during serialization, then transfers an independent allocation to the receiver. The
+     * receiver closes that Storage or transfers it to a GC owner.
      *
      * @return owning serialized bytes; closing them does not release this model
      * @throws RuntimeException if native serialization fails
@@ -456,11 +467,12 @@ public final class NativeBakedModel extends NativeObject {
     }
 
     /**
-     * <p>Failure: false reports native validation failure without returning a geometry owner.
-     * Java carrier, dimension, and option errors remain exceptions.
+     * <p>
+     * Failure: false reports native validation failure without returning a geometry owner. Java carrier, dimension, and
+     * option errors remain exceptions.
      *
-     * @return whether native bake validation completed for the supplied bytes and options;
-     *     this does not publish a model or a reusable validation handle
+     * @return whether native bake validation completed for the supplied bytes and options; this does not publish a
+     *         model or a reusable validation handle
      */
     public static boolean tryBake(UniBuffer modelData, NativeBuffer texturePixels, int textureWidth, int textureHeight,
         int originVersion, boolean forceCulling, boolean forceTranslucent, boolean hasPbr) {

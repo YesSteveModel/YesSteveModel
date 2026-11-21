@@ -18,7 +18,7 @@ public final class ChunkDecoding {
         validateStoredSize(source, chunk);
         try {
             return Zstd.decompressAndValidate(source, chunk.decodeSize(), chunk.hash(), outputType);
-        } catch (RuntimeException error) {
+        } catch (Zstd.InvalidDataException error) {
             throw AssetLoadException.content(
                 "Failed to decode chunk type=" + chunk.type() + " encoding=" + chunk.encoding() + " encodedSize="
                     + chunk.size() + " decodedSize=" + chunk.decodeSize() + " nativeStatus=" + error.getMessage(),

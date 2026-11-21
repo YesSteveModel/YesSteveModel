@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.preview;
 
-import com.elfmcys.ysm.model.resource.client.ClientModelRenderTargetManager;
+import com.elfmcys.ysm.model.domain.Hash256;
 
 import com.elfmcys.ysm.model.resource.client.AcquireResult;
 import com.elfmcys.ysm.model.resource.client.BakeProfile;
@@ -11,7 +11,7 @@ import com.elfmcys.ysm.model.resource.client.ResourceRequest;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
 import com.elfmcys.ysm.model.storage.TestPreviews;
 import com.elfmcys.ysm.util.UnsafeUtil;
@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -34,114 +33,17 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 @org.junit.jupiter.api.Timeout(30)
 class ClientPreviewGeneratorTest {
-    private static final Hash256 MODEL_ID = hash(1);
+    private static final ModelId MODEL_ID = hash(1);
     private static final ResourceRequest REQUEST = new ResourceRequest(MODEL_ID, "player", "", new BakeProfile("test"));
-
-    @Test
-    void ownerTickAdmitsEveryStageAndCallbacksOnlyPublishFacts() throws Exception {
-        var acquisition = new CompletableFuture<AcquireResult>();
-        var lease = new FakeLease();
-        var host = new QueueExecutor();
-        var workers = new QueueExecutor();
-        var pixels = new NativeImage(1, 1, false);
-        var expected = TestPreviews.pending();
-        try (
-            var generator = new ClientPreviewGenerator(ignored -> awaiting(lease, acquisition), (request, acquired) -> {
-                assertSame(REQUEST, request);
-                assertEquals(0, lease.closes.get());
-                return pixels;
-            }, image -> {
-                image.getPixelRGBA(0, 0);
-                return expected;
-            }, host, workers)) {
-            var result = generator.generate(content());
-            assertFalse(result.isDone());
-            assertEquals(0, generator.activeOperationCount());
-
-            generator.tick();
-            assertEquals(1, generator.activeOperationCount());
-
-            acquisition.complete(new AcquireResult.Ready(target()));
-            assertEquals(0, host.size());
-            generator.tick();
-            assertEquals(1, host.size());
-            assertEquals(0, workers.size());
-            assertFalse(result.isDone());
-
-            host.runNext();
-            assertEquals(1, lease.closes.get());
-            assertEquals(0, workers.size());
-            generator.tick();
-            assertEquals(1, workers.size());
-            assertFalse(result.isDone());
-
-            workers.runNext();
-            assertFalse(result.isDone());
-            assertEquals(1, generator.activeOperationCount());
-            generator.tick();
-            workers.runNext();
-            generator.tick();
-            assertEquals(1, result.join().width());
-            assertEquals(0, generator.activeOperationCount());
-            assertClosed(pixels);
-        }
-    }
-
-    @Test
-    void hostFailureClosesLeaseWithoutStartingEncoding() {
-        var failure = new IllegalStateException("host failed");
-        var lease = new FakeLease();
-        var workers = new QueueExecutor();
-        try (var generator = new ClientPreviewGenerator(ignored -> ready(lease), (request, acquired) -> {
-            throw failure;
-        }, image -> {
-            throw new AssertionError("encoding must not start");
-        }, Runnable::run, workers)) {
-            var result = generator.generate(content());
-            generator.tick();
-            generator.tick();
-            assertFalse(result.isDone());
-            generator.tick();
-            var thrown = assertThrows(CompletionException.class, result::join);
-            assertSame(failure, thrown.getCause());
-            assertEquals(1, lease.closes.get());
-            assertEquals(0, workers.size());
-            assertEquals(0, generator.activeOperationCount());
-        }
-    }
-
-    @Test
-    void encodingFailureClosesPixelsAndLease() {
-        var failure = new IllegalStateException("encode failed");
-        var lease = new FakeLease();
-        var pixels = new NativeImage(1, 1, false);
-        try (var generator =
-            new ClientPreviewGenerator(ignored -> ready(lease), (request, acquired) -> pixels, image -> {
-                throw failure;
-            }, Runnable::run, Runnable::run)) {
-            var result = generator.generate(content());
-            generator.tick();
-            generator.tick();
-            generator.tick();
-            assertFalse(result.isDone());
-            generator.tick();
-            var thrown = assertThrows(CompletionException.class, result::join);
-            assertSame(failure, thrown.getCause());
-            assertEquals(1, lease.closes.get());
-            assertClosed(pixels);
-            assertEquals(0, generator.activeOperationCount());
-        }
-    }
 
     @Test
     void previewAndExportShareOneAdmissionUntilOwnerObservedTerminal() throws Exception {
         var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("admission-raw"));
         var source =
             com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("admission-source.mxc"),
-                "pack/model", 10, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.RAW,
-                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
+                "pack/model", 10, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
+                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS);
         var failure = new java.io.IOException("Export preparation failed");
-        var firstAcquisition = new CompletableFuture<AcquireResult>();
         var firstLease = new FakeLease();
         var targetStarts = new AtomicInteger();
         var host = new QueueExecutor();
@@ -149,21 +51,24 @@ class ClientPreviewGeneratorTest {
         var firstPixels = new NativeImage(1, 1, false);
         try (var generator = new ClientPreviewGenerator(ignored -> {
             targetStarts.incrementAndGet();
-            return awaiting(firstLease, firstAcquisition);
+            return use(firstLease);
         }, (request, lease) -> firstPixels, image -> TestPreviews.pending(), host, workers, null, request -> {
             throw failure;
-        }, com.elfmcys.ysm.model.service.ModelExportService::finish, 1, 2, 4);
+        }, 1);
             var environment = new com.elfmcys.ysm.model.service.ModelExportService.Environment(this, () -> true,
                 () -> com.elfmcys.ysm.model.service.ExportTestFixture.catalog(java.util.List.of(source)),
                 generator::export)) {
-            var first = generator.generate(content());
+            var first = generator.resolveLocal(source, true);
             var second = environment.export("pack/model", null);
 
             generator.tick();
+            assertEquals(0, targetStarts.get());
+            workers.runNext();
+            generator.tick();
             assertEquals(1, targetStarts.get());
-            assertEquals(1, generator.activeOperationCount());
+            assertFalse(second.isDone());
 
-            firstAcquisition.complete(new AcquireResult.Ready(target()));
+            firstLease.outcome = new AcquireResult.Ready(target());
             assertEquals(1, targetStarts.get());
             generator.tick();
             host.runNext();
@@ -173,15 +78,13 @@ class ClientPreviewGeneratorTest {
             assertFalse(first.isDone());
             assertFalse(second.isDone());
             assertEquals(1, targetStarts.get());
-            assertEquals(1, generator.activeOperationCount());
 
             generator.tick();
             workers.runNext();
             generator.tick();
             assertTrue(first.isDone());
-            first.join();
+            ((AutoCloseable)first.join()).close();
             assertEquals(1, targetStarts.get());
-            assertEquals(1, generator.activeOperationCount());
             assertFalse(second.isDone());
             assertEquals(1, workers.size());
 
@@ -189,59 +92,10 @@ class ClientPreviewGeneratorTest {
             assertFalse(second.isDone());
             generator.tick();
             assertSame(failure, assertThrows(CompletionException.class, second::join).getCause());
-            assertEquals(0, generator.activeOperationCount());
             assertClosed(firstPixels);
         } finally {
             source.representation().close();
         }
-    }
-
-    @Test
-    void cancellationClosesLateLeaseBehindProductionTargetFuture() {
-        var upstream = new CompletableFuture<AcquireResult>();
-        var lease = new FakeLease();
-        var host = new QueueExecutor();
-        var workers = new QueueExecutor();
-        try (var generator = new ClientPreviewGenerator(ignored -> awaiting(lease, upstream), (request, acquired) -> {
-            throw new AssertionError("cancelled target must not reach the host");
-        }, image -> {
-            throw new AssertionError("cancelled target must not reach encoding");
-        }, host, workers)) {
-            var result = generator.generate(content());
-            generator.tick();
-            assertEquals(1, generator.activeOperationCount());
-
-            assertEquals(true, result.cancel(false));
-            generator.tick();
-            assertEquals(1, lease.closes.get());
-            assertEquals(0, generator.activeOperationCount());
-
-            // The exact acquisition can finish after its consumer interest was cancelled.
-            assertEquals(true, upstream.complete(new AcquireResult.Ready(target())));
-            assertEquals(1, lease.closes.get());
-            assertEquals(0, host.size());
-            assertEquals(0, workers.size());
-        }
-    }
-
-    @Test
-    void closeCancelsAwaitingAcquisitionBeforeDroppingItsToken() {
-        var terminal = new CompletableFuture<AcquireResult>();
-        var lease = new FakeLease();
-        var generator = new ClientPreviewGenerator(ignored -> awaiting(lease, terminal), (request, acquired) -> {
-            throw new AssertionError("closed target must not reach the host");
-        }, image -> {
-            throw new AssertionError("closed target must not reach encoding");
-        }, Runnable::run, Runnable::run);
-        generator.generate(content());
-        generator.tick();
-
-        generator.close();
-
-        assertEquals(1, lease.closes.get());
-        assertEquals(0, generator.activeOperationCount());
-        assertTrue(terminal.complete(new AcquireResult.Ready(target())));
-        assertEquals(1, lease.closes.get());
     }
 
     @org.junit.jupiter.api.io.TempDir
@@ -259,9 +113,11 @@ class ClientPreviewGeneratorTest {
         }
         var local = com.elfmcys.ysm.model.storage.ManagedContainer.openDirect(file,
             new com.elfmcys.ysm.model.catalog.source.CatalogLocation(
-                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.AUTH,
+                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS,
                 new com.elfmcys.ysm.model.domain.ModelPath("fixture")));
-        var store = new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("images"));
+        var store = new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("images"),
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temporary.resolve("images"))));
         try (
             var remoteStore =
                 new com.elfmcys.ysm.model.resource.client.remote.RemoteModelStore(temporary.resolve("remote"));
@@ -278,9 +134,7 @@ class ClientPreviewGeneratorTest {
                     throw new AssertionError("Image hit must not encode");
                 }, Runnable::run, Runnable::run, store, request -> {
                     throw new AssertionError();
-                }, (prepared, preview) -> {
-                    throw new AssertionError();
-                }, 16, 32, 4)) {
+                }, 16)) {
                     var result = generator.resolveEncoded(content, (identity, descriptors, receiver) -> {
                         throw new AssertionError("Image hit must not fetch body");
                     });
@@ -291,7 +145,6 @@ class ClientPreviewGeneratorTest {
                     try (var actual = result.join()) {
                         org.junit.jupiter.api.Assertions.assertArrayEquals(expected.bytes(), actual.bytes());
                     }
-                    assertEquals(0, generator.activeOperationCount());
                     try (var files = java.nio.file.Files.walk(remoteStore.root())) {
                         assertTrue(files.noneMatch(path -> path.toString().endsWith(".chunk")));
                     }
@@ -304,8 +157,9 @@ class ClientPreviewGeneratorTest {
         }
     }
 
-    private static ClientPreviewGenerator.AwaitingTarget ready(ResourceLease lease) {
-        return awaiting(lease, CompletableFuture.completedFuture(new AcquireResult.Ready(target())));
+    private static ClientPreviewGenerator.TargetUse ready(FakeLease lease) {
+        lease.outcome = new AcquireResult.Ready(target());
+        return use(lease);
     }
 
     @Test
@@ -320,7 +174,7 @@ class ClientPreviewGeneratorTest {
         }
         var content = com.elfmcys.ysm.model.storage.ManagedContainer.openDirect(file,
             new com.elfmcys.ysm.model.catalog.source.CatalogLocation(
-                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.AUTH,
+                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS,
                 new com.elfmcys.ysm.model.domain.ModelPath("cold")));
         var lease = new FakeLease();
         var failure = new IllegalStateException("Actual host seam rejected draw");
@@ -329,11 +183,12 @@ class ClientPreviewGeneratorTest {
         }, pixels -> {
             throw new AssertionError("Failed host must not encode");
         }, Runnable::run, Runnable::run,
-            new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("cold-cache")), request -> {
+            new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("cold-cache"),
+                com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                    .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temporary.resolve("cold-cache")))),
+            request -> {
                 throw new AssertionError();
-            }, (prepared, preview) -> {
-                throw new AssertionError();
-            }, 16, 32, 4)) {
+            }, 16)) {
             var result = generator.resolveEncoded(content, (identity, descriptors, receiver) -> {
                 throw new AssertionError("Local input must not fetch");
             });
@@ -341,7 +196,6 @@ class ClientPreviewGeneratorTest {
                 generator.tick();
             assertSame(failure, assertThrows(java.util.concurrent.CompletionException.class, result::join).getCause());
             assertEquals(1, lease.closes.get());
-            assertEquals(0, generator.activeOperationCount());
             assertFalse(java.nio.file.Files.exists(temporary.resolve("cold-cache/previews")));
         } finally {
             content.representation().close();
@@ -353,7 +207,7 @@ class ClientPreviewGeneratorTest {
         var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("export-raw"));
         var source = com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("export-source.mxc"),
             "fixture", 10, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
-            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
+            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS);
         var output = temporary.resolve("export-output.mxc");
         var host = new QueueExecutor();
         var lease = new FakeLease();
@@ -363,8 +217,11 @@ class ClientPreviewGeneratorTest {
             throw new AssertionError();
         }, host, Runnable::run, null,
             request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request,
-                new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("export-cache")), output),
-            com.elfmcys.ysm.model.service.ModelExportService::finish, 16, 32, 4);
+                new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("export-cache"),
+                    com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                        .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temporary.resolve("export-cache")))),
+                output),
+            16);
             var environment = new com.elfmcys.ysm.model.service.ModelExportService.Environment(this, () -> true,
                 () -> com.elfmcys.ysm.model.service.ExportTestFixture.catalog(java.util.List.of(source)),
                 generator::export)) {
@@ -373,44 +230,10 @@ class ClientPreviewGeneratorTest {
                 generator.tick();
             assertEquals(1, host.size());
             environment.close();
-            assertEquals(0, generator.activeOperationCount());
             assertEquals(1, lease.closes.get());
             assertTrue(result.isCompletedExceptionally());
             host.runNext();
             assertEquals(1, lease.closes.get());
-            assertFalse(java.nio.file.Files.exists(output));
-        } finally {
-            source.representation().close();
-        }
-    }
-
-    @Test
-    void exportEnvironmentStopAfterPixelsClosesPixelsWithoutEncodingOrOutput() throws Exception {
-        var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("pixels-raw"));
-        var source = com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("pixels-source.mxc"),
-            "fixture", 11, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
-            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
-        var output = temporary.resolve("pixels-output.mxc");
-        var pixels = new NativeImage(1, 1, false);
-        var lease = new FakeLease();
-        try (var generator =
-            new ClientPreviewGenerator(ignored -> ready(lease), (request, acquired) -> pixels, image -> {
-                throw new AssertionError("Retired export must not encode");
-            }, Runnable::run, Runnable::run, null,
-                request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request,
-                    new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("pixels-cache")), output),
-                com.elfmcys.ysm.model.service.ModelExportService::finish, 16, 32, 4);
-            var environment = new com.elfmcys.ysm.model.service.ModelExportService.Environment(this, () -> true,
-                () -> com.elfmcys.ysm.model.service.ExportTestFixture.catalog(java.util.List.of(source)),
-                generator::export)) {
-            var result = environment.export("fixture", null);
-            for (int i = 0; i < 3; i++)
-                generator.tick();
-            environment.close();
-            assertClosed(pixels);
-            assertEquals(1, lease.closes.get());
-            assertTrue(result.isCompletedExceptionally());
-            assertEquals(0, generator.activeOperationCount());
             assertFalse(java.nio.file.Files.exists(output));
         } finally {
             source.representation().close();
@@ -423,10 +246,13 @@ class ClientPreviewGeneratorTest {
         var source =
             com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("generated-cache-source.mxc"),
                 "fixture", 15, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
-                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
+                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS);
         var output = temporary.resolve("generated-cache-output.mxc");
         var observed = new ArrayList<Hash256>();
-        var store = new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("generated-cache"), observed::add);
+        var store = new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("generated-cache"),
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temporary.resolve("generated-cache"))),
+            observed::add);
         var lease = new FakeLease();
         final byte[] expected;
         try (var encoded = TestPreviews.blank()) {
@@ -436,8 +262,7 @@ class ClientPreviewGeneratorTest {
             var generator =
                 new ClientPreviewGenerator(ignored -> ready(lease), (request, acquired) -> new NativeImage(1, 1, false),
                     image -> TestPreviews.pending(), Runnable::run, Runnable::run, store,
-                    request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request, store, output),
-                    com.elfmcys.ysm.model.service.ModelExportService::finish, 16, 32, 4);
+                    request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request, store, output), 16);
             var environment = new com.elfmcys.ysm.model.service.ModelExportService.Environment(this, () -> true,
                 () -> com.elfmcys.ysm.model.service.ExportTestFixture.catalog(java.util.List.of(source)),
                 generator::export)) {
@@ -470,18 +295,19 @@ class ClientPreviewGeneratorTest {
         var source =
             com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("optional-cache-source.mxc"),
                 "fixture", 16, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
-                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
+                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS);
         var output = temporary.resolve("optional-cache-output.mxc");
         var cacheRoot = temporary.resolve("optional-cache");
         java.nio.file.Files.writeString(cacheRoot, "A file blocks cache directory creation");
-        var store = new com.elfmcys.ysm.model.storage.PreviewStore(cacheRoot);
+        var store =
+            new com.elfmcys.ysm.model.storage.PreviewStore(cacheRoot, com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cacheRoot)));
         var lease = new FakeLease();
         try (
             var generator =
                 new ClientPreviewGenerator(ignored -> ready(lease), (request, acquired) -> new NativeImage(1, 1, false),
                     image -> TestPreviews.pending(), Runnable::run, Runnable::run, store,
-                    request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request, store, output),
-                    com.elfmcys.ysm.model.service.ModelExportService::finish, 16, 32, 4);
+                    request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request, store, output), 16);
             var environment = new com.elfmcys.ysm.model.service.ModelExportService.Environment(this, () -> true,
                 () -> com.elfmcys.ysm.model.service.ExportTestFixture.catalog(java.util.List.of(source)),
                 generator::export)) {
@@ -507,7 +333,7 @@ class ClientPreviewGeneratorTest {
         var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("warm-raw"));
         var source = com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("warm-source.mxc"),
             "fixture", 12, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.RAW,
-            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
+            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS);
         var output = temporary.resolve("warm-output.mxc");
         try (var generator = new ClientPreviewGenerator(ignored -> {
             throw new AssertionError("Warm export must not acquire");
@@ -517,8 +343,11 @@ class ClientPreviewGeneratorTest {
             throw new AssertionError("Warm export must not encode");
         }, Runnable::run, Runnable::run, null,
             request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request,
-                new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("warm-cache")), output),
-            com.elfmcys.ysm.model.service.ModelExportService::finish, 16, 32, 4);
+                new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("warm-cache"),
+                    com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                        .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temporary.resolve("warm-cache")))),
+                output),
+            16);
             var environment = new com.elfmcys.ysm.model.service.ModelExportService.Environment(this, () -> true,
                 () -> com.elfmcys.ysm.model.service.ExportTestFixture.catalog(java.util.List.of(source)),
                 generator::export)) {
@@ -528,7 +357,6 @@ class ClientPreviewGeneratorTest {
             assertFalse(result.isDone());
             environment.close();
             assertEquals(output, result.join());
-            assertEquals(0, generator.activeOperationCount());
             var reopened = com.elfmcys.ysm.model.storage.ManagedContainer.openDirect(output, source.location());
             try {
                 com.elfmcys.ysm.model.catalog.content.DirectContainerAdmission.requireEmbeddedPreview(reopened);
@@ -541,85 +369,38 @@ class ClientPreviewGeneratorTest {
     }
 
     @Test
-    void exportCancellationReleasesOnlyItsSharedPreparationInterest() throws Exception {
-        var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("shared-raw"));
-        var source = com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("shared-source.mxc"),
-            "fixture", 13, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
-            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
-        try (var preparation = new com.elfmcys.ysm.model.resource.client.render.PreviewPreparationFixture();
-            var generator = new ClientPreviewGenerator(
-                ignored -> new ClientPreviewGenerator.AsyncDetachedTarget(REQUEST, cancelled -> preparation.acquire()),
-                (request, acquired) -> {
-                    throw new AssertionError("Retired export must not draw");
+    void cancelledPreviewDoesNotEndAnotherLeaseOrItsTargetOwnedInput() throws Exception {
+        var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("independent-raw"));
+        var source =
+            com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("independent-source.mxc"),
+                "fixture", 14, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
+                com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS);
+        var request = new ResourceRequest(source.modelId(), "player", "", new BakeProfile("test"));
+        var host = new QueueExecutor();
+        try (var resources = new com.elfmcys.ysm.model.resource.client.render.PreviewResourceFixture(source, request);
+            var other = resources.acquire(); var generator = new ClientPreviewGenerator(
+                ignored -> new ClientPreviewGenerator.TargetUse(request, resources.acquire()), (use, lease) -> {
+                    throw new AssertionError("Cancelled preview must not draw");
                 }, pixels -> {
                     throw new AssertionError();
-                }, Runnable::run, Runnable::run, null,
-                request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request,
-                    new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("shared-cache")),
-                    temporary.resolve("shared-output.mxc")),
-                com.elfmcys.ysm.model.service.ModelExportService::finish, 16, 32, 4);
-            var environment = new com.elfmcys.ysm.model.service.ModelExportService.Environment(this, () -> true,
-                () -> com.elfmcys.ysm.model.service.ExportTestFixture.catalog(java.util.List.of(source)),
-                generator::export)) {
-            var export = environment.export("fixture", null);
+                }, host, Runnable::run, null, ignored -> {
+                    throw new AssertionError();
+                }, 16)) {
+            var preview = generator.resolveLocal(source, true);
             generator.tick();
             generator.tick();
-            var other = preparation.acquire();
-            environment.close();
-            assertTrue(export.isCompletedExceptionally());
-            preparation.finishPreparation();
-            assertFalse(other.isCompletedExceptionally());
-            assertEquals(1, preparation.inputsClosed.get());
-            assertEquals(0, preparation.preparedClosed.get());
-            other.join().close();
-            assertEquals(1, preparation.preparedClosed.get());
-            assertEquals(0, generator.activeOperationCount());
-            assertFalse(java.nio.file.Files.exists(temporary.resolve("shared-output.mxc")));
-        } finally {
-            source.representation().close();
-        }
-    }
-
-    @Test
-    void lateAsyncCandidateHasOneClosingOwnerAfterExportEnvironmentStop() throws Exception {
-        var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("late-raw"));
-        var source = com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("late-source.mxc"),
-            "fixture", 14, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
-            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
-        var loading = new CompletableFuture<
-            com.elfmcys.ysm.model.resource.client.render.ModelRenderTargetLoader.ModelCandidate>() {
-            @Override
-            public boolean cancel(boolean interrupt) {
-                return false;
-            }
-        };
-        var closes = new AtomicInteger();
-        try (var generator = new ClientPreviewGenerator(
-            ignored -> new ClientPreviewGenerator.AsyncDetachedTarget(REQUEST, cancelled -> loading),
-            (request, acquired) -> {
-                throw new AssertionError("Late candidate must not draw");
-            }, pixels -> {
-                throw new AssertionError();
-            }, Runnable::run, Runnable::run, null,
-            request -> com.elfmcys.ysm.model.service.ExportTestFixture.prepare(request,
-                new com.elfmcys.ysm.model.storage.PreviewStore(temporary.resolve("late-cache")),
-                temporary.resolve("late-output.mxc")),
-            com.elfmcys.ysm.model.service.ModelExportService::finish, 16, 32, 4);
-            var environment = new com.elfmcys.ysm.model.service.ModelExportService.Environment(this, () -> true,
-                () -> com.elfmcys.ysm.model.service.ExportTestFixture.catalog(java.util.List.of(source)),
-                generator::export)) {
-            environment.export("fixture", null);
-            generator.tick();
-            generator.tick();
-            environment.close();
-            var candidate = com.elfmcys.ysm.model.resource.client.render.PreviewPreparationFixture
-                .candidate(closes::incrementAndGet);
-            assertTrue(loading.complete(candidate));
-            assertEquals(1, closes.get());
-            candidate.close();
-            assertEquals(1, closes.get());
-            assertThrows(IllegalStateException.class, candidate::publish);
-            assertEquals(0, generator.activeOperationCount());
+            assertTrue(preview.cancel(false));
+            resources.finishPreparation();
+            var ready = org.junit.jupiter.api.Assertions.assertInstanceOf(AcquireResult.Ready.class, other.poll());
+            assertTrue(ready.target().isStateCompatible(ready.target()));
+            assertEquals(com.elfmcys.ysm.model.resource.client.render.PreviewResourceFixture.PIXEL,
+                resources.readPixel());
+            generator.close();
+            assertSame(ready.target(),
+                org.junit.jupiter.api.Assertions.assertInstanceOf(AcquireResult.Ready.class, other.poll()).target());
+            assertEquals(com.elfmcys.ysm.model.resource.client.render.PreviewResourceFixture.PIXEL,
+                resources.readPixel());
+            assertEquals(0, host.size());
         } finally {
             source.representation().close();
         }
@@ -653,7 +434,6 @@ class ClientPreviewGeneratorTest {
                 host.borrow(pixels -> assertEquals(4, pixels.remaining()));
             }
             assertTrue(cancelled.isCancelled());
-            assertEquals(0, generator.activeOperationCount());
         }
     }
 
@@ -685,7 +465,7 @@ class ClientPreviewGeneratorTest {
         var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("eager-raw"));
         var source = com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("eager.mxc"),
             "fixture", 30, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
-            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
+            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS);
         var eager = new java.util.concurrent.atomic.AtomicBoolean();
         var renders = new AtomicInteger();
         var encodes = new AtomicInteger();
@@ -695,7 +475,9 @@ class ClientPreviewGeneratorTest {
         }, pixels -> {
             encodes.incrementAndGet();
             return TestPreviews.pending();
-        }, Runnable::run, Runnable::run)) {
+        }, Runnable::run, Runnable::run, null, request -> {
+            throw new AssertionError();
+        }, 16)) {
             var old = generator.resolveLocal(source, !eager.get());
             eager.set(true);
             var skipped = generator.resolveLocal(source, !eager.get());
@@ -726,7 +508,7 @@ class ClientPreviewGeneratorTest {
         var raw = com.elfmcys.ysm.model.service.ExportTestFixture.parse(temporary.resolve("lossy-raw"));
         var source = com.elfmcys.ysm.model.service.ExportTestFixture.create(raw, temporary.resolve("lossy.mxc"),
             "fixture", 31, com.elfmcys.ysm.proto.mixel.manifest.info.PreviewSource.UNSPECIFIED,
-            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.CUSTOM);
+            com.elfmcys.ysm.model.catalog.source.CatalogRootKind.MODELS);
         try (var generator = new ClientPreviewGenerator(ignored -> ready(new FakeLease()), (request, acquired) -> {
             var image = new NativeImage(com.elfmcys.ysm.client.gui.PreviewRenderHost.WIDTH,
                 com.elfmcys.ysm.client.gui.PreviewRenderHost.HEIGHT, false);
@@ -735,9 +517,14 @@ class ClientPreviewGeneratorTest {
                     image.setPixelRGBA(x, y,
                         0xff000000 | (x * 17 & 255) | ((y * 23 & 255) << 8) | ((x + y & 255) << 16));
             return image;
-        }, ClientPreviewGenerator::encode, Runnable::run, Runnable::run)) {
+        }, pixels -> com.elfmcys.ysm.model.storage.PreviewStore.pending(com.elfmcys.ysm.natives.image.ImageEncoder
+            .encodeLossy(pixels, com.elfmcys.ysm.client.gui.PreviewRenderHost.WIDTH,
+                com.elfmcys.ysm.client.gui.PreviewRenderHost.HEIGHT)),
+            Runnable::run, Runnable::run, null, request -> {
+                throw new AssertionError();
+            }, 16)) {
             com.elfmcys.ysm.model.storage.PreviewDecodeProbe.reset();
-            var output = generator.resolveLocal(source);
+            var output = generator.resolveLocal(source, true);
             for (var tick = 0; tick < 8; tick++)
                 generator.tick();
             assertTrue(output.isDone());
@@ -769,15 +556,11 @@ class ClientPreviewGeneratorTest {
             throw new AssertionError("Raw bytes need no encoder");
         }, Runnable::run, workers, null, request -> {
             throw new AssertionError();
-        }, (prepared, preview) -> {
-            throw new AssertionError();
-        }, 16, 32, 4);
+        }, 16);
     }
 
-    private static ClientPreviewGenerator.AwaitingTarget awaiting(ResourceLease lease,
-        CompletableFuture<AcquireResult> terminal) {
-        return new ClientPreviewGenerator.AwaitingTarget(REQUEST,
-            new ClientModelRenderTargetManager.ReadyAcquisition(REQUEST, lease, terminal));
+    private static ClientPreviewGenerator.TargetUse use(FakeLease lease) {
+        return new ClientPreviewGenerator.TargetUse(REQUEST, lease);
     }
 
     private static ModelRenderTarget target() {
@@ -795,7 +578,7 @@ class ClientPreviewGeneratorTest {
     private static ModelContent content() {
         return new ModelContent() {
             @Override
-            public Hash256 modelId() {
+            public ModelId modelId() {
                 return MODEL_ID;
             }
 
@@ -816,10 +599,10 @@ class ClientPreviewGeneratorTest {
         };
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
     private static final class QueueExecutor implements Executor {
@@ -841,6 +624,7 @@ class ClientPreviewGeneratorTest {
 
     private static final class FakeLease implements ResourceLease {
         private final AtomicInteger closes = new AtomicInteger();
+        private AcquireResult outcome = new AcquireResult.Pending();
 
         @Override
         public ModelResourcePurpose purpose() {
@@ -849,12 +633,12 @@ class ClientPreviewGeneratorTest {
 
         @Override
         public AcquireResult poll() {
-            return new AcquireResult.Pending();
+            return closes.get() == 0 ? outcome : new AcquireResult.Ended();
         }
 
         @Override
         public boolean isCurrent(ResourceRequest request) {
-            return true;
+            return closes.get() == 0 && REQUEST.equals(request);
         }
 
         @Override

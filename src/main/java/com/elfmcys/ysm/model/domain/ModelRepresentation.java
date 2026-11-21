@@ -61,7 +61,7 @@ public final class ModelRepresentation implements AutoCloseable {
         boolean prefixValidated) throws IOException {
         this.identity = Objects.requireNonNull(identity, "identity");
         this.view = Objects.requireNonNull(view, "view");
-        if (!ProtoBytes.equals(identity.modelId(), view.getManifest().info().properties().modelId())) {
+        if (!identity.modelId().toString().equals(view.getManifest().info().properties().modelId())) {
             throw new IllegalArgumentException("Model representation model id mismatch");
         }
         if (!identity.containerId().equals(view.getFileView().getAssetView().getContainerId())) {
@@ -92,7 +92,7 @@ public final class ModelRepresentation implements AutoCloseable {
         return identity;
     }
 
-    public Hash256 modelId() {
+    public ModelId modelId() {
         return identity.modelId();
     }
 

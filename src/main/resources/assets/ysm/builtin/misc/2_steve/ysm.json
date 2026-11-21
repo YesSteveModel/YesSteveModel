@@ -36,6 +36,7 @@
     }
   },
   "properties": {
+    "origin_ver": "2.6.5",
     "height_scale": 1,
     "width_scale": 1,
     "free": true

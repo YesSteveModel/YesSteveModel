@@ -1,18 +1,20 @@
 package com.elfmcys.ysm.expression.host.builtin;
 
-import com.elfmcys.ysm.expression.host.EntityComponent;
 import com.elfmcys.ysm.api.molang.MolangContextView;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
+import com.elfmcys.ysm.expression.annotation.BuiltinComponent;
+import com.elfmcys.ysm.expression.annotation.BuiltinFunction;
+import com.elfmcys.ysm.expression.host.EntityComponent;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 
-/** Position history that survives target replacement for one animatable owner. */
-@BuiltinComponent(value = "query")
+@BuiltinComponent("query")
 public final class PositionComponent implements EntityComponent<Entity> {
     private final AnimatableEntity<Entity> owner;
     private final Entity subject;
+    private final com.elfmcys.ysm.expression.host.SubjectSample.Draft sample;
     private Vec3 position;
     private Vec3 delta = Vec3.ZERO;
     private float renderTickDelta;
@@ -24,6 +26,7 @@ public final class PositionComponent implements EntityComponent<Entity> {
     public PositionComponent(AnimatableEntity<Entity> owner) {
         this.owner = owner;
         this.subject = owner.getEntity();
+        this.sample = owner.subjectSampleDraft();
     }
 
     public void copyHistoryFrom(PositionComponent previous) {
@@ -42,6 +45,7 @@ public final class PositionComponent implements EntityComponent<Entity> {
         var current = interpolated(event.getPartialTick());
         this.event = event;
         observedPosition = current;
+        writeSample(current, event.getPartialTick());
     }
 
     @Override
@@ -61,6 +65,13 @@ public final class PositionComponent implements EntityComponent<Entity> {
         position = current;
         sampleTime = currentTime;
         partialTick = partialTicks;
+        writeSample(current, partialTicks);
+    }
+
+    private void writeSample(Vec3 current, float partialTicks) {
+        sample.position((float)current.x, (float)current.y, (float)current.z, (float)delta.x, (float)delta.y,
+            (float)delta.z, renderTickDelta, trackedGroundSpeed(), verticalSpeed(),
+            relativeMoveInput(false, partialTicks), relativeMoveInput(true, partialTicks));
     }
 
     private Vec3 interpolated(float partialTicks) {
@@ -68,10 +79,10 @@ public final class PositionComponent implements EntityComponent<Entity> {
             Mth.lerp(partialTicks, subject.yo, subject.getY()), Mth.lerp(partialTicks, subject.zo, subject.getZ()));
     }
 
-    @BuiltinFunction(value = "position", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 1,
-        maxArgs = 1)
-    public Float position(MolangContextView<Entity> context, float axis) {
-        return positionValue((int)axis, false);
+    @BuiltinFunction("position")
+    @com.elfmcys.ysm.api.annotation.MolangNullable
+    public static float position(MolangContextView<Entity> context, float axis) {
+        return context.subjectSample().position((int)axis);
     }
 
     public Float positionValue(int index, boolean positionDelta) {
@@ -88,17 +99,10 @@ public final class PositionComponent implements EntityComponent<Entity> {
         return (float)component(value, index);
     }
 
-    @BuiltinFunction(value = "position_delta", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 1,
-        maxArgs = 1)
-    public float positionDelta(MolangContextView<Entity> context, float axis) {
-        int index = (int)axis;
-        return index < 0 || index > 2 ? Float.NaN : (float)component(delta, index);
-    }
-
-    @BuiltinFunction(value = "ground_speed2", namespace = "ysm",
-        effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public float trackedGroundSpeed(MolangContextView<Entity> context) {
-        return trackedGroundSpeed();
+    @BuiltinFunction("position_delta")
+    @com.elfmcys.ysm.api.annotation.MolangNullable
+    public static float positionDelta(MolangContextView<Entity> context, float axis) {
+        return context.subjectSample().positionDelta((int)axis);
     }
 
     public float trackedGroundSpeed() {
@@ -106,29 +110,18 @@ public final class PositionComponent implements EntityComponent<Entity> {
             : 20 * Mth.sqrt((float)(delta.x * delta.x + delta.z * delta.z)) / renderTickDelta;
     }
 
-    @BuiltinFunction(value = "vertical_speed", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public float verticalSpeed(MolangContextView<Entity> context) {
-        return verticalSpeed();
+    @BuiltinFunction("vertical_speed")
+    @com.elfmcys.ysm.api.annotation.MolangNullable
+    public static float verticalSpeed(MolangContextView<Entity> context) {
+        return context.subjectSample().verticalSpeed();
     }
 
     public float verticalSpeed() {
         return renderTickDelta == 0 ? 0 : 20 * (float)delta.y / renderTickDelta;
     }
 
-    @BuiltinFunction(value = "input_horizontal", namespace = "ysm",
-        effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public float inputHorizontal(MolangContextView<Entity> context) {
-        return relativeMoveInput(false, context.inputs().partialTick());
-    }
-
     public float inputHorizontal() {
         return relativeMoveInput(false, partialTick());
-    }
-
-    @BuiltinFunction(value = "input_vertical", namespace = "ysm",
-        effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT)
-    public float inputVertical(MolangContextView<Entity> context) {
-        return relativeMoveInput(true, context.inputs().partialTick());
     }
 
     public float inputVertical() {

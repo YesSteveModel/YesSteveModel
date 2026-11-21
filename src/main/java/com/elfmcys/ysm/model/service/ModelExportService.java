@@ -7,7 +7,7 @@ import com.elfmcys.ysm.format.schema.model.ModelFileConstant;
 import com.elfmcys.ysm.model.ModelRuntime;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.catalog.snapshot.ServerCatalog;
-import com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver;
+import com.elfmcys.ysm.model.catalog.source.ModelSelector;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
@@ -36,7 +36,8 @@ import java.util.function.Supplier;
 /**
  * Integrated-environment admission and effect authority for complete model exports.
  *
- * <p>Seam: implements [export identity and commit authority](docs/architecture/asset-pipeline/overview.md#导出批次与提交).
+ * <p>
+ * Seam: implements [export identity and commit authority](docs/architecture/asset-pipeline/overview.md#导出批次与提交).
  */
 public final class ModelExportService {
     private ModelExportService() {}
@@ -61,11 +62,13 @@ public final class ModelExportService {
     /**
      * Claims the request's source once and reopens its exact representation on a worker.
      *
-     * <p>Ensures: the result may already contain a committed path when an existing preview was usable.
-     * Otherwise the caller must obtain a preview and call finish.
+     * <p>
+     * Ensures: the result may already contain a committed path when an existing preview was usable. Otherwise the
+     * caller must obtain a preview and call finish.
      *
-     * <p>Ownership: the caller must close the returned PreparedExport on every exit path. Failure closes
-     * resources acquired by this call and propagates; it does not make the request reusable.
+     * <p>
+     * Ownership: the caller must close the returned PreparedExport on every exit path. Failure closes resources
+     * acquired by this call and propagates; it does not make the request reusable.
      */
     public static PreparedExport prepare(Request request) throws Exception {
         request.requireActive();
@@ -99,8 +102,8 @@ public final class ModelExportService {
     }
 
     /**
-     * Commits an incomplete preparation using a borrowed generated preview. Runs synchronous I/O on a worker.
-     * The caller keeps both arguments alive until return and closes them afterwards, including on failure.
+     * Commits an incomplete preparation using a borrowed generated preview. Runs synchronous I/O on a worker. The
+     * caller keeps both arguments alive until return and closes them afterwards, including on failure.
      */
     public static Path finish(PreparedExport prepared, PreviewStore.EncodedPreview generated) throws IOException {
         return ModelExporter.export(prepared.source, generated, prepared.output, prepared.extra,
@@ -124,10 +127,8 @@ public final class ModelExportService {
     static Path outputPath(Path root, String address) throws IOException {
         var location = CatalogLocation.parse(address);
         var directory = switch (location.root()) {
-            case GLOBAL_CUSTOM -> "global/custom";
-            case GLOBAL_AUTH -> "global/auth";
-            case LOCAL_CUSTOM -> "local/custom";
-            case LOCAL_AUTH -> "local/auth";
+            case GLOBAL -> "global";
+            case LOCAL -> "local";
             case BUILTIN -> throw new IOException("Builtin models cannot be exported");
         };
         var path = directory + "/" + location.entry();
@@ -163,9 +164,10 @@ public final class ModelExportService {
     /**
      * Owns export admission and commit authority for one exact integrated-server instance.
      *
-     * <p>Execution: the monitor orders admission, cancellation and replacement. Runner and notice callbacks can
-     * run inline while it is held; they must not wait for work that needs the same monitor. Notice RuntimeExceptions
-     * are logged and isolated. Owner checks are observations, not permits for later work; commit checks again.
+     * <p>
+     * Execution: the monitor orders admission, cancellation and replacement. Runner and notice callbacks can run inline
+     * while it is held; they must not wait for work that needs the same monitor. Notice RuntimeExceptions are logged
+     * and isolated. Owner checks are observations, not permits for later work; commit checks again.
      */
     public static final class Environment implements Closeable {
         private final Object owner;
@@ -194,12 +196,11 @@ public final class ModelExportService {
             require(owner);
             var current = catalog.get();
             var resolution = current.resolvePath(path);
-            if (resolution.status() != CatalogAddressResolver.Status.FOUND)
-                return CompletableFuture.failedFuture(new CatalogAddressResolver.Failure(resolution.status()));
+            if (resolution.status() != ModelSelector.Status.FOUND)
+                return CompletableFuture.failedFuture(new ModelSelector.Failure(resolution.status()));
             var source = resolution.found().flatMap(current::find).orElse(null);
             if (source == null)
-                return CompletableFuture
-                    .failedFuture(new CatalogAddressResolver.Failure(CatalogAddressResolver.Status.NOT_FOUND));
+                return CompletableFuture.failedFuture(new ModelSelector.Failure(ModelSelector.Status.NOT_FOUND));
             if (source.location().rootKind() == CatalogRootKind.BUILTIN)
                 return CompletableFuture.failedFuture(new IOException("Builtin models cannot be exported"));
             return start(source.location().value(), source, extra);
@@ -234,8 +235,8 @@ public final class ModelExportService {
         }
 
         /**
-         * Captures a fixed selection of non-builtin entries for serial progress through tick.
-         * Each item is checked against its captured representation before starting.
+         * Captures a fixed selection of non-builtin entries for serial progress through tick. Each item is checked
+         * against its captured representation before starting.
          *
          * @return false if another batch is active; no second batch is admitted
          */
@@ -287,9 +288,9 @@ public final class ModelExportService {
         }
 
         /**
-         * Seals admission, cancels requests and waits for registered workers before completing batch feedback.
-         * Calls after the first seal return immediately; they are not additional join operations.
-         * Must not run from a registered worker. Interrupted waits restore interruption after workers leave.
+         * Seals admission, cancels requests and waits for registered workers before completing batch feedback. Calls
+         * after the first seal return immediately; they are not additional join operations. Must not run from a
+         * registered worker. Interrupted waits restore interruption after workers leave.
          */
         @Override
         public void close() {
@@ -361,9 +362,10 @@ public final class ModelExportService {
     /**
      * Exact input and effect capability captured before source work is admitted.
      *
-     * <p>Execution: cancellation and commit are ordered by the environment monitor. Cancellation before commit
-     * prevents replacement; cancellation after commit preserves the committed result. Cancelling a future does
-     * not mean that a registered worker has ended its borrow.
+     * <p>
+     * Execution: cancellation and commit are ordered by the environment monitor. Cancellation before commit prevents
+     * replacement; cancellation after commit preserves the committed result. Cancelling a future does not mean that a
+     * registered worker has ended its borrow.
      */
     public static final class Request implements AtomicSharedCache.CommitGate {
         private final Environment environment;
@@ -468,8 +470,8 @@ public final class ModelExportService {
     }
 
     /**
-     * Owns a reopened source and any existing preview until closeOwned. The worker must finish all uses before
-     * closing; synchronized cleanup does not permit concurrent use and close. content() is a borrowed view.
+     * Owns a reopened source and any existing preview until closeOwned. The worker must finish all uses before closing;
+     * synchronized cleanup does not permit concurrent use and close. content() is a borrowed view.
      */
     public static final class PreparedExport {
         private final ManagedContainer source;

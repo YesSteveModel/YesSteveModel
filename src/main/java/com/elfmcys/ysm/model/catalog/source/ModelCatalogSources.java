@@ -2,8 +2,6 @@ package com.elfmcys.ysm.model.catalog.source;
 
 import com.elfmcys.ysm.AssetPaths;
 import com.elfmcys.ysm.model.ModelRuntime;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.fml.loading.FMLEnvironment;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -34,16 +32,13 @@ public final class ModelCatalogSources {
     public static List<ModelCatalogSource> reloadableSources(AssetPaths paths) {
         var sources = new java.util.ArrayList<ModelCatalogSource>();
         paths.global().ifPresent(global -> {
-            sources.add(new ModelCatalogSource(CatalogRoot.GLOBAL_CUSTOM, global.customRoot(), false));
-            sources.add(new ModelCatalogSource(CatalogRoot.GLOBAL_AUTH, global.authRoot(), false));
+            sources.add(new ModelCatalogSource(CatalogRoot.GLOBAL, global.modelsRoot(), false));
         });
-        sources.add(new ModelCatalogSource(CatalogRoot.LOCAL_CUSTOM, paths.customModelsRoot(), true));
-        sources.add(new ModelCatalogSource(CatalogRoot.LOCAL_AUTH, paths.authModelsRoot(),
-            FMLEnvironment.dist == Dist.DEDICATED_SERVER));
+        sources.add(new ModelCatalogSource(CatalogRoot.LOCAL, paths.modelsRoot(), true));
         return List.copyOf(sources);
     }
 
-    public static Path customPath() {
-        return ModelRuntime.paths().defaultCustomRoot();
+    public static Path modelsPath() {
+        return ModelRuntime.paths().defaultModelsRoot();
     }
 }

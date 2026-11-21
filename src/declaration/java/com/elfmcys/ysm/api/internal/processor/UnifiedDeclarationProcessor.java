@@ -14,7 +14,7 @@ import javax.tools.*;
 /** Both annotation surfaces normalize into this model and this emitter. */
 public final class UnifiedDeclarationProcessor extends AbstractProcessor {
     private static final String API = "com.elfmcys.ysm.api.annotation.";
-    private static final String BUILTIN = "com.elfmcys.ysm.expression.host.builtin.";
+    private static final String BUILTIN = "com.elfmcys.ysm.expression.annotation.";
     private static final String CONTEXT = "com.elfmcys.ysm.api.molang.MolangContextView";
     private static final String OWNER = "com.elfmcys.ysm.client.entity.AnimatableEntity";
     private static final String COMPONENT = "com.elfmcys.ysm.expression.host.EntityComponent";
@@ -79,7 +79,8 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
         String helper = packageName.isEmpty() ? simple : packageName + "." + simple;
         var recipes = new LinkedHashMap<String, Value>();
         var members = new ArrayList<Member>();
-        for (ExecutableElement method : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(owner))) {
+        var methods = ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(owner));
+        for (ExecutableElement method : methods) {
             var function = annotation(method, builtin ? BUILTIN + "BuiltinFunction" : API + "MolangFunction");
             if (function == null)
                 continue;
@@ -88,30 +89,33 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
             var signature =
                 (ExecutableType)processingEnv.getTypeUtils().asMemberOf((DeclaredType)owner.asType(), method);
             var parameters = signature.getParameterTypes();
-            if (parameters.isEmpty())
-                throw invalid("first parameter must be an exact Molang context view");
-            String viewType = processingEnv.getTypeUtils().erasure(parameters.get(0)).toString();
-            if (!viewType.equals(CONTEXT))
-                throw invalid("first parameter must be an exact MolangContextView<E>");
-            String entity = subject(parameters.get(0), viewType);
-            if (entity.isEmpty())
-                throw invalid("first parameter must be a closed Molang context view");
             boolean stat = method.getModifiers().contains(Modifier.STATIC);
             if (!stat && componentSubject.isEmpty())
                 throw invalid("member declaration requires EntityComponent<E>");
+            boolean injectContext = !parameters.isEmpty()
+                && processingEnv.getTypeUtils().erasure(parameters.get(0)).toString().equals(CONTEXT);
+            String entity = injectContext ? subject(parameters.get(0), CONTEXT)
+                : stat ? "net.minecraft.world.entity.Entity" : componentSubject;
+            if (entity.isEmpty())
+                throw invalid("first parameter must be a closed Molang context view");
             var attrs = values(function);
             String memberNamespace = text(attrs, "namespace").isEmpty() ? namespace : text(attrs, "namespace");
-            String name = identifier(text(attrs, "value").isEmpty()
-                ? method.getSimpleName().toString().toLowerCase(Locale.ROOT) : text(attrs, "value"));
-            String effect = enumText(attrs, "effect");
+            String name = text(attrs, "value");
+            if (!builtin && name.isEmpty())
+                name = method.getSimpleName().toString().toLowerCase(Locale.ROOT);
+            name = identifier(name);
+            String effect = booleanValue(attrs, "action") ? "ACTION" : "CONTEXT";
+            String scope = booleanValue(attrs, "alwaysOrigin") ? "ORIGIN" : "SUBJECT";
             boolean optional =
                 method.getParameters().stream().anyMatch(p -> annotation(p, API + "DefaultValue") != null);
             boolean tail = method.isVarArgs();
             if (tail && optional)
                 throw invalid("defaults and varargs cannot be mixed");
-            int offset = optional || tail ? 2 : 1;
-            if (offset == 2 && (parameters.size() < 2 || parameters.get(1).getKind() != TypeKind.INT))
-                throw invalid("optional/variadic declaration requires int argc second");
+            int contextCount = injectContext ? 1 : 0;
+            int offset = contextCount + (optional || tail ? 1 : 0);
+            if ((optional || tail)
+                && (parameters.size() <= contextCount || parameters.get(contextCount).getKind() != TypeKind.INT))
+                throw invalid("optional/variadic declaration requires int argc after the optional context");
             int fixedCount = parameters.size() - offset - (tail ? 1 : 0);
             var fixed = new ArrayList<Value>();
             var defaults = new ArrayList<String>();
@@ -136,18 +140,18 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
             if (min == -1)
                 min = fixedCount - defaults.size();
             if (max == -1) {
-                if (tail)
-                    throw invalid("variadic declaration requires finite maxArgs");
-                max = fixedCount;
+                max = tail ? Integer.MAX_VALUE : fixedCount;
             }
             Value result = value(signature.getReturnType(), recipes, new HashSet<>(), 1, true);
             var erased = (ExecutableType)processingEnv.getTypeUtils().erasure(method.asType());
             String descriptor =
                 "(" + erased.getParameterTypes().stream().map(this::descriptor).reduce("", String::concat) + ")"
                     + descriptor(erased.getReturnType());
-            members.add(new Member(memberNamespace, name, method.getSimpleName().toString(), descriptor,
-                "m" + members.size(), entity, stat, text(attrs, "contextFreeTarget"), effect, min, max,
-                fixed, defaults, variadic, result, annotation(method, API + "MolangNullable") != null));
+            // Overload ties compare adapter names lexically. Moving unrelated builtins must not change that order.
+            String adapter = builtin ? String.format(Locale.ROOT, "m%010d", members.size()) : "m" + members.size();
+            members.add(new Member(memberNamespace, name, method.getSimpleName().toString(), descriptor, adapter,
+                entity, stat, injectContext, effect, scope, min, max, fixed, defaults, variadic, result,
+                annotation(method, API + "MolangNullable") != null));
         }
         var dependencies = new ArrayList<Dependency>();
         AnnotationValue deps = marker.get("dependencies");
@@ -158,9 +162,12 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
             }
         dependencies.sort(Comparator.comparing(Dependency::modId));
         members.sort(Comparator.comparing(Member::symbol).thenComparing(Member::descriptor));
+        boolean instance = members.stream().anyMatch(m -> !m.isStatic())
+            || builtin && !componentSubject.isEmpty() && overridesComponentHook(owner, methods);
+        if (!instance)
+            componentSubject = "";
         var schema = new DeclarationSchema(ownerName, helper, namespace, text(marker, "modId"), builtin,
             "MANUAL".equals(enumText(marker, "mode")), componentSubject, dependencies, members);
-        boolean instance = members.stream().anyMatch(m -> !m.isStatic());
         if (instance)
             constructor(owner, componentSubject);
         String source = emit(schema, owner.getQualifiedName().toString(), packageName, simple, recipes.values());
@@ -174,6 +181,13 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
         }
         if (builtin)
             builtinResources.add(resource);
+    }
+
+    private boolean overridesComponentHook(TypeElement owner, List<ExecutableElement> methods) {
+        var elements = processingEnv.getElementUtils();
+        var hooks = ElementFilter.methodsIn(elements.getTypeElement(COMPONENT).getEnclosedElements());
+        return methods.stream().filter(method -> !method.getModifiers().contains(Modifier.ABSTRACT))
+            .anyMatch(method -> hooks.stream().anyMatch(hook -> elements.overrides(method, hook, owner)));
     }
 
     private Value value(TypeMirror mirror, Map<String, Value> known, Set<String> active, int depth, boolean result) {
@@ -194,6 +208,8 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
             "java.lang.String", "STRING").containsKey(name))
             kind = Map.of("java.lang.Float", "FLOAT", "java.lang.Integer", "INT", "java.lang.Boolean", "BOOLEAN",
                 "java.lang.String", "STRING").get(name);
+        if (name.equals("net.minecraft.world.entity.Entity"))
+            kind = "ENTITY";
         Value element = null;
         var fields = new ArrayList<Field>();
         if (mirror instanceof DeclaredType declared) {
@@ -272,7 +288,7 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
 
     private String emit(DeclarationSchema schema, String owner, String pkg, String simple, Collection<Value> values) {
         StringBuilder out = new StringBuilder(pkg.isEmpty() ? "" : "package " + pkg + ";\n");
-        boolean instance = schema.members().stream().anyMatch(m -> !m.isStatic());
+        boolean instance = !schema.componentSubject().isEmpty();
         out.append("@SuppressWarnings({\"unchecked\",\"rawtypes\"}) public final class ").append(simple);
         if (instance)
             out.append(" implements com.elfmcys.ysm.expression.host.EntityComponent<")
@@ -297,22 +313,29 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
         for (Member m : schema.members()) {
             String result = sourceName(m.result().carrier());
             out.append("public ").append(m.isStatic() ? "static " : "").append(result).append(' ').append(m.adapter())
-                .append("(com.elfmcys.ysm.expression.host.MolangContext<").append(sourceName(m.subject()))
-                .append("> context");
-            if (!m.shape().equals("FIXED"))
-                out.append(",int argc");
-            for (int i = 0; i < m.fixed().size(); i++)
-                out.append(',').append(sourceName(m.fixed().get(i).carrier())).append(" a").append(i);
-            if (m.tail() != null)
-                out.append(',').append(sourceName(m.tail().carrier())).append("[] tail");
-            out.append("){ ");
-            String call = (m.isStatic() ? owner : "provider") + "." + m.javaName() + "(context"
-                + (!m.shape().equals("FIXED") ? ",argc" : "");
-            for (int i = 0; i < m.fixed().size(); i++)
-                call += ",a" + i;
-            if (m.tail() != null)
-                call += ",tail";
-            call += ")";
+                .append('(');
+            var parameters = new ArrayList<String>();
+            var arguments = new ArrayList<String>();
+            if (m.injectContext()) {
+                parameters
+                    .add("com.elfmcys.ysm.expression.host.MolangContext<" + sourceName(m.subject()) + "> context");
+                arguments.add("context");
+            }
+            if (!m.shape().equals("FIXED")) {
+                parameters.add("int argc");
+                arguments.add("argc");
+            }
+            for (int i = 0; i < m.fixed().size(); i++) {
+                parameters.add(sourceName(m.fixed().get(i).carrier()) + " a" + i);
+                arguments.add("a" + i);
+            }
+            if (m.tail() != null) {
+                parameters.add(sourceName(m.tail().carrier()) + "[] tail");
+                arguments.add("tail");
+            }
+            out.append(String.join(",", parameters)).append("){ ");
+            String call =
+                (m.isStatic() ? owner : "provider") + "." + m.javaName() + "(" + String.join(",", arguments) + ")";
             if (m.result().kind().equals("VOID"))
                 out.append(call).append(';');
             else
@@ -416,6 +439,12 @@ public final class UnifiedDeclarationProcessor extends AbstractProcessor {
 
     private static String enumText(Map<String, AnnotationValue> values, String key) {
         return text(values, key);
+    }
+
+    private static boolean booleanValue(Map<String, AnnotationValue> values, String key) {
+        if (values.get(key).getValue() instanceof Boolean value)
+            return value;
+        throw invalid(key + " must be a boolean constant");
     }
 
     private static int integer(Map<String, AnnotationValue> values, String key) {

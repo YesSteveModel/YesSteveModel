@@ -17,19 +17,21 @@ import java.util.function.Function;
 /**
  * Owns one mutable native frame publication and its reusable storage.
  *
- * <p>Invariant: valid means that native extraction and Java view/count publication both completed.
- * Invalid state has no consumable publication; zero counts alone do not identify a valid empty result.
+ * <p>
+ * Invariant: valid means that native extraction and Java view/count publication both completed. Invalid state has no
+ * consumable publication; zero counts alone do not identify a valid empty result.
  *
- * <p>Execution: the owner serializes extract, view consumption, rendering, invalidate, and close
- * for this instance. Different instances may extract concurrently. Reachability fences do not
- * provide this exclusion.
+ * <p>
+ * Execution: the owner serializes extract, view consumption, rendering, invalidate, and close for this instance.
+ * Different instances may extract concurrently. Reachability fences do not provide this exclusion.
  *
- * <p>Ownership: pose, index, and locator views borrow this state until its next extract,
- * invalidate, or close. Consumers retain the state and must not modify the borrowed data.
- * Extraction borrows attributes only for the call and retains the baked backing in native state.
+ * <p>
+ * Ownership: pose, index, and locator views borrow this state until its next extract, invalidate, or close. Consumers
+ * retain the state and must not modify the borrowed data. Extraction borrows attributes only for the call and retains
+ * the baked backing in native state.
  *
- * <p>Seam: implements the
- * [frame publication and borrow contract](docs/architecture/rendering/overview.md#帧状态发布与借用).
+ * <p>
+ * Seam: implements the [frame publication and borrow contract](docs/architecture/rendering/overview.md#帧状态发布与借用).
  */
 public final class NativeModelState extends NativeObject {
     private static final int BONE_INFO_INT_COUNT = 8;
@@ -71,12 +73,14 @@ public final class NativeModelState extends NativeObject {
     }
 
     /**
-     * <p>Requires: bakedModel is open. boneAttributes contains one complete
-     * AnimatedGeoModel.BONE_ATTRIBUTE_COUNT record per baked bone, in the baked bone order.
-     * The caller excludes input mutation and release during this synchronous call.
+     * <p>
+     * Requires: bakedModel is open. boneAttributes contains one complete AnimatedGeoModel.BONE_ATTRIBUTE_COUNT record
+     * per baked bone, in the baked bone order. The caller excludes input mutation and release during this synchronous
+     * call.
      *
-     * <p>Failure: false means native extraction failed. Exceptions during Java result construction
-     * propagate. Both outcomes revoke the previous publication and leave this state invalid.
+     * <p>
+     * Failure: false means native extraction failed. Exceptions during Java result construction propagate. Both
+     * outcomes revoke the previous publication and leave this state invalid.
      *
      * @return true after publishing all views and counts, including a valid empty result
      */
@@ -86,9 +90,9 @@ public final class NativeModelState extends NativeObject {
     }
 
     /**
-     * Uses the extract contract with a local root and the same complete attribute array.
-     * External ancestors do not contribute transforms or visibility.
-     * Only poses referenced by the resulting render or locator indices may be consumed.
+     * Uses the extract contract with a local root and the same complete attribute array. External ancestors do not
+     * contribute transforms or visibility. Only poses referenced by the resulting render or locator indices may be
+     * consumed.
      *
      * @param rootIndex a bone index in the baked order, in [0, baked bone count)
      * @return true after complete local publication; native rejection revokes the result and returns false
@@ -191,10 +195,12 @@ public final class NativeModelState extends NativeObject {
     }
 
     /**
-     * <p>Requires: this state has a valid publication.
+     * <p>
+     * Requires: this state has a valid publication.
      *
-     * <p>Ownership: borrows a thread-local carrier. The next call to this method on the same
-     * thread, even for another state, ends the view's lifetime. State invalidation also ends its use.
+     * <p>
+     * Ownership: borrows a thread-local carrier. The next call to this method on the same thread, even for another
+     * state, ends the view's lifetime. State invalidation also ends its use.
      *
      * @return ranges in vertex units relative to this publication's final vertex buffer
      * @throws RuntimeException if native range extraction fails
@@ -215,10 +221,12 @@ public final class NativeModelState extends NativeObject {
     }
 
     /**
-     * <p>Requires: this state has a valid publication.
+     * <p>
+     * Requires: this state has a valid publication.
      *
-     * <p>Ownership: borrows a separate thread-local carrier until this method is called again
-     * on the same thread, even for another state. State invalidation also ends its use.
+     * <p>
+     * Ownership: borrows a separate thread-local carrier until this method is called again on the same thread, even for
+     * another state. State invalidation also ends its use.
      *
      * @return cube ranges in vertex units relative to this publication's final vertex buffer
      * @throws RuntimeException if native range extraction or result decoding fails

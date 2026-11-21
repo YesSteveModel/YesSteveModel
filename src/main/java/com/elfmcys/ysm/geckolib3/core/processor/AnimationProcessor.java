@@ -12,6 +12,7 @@ import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
 import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
 import com.elfmcys.ysm.geckolib3.core.snapshot.BoneTopLevelSnapshot;
 import com.elfmcys.ysm.geckolib3.core.util.MathUtil;
+import com.elfmcys.ysm.util.CleanupFailures;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
 import com.elfmcys.ysm.util.ThreadScheduling;
@@ -59,9 +60,13 @@ public class AnimationProcessor<TEntity extends Entity> {
     private final Int2ReferenceOpenHashMap<BoneTopLevelSnapshot> modelBonesMap = new Int2ReferenceOpenHashMap<>();
     private final ArrayDeque<BoneTopLevelSnapshot> activeModelBones = new ArrayDeque<>(); // 即使更新开销大也比链表更优
 
-    public SoundInstanceManager globalSoundManager() { return globalSoundManager; }
+    public SoundInstanceManager globalSoundManager() {
+        return globalSoundManager;
+    }
 
-    public RandomSource randomSource() { return random; }
+    public RandomSource randomSource() {
+        return random;
+    }
 
     private final SoundInstanceManager globalSoundManager = new SoundInstanceManager();
     private final RandomSource random = new XoroshiroRandomSource(RandomSupport.generateUniqueSeed());
@@ -220,12 +225,11 @@ public class AnimationProcessor<TEntity extends Entity> {
 
     public EntityExpressionRuntime.InvocationInputs invocationInputs(AnimationEvent<AnimatableEntity<TEntity>> event) {
         var production = new MinecraftInvocationInputs(animatable, event, random, globalSoundManager, null, null);
-        return new EntityExpressionRuntime.InvocationInputs(production, com.elfmcys.ysm.expression.host.EffectSink.direct(),
-            () -> animatable.getEntity().isRemoved());
+        return new EntityExpressionRuntime.InvocationInputs(production);
     }
 
     public void dispatchSync(EventArguments arguments) {
-        if (animatable.getExpressionRuntime().module().isEmpty()) {
+        if (animatable.getExpressionRuntime().metadata().isEmpty()) {
             throw new IllegalStateException("sync ingress has no current expression target");
         }
         animatable.getExpressionRuntime().action(ingressInvocationInputs(), evaluation -> {
@@ -322,7 +326,7 @@ public class AnimationProcessor<TEntity extends Entity> {
     public void enqueueTransient(String source, TransientExpressionSession.Privilege privilege, boolean beforeAnimation,
         @Nullable Consumer<String> resultConsumer) {
         var runtime = animatable.getExpressionRuntime();
-        if (runtime.module().isEmpty()) {
+        if (runtime.metadata().isEmpty()) {
             acceptResult(resultConsumer, "Error: no current expression target");
             return;
         }
@@ -351,8 +355,8 @@ public class AnimationProcessor<TEntity extends Entity> {
         var pending = pendingTransientCompiles;
         var owned = ownedTransientRequests;
         try {
-            TRANSIENT_COMPILER.execute(() -> compileTransient(request, inbox, beforeAnimation, resultConsumer,
-                pending, owned));
+            TRANSIENT_COMPILER
+                .execute(() -> compileTransient(request, inbox, beforeAnimation, resultConsumer, pending, owned));
         } catch (RuntimeException rejected) {
             request.close();
             pending.decrementAndGet();
@@ -362,8 +366,8 @@ public class AnimationProcessor<TEntity extends Entity> {
     }
 
     private static void compileTransient(EntityExpressionRuntime.TransientCompilation request,
-        CompileInbox<TransientTask> inbox, boolean before, Consumer<String> consumer,
-        AtomicInteger pending, AtomicInteger owned) {
+        CompileInbox<TransientTask> inbox, boolean before, Consumer<String> consumer, AtomicInteger pending,
+        AtomicInteger owned) {
         TransientExpressionSession session = null;
         Throwable failure = null;
         try {
@@ -377,6 +381,7 @@ public class AnimationProcessor<TEntity extends Entity> {
                     if (session != null)
                         session.close();
                 } finally {
+                    request.close();
                     owned.decrementAndGet();
                 }
             }
@@ -395,9 +400,10 @@ public class AnimationProcessor<TEntity extends Entity> {
                     runtime.attachTransient(result.request(), result.session());
                 } catch (Throwable failure) {
                     try {
-                        result.session().close();
+                        result.close();
                     } catch (Throwable cleanup) {
-                        if (cleanup != failure) failure.addSuppressed(cleanup);
+                        if (cleanup != failure)
+                            failure.addSuppressed(cleanup);
                     }
                     task = new TransientTask(result.request(), null, failure, result.beforeAnimation(),
                         result.resultConsumer());
@@ -449,7 +455,11 @@ public class AnimationProcessor<TEntity extends Entity> {
                     rethrowSevere(failure);
                 }
             } finally {
-                ownedTransientRequests.decrementAndGet();
+                try {
+                    task.request().close();
+                } finally {
+                    ownedTransientRequests.decrementAndGet();
+                }
             }
         }
         processWatches(evaluation, beforeAnimation);
@@ -479,7 +489,8 @@ public class AnimationProcessor<TEntity extends Entity> {
                 try {
                     state.closeSession();
                 } catch (Throwable cleanup) {
-                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                    if (cleanup != failure)
+                        failure.addSuppressed(cleanup);
                 }
                 owner.result(entry.name(), entry.revision(), error(failure));
                 rethrowSevere(failure);
@@ -530,9 +541,14 @@ public class AnimationProcessor<TEntity extends Entity> {
             } catch (Throwable error) {
                 failure = error;
             }
-            if (!inbox.publish(new WatchCompilation(entry.name(), entry.revision(), request, session, failure))
-                && session != null)
-                session.close();
+            if (!inbox.publish(new WatchCompilation(entry.name(), entry.revision(), request, session, failure))) {
+                try {
+                    if (session != null)
+                        session.close();
+                } finally {
+                    request.close();
+                }
+            }
         } finally {
             pending.decrementAndGet();
         }
@@ -540,7 +556,7 @@ public class AnimationProcessor<TEntity extends Entity> {
 
     private static void rethrowSevere(Throwable failure) {
         if (failure instanceof ExecutionFailure expression
-            && expression.reason() == ExecutionFailure.Reason.NON_NULL_RETURN) {
+            && expression.reason() == ExecutionFailure.Reason.INSTANCE_EXECUTION) {
             throw expression;
         }
         if (failure instanceof VirtualMachineError fatal)
@@ -566,21 +582,27 @@ public class AnimationProcessor<TEntity extends Entity> {
                 try {
                     result.close();
                 } catch (Throwable cleanup) {
-                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                    if (cleanup != failure)
+                        failure.addSuppressed(cleanup);
                 }
-                if (state != null) state.failed = true;
+                if (state != null)
+                    state.failed = true;
                 if (debugInfo != null)
                     debugInfo.result(result.name(), result.revision(), error(failure));
                 try {
                     rethrowSevere(failure);
                 } catch (RuntimeException | Error severe) {
-                    if (terminalFailure == null) terminalFailure = severe;
-                    else if (terminalFailure != severe) terminalFailure.addSuppressed(severe);
+                    if (terminalFailure == null)
+                        terminalFailure = severe;
+                    else if (terminalFailure != severe)
+                        terminalFailure.addSuppressed(severe);
                 }
             }
         }
-        if (terminalFailure instanceof RuntimeException error) throw error;
-        if (terminalFailure instanceof Error error) throw error;
+        if (terminalFailure instanceof RuntimeException error)
+            throw error;
+        if (terminalFailure instanceof Error error)
+            throw error;
     }
 
     private void closeTransientWork() {
@@ -593,10 +615,13 @@ public class AnimationProcessor<TEntity extends Entity> {
             var task = readyTransients.removeFirst();
             try {
                 task.close();
+            } catch (RuntimeException | Error error) {
+                failure = CleanupFailures.merge(failure, error);
+            }
+            try {
                 acceptResult(task.resultConsumer(), "Error: transient request cancelled");
             } catch (RuntimeException | Error error) {
-                if (failure == null) failure = error;
-                else failure.addSuppressed(error);
+                failure = CleanupFailures.merge(failure, error);
             } finally {
                 ownedTransientRequests.decrementAndGet();
             }
@@ -604,11 +629,12 @@ public class AnimationProcessor<TEntity extends Entity> {
         try {
             closeWatches();
         } catch (RuntimeException | Error next) {
-            if (failure == null) failure = next;
-            else if (failure != next) failure.addSuppressed(next);
+            failure = CleanupFailures.merge(failure, next);
         }
-        if (failure instanceof RuntimeException error) throw error;
-        if (failure instanceof Error error) throw error;
+        if (failure instanceof RuntimeException error)
+            throw error;
+        if (failure instanceof Error error)
+            throw error;
     }
 
     private void closeWatches() {
@@ -621,31 +647,40 @@ public class AnimationProcessor<TEntity extends Entity> {
         for (var resource : resources) {
             try {
                 resource.close();
-            } catch (Exception | LinkageError next) {
-                if (failure == null) failure = next;
-                else if (failure != next) failure.addSuppressed(next);
+            } catch (Exception | Error next) {
+                failure = CleanupFailures.merge(failure, next);
             }
         }
-        if (failure instanceof RuntimeException error) throw error;
-        if (failure instanceof Error error) throw error;
-        if (failure != null) throw new IllegalStateException("Failed to close watch programs", failure);
+        if (failure instanceof RuntimeException error)
+            throw error;
+        if (failure instanceof Error error)
+            throw error;
+        if (failure != null)
+            throw new IllegalStateException("Failed to close watch programs", failure);
     }
 
     /** This lock transfers only independently compiled programs, never entity execution state. */
     private static final class CompileInbox<T> {
         private final ArrayDeque<T> ready = new ArrayDeque<>();
         private boolean closed;
-        synchronized boolean isClosed() { return closed; }
+
+        synchronized boolean isClosed() {
+            return closed;
+        }
+
         synchronized boolean publish(T value) {
-            if (closed) return false;
+            if (closed)
+                return false;
             ready.addLast(value);
             return true;
         }
+
         synchronized List<T> drain() {
             var result = List.copyOf(ready);
             ready.clear();
             return result;
         }
+
         synchronized List<T> close() {
             closed = true;
             return drain();
@@ -682,14 +717,40 @@ public class AnimationProcessor<TEntity extends Entity> {
     }
 
     private record TransientTask(EntityExpressionRuntime.TransientCompilation request,
-        @Nullable TransientExpressionSession session, @Nullable Throwable failure,
-        boolean beforeAnimation, @Nullable Consumer<String> resultConsumer) implements AutoCloseable {
-        @Override public void close() { if (session != null) session.close(); }
+        @Nullable TransientExpressionSession session, @Nullable Throwable failure, boolean beforeAnimation,
+        @Nullable Consumer<String> resultConsumer) implements AutoCloseable {
+        @Override
+        public void close() {
+            closeCompilation(session, request);
+        }
     }
 
     private record WatchCompilation(String name, long revision, EntityExpressionRuntime.TransientCompilation request,
         @Nullable TransientExpressionSession session, @Nullable Throwable failure) implements AutoCloseable {
-        @Override public void close() { if (session != null) session.close(); }
+        @Override
+        public void close() {
+            closeCompilation(session, request);
+        }
+    }
+
+    private static void closeCompilation(@Nullable TransientExpressionSession session,
+        EntityExpressionRuntime.TransientCompilation request) {
+        Throwable failure = null;
+        try {
+            if (session != null)
+                session.close();
+        } catch (RuntimeException | Error cleanup) {
+            failure = cleanup;
+        }
+        try {
+            request.close();
+        } catch (RuntimeException | Error cleanup) {
+            failure = CleanupFailures.merge(failure, cleanup);
+        }
+        if (failure instanceof RuntimeException runtime)
+            throw runtime;
+        if (failure instanceof Error error)
+            throw error;
     }
 
     private static final class WatchState implements AutoCloseable {

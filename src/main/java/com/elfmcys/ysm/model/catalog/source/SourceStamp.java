@@ -73,6 +73,10 @@ public sealed interface SourceStamp permits SourceStamp.File, SourceStamp.RawDir
                 }
             }
         }
+        var manifest = root.resolve("ysm.json");
+        if (Files.isRegularFile(manifest, LinkOption.NOFOLLOW_LINKS)) {
+            bytes.write(ModelHashing.blake3(Files.readAllBytes(manifest)).bytes());
+        }
         return new RawDirectory(ModelHashing.blake3(bytes.toByteArray()), fileCount, totalBytes);
     }
 

@@ -1,8 +1,17 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import static com.elfmcys.ysm.model.storage.TestNamedRoamingSnapshots.named;
+
+import static com.elfmcys.ysm.model.storage.TestNamedRoamingSnapshots.fromMap;
+
+import com.elfmcys.ysm.client.entity.EntityModelDemand;
+import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.expression.host.ExpressionBinding;
+import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
@@ -11,9 +20,17 @@ import com.elfmcys.ysm.model.resource.client.*;
 import com.elfmcys.ysm.util.UnsafeUtil;
 import com.elfmcys.ysm.model.resource.client.work.ClientResourceScheduler;
 import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
+import com.elfmcys.ysm.model.storage.DatabaseWork;
+import com.elfmcys.ysm.model.storage.PlayerPreferences;
+import com.elfmcys.ysm.natives.storage.StorageResult;
+import com.elfmcys.ysm.testutil.NativeLibraryExtension;
+import com.elfmcys.ysm.model.storage.NamedRoamingSnapshot;
 import com.mojang.blaze3d.systems.RenderSystem;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -21,6 +38,9 @@ import org.junit.jupiter.params.provider.Arguments;
 import java.util.stream.Stream;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -36,8 +56,8 @@ class ClientDemandCoordinatorTest {
     }
 
     static Stream<Arguments> pageAdmissionCases() {
-        return Stream.of(-1L, 0L, 300L, 301L, 699L, 700L, 701L).flatMap(previous ->
-            Stream.of(0L, 299L, 300L, 699L, 700L).map(current -> Arguments.of(previous, current)));
+        return Stream.of(-1L, 0L, 300L, 301L, 699L, 700L, 701L)
+            .flatMap(previous -> Stream.of(0L, 299L, 300L, 699L, 700L).map(current -> Arguments.of(previous, current)));
     }
 
     @ParameterizedTest
@@ -115,14 +135,13 @@ class ClientDemandCoordinatorTest {
             assertEquals(1, f.interests(A));
             var eventStart = f.events.size();
             var claim = Objects.requireNonNull(scope.claimReadyInstallation());
-            assertEquals(List.of("0:acquire:1", "0:release:1"), f.events.subList(eventStart, f.events.size()));
-            assertEquals(1, f.interests(A));
-            assertNull(scope.claimReadyInstallation());
+            assertEquals(List.of("0:acquire:1"), f.events.subList(eventStart, f.events.size()));
+            assertEquals(2, f.interests(A));
             var lease = claim.takeLease();
             assertThrows(IllegalStateException.class, claim::takeLease);
             var outcome = receiver.install(claim.request(), lease, claim.fallback(), false);
-            assertTrue(scope.hasUnfinishedWork(), "only explicit frame completion ends the handoff");
-            claim.complete(outcome);
+            assertEquals(ClientDemandCoordinator.InstallationResult.INSTALLED, outcome);
+            assertFalse(scope.hasReadyInstallation(), "the actual installation ends matching candidate demand");
             claim.close();
             assertSame(lease, receiver.lease);
             scope.close();
@@ -152,9 +171,9 @@ class ClientDemandCoordinatorTest {
             assertEquals(1, f.starts.size());
             try (var claim = Objects.requireNonNull(scope.claimReadyInstallation())) {
                 assertNull(receiver.lease);
-                assertEquals(1, f.interests(A));
+                assertEquals(2, f.interests(A));
             }
-            assertEquals(0, f.interests(A));
+            assertEquals(1, f.interests(A));
         }
     }
 
@@ -184,7 +203,7 @@ class ClientDemandCoordinatorTest {
                 try (var claim = Objects.requireNonNull(scope.claimReadyInstallation())) {
                     assertNull(receiver.lease);
                 }
-                assertEquals(1, f.interests(A));
+                assertEquals(2, f.interests(A));
                 page.close();
             }
         }
@@ -195,7 +214,7 @@ class ClientDemandCoordinatorTest {
     void readyOnlyMissDoesNotCancelRestartOrDowngradeAnExistingAcquisition(ModelResourceDemand.Mode mode)
         throws Exception {
         try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
-            var probe = new CompletableFuture<Optional<ResourceLease>>();
+            var probe = new Probe();
             if (mode == ModelResourceDemand.Mode.CACHED)
                 f.cachedProbe = probe;
             else
@@ -207,10 +226,10 @@ class ClientDemandCoordinatorTest {
             for (int frame = 0; frame < 3; frame++) {
                 assertFalse(scope.hasReadyInstallation());
                 assertNull(scope.claimReadyInstallation());
-                assertFalse(probe.isCancelled());
+                assertFalse(probe.closed);
             }
             f.tick();
-            assertFalse(probe.isCancelled());
+            assertFalse(probe.closed);
             assertEquals(mode == ModelResourceDemand.Mode.CACHED ? 1 : 0, f.cachedCalls);
             assertEquals(mode == ModelResourceDemand.Mode.OFFLINE ? 1 : 0, f.offlineCalls);
             assertEquals(0, f.onlineCalls);
@@ -220,7 +239,7 @@ class ClientDemandCoordinatorTest {
                 f.complete(A);
                 f.cache.tick();
                 assertTrue(scope.hasReadyInstallation());
-                assertTrue(probe.isCancelled(), "only an acquired Ready replacement can retire the old probe");
+                assertTrue(probe.closed, "only an acquired Ready replacement can retire the old probe");
                 assertEquals(2, f.interests(A));
                 assertNull(receiver.lease);
             }
@@ -264,7 +283,7 @@ class ClientDemandCoordinatorTest {
                 f.tick();
                 var rejectedSubmission = Objects.requireNonNull(scope.claimReadyInstallation());
                 rejectedSubmission.close();
-                assertEquals(1, f.interests(A));
+                assertEquals(2, f.interests(A));
                 f.tick();
                 var busy = Objects.requireNonNull(scope.claimReadyInstallation());
                 receiver.busy = true;
@@ -272,13 +291,13 @@ class ClientDemandCoordinatorTest {
                 var outcome = receiver.install(busy.request(), lease, false, false);
                 assertEquals(ClientDemandCoordinator.InstallationResult.BUSY, outcome);
                 lease.close();
-                busy.complete(outcome);
+                busy.close();
                 f.tick();
                 assertTrue(scope.hasReadyInstallation());
                 var finalClaim = Objects.requireNonNull(scope.claimReadyInstallation());
                 var taskLease = finalClaim.takeLease();
                 scope.close();
-                finalClaim.complete(ClientDemandCoordinator.InstallationResult.STALE);
+                finalClaim.close();
                 taskLease.close();
                 f.tick();
                 assertNull(scope.claimReadyInstallation());
@@ -299,6 +318,7 @@ class ClientDemandCoordinatorTest {
             var secondary = new IllegalArgumentException("second cleanup");
             page.action(new ClientDemandCoordinator.PageAction() {
                 public void advance(ModelResourceDemand.Mode allowed) {}
+
                 public void close() {
                     calls.add("first");
                     throw primary;
@@ -306,6 +326,7 @@ class ClientDemandCoordinatorTest {
             });
             page.action(new ClientDemandCoordinator.PageAction() {
                 public void advance(ModelResourceDemand.Mode allowed) {}
+
                 public void close() {
                     calls.add("second");
                     throw secondary;
@@ -351,7 +372,7 @@ class ClientDemandCoordinatorTest {
     }
 
     @Test
-    void rejectedFrameInstallationReportsItsExplicitOutcomeAndDoesNotOwnTheTransferredLease() throws Exception {
+    void transferredFrameCandidateHasNoCompletionProtocolAndRetainsOnlyItsOwnUse() throws Exception {
         try (var f = new Fixture(); var receiver = new Receiver(f, A, ModelResourcePurpose.GUI)) {
             var request = f.resourceRequest(A.modelId(), "player", "main", ModelResourcePurpose.GUI, null);
             try (var producer = f.start(request, WorkPriority.BACKGROUND)) {
@@ -360,13 +381,12 @@ class ClientDemandCoordinatorTest {
                 scope.useFrameInstallation();
                 f.tick();
                 var claim = Objects.requireNonNull(scope.claimReadyInstallation());
-                assertThrows(IllegalStateException.class,
-                    () -> claim.complete(ClientDemandCoordinator.InstallationResult.INSTALLED));
                 var taskLease = claim.takeLease();
+                claim.close();
+                assertTrue(taskLease.poll() instanceof AcquireResult.Ready);
+                scope.close();
+                assertTrue(taskLease.poll() instanceof AcquireResult.Ready);
                 taskLease.close();
-                claim.complete(ClientDemandCoordinator.InstallationResult.REJECTED);
-                assertNotNull(scope.failure());
-                assertEquals("Model installation was rejected", scope.failure().getMessage());
                 claim.close();
                 assertEquals(1, f.interests(A));
             }
@@ -490,7 +510,7 @@ class ClientDemandCoordinatorTest {
             f.eager = true;
             f.at(301);
             assertFalse(b.scope.isClosed());
-            assertEquals(0, f.onlineCalls);
+            assertEquals(1, f.onlineCalls, "Online admission delegates the local probe to the resource owner");
         }
     }
 
@@ -617,7 +637,6 @@ class ClientDemandCoordinatorTest {
             assertEquals(ModelResourcePurpose.FULL, f.requests.get(1).purpose());
             assertEquals(WorkPriority.LOCAL_PLAYER, f.priorities.get(A.modelId()));
             assertEquals(2, f.interests(A), "GUI anchor and FULL selection remain independent");
-            f.coordinator.disposition(f.selections.owner, 1, true, false);
             f.ready(A);
             assertTrue(page.feedback(A).waiting());
             assertNull(card.lease);
@@ -625,6 +644,7 @@ class ClientDemandCoordinatorTest {
             f.tick();
             assertNotNull(player.lease);
             f.selections.authority = f.selections.installed = A;
+            f.coordinator.selectionCommitted(f.selections.context(), 1, A, A);
             f.tick();
             assertFalse(page.feedback(A).waiting());
             assertNull(card.lease);
@@ -704,14 +724,201 @@ class ClientDemandCoordinatorTest {
     }
 
     @Test
-    void hotClickHasNoFeedbackFlashAndStillSends() throws Exception {
+    void reentrantSubmissionCannotSendTwiceOrCompleteBeforeTheSendReturns() throws Exception {
         try (var f = new Fixture()) {
-            f.selections.installed = A;
+            f.selections.authority = f.selections.installed = A;
+            f.selections.trace = event -> {
+                if (event.startsWith("send:")) {
+                    assertNotNull(f.coordinator.association(f.selections.context(), 1, A));
+                    f.coordinator.selectionCommitted(f.selections.context(), 1, A, A);
+                    f.tick();
+                    assertTrue(f.coordinator.feedback().waiting());
+                }
+            };
             f.coordinator.select(A);
-            assertFalse(f.coordinator.feedback().waiting());
             f.tick();
             assertEquals(List.of(A), f.selections.sent);
-            assertEquals(0, f.starts.size());
+            assertFalse(f.coordinator.feedback().waiting());
+            assertNull(f.coordinator.association(f.selections.context(), 1, A));
+        }
+    }
+
+    @Test
+    void matchingTargetWithOldInstallationCannotFinishANewApplication() throws Exception {
+        try (var f = new Fixture()) {
+            f.selections.authority = f.selections.installed = A;
+            f.selections.installedApplication = new Object();
+            f.coordinator.reselect(A);
+            f.tick();
+            var application = new Object();
+            f.coordinator.selectionCommitted(f.selections.context(), 1, A, application);
+            f.tick();
+            assertTrue(f.coordinator.feedback().waiting());
+            f.selections.installedApplication = application;
+            f.tick();
+            assertFalse(f.coordinator.feedback().waiting());
+        }
+    }
+
+    @Test
+    void explicitReselectKeepsPreferenceInputAndRequiresItsAppliedInstallation() throws Exception {
+        try (var f = new Fixture()) {
+            f.selections.authority = f.selections.installed = A;
+            var value = fromMap(Map.of("old", 7F));
+            f.selections.retained = value;
+            f.coordinator.reselect(A);
+            f.tick();
+            assertEquals(List.of(value), f.selections.initials);
+            assertEquals(ClientDemandCoordinator.SelectionKind.RESELECT,
+                f.coordinator.association(f.selections.context(), 1, A).kind());
+            assertTrue(f.coordinator.feedback().waiting());
+        }
+    }
+
+    @Test
+    void synchronousSendFailureTerminatesOnceAndDoesNotReplay() throws Exception {
+        try (var f = new Fixture()) {
+            var cause = new IllegalStateException("transport unavailable");
+            f.selections.sendFailure = cause;
+            f.selections.installed = A;
+            f.coordinator.select(A);
+            f.tick();
+            assertFalse(f.coordinator.feedback().waiting());
+            var failure =
+                assertInstanceOf(ClientDemandCoordinator.SelectionFailure.class, f.coordinator.feedback().failure());
+            assertEquals(ClientDemandCoordinator.FailureStage.SEND, failure.stage());
+            assertSame(cause, failure.getCause());
+            assertEquals(List.of(A), f.selections.sent);
+            assertEquals(List.of(failure), f.selections.failures);
+            f.coordinator.selectionCommitted(f.selections.context(), 1, A, A);
+            f.at(1000);
+            f.at(ClientDemandCoordinator.WAIT_MILLIS);
+            assertEquals(List.of(A), f.selections.sent);
+            assertEquals(1, f.selections.failures.size());
+            assertNull(f.coordinator.association(f.selections.context(), 1, A));
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"uuid", "binding"})
+    void sameOwnerIdentityReplacementRetiresOldInitialAndRejectsItsAuthority(String replacement) throws Exception {
+        try (var f = new Fixture()) {
+            f.select(A, true);
+            var previous = f.selections.context();
+            if (replacement.equals("uuid"))
+                f.selections.player = new UUID(0, 2);
+            else
+                f.selections.preferenceBinding = new Object();
+            f.tick();
+            assertFalse(f.coordinator.feedback().waiting());
+            assertNull(f.coordinator.association(previous, 1, A));
+            f.coordinator.select(B);
+            f.at(701);
+            f.ready(B);
+            assertEquals(List.of(1L, 2L), f.selections.ids);
+            f.selections.authority = f.selections.installed = B;
+            f.coordinator.selectionCommitted(previous, 2, B, B);
+            f.tick();
+            assertTrue(f.coordinator.feedback().waiting());
+            f.coordinator.selectionCommitted(f.selections.context(), 2, B, B);
+            f.tick();
+            assertFalse(f.coordinator.feedback().waiting());
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "YSM_NATIVE_PATH", matches = ".+")
+    @ExtendWith(NativeLibraryExtension.class)
+    void realPreferenceFailureSendsEmptyInitialWithoutMakingItPersistable(@TempDir Path directory) throws Exception {
+        try (var work = new DatabaseWork()) {
+            var preferences = new PlayerPreferences(directory, work);
+            com.elfmcys.ysm.model.storage.PreferenceTestDriver.await(preferences,
+                preferences.readSelection(new UUID(0, 1)));
+        }
+        try (
+            var connection =
+                java.sql.DriverManager.getConnection("jdbc:sqlite:" + directory.resolve("preferences-c2.sqlite"));
+            var statement = connection.createStatement()) {
+            statement.execute("UPDATE storage_meta SET compatibility_epoch=99 WHERE id=1");
+        }
+        try (var work = new DatabaseWork(); var f = new Fixture(new PlayerPreferences(directory, work))) {
+            f.selections.retained = null;
+            f.selections.authority = f.selections.installed = B;
+            f.select(A, true);
+            work.awaitIdle();
+            f.tick();
+            assertTrue(f.coordinator.feedback().waiting());
+            assertNull(f.coordinator.feedback().failure());
+            assertTrue(f.selections.failures.isEmpty());
+            assertEquals(1, f.selections.readFailures.size());
+            assertTrue(f.selections.readFailures.get(0).getMessage().contains("INCOMPATIBLE"));
+            assertEquals(List.of(A), f.selections.sent);
+            assertTrue(named(f.selections.initials.get(0)).isEmpty());
+            assertFalse(f.coordinator.association(f.selections.context(), 1, A).initial().persistable());
+            assertEquals(B, f.selections.authority);
+            assertEquals(B, f.selections.installed);
+            f.at(1000);
+            assertEquals(1, f.selections.readFailures.size());
+            assertEquals(List.of(A), f.selections.sent);
+            f.selections.authority = f.selections.installed = A;
+            f.coordinator.selectionCommitted(f.selections.context(), 1, A, A);
+            f.tick();
+            assertFalse(f.coordinator.feedback().waiting());
+            assertNull(f.coordinator.feedback().failure());
+            assertEquals(0, f.interests(A));
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"replacement", "uuid", "binding", "clear"})
+    @EnabledIfEnvironmentVariable(named = "YSM_NATIVE_PATH", matches = ".+")
+    @ExtendWith(NativeLibraryExtension.class)
+    void retiringSelectionCancelsItsQueuedDatabaseFill(String action, @TempDir Path directory) throws Exception {
+        try (var work = new DatabaseWork()) {
+            var preferences = new PlayerPreferences(directory, work);
+            try (var f = new Fixture(preferences)) {
+                f.selections.retained = null;
+                var original = f.selections.context();
+                f.select(A, false);
+                var entered = new CountDownLatch(1);
+                var release = new CountDownLatch(1);
+                var blocker = work.createResource(token -> (AutoCloseable)() -> {
+                });
+                work.submit(blocker, (unused, token) -> {
+                    entered.countDown();
+                    try {
+                        if (!release.await(10, TimeUnit.SECONDS))
+                            throw new AssertionError("Worker was not released");
+                    } catch (InterruptedException failure) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(failure);
+                    }
+                    return StorageResult.refused(StorageResult.Failure.CANCELLED);
+                });
+                try {
+                    assertTrue(entered.await(10, TimeUnit.SECONDS));
+                    f.ready(A);
+                    assertTrue(f.coordinator.feedback().waiting());
+                    switch (action) {
+                        case "replacement" -> f.coordinator.select(B);
+                        case "uuid" -> f.selections.player = new UUID(0, 2);
+                        case "binding" -> f.selections.preferenceBinding = new Object();
+                        case "clear" -> f.coordinator.cancelSelection(A.identity());
+                        default -> throw new AssertionError(action);
+                    }
+                    f.tick();
+                    assertTrue(f.selections.sent.isEmpty());
+                } finally {
+                    release.countDown();
+                }
+                work.awaitIdle();
+                f.tick();
+                assertTrue(f.selections.sent.isEmpty());
+                assertNull(f.coordinator.association(original, 1, A));
+                assertEquals(StorageResult.Outcome.MISSING, com.elfmcys.ysm.model.storage.PreferenceTestDriver
+                    .await(preferences, preferences.readRoaming(original.player(), A.identity(), Set.of())).outcome());
+                assertTrue(f.selections.failures.isEmpty());
+            }
         }
     }
 
@@ -732,7 +939,6 @@ class ClientDemandCoordinatorTest {
             assertInstanceOf(AcquireResult.Ready.class, endpoint.lease.poll());
             endpoint.close();
             f.cache.tick();
-            assertEquals(0, f.cache.readyCount());
         }
     }
 
@@ -757,123 +963,6 @@ class ClientDemandCoordinatorTest {
     }
 
     @Test
-    void currentAssociationRejectsAbaOldConnectionZeroAndLateDisposition() throws Exception {
-        try (var f = new Fixture()) {
-            f.coordinator.select(A);
-            f.tick();
-            f.coordinator.select(B);
-            f.at(701);
-            f.coordinator.select(A);
-            f.at(1402);
-            assertEquals(List.of(1L, 2L, 3L), f.selections.ids);
-            f.coordinator.disposition(f.selections.owner, 1, false, true);
-            f.coordinator.disposition(new Object(), 3, false, true);
-            f.coordinator.disposition(f.selections.owner, 0, false, true);
-            f.coordinator.disposition(f.selections.owner, 3, true, false);
-            assertTrue(f.coordinator.feedback().waiting());
-            f.coordinator.disposition(f.selections.owner, 3, false, true);
-            assertFalse(f.coordinator.feedback().waiting());
-            assertEquals(1, f.selections.failures.size());
-            f.coordinator.disposition(f.selections.owner, 3, false, true);
-            assertEquals(1, f.selections.failures.size());
-            f.selections.owner = new Object();
-            f.tick();
-            f.coordinator.select(B);
-            f.tick();
-            assertEquals(1L, f.selections.ids.get(3));
-        }
-    }
-
-    @Test
-    void authoritativeFailureBelongsToItsCardAfterAnEarlierSelectionEnds() throws Exception {
-        try (var f = new Fixture()) {
-            f.tick();
-            f.coordinator.select(A);
-            f.tick();
-            f.coordinator.disposition(f.selections.owner, 1, false, true);
-            assertNotNull(f.coordinator.feedback(A).failure());
-            f.selections.authority = B;
-            f.tick();
-            assertTrue(f.coordinator.feedback(B).waiting());
-            assertNull(f.coordinator.feedback(A).failure());
-            f.at(ClientDemandCoordinator.WAIT_MILLIS);
-            assertFalse(f.coordinator.feedback(B).waiting());
-            assertNotNull(f.coordinator.feedback(B).failure());
-            assertNull(f.coordinator.feedback(A).failure());
-            assertEquals(B, f.selections.authority);
-        }
-    }
-
-    @Test
-    void unsignedIdentifiersExhaustWithoutWrapping() throws Exception {
-        try (var f = new Fixture()) {
-            f.tick();
-            var next = ClientDemandCoordinator.class.getDeclaredField("nextIntentId");
-            next.setAccessible(true);
-            next.setLong(f.coordinator, Long.MIN_VALUE);
-            f.coordinator.select(A);
-            f.tick();
-            assertEquals(Long.MIN_VALUE, f.selections.ids.get(0));
-            next.setLong(f.coordinator, -1L);
-            f.coordinator.select(B);
-            f.at(701);
-            assertEquals(-1L, f.selections.ids.get(1));
-            f.coordinator.select(C);
-            f.at(1402);
-            assertEquals(2, f.selections.ids.size());
-            assertFalse(f.coordinator.feedback().waiting());
-            assertNotNull(f.coordinator.feedback().failure());
-        }
-    }
-
-    @Test
-    void duplicateClickDoesNotRenewDeadlineAndLateAuthorityUsesIndependentEntity() throws Exception {
-        try (var f = new Fixture()) {
-            var real = new Receiver(f, A, ModelResourcePurpose.FULL);
-            var scope = f.coordinator.register(real);
-            f.tick();
-            f.ready(A);
-            f.coordinator.select(B);
-            f.at(1000);
-            f.coordinator.select(B);
-            f.at(ClientDemandCoordinator.WAIT_MILLIS);
-            assertFalse(f.coordinator.feedback().waiting());
-            assertEquals(1, f.selections.failures.size());
-            assertNotNull(real.lease);
-            assertInstanceOf(AcquireResult.Ready.class, real.lease.poll());
-            assertEquals(0, f.interests(B));
-            real.target = B;
-            f.tick();
-            f.ready(B);
-            f.selections.authority = B;
-            f.selections.installed = B;
-            f.tick();
-            assertFalse(f.coordinator.feedback().waiting());
-            assertEquals(1, f.selections.failures.size());
-            scope.close();
-            real.close();
-        }
-    }
-
-    @Test
-    void failureCannotSuppressSelectionSendOrRevokeAnIndependentAssignment() throws Exception {
-        try (var f = new Fixture()) {
-            var real = new Receiver(f, A, ModelResourcePurpose.FULL);
-            var scope = f.coordinator.register(real);
-            f.tick();
-            f.ready(A);
-            f.denied.add(B.modelId());
-            f.coordinator.select(B);
-            f.tick();
-            assertEquals(List.of(B), f.selections.sent);
-            assertEquals(1, f.selections.failures.size());
-            assertInstanceOf(AcquireResult.Ready.class, real.lease.poll());
-            scope.close();
-            real.close();
-        }
-    }
-
-    @Test
     void readFrequencyDoesNotAdvanceWorkOrRenewWait() throws Exception {
         try (var f = new Fixture()) {
             f.coordinator.select(A);
@@ -885,140 +974,23 @@ class ClientDemandCoordinatorTest {
             assertTrue(f.selections.sent.isEmpty());
             f.tick();
             assertEquals(1, f.starts.size());
+            assertTrue(f.selections.sent.isEmpty());
+            f.ready(A);
             assertEquals(List.of(A), f.selections.sent);
         }
     }
 
     @Test
-    void zeroOnceAndRepeatedViewReadsKeepTheCompleteEffectTrace() throws Exception {
-        var expected = readTrace(0);
-        assertEquals(expected, readTrace(1));
-        assertEquals(expected, readTrace(8));
-        assertTrue(expected.stream().anyMatch(event -> event.contains("work-cancel:1")));
-        assertTrue(expected.stream().anyMatch(event -> event.contains("work-terminal:2:Ready")));
-        assertTrue(expected.stream().anyMatch(event -> event.contains("work-terminal:3:Failed")));
-        assertTrue(expected.contains("1503:selection-terminal:trace resource failure"));
-        assertTrue(expected.contains("31600:selection-terminal:Model selection installation timed out"));
-        assertTrue(expected.contains("32010:probe-cancel"));
-        assertTrue(expected.contains("32020:release:3"));
-        assertEquals(3, expected.stream().filter(event -> event.contains(":send:")).count());
-    }
-
-    private List<String> readTrace(int reads) throws Exception {
-        var f = new Fixture();
-        try (f; var player = new Receiver(f, B, ModelResourcePurpose.FULL);
-            var lateCard = new Receiver(f, C, ModelResourcePurpose.GUI)) {
-            var page = f.coordinator.openPage("trace-list");
-            page.pointer(A);
-            traceTick(f, 0, reads, null);
-            traceTick(f, 301, reads, null);
-            f.clock.set(350);
-            page.pointer(B);
-            traceTick(f, 651, reads, null);
-            traceTick(f, 700, reads, null);
-            f.clock.set(710);
-            f.ready(B);
-            var playerScope = f.coordinator.register(player);
-            f.clock.set(720);
-            f.coordinator.select(B);
-            traceTick(f, 720, reads, playerScope);
-            f.ready(B);
-            assertNotNull(player.lease);
-            f.selections.authority = B;
-            f.selections.installed = B;
-            traceTick(f, 730, reads, playerScope);
-            page.close();
-
-            f.clock.set(800);
-            f.coordinator.select(C);
-            traceTick(f, 800, reads, playerScope);
-            traceTick(f, 1500, reads, playerScope);
-            traceTick(f, 1501, reads, playerScope);
-            f.clock.set(1502);
-            f.pending.get(C.modelId()).complete(new ModelRenderTargetLoader.LoadResult.Failed(new ResourceFailure(
-                ResourceFailure.Kind.DETERMINISTIC, new IllegalArgumentException("trace resource failure"))));
-            traceTick(f, 1503, reads, playerScope);
-
-            f.clock.set(1600);
-            f.coordinator.select(A);
-            traceTick(f, 1600, reads, playerScope);
-            f.clock.set(31000);
-            f.coordinator.select(A);
-            traceTick(f, 31000, reads, playerScope);
-            traceTick(f, 31599, reads, playerScope);
-            traceTick(f, 31600, reads, playerScope);
-            traceTick(f, 31601, reads, playerScope);
-            assertEquals(2, f.selections.failures.size());
-
-            f.cachedProbe = new CompletableFuture<>() {
-                @Override
-                public boolean cancel(boolean interrupt) {
-                    f.event("probe-cancel");
-                    return false;
-                }
-            };
-            f.clock.set(32000);
-            var latePage = f.coordinator.openPage("late-card");
-            var lateScope = f.coordinator.register(lateCard);
-            latePage.entity(lateScope);
-            traceTick(f, 32000, reads, lateScope);
-            f.clock.set(32005);
-            var late = f.start(lateCard.assignment().request(), WorkPriority.BACKGROUND);
-            f.clock.set(32010);
-            latePage.close();
-            // The producer can complete after retirement; neither a view read nor a coordinator tick follows.
-            f.clock.set(32020);
-            f.complete(C);
-            f.cache.tick();
-            assertTrue(f.cachedProbe.complete(Optional.of(late)));
-            assertEquals(0, f.interests(C));
-            f.cache.tick();
-            f.clock.set(33000);
-            playerScope.close();
-            player.close();
-            f.coordinator.close();
-            f.cache.tick();
-            assertEquals(0, f.cache.loadingCount());
-            assertEquals(0, f.cache.readyCount());
-            assertTrue(f.interests.values().stream().allMatch(count -> count == 0));
-        }
-        return List.copyOf(f.events);
-    }
-
-    private void traceTick(Fixture f, long at, int reads, ClientDemandCoordinator.EntityScope scope) {
-        long before = f.clock.get();
-        for (int frame = 1; reads > 1 && frame <= 4; frame++) {
-            f.clock.set(before + (at - before) * frame / 4);
-            readViews(f, reads, scope);
-        }
-        f.at(at);
-        readViews(f, reads, scope);
-    }
-
-    private void readViews(Fixture f, int reads, ClientDemandCoordinator.EntityScope scope) {
-        var before = List.copyOf(f.events);
-        for (int i = 0; i < reads; i++) {
-            f.coordinator.feedback();
-            f.coordinator.canOpenTextures();
-            if (scope != null) {
-                scope.failure();
-                scope.hasUnfinishedWork();
-                scope.isClosed();
-            }
-        }
-        assertEquals(before, f.events, "view reads must not produce effects between owner ticks");
-    }
-
-    @Test
     void switchDwellIsStrictAndCompleteLocalWorkBypassesIt() throws Exception {
         try (var f = new Fixture()) {
-            f.select(A, false);
+            f.select(A, true);
             f.clock.set(100);
             f.coordinator.select(B);
             f.tick();
             f.at(800);
             assertEquals(List.of(A), f.selections.sent);
             f.at(801);
+            f.ready(B);
             assertEquals(List.of(A, B), f.selections.sent);
         }
         try (var f = new Fixture()) {
@@ -1033,7 +1005,7 @@ class ClientDemandCoordinatorTest {
             f.at(401);
             f.ready(B);
             assertEquals(List.of(A, B), f.selections.sent);
-            assertEquals(0, f.onlineCalls);
+            assertEquals(1, f.onlineCalls, "Online admission delegates the local probe to the resource owner");
         }
     }
 
@@ -1115,52 +1087,9 @@ class ClientDemandCoordinatorTest {
     }
 
     @Test
-    void pageAndPointerGatesRunTogetherAndAdmittedHoverKeepsThePageNetworkGate() throws Exception {
-        try (var f = new Fixture()) {
-            var previous = f.coordinator.openPage("first");
-            f.clock.set(100);
-            var page = f.coordinator.replacePage(previous, "second");
-            f.clock.set(300);
-            page.pointer(A);
-            f.at(401);
-            assertEquals(0, f.offlineCalls, "pointer has not qualified");
-            f.at(600);
-            assertEquals(1, f.offlineCalls);
-            assertEquals(0, f.onlineCalls);
-            page.pointer(null);
-            f.at(800);
-            assertEquals(1, f.onlineCalls);
-            f.at(801);
-            assertEquals(1, f.onlineCalls, "accepted hover continues after pointer exit");
-            assertEquals(1, f.offlineCalls, "network admission reuses the completed offline probe");
-            page.close();
-            assertEquals(0, f.interests(A));
-        }
-    }
-
-    @Test
-    void exitingBeforePageAdmissionLeavesNoDeferredHover() throws Exception {
-        try (var f = new Fixture(); var card = new Receiver(f, A, ModelResourcePurpose.GUI)) {
-            var previous = f.coordinator.openPage("first");
-            f.clock.set(100);
-            var page = f.coordinator.replacePage(previous, "second");
-            page.card(card, A);
-            page.pointer(A);
-            f.at(399);
-            assertNull(card.scope);
-            assertEquals(0, f.offlineCalls);
-            page.pointer(null);
-            f.at(1000);
-            assertTrue(f.starts.isEmpty());
-            assertEquals(0, f.offlineCalls);
-            assertNull(card.scope);
-        }
-    }
-
-    @Test
     void lateOfflineMissUsesTheAlreadyOpenNetworkGate() throws Exception {
         try (var f = new Fixture()) {
-            f.offlineProbe = new CompletableFuture<>();
+            f.offlineProbe = new Probe();
             var previous = f.coordinator.openPage("first");
             f.clock.set(100);
             var page = f.coordinator.replacePage(previous, "second");
@@ -1169,36 +1098,14 @@ class ClientDemandCoordinatorTest {
             assertEquals(1, f.offlineCalls);
             f.at(401);
             f.at(801);
-            assertFalse(f.offlineProbe.isCancelled());
+            assertFalse(f.offlineProbe.closed);
             assertEquals(1, f.offlineCalls);
             assertEquals(0, f.onlineCalls);
             f.clock.set(1000);
-            f.offlineProbe.complete(Optional.empty());
+            f.offlineProbe.missing = true;
             f.tick();
             assertEquals(1, f.offlineCalls);
             assertEquals(1, f.onlineCalls, "900 ms miss does not start another dwell interval");
-        }
-    }
-
-    @Test
-    void rejectedFullSelectionLeavesTheIndependentGuiPreparationUntilThePageCloses() throws Exception {
-        try (var f = new Fixture()) {
-            var page = f.coordinator.openPage("list");
-            page.pointer(A);
-            f.select(A, false);
-            var full = f.pending.get(A.modelId());
-            f.at(301);
-            var gui = f.pending.get(A.modelId());
-            assertNotSame(full, gui);
-            f.coordinator.disposition(f.selections.owner, 1, false, true);
-            f.tick();
-            assertTrue(full.isCancelled());
-            assertFalse(gui.isCancelled());
-            assertEquals(1, f.interests(A));
-            page.close();
-            f.cache.tick();
-            assertTrue(gui.isCancelled());
-            assertEquals(0, f.interests(A));
         }
     }
 
@@ -1262,30 +1169,12 @@ class ClientDemandCoordinatorTest {
             assertEquals(ModelResourcePurpose.GUI, card.lease.purpose());
             assertEquals(ModelResourcePurpose.FULL, player.lease.purpose());
             f.selections.installed = f.selections.authority = A;
+            f.coordinator.selectionCommitted(f.selections.context(), 1, A, A);
             f.tick();
             assertFalse(f.coordinator.feedback().waiting());
             page.close();
             assertNull(card.lease);
             assertInstanceOf(AcquireResult.Ready.class, player.lease.poll());
-        }
-    }
-
-    @Test
-    void unrelatedCatalogGrowthDoesNotIncreaseActiveTraversal() throws Exception {
-        try (var f = new Fixture()) {
-            var receiver = new Receiver(f, A, ModelResourcePurpose.FULL);
-            var scope = f.coordinator.register(receiver);
-            f.tick();
-            f.contentReads = 0;
-            f.tick();
-            int before = f.contentReads;
-            for (int i = 10; i < 250; i++)
-                f.contents.put(hash(i), content(hash(i)));
-            f.contentReads = 0;
-            f.tick();
-            assertEquals(before, f.contentReads);
-            scope.close();
-            receiver.close();
         }
     }
 
@@ -1308,6 +1197,51 @@ class ClientDemandCoordinatorTest {
         }
     }
 
+    @Test
+    void selectionWaitsForCompleteDeclarationPreparationEvenWithRetainedInput() throws Exception {
+        try (var f = new Fixture()) {
+            f.coordinator.select(A);
+            f.tick();
+            assertTrue(f.selections.sent.isEmpty());
+            f.ready(A);
+            assertEquals(List.of(A), f.selections.sent);
+            var association = f.coordinator.association(f.selections.context(), 1, A);
+            assertNotNull(association);
+            assertNotNull(association.dictionary());
+            f.coordinator.selectionCommitted(f.selections.context(), 1, A, new Object());
+            assertNull(f.coordinator.association(f.selections.context(), 1, A));
+        }
+    }
+
+    /** A controllable pending use for cache-only and offline admission. */
+    private static final class Probe implements ResourceLease {
+        private ResourceRequest request;
+        private boolean missing;
+        private boolean closed;
+
+        public ModelResourcePurpose purpose() {
+            return request.purpose();
+        }
+
+        public AcquireResult poll() {
+            if (closed)
+                return new AcquireResult.Ended();
+            return missing ? new AcquireResult.Missing() : new AcquireResult.Pending();
+        }
+
+        public boolean isCurrent(ResourceRequest candidate) {
+            return !closed && request.equals(candidate);
+        }
+
+        public void cancelPending() {
+            close();
+        }
+
+        public void close() {
+            closed = true;
+        }
+    }
+
     private static final class Fixture implements ClientDemandCoordinator.Resources, AutoCloseable {
         final AtomicLong clock = new AtomicLong();
         final List<String> events = new ArrayList<>();
@@ -1318,25 +1252,31 @@ class ClientDemandCoordinatorTest {
         }, ignored -> {
             throw new AssertionError("testing candidate");
         }, () -> 8, () -> 0);
-        final Map<Hash256, ModelContent> contents = new HashMap<>();
-        final Map<Hash256, CompletableFuture<ModelRenderTargetLoader.LoadResult>> pending = new HashMap<>();
-        final List<Hash256> starts = new ArrayList<>();
-        final Set<Hash256> denied = new HashSet<>();
-        final Map<Hash256, Integer> interests = new HashMap<>();
-        final ClientDemandCoordinator coordinator =
-            new ClientDemandCoordinator(clock::get, this, selections, () -> this.eager);
+        final Map<ModelId, ModelContent> contents = new HashMap<>();
+        final Map<ModelId, CompletableFuture<ModelRenderTargetLoader.LoadResult>> pending = new HashMap<>();
+        final List<ModelId> starts = new ArrayList<>();
+        final Set<ModelId> denied = new HashSet<>();
+        final Map<ModelId, Integer> interests = new HashMap<>();
+        final ClientDemandCoordinator coordinator;
+        final PlayerPreferences preferences;
         boolean eager;
         final List<ResourceRequest> requests = new ArrayList<>();
-        final Map<Hash256, WorkPriority> priorities = new HashMap<>();
+        final Map<ModelId, WorkPriority> priorities = new HashMap<>();
         int cachedCalls;
         int offlineCalls;
         boolean local;
         int onlineCalls;
         int contentReads;
-        CompletableFuture<Optional<ResourceLease>> cachedProbe;
-        CompletableFuture<Optional<ResourceLease>> offlineProbe;
+        Probe cachedProbe;
+        Probe offlineProbe;
 
         Fixture() {
+            this(null);
+        }
+
+        Fixture(PlayerPreferences preferences) {
+            this.preferences = preferences;
+            coordinator = new ClientDemandCoordinator(clock::get, this, selections, preferences, () -> this.eager);
             selections.trace = this::event;
         }
 
@@ -1344,13 +1284,23 @@ class ClientDemandCoordinatorTest {
             events.add(clock.get() + ":" + effect);
         }
 
-        int marker(Hash256 id) {
-            return Byte.toUnsignedInt(id.bytes()[0]);
+        ModelId sourceId(PublishedModelId id) {
+            return id instanceof PublishedModelId.Model model ? model.hash() : hash(0);
+        }
+
+        public ModelContent content(PublishedModelId id) {
+            return content(sourceId(id));
+        }
+
+        int marker(ModelId id) {
+            return Integer.parseInt(id.toString().substring(5, 7), 16);
         }
 
         void tick() {
             cache.tick();
             coordinator.tick();
+            if (preferences != null)
+                com.elfmcys.ysm.model.storage.PreferenceTestDriver.tick(preferences);
         }
 
         void at(long millis) {
@@ -1384,56 +1334,94 @@ class ClientDemandCoordinatorTest {
         }
 
         void complete(CompletableFuture<ModelRenderTargetLoader.LoadResult> future) throws Exception {
-            var value = (ModelRenderTarget)UnsafeUtil.getUnsafe().allocateInstance(ModelRenderTarget.class);
-            future.complete(new ModelRenderTargetLoader.LoadResult.Ready(
-                ModelRenderTargetLoader.ModelCandidate.testing(value)));
+            var value = metadataTarget(hash(0), List.of());
+            future.complete(
+                new ModelRenderTargetLoader.LoadResult.Ready(ModelRenderTargetLoader.ModelCandidate.testing(value)));
         }
 
         int interests(ClientDemandCoordinator.Target target) {
             return interests.getOrDefault(target.modelId(), 0);
         }
 
-        public ModelContent content(Hash256 id) {
+        public ModelContent content(ModelId id) {
             contentReads++;
             return contents.computeIfAbsent(id, ClientDemandCoordinatorTest::content);
         }
 
-        public ResourceRequest resourceRequest(Hash256 id, String target, String texture, ModelResourcePurpose purpose,
+        public ResourceRequest resourceRequest(ModelId id, String target, String texture, ModelResourcePurpose purpose,
             Class<?> subject) {
-            return new ResourceRequest(id, target, texture, PROFILE, ExpressionBinding.standalone(),
-                purpose);
+            return new ResourceRequest(id, target, texture, PROFILE, ExpressionBinding.standalone(), purpose);
         }
 
         public ResourceRequest defaultResourceRequest(String target, ModelResourcePurpose purpose, Class<?> subject) {
-            return resourceRequest(hash(0), target, "", purpose, subject);
+            return new ResourceRequest(PublishedModelId.INTRINSIC_DEFAULT, target, "", PROFILE,
+                ExpressionBinding.standalone(), purpose);
         }
 
         public boolean permitsAcquisition(ResourceRequest request) {
-            return !denied.contains(request.modelId());
+            return !denied.contains(sourceId(request.modelId()));
         }
 
         RenderTargetKey key(ResourceRequest request, boolean full) {
             return new RenderTargetKey(request.targetId(), request.requestedTexture(), PROFILE,
-                request.expressionBinding(), full ? ModelResourcePurpose.FULL : request.purpose());
+                request.expressionBinding(), full ? ModelResourcePurpose.FULL : request.purpose(),
+                request.modelId().role());
         }
 
         public Optional<ResourceLease> findReady(ResourceRequest request) {
             if (!permitsAcquisition(request))
                 return Optional.empty();
-            return cache.findReady(request, content(request.modelId()), key(request, false),
+            if (request.purpose() == ModelResourcePurpose.FULL && selections.installed != null
+                && request.modelId().equals(selections.installed.identity())) {
+                try {
+                    var target = metadataTarget(sourceId(request.modelId()),
+                        selections.retained == null ? List.of() : java.util.Arrays.asList(selections.retained.names()));
+                    return Optional.of(new ResourceLease() {
+                        boolean ended;
+
+                        public ModelResourcePurpose purpose() {
+                            return request.purpose();
+                        }
+
+                        public AcquireResult poll() {
+                            return ended ? new AcquireResult.Ended() : new AcquireResult.Ready(target);
+                        }
+
+                        public boolean isCurrent(ResourceRequest asked) {
+                            return !ended && request.equals(asked);
+                        }
+
+                        public void cancelPending() {
+                            close();
+                        }
+
+                        public void close() {
+                            ended = true;
+                        }
+                    });
+                } catch (ReflectiveOperationException failure) {
+                    throw new AssertionError(failure);
+                }
+            }
+            return cache.findReady(request, content(sourceId(request.modelId())), key(request, false),
                 (identity, key, asked) -> true).map(lease -> wrap(request, lease));
         }
 
-        public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkPriority priority) {
+        public ResourceLease getOrStartCached(ResourceRequest request, WorkPriority priority) {
             cachedCalls++;
-            return cachedProbe == null ? CompletableFuture.completedFuture(Optional.empty()) : cachedProbe;
+            if (cachedProbe == null)
+                return ResourceLease.missing(request);
+            cachedProbe.request = request;
+            return cachedProbe;
         }
 
-        public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request, WorkPriority priority) {
+        public ResourceLease getOrStartOffline(ResourceRequest request, WorkPriority priority) {
             offlineCalls++;
-            if (offlineProbe != null)
+            if (offlineProbe != null) {
+                offlineProbe.request = request;
                 return offlineProbe;
-            return CompletableFuture.completedFuture(local ? Optional.of(start(request, priority)) : Optional.empty());
+            }
+            return local ? start(request, priority) : ResourceLease.missing(request);
         }
 
         public ResourceLease getOrStart(ResourceRequest request, WorkPriority priority) {
@@ -1442,28 +1430,30 @@ class ClientDemandCoordinatorTest {
         }
 
         private ResourceLease start(ResourceRequest request, WorkPriority priority) {
-            priorities.put(request.modelId(), priority);
-            return wrap(request, cache.getOrStart(request, content(request.modelId()), key(request, false), (ignored, dispatch) -> {
-                requests.add(request);
-                starts.add(request.modelId());
-                event("start:" + marker(request.modelId()));
-                var future = new CompletableFuture<ModelRenderTargetLoader.LoadResult>() {
-                    @Override
-                    public boolean cancel(boolean interrupt) {
-                        event("work-cancel:" + marker(request.modelId()));
-                        return super.cancel(interrupt);
-                    }
-                };
-                future.whenComplete((outcome, error) -> event("work-terminal:" + marker(request.modelId()) + ":"
-                    + (error == null ? outcome.getClass().getSimpleName() : error.getClass().getSimpleName())));
-                pending.put(request.modelId(), future);
-                return future;
-            }, (identity, key, asked) -> true, selections.owner, priority));
+            priorities.put(sourceId(request.modelId()), priority);
+            return wrap(request, cache.getOrStart(request, content(sourceId(request.modelId())), key(request, false),
+                (ignored, dispatch) -> {
+                    requests.add(request);
+                    starts.add(sourceId(request.modelId()));
+                    event("start:" + marker(sourceId(request.modelId())));
+                    var future = new CompletableFuture<ModelRenderTargetLoader.LoadResult>() {
+                        @Override
+                        public boolean cancel(boolean interrupt) {
+                            event("work-cancel:" + marker(sourceId(request.modelId())));
+                            return super.cancel(interrupt);
+                        }
+                    };
+                    future.whenComplete(
+                        (outcome, error) -> event("work-terminal:" + marker(sourceId(request.modelId())) + ":"
+                            + (error == null ? outcome.getClass().getSimpleName() : error.getClass().getSimpleName())));
+                    pending.put(sourceId(request.modelId()), future);
+                    return future;
+                }, (identity, key, asked) -> true, selections.owner, priority));
         }
 
         ResourceLease wrap(ResourceRequest request, ResourceLease inner) {
-            interests.merge(request.modelId(), 1, Integer::sum);
-            event("acquire:" + marker(request.modelId()));
+            interests.merge(sourceId(request.modelId()), 1, Integer::sum);
+            event("acquire:" + marker(sourceId(request.modelId())));
             return new ResourceLease() {
                 boolean closed;
 
@@ -1487,8 +1477,8 @@ class ClientDemandCoordinatorTest {
                     if (!closed) {
                         closed = true;
                         inner.close();
-                        interests.merge(request.modelId(), -1, Integer::sum);
-                        event("release:" + marker(request.modelId()));
+                        interests.merge(sourceId(request.modelId()), -1, Integer::sum);
+                        event("release:" + marker(sourceId(request.modelId())));
                     }
                 }
             };
@@ -1515,40 +1505,65 @@ class ClientDemandCoordinatorTest {
         java.util.function.Consumer<String> trace = ignored -> {
         };
         Object owner = new Object();
+        UUID player = new UUID(0, 1);
+        Object preferenceBinding = new Object();
+        NamedRoamingSnapshot retained = fromMap(Map.of());
+        RuntimeException sendFailure;
         ClientDemandCoordinator.Target authority = new ClientDemandCoordinator.Target(null, "");
         ClientDemandCoordinator.Target installed;
+        Object installedApplication;
         final List<ClientDemandCoordinator.Target> sent = new ArrayList<>();
         final List<Long> ids = new ArrayList<>();
+        final List<NamedRoamingSnapshot> initials = new ArrayList<>();
+        final List<Boolean> reinitializes = new ArrayList<>();
         final List<Throwable> failures = new ArrayList<>();
+        final List<Throwable> readFailures = new ArrayList<>();
 
         public ClientDemandCoordinator.SelectionContext context() {
-            return new ClientDemandCoordinator.SelectionContext(owner, true, true);
+            return new ClientDemandCoordinator.SelectionContext(owner, player, preferenceBinding, true, true);
         }
 
         public ClientDemandCoordinator.Target authority() {
             return authority;
         }
 
-        public boolean installed(ClientDemandCoordinator.Target target) {
-            return target.equals(installed);
+        public boolean installed(ClientDemandCoordinator.Target target, Object application) {
+            return target.equals(installed)
+                && (application == null || installedApplication == null || installedApplication == application);
         }
 
-        public void send(ClientDemandCoordinator.Target target, long id) {
+        public ClientDemandCoordinator.InitialRoaming retainedInitial(ClientDemandCoordinator.SelectionContext context,
+            ClientDemandCoordinator.Target target) {
+            return retained == null ? null : new ClientDemandCoordinator.InitialRoaming(retained, true);
+        }
+
+        public void send(ClientDemandCoordinator.SelectionContext context, ClientDemandCoordinator.Target target,
+            long id, NamedRoamingSnapshot initial, boolean reinitialize) {
+            assertTrue(context.matches(context()));
+            assertNotNull(initial);
             sent.add(target);
             ids.add(id);
-            trace.accept("send:"
-                + (target.modelId() == null ? "default" : Byte.toUnsignedInt(target.modelId().bytes()[0])) + ":" + id);
+            initials.add(initial);
+            reinitializes.add(reinitialize);
+            trace.accept("send:" + (target.modelId() == null ? "default"
+                : Integer.parseInt(target.modelId().toString().substring(5, 7), 16)) + ":" + id);
+            if (sendFailure != null)
+                throw sendFailure;
         }
 
         public void reportFailure(Throwable failure) {
             failures.add(failure);
             trace.accept("selection-terminal:" + failure.getMessage());
         }
+
+        public void reportPreferenceReadFailure(Throwable failure) {
+            readFailures.add(failure);
+        }
     }
 
     private static final class Receiver
         implements ClientDemandCoordinator.Installation, ClientDemandCoordinator.CardDisplay, AutoCloseable {
-        ClientDemandCoordinator.EntityScope scope;
+        EntityModelDemand scope;
         ModelResourceDemand.Mode mode;
         final Fixture fixture;
         final ModelResourcePurpose purpose;
@@ -1603,7 +1618,7 @@ class ClientDemandCoordinatorTest {
             lease = candidate;
             installed = request;
             full = candidate.purpose() == ModelResourcePurpose.FULL;
-            fixture.event("install:" + fixture.marker(request.modelId()));
+            fixture.event("install:" + fixture.marker(fixture.sourceId(request.modelId())));
             return ClientDemandCoordinator.InstallationResult.INSTALLED;
         }
 
@@ -1615,29 +1630,40 @@ class ClientDemandCoordinatorTest {
         }
     }
 
+    private static ModelRenderTarget metadataTarget(ModelId id, List<String> fields)
+        throws ReflectiveOperationException {
+        var store = com.elfmcys.ysm.expression.aot.TestExpressionModules.store(
+            com.elfmcys.ysm.expression.aot.TestExpressionModules.create(new java.util.LinkedHashSet<>(fields)),
+            Map.of());
+        return new ModelRenderTarget(id, "main", new RenderTargetResources() {},
+            (CommonAsset)UnsafeUtil.getUnsafe().allocateInstance(CommonAsset.class), store,
+            (com.elfmcys.ysm.format.schema.model.views.ModelInfoView)UnsafeUtil.getUnsafe()
+                .allocateInstance(com.elfmcys.ysm.format.schema.model.views.ModelInfoView.class));
+    }
+
     static ClientDemandCoordinator.Target target(int marker) {
         return new ClientDemandCoordinator.Target(hash(marker), "main");
     }
 
-    static Hash256 hash(int marker) {
+    static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
-    static ModelContent content(Hash256 id) {
-        return content(id, hash(100 + Byte.toUnsignedInt(id.bytes()[0])));
+    static ModelContent content(ModelId id) {
+        return content(id, hash(100 + Integer.parseInt(id.toString().substring(5, 7), 16)));
     }
 
-    static ModelContent content(Hash256 id, Hash256 containerId) {
+    static ModelContent content(ModelId id, ModelId containerId) {
         try {
             var representation =
                 (ModelRepresentation)UnsafeUtil.getUnsafe().allocateInstance(ModelRepresentation.class);
             var field = ModelRepresentation.class.getDeclaredField("identity");
             field.setAccessible(true);
-            field.set(representation, new ModelFileIdentity(id, containerId));
+            field.set(representation, new ModelFileIdentity(id, Hash256.parse(containerId.toString().substring(5))));
             return new ModelContent() {
-                public Hash256 modelId() {
+                public ModelId modelId() {
                     return id;
                 }
 

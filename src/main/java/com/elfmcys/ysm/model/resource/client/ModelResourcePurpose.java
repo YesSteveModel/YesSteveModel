@@ -2,7 +2,7 @@ package com.elfmcys.ysm.model.resource.client;
 
 /** The input closure is independent of acquisition policy and subject specialization. */
 public enum ModelResourcePurpose {
-    FULL("full-v1"), GUI("gui-closure-v1");
+    FULL("full-v1"), GUI("gui-v1");
 
     private final String ruleId;
 

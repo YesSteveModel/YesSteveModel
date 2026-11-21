@@ -17,15 +17,18 @@ import java.util.function.Supplier;
 /**
  * Sole owner of accepted resource packets, fragment cursors, retries and global rate limiting.
  *
- * <p><b>Invariant:</b> Queue acceptance is neither transmission completion nor client publication.
- * Retrying rebuilds only the current fragment. Session keys are exact ServerModelSession objects;
- * the caller must already establish their connection and business eligibility.
+ * <p>
+ * <b>Invariant:</b> Queue acceptance is neither transmission completion nor client publication. Retrying rebuilds only
+ * the current fragment. Session keys are exact ServerModelSession objects; the caller must already establish their
+ * connection and business eligibility.
  *
- * <p><b>Execution:</b> The producer serializes fragment production and transport attempts per session.
- * Detached packet close and production-failure callbacks run outside the dispatch session monitor.
- * Close seals queues and joins the producer; the producer must not close its own worker.
+ * <p>
+ * <b>Execution:</b> The producer serializes fragment production and transport attempts per session. Detached packet
+ * close and production-failure callbacks run outside the dispatch session monitor. Close seals queues and joins the
+ * producer; the producer must not close its own worker.
  *
- * <p><b>Seam:</b> [dispatch ownership frontier](docs/architecture/network/overview.md#传输接管与发送终态).
+ * <p>
+ * <b>Seam:</b> [dispatch ownership frontier](docs/architecture/network/overview.md#传输接管与发送终态).
  */
 public final class ResourceDispatchWorker implements AutoCloseable {
     public static final long RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(100);

@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.client.controller;
 
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
-import com.elfmcys.ysm.model.resource.client.CommonAsset;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 
@@ -23,12 +23,11 @@ public class AnimationControllerCollection<T extends AnimatableEntity<?>, TModel
         initialized = true;
     }
 
-    public BiConsumer<T, AnimationData> build(TModel model, CommonAsset assets,
-        com.elfmcys.ysm.model.resource.client.AnimationStore source) {
+    public BiConsumer<T, AnimationData> build(TModel model, AnimationStore.View source) {
         var factories = new ReferenceArrayList<ControllerFactory<T>>(discoveries.size());
         try (var phase = source.openReadPhase()) {
             for (var discovery : discoveries) {
-                factories.add(discovery.process(model, assets, phase.animations()));
+                factories.add(discovery.process(model, phase.animations()));
             }
         } catch (java.io.IOException failure) {
             throw new java.io.UncheckedIOException(failure);

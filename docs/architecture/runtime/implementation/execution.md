@@ -1,23 +1,24 @@
 # 执行容量映射
 
-本页落实[有限工作与发布](../overview.md#有限工作调度与领域交接)和[客户端资源调度](../overview.md#客户端资源调度)，只定位执行、交接与终态责任。
+本页落实[有限工作与发布](../overview.md#有限工作调度与领域交接)和[客户端资源调度](../overview.md#客户端资源调度)，定位各线程池的执行边界、交接路径与收尾责任。
 
 ## 工作线程与发布线程
 
 | 执行环境 | 当前交接关系 |
 |---|---|
-| Catalog coordinator / 验证池 | Coordinator 组织完整 candidate 并交最新槽位；worker 只交完整 outcome，不等主线程 ACK |
-| `ClientResourceScheduler` | 本地玩家与后台独立排队和领取；Flight、共享准备和 required bootstrap 消费各自结果 |
-| Server runtime worker | 网络输入齐全后做有限读取与准备；terminal 只入本 runtime queue |
-| Java 动画 worker | 使用本 entity generation 的私有状态，串行求值与 extract；observation 不能提交 effect |
-| `ResourceDispatchWorker` | 独占已接纳传输的 outbound cursor，不裁决游戏权限 |
-| Native render worker | 只消费冻结 task 并写指定区间，不读取 `Entity`、Molang 或宿主纹理对象 |
-| Minecraft render thread | 完成纹理注册、上传、render adapter 调用及顶点提交 |
+| Catalog 协调线程与验证池 | 协调线程汇总完整目录候选并写入最新槽位；验证 worker 只返回完整结果，不等待主线程 ACK |
+| `ClientResourceScheduler` | 本地玩家与后台队列分开排队和领取；Flight、共享准备和 required bootstrap 各自消费结果 |
+| 服务端资源 worker | 在网络输入齐全后执行有界读取与准备；结果只投递回本 runtime 队列 |
+| Java 动画 worker | 基于实体当前代次的私有状态串行求值并执行 Extract；纯观测路径不能提交游戏 effect |
+| `ResourceDispatchWorker` | 独占已接纳传输的出站游标与关闭权，不参与游戏权限判断 |
+| Native render worker | 只消费冻结的渲染任务并写入指定区间，不访问 `Entity`、Molang 或宿主纹理对象 |
+| `DatabaseWork` | 独立的低优先级 worker 串行执行短数据库操作，实行有界接纳；关闭时等待当前同步 JNI 返回再释放连接 |
+| Minecraft render thread | 负责纹理注册、上传、render adapter 调用以及最终顶点提交 |
 
-`ClientResourceScheduler` 的专用本地玩家 worker 不领取后台队列。提升与领取共同裁决同一未领取节点；通知 timer 不执行加载或解码。业务 owner 仍拥有取消和未交付输入，不把 scheduler 的撤队列结果当作资源终态。
+`ClientResourceScheduler` 划出的专用本地玩家 worker 绝不领取后台队列的任务。优先级提升与任务领取共同竞争同一个未领取节点；通知定时器（timer）本身不执行加载或解码。业务负责方仍掌握取消与未交付输入的清理权，不能把调度器撤出队列的结果直接当成资源已结束。
 
 ## 线程策略
 
-原 owner 的 thread factory 用 `ThreadScheduling.entry(role, policy, body)` 包装整个 worker loop。该门面不创建 executor，也不接管任务终态。Catalog coordinator、后台资源与临时编译采用低档策略；Catalog 验证区分首次与后续策略。本地玩家、动画与 dispatch 保留正常 owner 的创建路径。
+原负责方的线程工厂使用 `ThreadScheduling.entry(role, policy, body)` 包装整个 worker 循环，并把自建后台线程设为 daemon，以此落实[进程退出](../overview.md#jvm-进程退出)决策。这层门面既不创建 executor，也不接管任务生命周期。Catalog 协调线程、后台资源加载、数据库执行和临时编译采用低档策略；Catalog 验证池则区分首次扫描与后续扫描采用不同策略。本地玩家加载、动画求值与网络 dispatch 沿用正常负责方的创建路径。
 
-不能从低档 worker 懒创建正常池，再用 `Thread.setPriority(5)` 推定恢复 OS 状态。JDK 内部线程与非默认 JVM priority policy 需独立验证。平台映射和部分失败见[Native 调度](../../native-runtime/overview.md#调用线程调度)；策略本身不证明帧率收益。
+禁止在低档后台 worker 里懒创建正常优先级的线程池，也不能指望通过 `Thread.setPriority(5)` 恢复已被降低的 OS 调度属性。JDK 内部线程以及非默认的 JVM 优先级策略需要单独验证。各平台的系统调用映射与部分失败处理见[Native 调度](../../native-runtime/overview.md#调用线程调度)；设置线程策略本身不代表已验证帧率收益。

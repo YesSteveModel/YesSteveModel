@@ -3,8 +3,10 @@ package com.elfmcys.ysm.client.entity;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.expression.host.ExecutionFailure;
+import com.elfmcys.ysm.util.CleanupFailures;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.resource.client.*;
 import com.elfmcys.ysm.model.service.ClientModelService;
@@ -15,14 +17,18 @@ import java.util.*;
 import java.util.function.LongSupplier;
 
 /**
- * Owns complete installations and exact installation failures; resource acquisition belongs to the demand coordinator.
+ * Owns complete installations and exact installation failures; candidates belong to the entity's demand owner.
  *
- * <p>Execution: the caller holds the owner's installation window for acceptance, replacement, and release.
- * This binding does not join tasks or reserve that window for a later call.
+ * <p>
+ * Execution: the caller holds the owner's installation window for acceptance, replacement, and release. This binding
+ * does not join tasks or reserve that window for a later call.
  *
- * <p>Ownership: an accepted attempt owns the supplied lease until a holder takes ownership or the attempt closes it.
+ * <p>
+ * Ownership: an accepted attempt owns the supplied lease until a holder takes ownership or the attempt closes it.
  *
- * <p>Seam: implements [complete installation and replacement](docs/architecture/animation/entity-lifecycle.md#模型使用与完整安装) and [installation publication](docs/architecture/animation/entity-lifecycle.md#安装发布结果).
+ * <p>
+ * Seam: implements [complete installation and replacement](docs/architecture/animation/entity-lifecycle.md#模型使用与完整安装)
+ * and [installation publication](docs/architecture/animation/entity-lifecycle.md#安装发布结果).
  */
 final class EntityModelBinding implements AutoCloseable {
     @FunctionalInterface
@@ -30,8 +36,9 @@ final class EntityModelBinding implements AutoCloseable {
         /**
          * Builds a private complete candidate using the supplied lease, without publishing the holder.
          *
-         * <p>Ownership: a non-null holder must own that exact lease. The acceptance operation closes the lease
-         * if creation throws or returns null. Candidate cleanup must not close the previous installation.
+         * <p>
+         * Ownership: a non-null holder must own that exact lease. The acceptance operation closes the lease if creation
+         * throws or returns null. Candidate cleanup must not close the previous installation.
          *
          * @return the prepared candidate, or null when preparation rejects the attempt
          */
@@ -40,14 +47,28 @@ final class EntityModelBinding implements AutoCloseable {
     }
 
     interface ModelAccess {
-        @Nullable
-        ModelContent content(Hash256 modelId);
+        /** Owns the fixed bake profile and subject bindings used by this access. */
+        default Object requestOwner() {
+            return this;
+        }
 
-        ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName);
+        /** Returns current immutable content; a declaration change publishes a different content identity. */
+        @Nullable
+        ModelContent content(ModelId modelId);
+
+        default @Nullable ModelContent content(PublishedModelId modelId) {
+            return modelId instanceof PublishedModelId.Model model ? content(model.hash()) : null;
+        }
+
+        default @Nullable ModelId builtinDefaultModelId() {
+            return null;
+        }
+
+        ResourceRequest resourceRequest(ModelId modelId, String targetId, String textureName);
 
         ResourceRequest defaultResourceRequest(String targetId);
 
-        default ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName,
+        default ResourceRequest resourceRequest(ModelId modelId, String targetId, String textureName,
             ModelResourcePurpose purpose, Class<?> subjectType) {
             var request = resourceRequest(modelId, targetId, textureName);
             return new ResourceRequest(request.modelId(), request.targetId(), request.requestedTexture(),
@@ -68,8 +89,8 @@ final class EntityModelBinding implements AutoCloseable {
 
     private final ModelAccess models;
     private final LongSupplier clock;
-    private boolean assigned;
     private ModelIntent intent;
+    private Object installedSelectionOperation;
     private AnimatableEntity.ResourceHolder resourceHolder;
     private ResourceRequest installedRequest;
     private ModelContent installedContent;
@@ -78,6 +99,9 @@ final class EntityModelBinding implements AutoCloseable {
     private Throwable installationFailure;
     private ModelResourcePurpose purpose = ModelResourcePurpose.FULL;
     private Class<?> subjectType;
+    // Content fixes the manifest; local mutations clear this projection, and Catalog lookup detects
+    // replacement/removal.
+    private RequestRelation requestRelation;
 
     EntityModelBinding() {
         this(new ClientModelAccess());
@@ -97,36 +121,67 @@ final class EntityModelBinding implements AutoCloseable {
         return models.coordinator(clock);
     }
 
-    void updateModelHash(@Nullable Hash256 hash) {
+    void updateModelHash(@Nullable ModelId hash) {
         updateModelHash(hash, "player", "");
     }
 
-    void updateModelHash(@Nullable Hash256 hash, String targetId, String texture) {
-        assigned = true;
-        var next = new ModelIntent(hash, targetId, texture);
+    void updateModelHash(@Nullable ModelId hash, String targetId, String texture) {
+        var operation = intent == null || !Objects.equals(intent.modelId(), hash) ? new Object() : intent.operation();
+        select(hash, targetId, texture, operation);
+    }
+
+    void select(@Nullable ModelId hash, String targetId, String texture, Object operation) {
+        var next = new ModelIntent(hash, targetId, texture, Objects.requireNonNull(operation));
         if (!next.equals(intent)) {
+            requestRelation = null;
             intent = next;
             installationFailure = null;
         }
     }
 
+    Object selectionOperation() {
+        return intent == null ? null : intent.operation();
+    }
+
+    String selectedTexture() {
+        return intent == null ? "" : intent.textureName();
+    }
+
+    boolean usageMatchesOperation() {
+        return resourceHolder != null && installedSelectionOperation == selectionOperation();
+    }
+
+    void requestBuiltinDefault() {
+        select(null, "player", "", new Object());
+    }
+
     boolean isAssigned() {
-        return assigned;
+        return intent != null;
     }
 
     void revokeAssignment() {
-        assigned = false;
+        requestRelation = null;
         intent = null;
     }
 
     @Nullable
-    Hash256 modelHash() {
+    ModelId modelHash() {
         return intent == null ? null : intent.modelId();
     }
 
     @Nullable
     AnimatableEntity.ResourceHolder resourceHolder() {
         return resourceHolder;
+    }
+
+    @Nullable
+    PublishedModelId installedModelId() {
+        return installedRequest == null ? null : installedRequest.modelId();
+    }
+
+    @Nullable
+    ResourceRequest installedRequest() {
+        return installedRequest;
     }
 
     ClientDemandCoordinator.Assignment assignment(String target, String texture, String fallback,
@@ -136,14 +191,24 @@ final class EntityModelBinding implements AutoCloseable {
         var defaultRequest =
             fallback == null || fallback.isBlank() ? null : models.defaultResourceRequest(fallback, purpose, subject);
         var hash = modelHash();
-        var request = intrinsicDefaultOnly() || hash == null ? defaultRequest
-            : target == null || target.isBlank() || models.content(hash) == null ? null
-                : models.resourceRequest(hash, target, texture, purpose, subject);
-        return new ClientDemandCoordinator.Assignment(request, defaultRequest, mode, assigned);
+        var request = intrinsicDefaultOnly() ? defaultRequest
+            : hash == null
+                ? target == null || target.isBlank() ? null : intrinsicRequest(target, texture, purpose, subject)
+                : target == null || target.isBlank() || models.content(hash) == null ? null
+                    : models.resourceRequest(hash, target, texture, purpose, subject);
+        return new ClientDemandCoordinator.Assignment(request, defaultRequest, mode, isAssigned(),
+            selectionOperation());
     }
 
     boolean matches(ResourceRequest request, boolean full) {
-        return resourceHolder != null && (!full || installedFull) && resourceHolder.lease().isCurrent(request);
+        return resourceHolder != null && installedSelectionOperation == selectionOperation() && (!full || installedFull)
+            && resourceHolder.lease().isCurrent(request);
+    }
+
+    boolean installedForSelection(Object operation) {
+        return resourceHolder != null && installedSelectionOperation == operation && intent != null
+            && installedRequest != null && installedRequest.modelId().equals(intent.modelId() == null
+                ? PublishedModelId.INTRINSIC_DEFAULT : PublishedModelId.model(intent.modelId()));
     }
 
     boolean matchesSelection(ClientDemandCoordinator.Target target) {
@@ -152,6 +217,13 @@ final class EntityModelBinding implements AutoCloseable {
                 : models.resourceRequest(target.modelId(), "player", target.texture(), ModelResourcePurpose.FULL,
                     net.minecraft.client.player.AbstractClientPlayer.class);
         return matches(request, true);
+    }
+
+    private ResourceRequest intrinsicRequest(String target, String texture, ModelResourcePurpose purpose,
+        Class<?> subject) {
+        var required = models.defaultResourceRequest(target, purpose, subject);
+        return new ResourceRequest(required.modelId(), required.targetId(), texture, required.bakeProfile(),
+            required.expressionBinding(), purpose);
     }
 
     @Nullable
@@ -168,20 +240,24 @@ final class EntityModelBinding implements AutoCloseable {
     /**
      * Consumes one installation attempt inside an already established installation window.
      *
-     * <p>Ensures: INSTALLED follows holder publication, including a later observer failure.
-     * Private candidate failure preserves the old holder. Failed activation of shared mutable state ends the old use without rollback.
+     * <p>
+     * Ensures: INSTALLED follows holder publication, including a later observer failure. Private candidate failure
+     * preserves the old holder. Failed activation of shared mutable state ends the old use without rollback.
      *
-     * <p>Failure: stale request or preparation identity returns STALE. Exact remembered failure or candidate
-     * rejection returns REJECTED. Runtime installation failure records the exact request/content pair.
-     * Required-default failure before publication propagates from this boundary.
+     * <p>
+     * Failure: stale request or preparation identity returns STALE. Exact remembered failure or candidate rejection
+     * returns REJECTED. Runtime installation failure records the exact request/content pair. Required-default failure
+     * before publication propagates from this boundary.
      *
-     * <p>Ownership: all entered outcomes consume the supplied lease. The caller must not close or reuse that lease afterward.
+     * <p>
+     * Ownership: all entered outcomes consume the supplied lease. The caller must not close or reuse that lease
+     * afterward.
      *
      * @return the publication result; this method does not return BUSY
      */
     ClientDemandCoordinator.InstallationResult accept(ResourceRequest request, ResourceLease lease, boolean fallback,
         boolean full, ResourceFactory factory) {
-        if (!assigned || !lease.isCurrent(request)) {
+        if (!isAssigned() || !lease.isCurrent(request)) {
             lease.close();
             return ClientDemandCoordinator.InstallationResult.STALE;
         }
@@ -199,6 +275,8 @@ final class EntityModelBinding implements AutoCloseable {
         try {
             if (!installReady(lease, request, content, fallback, factory)) {
                 installationFailure = new IllegalStateException("Resource installation was rejected");
+                if (request.modelId().isIntrinsicDefault())
+                    throw (IllegalStateException)installationFailure;
                 rejectedInstallations.put(request,
                     new ContentFailure(new WeakReference<>(content), installationFailure));
                 return ClientDemandCoordinator.InstallationResult.REJECTED;
@@ -216,24 +294,38 @@ final class EntityModelBinding implements AutoCloseable {
             }
             installationFailure = failure;
             if (failure instanceof OutOfMemoryError) {
-                if (request.modelId().equals(models.defaultResourceRequest("player").modelId()))
+                if (request.modelId().isIntrinsicDefault())
                     throw failure;
                 return ClientDemandCoordinator.InstallationResult.REJECTED;
             }
             rejectedInstallations.put(request, new ContentFailure(new WeakReference<>(content), failure));
-            if (request.modelId().equals(models.defaultResourceRequest("player").modelId()))
+            if (request.modelId().isIntrinsicDefault())
                 throw failure;
             return ClientDemandCoordinator.InstallationResult.REJECTED;
         }
     }
 
-    void failExpression(ExecutionFailure failure, @Nullable String fallback, ResourceFactory factory) {
-        if (failure.reason() != ExecutionFailure.Reason.NON_NULL_RETURN || resourceHolder == null
-            || isIntrinsicDefault())
-            throw failure;
-        var notice = rejectActiveInstallation(resourceHolder, failure);
-        reportFailure(notice, fallback != null);
-        replaceResourceHolder(null, null, null);
+    void failExpression(ExecutionFailure failure, @Nullable String fallback, Runnable endUse) {
+        Throwable primary = null;
+        try {
+            if (failure.reason() != ExecutionFailure.Reason.INSTANCE_EXECUTION || resourceHolder == null
+                || isIntrinsicDefault())
+                throw failure;
+            var notice = rejectActiveInstallation(resourceHolder, failure);
+            reportFailure(notice, fallback != null);
+        } catch (RuntimeException | Error rejection) {
+            primary = EntityExecutionLifecycle.appendFailure(failure, rejection, false);
+        }
+        try {
+            // The entity owns private execution and must release it before the target lease.
+            endUse.run();
+        } catch (RuntimeException | Error cleanup) {
+            primary = EntityExecutionLifecycle.appendFailure(primary == null ? failure : primary, cleanup, false);
+        }
+        if (primary instanceof RuntimeException runtime)
+            throw runtime;
+        if (primary instanceof Error error)
+            throw error;
     }
 
     @Nullable
@@ -253,11 +345,13 @@ final class EntityModelBinding implements AutoCloseable {
             models.reportActiveModelFailure(notice.content(), fallbackAvailable);
     }
 
-    record FailureNotice(RuntimeException cause, @Nullable ResourceRequest request,
-        @Nullable ModelContent content, boolean intrinsicDefault) {}
+    record FailureNotice(RuntimeException cause, @Nullable ResourceRequest request, @Nullable ModelContent content,
+        boolean intrinsicDefault) {
+    }
 
     void installReadyForPreview(ResourceRequest request, ResourceLease lease, ResourceFactory factory) {
-        updateModelHash(request.modelId(), request.targetId(), request.requestedTexture());
+        updateModelHash(request.modelId() instanceof PublishedModelId.Model model ? model.hash() : null,
+            request.targetId(), request.requestedTexture());
         if (accept(request, lease, false, request.purpose() == ModelResourcePurpose.FULL,
             factory) != ClientDemandCoordinator.InstallationResult.INSTALLED)
             throw new IllegalArgumentException("Preview resource lease was rejected");
@@ -265,7 +359,7 @@ final class EntityModelBinding implements AutoCloseable {
 
     private boolean installReady(ResourceLease lease, ResourceRequest request, @Nullable ModelContent content,
         boolean fallback, ResourceFactory factory) {
-        final Object revision = intent;
+        final Object revision = selectionOperation();
         final AnimatableEntity.ResourceHolder next;
         try {
             next = factory.create(lease, fallback);
@@ -273,14 +367,10 @@ final class EntityModelBinding implements AutoCloseable {
             try {
                 lease.close();
             } catch (RuntimeException | Error cleanupFailure) {
-                if ((cleanupFailure instanceof VirtualMachineError && !(cleanupFailure instanceof OutOfMemoryError)
-                    || cleanupFailure instanceof ThreadDeath)
-                    && !(error instanceof VirtualMachineError || error instanceof ThreadDeath)) {
-                    cleanupFailure.addSuppressed(error);
-                    throw cleanupFailure;
-                }
-                if (cleanupFailure != error)
-                    error.addSuppressed(cleanupFailure);
+                var primary = CleanupFailures.merge(error, cleanupFailure);
+                if (primary instanceof Error fatal)
+                    throw fatal;
+                throw (RuntimeException)primary;
             }
             throw error;
         }
@@ -293,7 +383,7 @@ final class EntityModelBinding implements AutoCloseable {
             lease.close();
             throw new IllegalStateException("Resource factory did not transfer the supplied lease");
         }
-        if (revision != intent || !lease.isCurrent(request)) {
+        if (revision != selectionOperation() || !lease.isCurrent(request)) {
             next.close();
             throw new java.util.concurrent.CancellationException("Installation candidate is no longer current");
         }
@@ -306,31 +396,44 @@ final class EntityModelBinding implements AutoCloseable {
                 resourceHolder = next;
                 installedRequest = request;
                 installedContent = content;
-            }, () -> revision == intent && lease.isCurrent(request));
+                installedSelectionOperation = revision;
+                requestRelation = null;
+            }, () -> revision == selectionOperation() && lease.isCurrent(request));
         } catch (RuntimeException | Error failure) {
-            try {
-                if (next.sharedStateActivationStarted()) {
-                    if (!(failure instanceof java.util.concurrent.CancellationException)) {
-                        failure.addSuppressed(new ActivationProvenance(previousRequest, previousContent, request,
-                            candidateContent));
-                        installationFailure = failure;
-                        rejectedInstallations.put(request, new ContentFailure(new WeakReference<>(content), failure));
-                    }
+            var sharedActivation = next.sharedStateActivationStarted();
+            Throwable abortFailure = null;
+            Throwable closeFailure = null;
+            if (sharedActivation) {
+                try {
                     next.abortSharedStateActivation();
+                } catch (RuntimeException | Error cleanupFailure) {
+                    abortFailure = cleanupFailure;
                 }
-            } catch (RuntimeException | Error cleanupFailure) {
-                if (cleanupFailure != failure)
-                    failure.addSuppressed(cleanupFailure);
             }
             if (resourceHolder != next) {
                 try {
                     next.close();
                 } catch (RuntimeException | Error cleanupFailure) {
-                    if (cleanupFailure != failure)
-                        failure.addSuppressed(cleanupFailure);
+                    closeFailure = cleanupFailure;
                 }
             }
-            throw failure;
+            // Diagnostics can allocate; neither failed bookkeeping nor suppression may skip either cleanup.
+            Throwable primary = CleanupFailures.merge(failure, abortFailure);
+            primary = CleanupFailures.merge(primary, closeFailure);
+            if (sharedActivation && !(failure instanceof java.util.concurrent.CancellationException)
+                && !(failure instanceof OutOfMemoryError)) {
+                try {
+                    failure.addSuppressed(
+                        new ActivationProvenance(previousRequest, previousContent, request, candidateContent));
+                    installationFailure = failure;
+                    rejectedInstallations.put(request, new ContentFailure(new WeakReference<>(content), failure));
+                } catch (RuntimeException | Error diagnosticFailure) {
+                    primary = CleanupFailures.merge(primary, diagnosticFailure);
+                }
+            }
+            if (primary instanceof Error error)
+                throw error;
+            throw (RuntimeException)primary;
         }
         if (previous != null && previous != next) {
             try {
@@ -365,10 +468,24 @@ final class EntityModelBinding implements AutoCloseable {
             this.candidateContent = candidateContent;
         }
 
-        @Nullable ResourceRequest previousRequest() { return previousRequest; }
-        @Nullable ModelFileIdentity previousContent() { return previousContent; }
-        ResourceRequest candidateRequest() { return candidateRequest; }
-        @Nullable ModelFileIdentity candidateContent() { return candidateContent; }
+        @Nullable
+        ResourceRequest previousRequest() {
+            return previousRequest;
+        }
+
+        @Nullable
+        ModelFileIdentity previousContent() {
+            return previousContent;
+        }
+
+        ResourceRequest candidateRequest() {
+            return candidateRequest;
+        }
+
+        @Nullable
+        ModelFileIdentity candidateContent() {
+            return candidateContent;
+        }
     }
 
     private void replaceResourceHolder(@Nullable AnimatableEntity.ResourceHolder next,
@@ -377,7 +494,9 @@ final class EntityModelBinding implements AutoCloseable {
         resourceHolder = next;
         installedRequest = request;
         installedContent = content;
+        installedSelectionOperation = null;
         installedFull = false;
+        requestRelation = null;
         if (previous != null && previous != next)
             previous.close();
     }
@@ -408,13 +527,12 @@ final class EntityModelBinding implements AutoCloseable {
     }
 
     static boolean intrinsicDefaultOnly() {
-        return com.elfmcys.ysm.network.forge.ClientSessionRuntime.state()
+        return com.elfmcys.ysm.network.forge.ClientSessionRuntime.stateInReadWindow()
             .orElse(null) == com.elfmcys.ysm.model.session.client.ClientModelSession.State.INTRINSIC_DEFAULT_ONLY;
     }
 
     boolean isIntrinsicDefault() {
-        return installedRequest != null
-            && installedRequest.modelId().equals(models.defaultResourceRequest("player").modelId());
+        return installedRequest != null && installedRequest.modelId().isIntrinsicDefault();
     }
 
     AnimatableEntity.InstallationRelation relation(String target, String texture) {
@@ -425,12 +543,29 @@ final class EntityModelBinding implements AutoCloseable {
         Class<?> subject) {
         if (resourceHolder == null)
             return AnimatableEntity.InstallationRelation.UNBOUND;
-        var request = modelHash() == null ? models.defaultResourceRequest(target, purpose, subject)
-            : target == null ? null : models.resourceRequest(modelHash(), target, texture, purpose, subject);
-        if (request != null && matches(request, false))
-            return AnimatableEntity.InstallationRelation.MATCHING;
-        return isIntrinsicDefault() ? AnimatableEntity.InstallationRelation.DEFAULT_SUBSTITUTE
-            : AnimatableEntity.InstallationRelation.RETAINED;
+        var hash = modelHash();
+        var owner = models.requestOwner();
+        var previous = requestRelation;
+        var modelId = previous != null && Objects.equals(previous.hash(), hash) ? previous.modelId()
+            : hash == null ? PublishedModelId.INTRINSIC_DEFAULT : PublishedModelId.model(hash);
+        var content = models.content(modelId);
+        if (previous != null && Objects.equals(previous.hash(), hash) && Objects.equals(previous.target(), target)
+            && Objects.equals(previous.texture(), texture) && previous.purpose() == purpose
+            && previous.subject() == subject && previous.owner() == owner && previous.content() == content)
+            return previous.relation();
+        var request = hash == null ? intrinsicRequest(target, texture, purpose, subject)
+            : target == null ? null : models.resourceRequest(hash, target, texture, purpose, subject);
+        var relation = request != null && matches(request, false) ? AnimatableEntity.InstallationRelation.MATCHING
+            : isIntrinsicDefault() ? AnimatableEntity.InstallationRelation.DEFAULT_SUBSTITUTE
+                : AnimatableEntity.InstallationRelation.RETAINED;
+        requestRelation =
+            new RequestRelation(hash, modelId, target, texture, purpose, subject, owner, content, relation);
+        return relation;
+    }
+
+    private record RequestRelation(@Nullable ModelId hash, PublishedModelId modelId, String target, String texture,
+        ModelResourcePurpose purpose, Class<?> subject, Object owner, @Nullable ModelContent content,
+        AnimatableEntity.InstallationRelation relation) {
     }
 
     @Override
@@ -443,7 +578,7 @@ final class EntityModelBinding implements AutoCloseable {
     private record ContentFailure(WeakReference<ModelContent> content, Throwable cause) {
     }
 
-    private record ModelIntent(@Nullable Hash256 modelId, String targetId, String textureName) {
+    private record ModelIntent(@Nullable ModelId modelId, String targetId, String textureName, Object operation) {
         private ModelIntent {
             targetId = Objects.requireNonNullElse(targetId, "");
             textureName = Objects.requireNonNullElse(textureName, "");
@@ -456,12 +591,33 @@ final class EntityModelBinding implements AutoCloseable {
         }
 
         @Override
-        public @Nullable ModelContent content(Hash256 modelId) {
-            return service().catalog().find(modelId).map(entry -> entry.content()).orElse(null);
+        public Object requestOwner() {
+            return service();
         }
 
         @Override
-        public ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName) {
+        public @Nullable ModelContent content(ModelId modelId) {
+            var record = service().catalog().catalog().byModelId().get(modelId);
+            return record == null ? null : record.binding().content();
+        }
+
+        @Override
+        public @Nullable ModelContent content(PublishedModelId modelId) {
+            if (modelId instanceof PublishedModelId.Model model)
+                return content(model.hash());
+            var record = service().catalog().catalog().intrinsicDefault();
+            return record == null ? null : record.binding().content();
+        }
+
+        @Override
+        public @Nullable ModelId builtinDefaultModelId() {
+            return ClientModelService.current()
+                .map(value -> value.catalog().find(PublishedModelId.INTRINSIC_DEFAULT).orElseThrow().modelHash())
+                .orElse(null);
+        }
+
+        @Override
+        public ResourceRequest resourceRequest(ModelId modelId, String targetId, String textureName) {
             return service().resourceRequest(modelId, targetId, textureName);
         }
 
@@ -471,7 +627,7 @@ final class EntityModelBinding implements AutoCloseable {
         }
 
         @Override
-        public ResourceRequest resourceRequest(Hash256 modelId, String targetId, String textureName,
+        public ResourceRequest resourceRequest(ModelId modelId, String targetId, String textureName,
             ModelResourcePurpose purpose, Class<?> subjectType) {
             return service().resourceRequest(modelId, targetId, textureName, purpose, subjectType);
         }
@@ -486,5 +642,6 @@ final class EntityModelBinding implements AutoCloseable {
         public void reportActiveModelFailure(ModelContent content, boolean fallbackAvailable) {
             service().reportActiveModelFailure(content, fallbackAvailable);
         }
+
     }
 }

@@ -2,14 +2,14 @@ package com.elfmcys.ysm.model.catalog.client.entry;
 
 import com.elfmcys.ysm.format.schema.model.views.ModelInfoView;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.RenderTargetIds;
 import com.elfmcys.ysm.format.schema.model.ModelManifestLookup;
 
 import java.util.Objects;
 
 /** Lightweight GUI metadata derived entirely from the catalog schema manifest. */
-public record CatalogModelMetadata(Hash256 modelHash, String path, ModelRepresentation representation,
+public record CatalogModelMetadata(ModelId modelHash, String path, ModelRepresentation representation,
     ModelInfoView info) {
     public CatalogModelMetadata {
         Objects.requireNonNull(modelHash, "modelHash");

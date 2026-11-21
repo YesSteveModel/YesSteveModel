@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.asset;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.storage.PreviewStorage;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -13,7 +14,6 @@ import com.elfmcys.ysm.model.catalog.client.ClientCatalogManager;
 import com.elfmcys.ysm.model.catalog.client.ClientCatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.catalog.source.ModelCatalogSources;
-import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
@@ -255,8 +255,8 @@ public final class ClientAssetRepository {
 
     public final class Batch implements AutoCloseable {
         private final ClientCatalogSnapshot snapshot;
-        private final java.util.Map<Hash256, Object> imageMembers = new java.util.HashMap<>();
-        private final java.util.Map<Hash256, Object> imageSessionMembers = new java.util.HashMap<>();
+        private final java.util.Map<ModelId, Object> imageMembers = new java.util.HashMap<>();
+        private final java.util.Map<ModelId, Object> imageSessionMembers = new java.util.HashMap<>();
         private final RemotePresentationFetcher fetcher = presentations.get();
         private final ClientModelSession session = sessions.get();
         private final AtomicBoolean closed = new AtomicBoolean();
@@ -277,32 +277,36 @@ public final class ClientAssetRepository {
             return images;
         }
 
-        public ImageRequest imageRequest(Hash256 modelId, ModelAssetSelector selector) {
-            var content = snapshot.find(modelId).orElseThrow(() ->
-                new IllegalArgumentException("Unknown model id: " + modelId)).content();
+        public ImageRequest imageRequest(ModelId modelId, ModelAssetSelector selector) {
+            var content = snapshot.find(modelId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown model id: " + modelId)).content();
             var member = imageMembers.get(modelId);
             var connection = session;
             var remoteIdentity = content instanceof RemoteModelContent ? content.representation().identity() : null;
             var sessionMember = imageSessionMembers.get(modelId);
             BooleanSupplier allowed = () -> !closed.get() && sessions.get() == connection
-                && (connection == null || connection.state() != ClientModelSession.State.CLOSED)
-                && member != null && catalogs.imageMember(modelId) == member
+                && (connection == null || connection.state() != ClientModelSession.State.CLOSED) && member != null
+                && catalogs.imageMember(modelId) == member
                 && catalogs.snapshot().find(modelId).map(entry -> entry.content() == content).orElse(false)
                 && (connection == null || remoteIdentity == null
                     || connection.imageMemberCurrent(remoteIdentity, sessionMember));
             var preview = selector instanceof ModelAssetSelector.ModelPreview;
-            Supplier<CompletableFuture<PreviewResult>> acquire = () -> preview ? preview(modelId)
-                : presentation(modelId, ((ModelAssetSelector.ModelPresentation)selector).asset(),
-                    ((ModelAssetSelector.ModelPresentation)selector).index()).thenApply(PreviewResult.Data::new);
+            Supplier<
+                CompletableFuture<PreviewResult>> acquire =
+                    () -> preview ? preview(modelId)
+                        : presentation(modelId, ((ModelAssetSelector.ModelPresentation)selector).asset(),
+                            ((ModelAssetSelector.ModelPresentation)selector).index())
+                            .thenApply(PreviewResult.Data::new);
             try {
                 var chunk = presentationChunk(content, selector);
                 if (chunk != null) {
                     Object proof = chunk.hash() == null ? content.representation().identity()
                         : java.util.HexFormat.of().formatHex(chunk.hash());
                     var image = presentationImage(content, selector);
-                    var interpretation = image == null ? List.of() : List.of(image.format(), image.width(), image.height());
-                    var identity = new ImageIdentity(modelId, selector, proof, interpretation,
-                        chunk.encoding(), chunk.size(), chunk.decodeSize(), chunk.flags());
+                    var interpretation =
+                        image == null ? List.of() : List.of(image.format(), image.width(), image.height());
+                    var identity = new ImageIdentity(modelId, selector, proof, interpretation, chunk.encoding(),
+                        chunk.size(), chunk.decodeSize(), chunk.flags());
                     return new ImageRequest(ignored -> identity, allowed, ignored -> true, acquire);
                 }
                 if (!preview) {
@@ -316,13 +320,16 @@ public final class ClientAssetRepository {
                 var observation = connection == null ? null
                     : connection.observePreview(content.representation().identity()).orElse(null);
                 var previewVersion = observation == null ? member : observation.contentVersion();
-                Function<ImageSource, Object> imageVersion = source -> source instanceof PreviewStore.EncodedPreview data
-                    && data.version() != null ? data.version() : version;
+                Function<ImageSource, Object> imageVersion =
+                    source -> source instanceof PreviewStore.EncodedPreview data && data.version() != null
+                        ? data.version() : version;
                 Function<ImageSource, ImageIdentity> identity = source -> new ImageIdentity(modelId, selector,
                     container, imageVersion.apply(source), reload, previewVersion);
-                return new ImageRequest(identity, allowed, source -> catalogs.previewReload() == reload
-                    && (store == null || store.current(container, (PreviewStore.Version)imageVersion.apply(source)))
-                    && (observation == null || connection.previewObservationCurrent(observation)), acquire);
+                return new ImageRequest(identity, allowed,
+                    source -> catalogs.previewReload() == reload
+                        && (store == null || store.current(container, (PreviewStore.Version)imageVersion.apply(source)))
+                        && (observation == null || connection.previewObservationCurrent(observation)),
+                    acquire);
             } catch (IOException failure) {
                 throw new CompletionException(failure);
             }
@@ -341,7 +348,7 @@ public final class ClientAssetRepository {
             return !closed.get() && session != null && session.previewAbsent(identity);
         }
 
-        public synchronized CompletableFuture<PreviewResult> preview(Hash256 modelId) {
+        public synchronized CompletableFuture<PreviewResult> preview(ModelId modelId) {
             checkRegistrationOpen();
             var entry = snapshot.find(modelId).orElse(null);
             if (entry == null) {
@@ -368,7 +375,7 @@ public final class ClientAssetRepository {
                     member, null));
         }
 
-        public synchronized CompletableFuture<ImageSource> presentation(Hash256 modelId,
+        public synchronized CompletableFuture<ImageSource> presentation(ModelId modelId,
             ModelAssetSelector.PresentationAsset asset, int index) {
             checkRegistrationOpen();
             var entry = snapshot.find(modelId).orElse(null);
@@ -622,17 +629,19 @@ public final class ClientAssetRepository {
             try {
                 pending.preparation = loader.get();
                 pending.preparation.whenComplete((value, failure) -> {
-                    var source = (ImageSource)value;
-                    if (closed.get()) {
-                        release(source);
-                        return;
-                    }
-                    if (failure == null) {
-                        if (!pending.result
-                            .complete(source == null ? PreviewResult.Absent.INSTANCE : new PreviewResult.Data(source)))
+                    synchronized (Batch.this) {
+                        var source = (ImageSource)value;
+                        if (closed.get()) {
                             release(source);
-                    } else {
-                        pending.result.completeExceptionally(failure);
+                            return;
+                        }
+                        if (failure == null) {
+                            if (!pending.result.complete(
+                                source == null ? PreviewResult.Absent.INSTANCE : new PreviewResult.Data(source)))
+                                release(source);
+                        } else {
+                            pending.result.completeExceptionally(failure);
+                        }
                     }
                 });
             } catch (RuntimeException failure) {

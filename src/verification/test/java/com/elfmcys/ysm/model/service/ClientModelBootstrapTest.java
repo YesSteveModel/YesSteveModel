@@ -1,9 +1,12 @@
 package com.elfmcys.ysm.model.service;
 
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.buffer.SharedBuffer;
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.buffer.BufferType;
+import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.expression.aot.ExpressionEngineMetrics;
 import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModuleFactory;
@@ -15,14 +18,15 @@ import com.elfmcys.ysm.format.parser.ModelParser;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
 import com.elfmcys.ysm.format.vfs.Directory;
-import com.elfmcys.ysm.model.ModelRuntime;
 import com.elfmcys.ysm.model.ModelSystem;
 import com.elfmcys.ysm.model.catalog.ReloadableModelCatalog;
 import com.elfmcys.ysm.model.catalog.builtin.BuiltinModelCatalog;
 import com.elfmcys.ysm.model.catalog.builtin.BuiltinModelIndex;
 import com.elfmcys.ysm.model.catalog.builtin.BuiltinModelMaterializer;
 import com.elfmcys.ysm.model.catalog.client.ClientCatalogManager;
+import com.elfmcys.ysm.model.catalog.client.ClientCatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.content.DefaultAnimationKey;
+import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.catalog.source.ModelCatalogSource;
@@ -31,20 +35,28 @@ import com.elfmcys.ysm.model.domain.ModelPath;
 import com.elfmcys.ysm.model.domain.RenderTargetIds;
 import com.elfmcys.ysm.model.resource.RuntimeContentStore;
 import com.elfmcys.ysm.model.resource.client.AnimationStore;
+import com.elfmcys.ysm.model.resource.client.AcquireResult;
 import com.elfmcys.ysm.model.resource.client.ClientModelRenderTargetManager;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
+import com.elfmcys.ysm.model.resource.client.ModelResourcePurpose;
 import com.elfmcys.ysm.model.resource.client.PlayerModelResources;
 import com.elfmcys.ysm.model.resource.client.RenderTargetResources;
+import com.elfmcys.ysm.model.resource.client.ResourceRequest;
 import com.elfmcys.ysm.model.resource.client.asset.ClientAssetRepository;
 import com.elfmcys.ysm.model.resource.client.render.BakedModelCache;
 import com.elfmcys.ysm.model.resource.client.render.DefaultAnimationRuntime;
 import com.elfmcys.ysm.model.resource.client.work.ClientResourceScheduler;
+import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
+import com.elfmcys.ysm.model.session.client.state.PublicationEntry;
+import com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.model.resource.client.render.ModelRenderTargetLoader;
 import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.model.storage.ModelStorageInfra;
+import com.elfmcys.ysm.model.storage.PlayerPreferences.LocalSelection;
 import com.elfmcys.ysm.util.UnsafeUtil;
+import com.electronwill.nightconfig.core.CommentedConfig;
 import java.io.IOException;
 import java.lang.ref.Cleaner;
 import java.lang.reflect.Proxy;
@@ -55,6 +67,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Collections;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
@@ -65,6 +79,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import net.minecraft.client.player.AbstractClientPlayer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -72,6 +87,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -122,8 +138,8 @@ class ClientModelBootstrapTest {
             assertNotSame(first.system.paths(), second.system.paths());
             assertEquals(temp.resolve("first/ysm/cache"), first.system.storage().local().root());
             assertEquals(temp.resolve("second/ysm/cache"), second.system.storage().local().root());
-            assertEquals(temp.resolve("first/ysm/custom"), first.system.paths().customModelsRoot());
-            assertEquals(temp.resolve("second/ysm/custom"), second.system.paths().customModelsRoot());
+            assertEquals(temp.resolve("first/ysm/models"), first.system.paths().modelsRoot());
+            assertEquals(temp.resolve("second/ysm/models"), second.system.paths().modelsRoot());
         }
     }
 
@@ -136,7 +152,8 @@ class ClientModelBootstrapTest {
                 assertExternalReferencesEmpty();
                 fixture.required.join();
                 assertSame(fixture.manager.defaultRenderTarget(), service.defaultRenderTarget());
-                assertFalse(service.catalog().models().isEmpty());
+                assertTrue(service.catalog().models().isEmpty());
+                assertTrue(service.catalog().find(PublishedModelId.INTRINSIC_DEFAULT).isPresent());
                 requiredComplete.set(true);
             }, service -> {
                 assertExternalReferencesEmpty();
@@ -171,20 +188,151 @@ class ClientModelBootstrapTest {
             assertEquals(fixture.requiredSetCount,
                 counts.stageCalls(dev.semaweave.compilation.EngineMetrics.Stage.MODULE_LOAD));
             assertEquals(fixture.requiredSetCount, counts.portableProgramDecodes());
+            var resident = (ManagedContainer)fixture.service.catalog().catalog().intrinsicDefault().binding().content();
+            setField(resident, "chunks", new FailingChunks(AssetLoadException.access("post-startup source blocked")));
             for (var target : defaultFixture.view().getRenderTargets()) {
                 for (var texture : target.getTextureNames()) {
-                    var request =
-                        fixture.manager.request(defaultFixture.representation().modelId(), target.id(), texture);
-                    assertSame(fixture.specializations.get(0), request.expressionBinding());
-                    try (var lease = fixture.manager.findReady(request).orElseThrow()) {
-                        assertInstanceOf(com.elfmcys.ysm.model.resource.client.AcquireResult.Ready.class, lease.poll());
+                    for (var purpose : com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.values()) {
+                        var request = fixture.manager.request(PublishedModelId.INTRINSIC_DEFAULT, target.id(), texture,
+                            purpose, null);
+                        assertEquals(com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.FULL,
+                            request.purpose());
+                        assertSame(fixture.specializations.get(0), request.expressionBinding());
+                        try (var lease = fixture.manager.getOrStart(request)) {
+                            assertInstanceOf(com.elfmcys.ysm.model.resource.client.AcquireResult.Ready.class,
+                                lease.poll());
+                        }
+                        try (var lease = fixture.manager.getOrStartOffline(request)) {
+                            assertTrue(lease.isCurrent(request));
+                        }
+                        try (var lease = fixture.manager.getOrStartCached(request)) {
+                            assertTrue(lease.isCurrent(request));
+                        }
                     }
                 }
             }
+            assertTrue(
+                fixture.manager.findReady(fixture.manager.request(resident.modelId(), "player", "default")).isEmpty());
             assertEquals(prepared, fixture.specializations.size());
             assertEquals(counts.stageCalls(dev.semaweave.compilation.EngineMetrics.Stage.MODULE_LOAD),
                 fixture.metrics.snapshot().stageCalls(dev.semaweave.compilation.EngineMetrics.Stage.MODULE_LOAD));
             fixture.close();
+        }
+    }
+
+    @Test
+    void realDefaultSourceAlsoEntersTheOrdinaryCatalogLifecycle() throws Exception {
+        var source = Path.of(getClass().getResource("/assets/ysm/builtin/default/ysm.json").toURI()).getParent();
+        var builtinRoot = Files.createDirectories(temp.resolve("builtin"));
+        org.apache.commons.io.FileUtils.copyDirectory(source.toFile(), builtinRoot.resolve("default").toFile());
+        try (var storage = BootstrapFixture.storage(temp.resolve("ysm/cache"));
+            var builtins = BuiltinModelCatalog.open(defaultContract, builtinRoot);
+            var catalog = new ReloadableModelCatalog(storage,
+                List.of(new ModelCatalogSource(CatalogRootKind.BUILTIN, builtinRoot, false)), builtins)) {
+            var required = catalog.current().intrinsicDefault();
+            assertTrue(catalog.current().byModelId().isEmpty());
+            catalog.activate();
+            var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+            while (catalog.busy() && System.nanoTime() < deadline) {
+                catalog.tick();
+                Thread.sleep(1);
+            }
+            assertFalse(catalog.busy());
+            assertEquals(0, catalog.current().report().errorCount());
+            assertEquals(1, catalog.current().byModelId().size());
+            var ordinary = catalog.current().byModelId().get(defaultFixture.modelId());
+            assertEquals("builtin:default", ordinary.location().value());
+            assertNotSame(required.binding().content(), ordinary.binding().content());
+            assertSame(required, catalog.current().intrinsicDefault());
+            var reload = catalog.reload();
+            while (!reload.isDone() && System.nanoTime() < deadline) {
+                catalog.tick();
+                Thread.sleep(1);
+            }
+            assertTrue(reload.isDone());
+            assertSame(required, catalog.current().intrinsicDefault());
+            assertEquals(1, catalog.current().byModelId().size());
+        }
+    }
+
+    @Test
+    void startupInputsUseLocalPublicationBufferedPreferencesAndFullBackgroundPlayerResources() throws Exception {
+        if (ClientConfig.MODEL_RETENTION_COUNT == null)
+            ClientConfig.init().setConfig(CommentedConfig.inMemory());
+        var source = Path.of(getClass().getResource("/assets/ysm/builtin/default/ysm.json").toURI()).getParent();
+        var builtinRoot = Files.createDirectories(temp.resolve("builtin"));
+        org.apache.commons.io.FileUtils.copyDirectory(source.toFile(), builtinRoot.resolve("default").toFile());
+        try (var fixture = BootstrapFixture.open(temp, Stage.SUCCESS, ignored -> {
+        }, new ModelCatalogSource(CatalogRootKind.BUILTIN, builtinRoot, false))) {
+            fixture.required.join();
+            var local = fixture.system.catalog();
+            var preferences = fixture.system.storage().preferences();
+            var projection = (ClientCatalogManager)field(fixture.service, "catalogManager");
+            var inputs = new StartupModelWarmup.ClientInputs(local, preferences, projection, fixture.manager);
+            var notifications = new AtomicInteger();
+            try (var subscription = inputs.subscribe(notifications::incrementAndGet)) {
+                assertEquals(1, notifications.get());
+                projection.beginRemote();
+                local.activate();
+                fixture.finishCatalog();
+                assertEquals(0, inputs.catalog().report().errorCount(), inputs.catalog().report().errors().toString());
+                var modelId = inputs.catalog().resolve(CatalogLocation.BUILTIN_DEFAULT).orElseThrow();
+                assertEquals(defaultFixture.modelId(), modelId);
+                var identity = PublishedModelId.model(modelId);
+                var ordinary = inputs.catalog().byModelId().get(modelId);
+                assertTrue(notifications.get() > 1);
+                assertEquals(CatalogLocation.BUILTIN_DEFAULT, ordinary.location());
+                assertTrue(projection.snapshot().find(identity).isEmpty());
+                assertNull(inputs.acquire(new LocalSelection(identity, "")));
+                assertEquals(0, fixture.manager.loadingCount());
+
+                var player = UUID.fromString("4e769875-2df4-40aa-a938-48505b09c6ef");
+                var saved = new LocalSelection(identity, "saved-texture-intent");
+                var write = preferences.writeSelection(player, saved);
+                assertFalse(write.result().toCompletableFuture().isDone());
+                try (var query = inputs.readSelection(player)) {
+                    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                    while (query.poll() == null && System.nanoTime() < deadline) {
+                        fixture.system.storage().tick(System.nanoTime());
+                        Thread.sleep(1);
+                    }
+                    var completion = Objects.requireNonNull(query.poll(), "Preference read did not finish");
+                    assertFalse(completion.closed());
+                    assertNull(completion.failure());
+                    assertEquals(List.of(saved), completion.result().rows());
+                }
+
+                var denied = new PublicationEntry(ordinary.binding().content().representation().identity(),
+                    ordinary.entry().path(), CatalogAccess.PUBLIC, false);
+                setField(projection, "catalog", new ClientCatalogSnapshot(inputs.catalog(), List.of(),
+                    new RemotePublicationSnapshot(List.of(denied), Set.of(), List.of(), Map.of())));
+                assertTrue(projection.snapshot().find(identity).orElseThrow().hasLocalSource());
+                assertNull(inputs.acquire(saved));
+                assertEquals(0, fixture.manager.loadingCount());
+                projection.endRemote();
+
+                var expected = fixture.manager.request(identity, RenderTargetIds.PLAYER, saved.texture(),
+                    ModelResourcePurpose.FULL, AbstractClientPlayer.class);
+                assertTrue(fixture.manager.findReady(expected).isEmpty());
+                try (var lease = Objects.requireNonNull(inputs.acquire(saved))) {
+                    var actual = (ResourceRequest)field(lease, "originalRequest");
+                    assertEquals(expected, actual);
+                    assertEquals(AbstractClientPlayer.class,
+                        actual.expressionBinding().bindingPlan().rootSubjectType().orElseThrow());
+                    var flight = field(field(lease, "state"), "flight");
+                    assertEquals(WorkPriority.BACKGROUND,
+                        ((ClientResourceScheduler.Dispatch)field(flight, "dispatch")).priority());
+                    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                    while (lease.poll() instanceof AcquireResult.Pending && System.nanoTime() < deadline) {
+                        fixture.manager.tick();
+                        Thread.sleep(1);
+                    }
+                    var ready = assertInstanceOf(AcquireResult.Ready.class, lease.poll());
+                    assertEquals(identity, ready.target().publishedId());
+                    assertNotSame(fixture.manager.defaultRenderTarget(), ready.target());
+                }
+                fixture.manager.tick();
+            }
         }
     }
 
@@ -334,7 +482,44 @@ class ClientModelBootstrapTest {
     }
 
     @Test
-    void processCloseDetachesAndSealsBeforeWaitingForCatalogOutsideBothMonitors() throws Exception {
+    void realDisconnectFollowsInlineAndGuiReadersAndKeepsRequiredResources() throws Exception {
+        try (var fixture = BootstrapFixture.open(temp, Stage.SUCCESS)) {
+            fixture.required.join();
+            setInstance(fixture.service);
+            var connection =
+                new net.minecraft.network.Connection(net.minecraft.network.protocol.PacketFlow.CLIENTBOUND);
+            var session = new com.elfmcys.ysm.model.session.client.ClientModelSession(
+                com.elfmcys.ysm.network.session.SessionMode.AUTO, true,
+                com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot.empty());
+            session.onServerHello(com.elfmcys.ysm.network.protocol.ProtocolVersion.CURRENT, false);
+            session.publishFull(new com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot(List.of(),
+                java.util.Set.of(), List.of(), Map.of()));
+            var runtime = com.elfmcys.ysm.network.forge.ClientSessionRuntime.class;
+            var current = runtime.getDeclaredField("current");
+            current.setAccessible(true);
+            var type = Class.forName(runtime.getName() + "$ConnectionState");
+            var constructor = type.getDeclaredConstructor(net.minecraft.network.Connection.class,
+                com.elfmcys.ysm.model.session.client.ClientModelSession.class, Consumer.class, Object.class);
+            constructor.setAccessible(true);
+            current.set(null, constructor.newInstance(connection, session, (Consumer<String>)ignored -> {
+            }, fixture.service.beginConnection()));
+            try {
+                com.elfmcys.ysm.client.entity.FrameContractReaders.verifyDisconnectAfterInlineAndGuiReaders(
+                    () -> com.elfmcys.ysm.network.forge.ClientSessionRuntime.disconnect(connection));
+                assertEquals(com.elfmcys.ysm.model.session.client.ClientModelSession.State.CLOSED, session.state());
+                assertSame(fixture.manager.defaultRenderTarget(), fixture.service.defaultRenderTarget());
+                assertTrue(fixture.service.catalog().find(PublishedModelId.INTRINSIC_DEFAULT).isPresent());
+            } finally {
+                var owner = current.get(null);
+                current.set(null, null);
+                if (owner instanceof AutoCloseable closeable)
+                    closeable.close();
+            }
+        }
+    }
+
+    @Test
+    void controlledSystemCloseSealsBeforeWaitingForCatalogOutsideItsMonitor() throws Exception {
         try (var fixture = BootstrapFixture.open(temp, Stage.SUCCESS)) {
             fixture.required.join();
             fixture.service.close();
@@ -360,14 +545,12 @@ class ClientModelBootstrapTest {
                     Thread.currentThread().interrupt();
                 body.run();
             }));
-            setField(ModelRuntime.class, null, "system", system);
             catalog.activate();
             started.get(5, TimeUnit.SECONDS);
-            var closing = CompletableFuture.runAsync(ModelRuntime::close);
+            var closing = CompletableFuture.runAsync(system::close);
             try {
                 interrupted.get(5, TimeUnit.SECONDS);
                 CompletableFuture.runAsync(() -> {
-                    assertThrows(IllegalStateException.class, ModelRuntime::system);
                     assertThrows(IllegalStateException.class, system::catalog);
                 }).get(5, TimeUnit.SECONDS);
                 assertFalse((boolean)field(runtime, "closed"));
@@ -375,7 +558,6 @@ class ClientModelBootstrapTest {
             } finally {
                 release.countDown();
                 closing.get(5, TimeUnit.SECONDS);
-                setField(ModelRuntime.class, null, "system", null);
             }
             assertTrue((boolean)field(runtime, "closed"));
         }
@@ -406,7 +588,7 @@ class ClientModelBootstrapTest {
     }
 
     @Test
-    void processCloseRetainsTheConsumerUntilClientWorkHasTerminated() throws Exception {
+    void controlledSystemCloseRetainsTheConsumerUntilClientWorkHasTerminated() throws Exception {
         var release = new CountDownLatch(1);
         try (var fixture = BootstrapFixture.open(temp, Stage.SUCCESS)) {
             fixture.required.join();
@@ -594,8 +776,8 @@ class ClientModelBootstrapTest {
             });
         }
 
-        private static BootstrapFixture open(Path root, Stage stage, Consumer<ClientResourceScheduler> beforeRequired)
-            throws Exception {
+        private static BootstrapFixture open(Path root, Stage stage, Consumer<ClientResourceScheduler> beforeRequired,
+            ModelCatalogSource... sourceOverrides) throws Exception {
             var handle = ManagedContainer.openResidentDefault(Files.readAllBytes(defaultContainer), defaultLocation());
             var gameCacheRoot = root.resolve("ysm/cache");
             var storage = storage(gameCacheRoot);
@@ -608,8 +790,10 @@ class ClientModelBootstrapTest {
             ModelSystem system = null;
             var targets = Collections.synchronizedList(new java.util.ArrayList<ModelRenderTarget>());
             try {
-                var sources = List.of(new ModelCatalogSource(CatalogRootKind.CUSTOM, root.resolve("custom"), true),
-                    new ModelCatalogSource(CatalogRootKind.AUTH, root.resolve("auth"), true));
+                var sources = sourceOverrides.length == 0
+                    ? List.of(new ModelCatalogSource(CatalogRootKind.MODELS, root.resolve("custom"), true),
+                        new ModelCatalogSource(CatalogRootKind.MODELS, root.resolve("auth"), true))
+                    : List.of(sourceOverrides);
                 catalogOwner = new ReloadableModelCatalog(storage, sources, builtins);
                 system = system(storage, builtins, catalogOwner);
                 var catalogs = new ClientCatalogManager(catalogOwner);
@@ -626,10 +810,11 @@ class ClientModelBootstrapTest {
                 var bakedRoot = root.resolve("baked");
                 var cache = track(new AtomicSharedCache(bakedRoot));
                 var metrics = new ExpressionEngineMetrics();
-                var loader = new ModelRenderTargetLoader(new BakedModelCache(bakedRoot, cache),
-                    new RenderTargetExpressionModuleFactory(storage.local().expressions(),
-                        ExpressionHost.create(HostAvailability.all()), metrics),
-                    scheduler, animations);
+                var loader =
+                    new ModelRenderTargetLoader(new BakedModelCache(bakedRoot, cache),
+                        new RenderTargetExpressionModuleFactory(storage.local().expressions(),
+                            storage.local().animations(), ExpressionHost.create(HostAvailability.all()), metrics),
+                        scheduler, animations);
                 var specializations = Collections.synchronizedList(new java.util.ArrayList<ExpressionBinding>());
                 installBuildStage(loader, stage, handle.representation().modelId(), targets, specializations);
                 if (stage == Stage.CHUNK_READ) {
@@ -696,9 +881,8 @@ class ClientModelBootstrapTest {
 
         private static ModelStorageInfra storage(Path gameCacheRoot) throws Exception {
             var game = gameCacheRoot.toAbsolutePath().normalize().getParent().getParent();
-            return ModelStorageInfra.open(
-                com.elfmcys.ysm.AssetPaths.localOnly(game, game.resolve("config"), game.resolve("builtin")),
-                "bootstrap-test");
+            return ModelStorageInfra
+                .open(com.elfmcys.ysm.AssetPaths.localOnly(game, game.resolve("config"), game.resolve("builtin")));
         }
 
         private static BuiltinModelCatalog builtins(ManagedContainer handle) throws Exception {
@@ -718,7 +902,7 @@ class ClientModelBootstrapTest {
             return constructor.newInstance(system, scheduler, workers, catalogs, assets, manager, remoteRoot);
         }
 
-        private static void installBuildStage(ModelRenderTargetLoader loader, Stage stage, Hash256 modelHash,
+        private static void installBuildStage(ModelRenderTargetLoader loader, Stage stage, ModelId modelHash,
             List<ModelRenderTarget> targets, List<ExpressionBinding> specializations) throws Exception {
             var buildStageType = Class.forName(ModelRenderTargetLoader.class.getName() + "$ConsumerStage");
             var buildStage = Proxy.newProxyInstance(buildStageType.getClassLoader(), new Class<?>[] {buildStageType},
@@ -747,16 +931,11 @@ class ClientModelBootstrapTest {
                     var prepared = valueMethod.invoke(pin);
                     var sourcesMethod = prepared.getClass().getDeclaredMethod("defaultSources");
                     sourcesMethod.setAccessible(true);
+                    @SuppressWarnings("unchecked")
+                    var sources = (Map<String, DefaultAnimationRuntime.Source>)sourcesMethod.invoke(prepared);
+                    var store = (AnimationStore)field(field(prepared, "main"), "animationStore");
                     var target = target(modelHash, targetId, (stage == Stage.SUCCESS || stage == Stage.ANIMATIONS)
-                        && targetId.equals(RenderTargetIds.PLAYER));
-                    setField(target, "defaultSources", sourcesMethod.invoke(prepared));
-                    setField(target, "cleanable", (Cleaner.Cleanable)() -> {
-                        try {
-                            pin.close();
-                        } catch (Exception failure) {
-                            throw new IllegalStateException(failure);
-                        }
-                    });
+                        && targetId.equals(RenderTargetIds.PLAYER), store, sources, pin);
                     targets.add(target);
                     return candidate(target);
                 });
@@ -770,18 +949,24 @@ class ClientModelBootstrapTest {
             return testing.invoke(null, target);
         }
 
-        private static ModelRenderTarget target(Hash256 modelHash, String targetId, boolean player) throws Exception {
-            var target = (ModelRenderTarget)UnsafeUtil.getUnsafe().allocateInstance(ModelRenderTarget.class);
-            setField(target, "modelHash", modelHash);
-            setField(target, "renderTargetId", targetId);
-            setField(target, "targetResources", player ? playerResources() : new EmptyResources());
-            return target;
+        private static ModelRenderTarget target(ModelId modelHash, String targetId, boolean player,
+            AnimationStore store, Map<String, DefaultAnimationRuntime.Source> sources, AutoCloseable pin)
+            throws Exception {
+            return new ModelRenderTarget(modelHash, targetId, player ? playerResources() : new EmptyResources(),
+                (com.elfmcys.ysm.model.resource.client.CommonAsset)UnsafeUtil.getUnsafe()
+                    .allocateInstance(com.elfmcys.ysm.model.resource.client.CommonAsset.class),
+                store,
+                (com.elfmcys.ysm.format.schema.model.views.ModelInfoView)UnsafeUtil.getUnsafe()
+                    .allocateInstance(com.elfmcys.ysm.format.schema.model.views.ModelInfoView.class),
+                null, null, pin, sources);
         }
 
         private static PlayerModelResources playerResources() throws Exception {
             var resources = (PlayerModelResources)UnsafeUtil.getUnsafe().allocateInstance(PlayerModelResources.class);
-            setField(resources, "animations", new AnimationStore());
-            setField(resources, "fpArmAnimations", new AnimationStore());
+            setField(resources, "animations", AnimationStore.emptyView());
+            setField(resources, "fpArmAnimations", AnimationStore.emptyView());
+            setField(resources, "variants", new com.elfmcys.ysm.util.FifoHashMap<>(new String[0],
+                new com.elfmcys.ysm.model.resource.client.PlayerModelVariant[0]));
             return resources;
         }
 

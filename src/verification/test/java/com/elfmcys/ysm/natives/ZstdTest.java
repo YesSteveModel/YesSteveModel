@@ -32,7 +32,7 @@ class ZstdTest {
     }
 
     @Test
-    void rejectsInvalidCompressedDataThroughNullBoundaryValue() {
+    void classifiesInvalidCompressedDataAsContentFailure() {
         var payload = new byte[4096];
         Arrays.fill(payload, (byte)7);
         var hash = new byte[Blake3.HASH_SIZE];
@@ -45,29 +45,25 @@ class ZstdTest {
         var corruptFrame = compressedBytes.clone();
         corruptFrame[0] ^= 0x7f;
         try (var source = buffer(corruptFrame, BufferType.ARRAY)) {
-            var error = assertThrows(IllegalStateException.class,
+            assertThrows(Zstd.InvalidDataException.class,
                 () -> Zstd.decompressAndValidate(source, payload.length, hash, BufferType.ARRAY));
-            assertEquals("Native zstd decompression returned no result", error.getMessage());
         }
 
         try (var source = buffer(compressedBytes, BufferType.NATIVE)) {
-            var error = assertThrows(IllegalStateException.class,
+            assertThrows(Zstd.InvalidDataException.class,
                 () -> Zstd.decompressAndValidate(source, payload.length + 1, hash, BufferType.NATIVE));
-            assertEquals("Native zstd decompression returned no result", error.getMessage());
         }
 
         try (var source = buffer(compressedBytes, BufferType.ARRAY)) {
-            var error = assertThrows(IllegalStateException.class,
+            assertThrows(Zstd.InvalidDataException.class,
                 () -> Zstd.decompressAndValidate(source, payload.length - 1, hash, BufferType.ARRAY));
-            assertEquals("Native zstd decompression returned no result", error.getMessage());
         }
 
         var incorrectHash = hash.clone();
         incorrectHash[0] ^= 0x7f;
         try (var source = buffer(compressedBytes, BufferType.ARRAY)) {
-            var error = assertThrows(IllegalStateException.class,
+            assertThrows(Zstd.InvalidDataException.class,
                 () -> Zstd.decompressAndValidate(source, payload.length, incorrectHash, BufferType.ARRAY));
-            assertEquals("Native zstd decompression returned no result", error.getMessage());
         }
     }
 

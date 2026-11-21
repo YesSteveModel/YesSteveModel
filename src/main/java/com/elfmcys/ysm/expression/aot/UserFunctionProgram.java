@@ -7,14 +7,25 @@ import dev.semaweave.compilation.ResourceGenerationToken;
 
 import java.util.Objects;
 
-/** Catalog identity for a user function resolved inside the complete compiled unit. */
-public record UserFunctionProgram(ModelProgramInventory.SemanticLocation location, ProgramRef reference,
-    ResourceGenerationToken generation) {
+/** Catalog identity; interpreted calls resolve the body only when the function is consumed. */
+public record UserFunctionProgram(ModelProgramInventory.SemanticLocation location, ProgramBinding binding) {
+    public UserFunctionProgram(ModelProgramInventory.SemanticLocation location, ProgramRef reference,
+        ResourceGenerationToken generation) {
+        this(location, new ProgramBinding.Aot(reference, generation));
+    }
+
+    public ProgramRef reference() {
+        return binding.aotReference();
+    }
+
+    public ResourceGenerationToken generation() {
+        return binding.aotGeneration();
+    }
+
     public UserFunctionProgram {
         Objects.requireNonNull(location, "location");
-        Objects.requireNonNull(reference, "reference");
-        Objects.requireNonNull(generation, "generation");
-        if (reference.shape() != ProgramShape.USER_FUNCTION || location.role().shape() != ProgramShape.USER_FUNCTION) {
+        Objects.requireNonNull(binding, "binding");
+        if (binding.shape() != ProgramShape.USER_FUNCTION || location.role().shape() != ProgramShape.USER_FUNCTION) {
             throw new IllegalArgumentException("user-function shape mismatch at " + location);
         }
     }

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.catalog.builtin;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
 import com.elfmcys.ysm.model.catalog.content.DefaultAnimationKey;
 
@@ -210,7 +211,7 @@ public final class BuiltinModelMaterializer {
     }
 
     private static void validateSounds(ModelFileView view, ChunkDataSource chunks) throws IOException {
-        var decoded = new java.util.HashSet<com.elfmcys.ysm.model.domain.Hash256>();
+        var decoded = new java.util.HashSet<Hash256>();
         for (var sound : view.getCommon().sounds().values()) {
             if (!decoded.add(sound.mediaIdentity())) {
                 continue;
@@ -223,7 +224,7 @@ public final class BuiltinModelMaterializer {
         return texture.hasNormal() || texture.hasSpecular();
     }
 
-    public record Result(Hash256 modelHash, Map<DefaultAnimationKey, Hash256> animationHashes,
+    public record Result(ModelId modelHash, Map<DefaultAnimationKey, Hash256> animationHashes,
         List<ModelProgramInventory.ManifestEntry> programManifest, ModelProgramInventory.Counts programCounts) {
     }
 

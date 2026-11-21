@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.client.gui.button;
 
 import com.elfmcys.ysm.client.texture.TextureHolder;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.resource.client.asset.ModelAssetSelector;
 import com.elfmcys.ysm.model.resource.client.asset.PageImages;
 import org.jetbrains.annotations.Nullable;
@@ -11,13 +11,13 @@ import java.util.List;
 
 /** Keeps image policy independent of the card's mutable entity lifecycle. */
 public final class CatalogCardImages {
-    private final Hash256 model;
+    private final ModelId model;
     private final PageImages.Image background;
     private final PageImages.Image foreground;
     private PageImages.Image preview;
     private boolean eager;
 
-    public CatalogCardImages(PageImages decorations, Hash256 model, boolean hasBackground, boolean hasForeground,
+    public CatalogCardImages(PageImages decorations, ModelId model, boolean hasBackground, boolean hasForeground,
         boolean eager) {
         this.model = model;
         this.eager = eager;

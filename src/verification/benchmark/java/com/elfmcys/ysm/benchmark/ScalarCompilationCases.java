@@ -174,25 +174,14 @@ public final class ScalarCompilationCases {
         var linked = RegistryRuntimeLinkage.<Object>create(ProviderInstanceTable.create(registry, Map.of()),
             RuntimeSymbolTable.empty());
         var linkage = new RuntimeLinkage<Object>() {
-            public ContextType<Object> contextType() {
-                return registry.contextType();
-            }
-
             public RegistryRuntimeLinkage<Object> registry() {
                 return linked;
-            }
-
-            public BakedConstantTable constants() {
-                return artifact.constants();
             }
 
             public RuntimeDiagnostics diagnostics() {
                 return RuntimeDiagnostics.none();
             }
 
-            public ResourceLease<Object> retainResource() {
-                return resource.retain();
-            }
         };
         var values = new ArrayList<Float>();
         TRACE.clear();
@@ -242,24 +231,9 @@ public final class ScalarCompilationCases {
             active = false;
         }
 
-        public void chargeLoopIteration() {}
+        public void enterUserFunction() {}
 
-        public void chargeProviderCall() {}
+        public void exitUserFunction() {}
 
-        public void chargeControlTransfer() {}
-
-        public boolean tryEnterUserFunction(int id) {
-            return true;
-        }
-
-        public void exitUserFunction(int id) {}
-
-        public ArgumentScratch acquireArgumentScratch(int size) {
-            throw new AssertionError("unexpected scratch");
-        }
-
-        public void releaseArgumentScratch(ArgumentScratch scratch) {
-            throw new AssertionError("unexpected scratch");
-        }
     }
 }

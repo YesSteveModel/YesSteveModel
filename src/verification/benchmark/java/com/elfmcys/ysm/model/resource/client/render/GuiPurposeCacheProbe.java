@@ -83,15 +83,16 @@ public final class GuiPurposeCacheProbe {
         var bootRoot = Files.createDirectories(output.resolve("boot"));
         var bootCache = new AtomicSharedCache(bootRoot, work);
         var bootLoader = new ModelRenderTargetLoader(new BakedModelCache(bootRoot.resolve("bake"), bootCache),
-            new RenderTargetExpressionModuleFactory(new ExpressionArtifactStore(bootRoot, bootCache), host,
-                new ExpressionEngineMetrics()),
+            new RenderTargetExpressionModuleFactory(new ExpressionArtifactStore(bootRoot, bootCache),
+                new AnimationInputStore(bootRoot, bootCache), host, new ExpressionEngineMetrics()),
             scheduler, defaults);
         var cacheRoot = Files.createDirectories(root.resolve("cache"));
         var cache = new AtomicSharedCache(cacheRoot, work);
         var metrics = new ExpressionEngineMetrics();
         var store = new ExpressionArtifactStore(cacheRoot, cache);
         var loader = new ModelRenderTargetLoader(new BakedModelCache(cacheRoot.resolve("bake"), cache),
-            new RenderTargetExpressionModuleFactory(store, host, metrics), scheduler, defaults);
+            new RenderTargetExpressionModuleFactory(store, new AnimationInputStore(cacheRoot, cache), host, metrics),
+            scheduler, defaults);
         ModelRenderTargetLoader.ModelCandidate boot = null;
         ModelRenderTargetLoader.ModelCandidate fullReady = null;
         try (var directory = new Directory(builtinRoot)) {
@@ -136,24 +137,25 @@ public final class GuiPurposeCacheProbe {
                         result.put("animationBatchHandles", animationHandles);
                         result.put("loaderHandles", phaseHandles);
                         var model = target(candidate);
-                        result.put("source", model.expressions().source());
-                        result.put("identity", model.expressions().identity().cacheKey());
-                        result.put("binding", model.expressions().expressionBinding().key());
-                        result.put("programs", model.expressions().programLocations().size());
-                        result.put("animations",
-                            model.playerResources().animations().keySet().stream().sorted().toList());
+                        result.put("source", model.animationStore().diagnostics().source());
+                        result.put("identity", model.animationStore().diagnostics().identity() == null ? null
+                            : model.animationStore().diagnostics().identity().cacheKey());
+                        result.put("binding", model.animationStore().metadata().expressionBinding().key());
+                        result.put("programs", model.animationStore().diagnostics().programLocations().size());
+                        result.put("animations", model.animations().keySet().stream().sorted().toList());
                         work.awaitIdle();
                         if (operation.startsWith("seed-full")) {
-                            var keep = operation.equals("seed-full-arm") ? model.armExpressions() : model.expressions();
+                            var keep =
+                                operation.equals("seed-full-arm") ? model.armAnimationStore() : model.animationStore();
                             var remove =
-                                operation.equals("seed-full-arm") ? model.expressions() : model.armExpressions();
+                                operation.equals("seed-full-arm") ? model.animationStore() : model.armAnimationStore();
                             var path = ExpressionArtifactStore.class.getDeclaredMethod("path",
                                 ExpressionArtifactIdentity.class);
                             path.setAccessible(true);
-                            var retained = (Path)path.invoke(store, keep.identity());
+                            var retained = (Path)path.invoke(store, keep.diagnostics().identity());
                             if (!Files.isRegularFile(retained))
                                 throw new IllegalStateException("Seed artifact was not persisted: " + retained);
-                            Files.deleteIfExists((Path)path.invoke(store, remove.identity()));
+                            Files.deleteIfExists((Path)path.invoke(store, remove.diagnostics().identity()));
                             result.put("retained", retained.toString());
                         }
                         result.put("ready", true);

@@ -29,7 +29,8 @@ final class PreparedTargetCacheTest {
         var constructions = new AtomicInteger();
         var inputsClosed = new AtomicInteger();
         var value = new Value();
-        try (var blocked = block(WorkPriority.BACKGROUND); var owner = new PreparedTargetCache<String, Value>(scheduler)) {
+        try (var blocked = block(WorkPriority.BACKGROUND);
+            var owner = new PreparedTargetCache<String, Value>(scheduler)) {
             PreparedTargetCache.ProducerFactory<Value> producer = () -> {
                 constructions.incrementAndGet();
                 return new PreparedTargetCache.Producer<>() {
@@ -96,7 +97,8 @@ final class PreparedTargetCacheTest {
         var productions = new AtomicInteger();
         var thread = new AtomicReference<Thread>();
         var local = background();
-        try (var blocked = block(WorkPriority.BACKGROUND); var owner = new PreparedTargetCache<String, Value>(scheduler)) {
+        try (var blocked = block(WorkPriority.BACKGROUND);
+            var owner = new PreparedTargetCache<String, Value>(scheduler)) {
             var first = owner.acquire("same", background(), () -> cancelled -> {
                 productions.incrementAndGet();
                 thread.set(Thread.currentThread());
@@ -121,7 +123,8 @@ final class PreparedTargetCacheTest {
     void promotionBeforePinRegistrationIsAppliedToTheNewProducer() throws Exception {
         var dispatch = background();
         dispatch.promoteLocalPlayer();
-        try (var blocked = block(WorkPriority.BACKGROUND); var owner = new PreparedTargetCache<String, Value>(scheduler)) {
+        try (var blocked = block(WorkPriority.BACKGROUND);
+            var owner = new PreparedTargetCache<String, Value>(scheduler)) {
             var thread = new AtomicReference<Thread>();
             var pin = owner.acquire("same", dispatch, () -> cancelled -> {
                 thread.set(Thread.currentThread());
@@ -195,7 +198,8 @@ final class PreparedTargetCacheTest {
     void shutdownWithdrawsUnstartedProducerAndClosesItsInputOnce() throws Exception {
         var inputsClosed = new AtomicInteger();
         var productions = new AtomicInteger();
-        try (var blocked = block(WorkPriority.BACKGROUND); var owner = new PreparedTargetCache<String, Value>(scheduler)) {
+        try (var blocked = block(WorkPriority.BACKGROUND);
+            var owner = new PreparedTargetCache<String, Value>(scheduler)) {
             var first = owner.acquire("same", background(), () -> new PreparedTargetCache.Producer<>() {
                 @Override
                 public Value produce(java.util.function.BooleanSupplier cancelled) {
@@ -222,6 +226,44 @@ final class PreparedTargetCacheTest {
             drainBackground();
             assertEquals(0, productions.get());
             assertEquals(1, inputsClosed.get());
+        }
+    }
+
+    @Test
+    void shutdownClosesEveryPendingProducerWhenTwoCleanupsThrowTheSameFailure() throws Exception {
+        var failure = new IllegalStateException("shared cleanup failure");
+        var inputsClosed = new AtomicInteger();
+        var productions = new AtomicInteger();
+        try (var blocked = block(WorkPriority.BACKGROUND);
+            var owner = new PreparedTargetCache<String, Value>(scheduler)) {
+            var requests = new java.util.ArrayList<CompletableFuture<?>>();
+            for (int index = 0; index < 3; index++) {
+                boolean failing = index < 2;
+                requests
+                    .add(owner.acquire("pending-" + index, background(), () -> new PreparedTargetCache.Producer<>() {
+                        @Override
+                        public Value produce(java.util.function.BooleanSupplier cancelled) {
+                            productions.incrementAndGet();
+                            return new Value();
+                        }
+
+                        @Override
+                        public void close() {
+                            inputsClosed.incrementAndGet();
+                            if (failing)
+                                throw failure;
+                        }
+                    }));
+            }
+            var cleanup = assertThrows(IllegalStateException.class, owner::close);
+            assertSame(failure, cleanup.getCause());
+            requests.forEach(request -> assertThrows(CancellationException.class, request::join));
+            assertEquals(3, inputsClosed.get());
+            assertEquals(0, owner.size());
+            blocked.close();
+            drainBackground();
+            assertEquals(0, productions.get());
+            assertEquals(3, inputsClosed.get());
         }
     }
 
@@ -273,7 +315,8 @@ final class PreparedTargetCacheTest {
     }
 
     private void drainBackground() throws Exception {
-        CompletableFuture.runAsync(() -> {}, scheduler.backgroundExecutor()).get(10, TimeUnit.SECONDS);
+        CompletableFuture.runAsync(() -> {
+        }, scheduler.backgroundExecutor()).get(10, TimeUnit.SECONDS);
     }
 
     private BlockedWorker block(WorkPriority priority) throws InterruptedException {

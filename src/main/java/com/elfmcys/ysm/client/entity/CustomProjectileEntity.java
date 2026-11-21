@@ -29,8 +29,13 @@ public class CustomProjectileEntity extends AnimatableEntity<Projectile> {
     @Override
     protected String requestedRenderTargetId() {
         var hash = getModelHash();
-        return hash == null ? null : ClientModelService.instance().findRenderTarget(hash, RenderTargetKind.PROJECTILE,
-            entity.getType().builtInRegistryHolder().key().location()).orElse(null);
+        return hash == null
+            ? isAssigned() ? ClientModelService.instance()
+                .findIntrinsicRenderTarget(RenderTargetKind.PROJECTILE,
+                    entity.getType().builtInRegistryHolder().key().location())
+                .orElse(null) : null
+            : ClientModelService.instance().findRenderTarget(hash, RenderTargetKind.PROJECTILE,
+                entity.getType().builtInRegistryHolder().key().location()).orElse(null);
     }
 
     @Override
@@ -66,7 +71,7 @@ public class CustomProjectileEntity extends AnimatableEntity<Projectile> {
     }
 
     @Override
-    protected AnimationStore animationSource() {
+    protected AnimationStore.View animationSource() {
         return getModelRenderTarget().projectileResources().animations();
     }
 

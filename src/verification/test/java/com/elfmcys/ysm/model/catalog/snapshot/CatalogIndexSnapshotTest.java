@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.catalog.snapshot;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 
@@ -35,18 +36,18 @@ class CatalogIndexSnapshotTest {
         assertTrue(index.findCandidates(new ModelFileIdentity(hash(4), currentContainer)).isEmpty());
     }
 
-    private CatalogIndexEntry entry(Hash256 modelId, Hash256 containerId, String path) {
+    private CatalogIndexEntry entry(ModelId modelId, Hash256 containerId, String path) {
         return new CatalogIndexEntry(new ModelFileIdentity(modelId, containerId),
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath(path)), temp.resolve(path));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath(path)), temp.resolve(path));
     }
 
-    private static Hash256 hash(int seed) {
+    private static ModelId hash(int seed) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)seed;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
     private static Hash256 container(int seed) {
-        return hash(seed);
+        return Hash256.parse(hash(seed).toString().substring(5));
     }
 }

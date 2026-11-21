@@ -1,10 +1,12 @@
 package com.elfmcys.ysm.capability;
 
 import com.elfmcys.ysm.client.entity.CustomVehicleEntity;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
+import dev.semaweave.RoamingPayload;
 import it.unimi.dsi.fastutil.ints.Int2FloatMap;
 import it.unimi.dsi.fastutil.ints.Int2FloatOpenHashMap;
+import java.util.List;
 import net.minecraft.world.entity.Entity;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
@@ -20,33 +22,51 @@ public class VehicleAnimatableCapability extends CustomVehicleEntity {
         super(entity);
     }
 
-    public void init(Hash256 ownerModelHash) {
+    @Override
+    protected boolean worldSubjectSamplePublisher(Entity subject) {
+        return !(subject instanceof net.minecraft.world.entity.player.Player
+            || subject instanceof net.minecraft.world.entity.projectile.Projectile);
+    }
+
+    public void init(ModelId ownerModelHash) {
         updateModelHash(ownerModelHash);
     }
 
     public void initRoamingVars(@NotNull Int2FloatOpenHashMap vars) {
         waitForAsyncUpdate();
-        com.elfmcys.ysm.network.NetworkHandler.traceNetwork("vehicle-roaming-full-apply",
-            "vehicleId=" + getEntity().getId(), "variables=" + vars.size());
+        if (com.elfmcys.ysm.network.NetworkDiagnostics.isEnabled())
+            com.elfmcys.ysm.network.NetworkDiagnostics.trace("vehicle-roaming-full-apply",
+                "vehicleId=" + getEntity().getId(), "variables=" + vars.size());
         // 无条件同步服务端数据
-        var payload = RoamingPayloads.fromNetwork(vars);
+        RoamingPayloads.validateNetwork(vars);
         if (getModelRenderTarget() == null) {
             pendingRoamingValues = new Int2FloatOpenHashMap(vars);
             return;
         }
-        getModelRenderTarget().expressions().validateRoamingFull(payload);
+        var payload =
+            RoamingPayloads.fromNetwork(vars, getExpressionRuntime().metadata().orElseThrow().roamingFields());
         roamingValues = new Int2FloatOpenHashMap(vars);
         pendingRoamingValues = null;
-        if (getExpressionRuntime().module().isPresent()) {
+        if (getExpressionRuntime().metadata().isPresent()) {
             getExpressionRuntime().applyRoamingFull(payload);
         }
     }
 
     public void updateRoamingVars(@NotNull Int2FloatMap vars) {
+        RoamingPayloads.validateNetwork(vars);
+        applyRoamingChanges(vars);
+    }
+
+    /** Borrows a finite module export and its exact source layout; wire validation belongs to the map ingress. */
+    public void adoptRoamingChanges(RoamingPayload changes, List<String> sourceFields) {
+        applyRoamingChanges(RoamingPayloads.toNetwork(changes, sourceFields));
+    }
+
+    private void applyRoamingChanges(Int2FloatMap vars) {
         waitForAsyncUpdate();
-        com.elfmcys.ysm.network.NetworkHandler.traceNetwork("vehicle-roaming-delta-apply",
-            "vehicleId=" + getEntity().getId(), "variables=" + vars.size());
-        var payload = RoamingPayloads.fromNetwork(vars);
+        if (com.elfmcys.ysm.network.NetworkDiagnostics.isEnabled())
+            com.elfmcys.ysm.network.NetworkDiagnostics.trace("vehicle-roaming-delta-apply",
+                "vehicleId=" + getEntity().getId(), "variables=" + vars.size());
         if (getModelRenderTarget() == null) {
             if (pendingRoamingValues == null) {
                 pendingRoamingValues =
@@ -55,12 +75,13 @@ public class VehicleAnimatableCapability extends CustomVehicleEntity {
             pendingRoamingValues.putAll(vars);
             return;
         }
-        getModelRenderTarget().expressions().validateRoamingPatch(payload);
+        var payload =
+            RoamingPayloads.fromNetwork(vars, getExpressionRuntime().metadata().orElseThrow().roamingFields());
         if (roamingValues == null) {
             roamingValues = new Int2FloatOpenHashMap();
         }
         roamingValues.putAll(vars);
-        if (getExpressionRuntime().module().isPresent()) {
+        if (getExpressionRuntime().metadata().isPresent()) {
             getExpressionRuntime().applyRoamingPatch(payload);
         }
     }
@@ -70,7 +91,8 @@ public class VehicleAnimatableCapability extends CustomVehicleEntity {
         com.elfmcys.ysm.expression.aot.EntityExpressionRuntime.PreparedInstallation prepared) {
         var values = pendingRoamingValues != null ? pendingRoamingValues
             : roamingValues == null ? new Int2FloatOpenHashMap() : roamingValues;
-        prepared.initializeRoaming(RoamingPayloads.fromNetwork(values));
+        prepared
+            .initializeRoaming(RoamingPayloads.fromNetwork(values, animationStore(target).metadata().roamingFields()));
         var accepted = new Int2FloatOpenHashMap(values);
         return () -> {
             roamingValues = accepted;

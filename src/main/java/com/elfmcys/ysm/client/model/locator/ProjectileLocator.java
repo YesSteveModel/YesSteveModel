@@ -14,15 +14,12 @@ public class ProjectileLocator extends GeoLocatorType {
         super(new ResourceLocation(YesSteveModel.MOD_ID, "projectile"));
     }
 
+    /** Initializes and freezes declarations on the bootstrap owner before resource workers can read them. */
     public static void init() {
         if (INSTANCE == null) {
-            synchronized (ProjectileLocator.class) {
-                if (INSTANCE == null) {
-                    INSTANCE = new ProjectileLocator();
-                    YesSteveModel.postEvent(new RegisterModelLocatorEvent(ModelKind.PROJECTILE, INSTANCE::register));
-                    INSTANCE.freeze();
-                }
-            }
+            INSTANCE = new ProjectileLocator();
+            YesSteveModel.postEvent(new RegisterModelLocatorEvent(ModelKind.PROJECTILE, INSTANCE::register));
+            INSTANCE.freeze();
         }
     }
 

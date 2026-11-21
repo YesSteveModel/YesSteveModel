@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.audio;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.testutil.NativeLibraryExtension;
@@ -130,12 +131,12 @@ class AudioRetentionCacheTest {
     @Test
     void completeRequiresWholeFramesInTheDefaultMonoFormat() {
         assertThrows(IllegalArgumentException.class, () -> new CachedAudio.Complete(new PcmAudio(new byte[3], FORMAT)));
-        assertThrows(IllegalArgumentException.class, () -> new CachedAudio.Complete(
-            new PcmAudio(new byte[4], new AudioFormat(48_000, 16, 2, true, false))));
-        assertThrows(IllegalArgumentException.class, () -> new CachedAudio.Complete(
-            new PcmAudio(new byte[4], new AudioFormat(48_000, 16, 1, true, true))));
-        assertThrows(IllegalArgumentException.class, () -> new CachedAudio.Complete(
-            new PcmAudio(new byte[4], new AudioFormat(44_100, 16, 1, true, false))));
+        assertThrows(IllegalArgumentException.class,
+            () -> new CachedAudio.Complete(new PcmAudio(new byte[4], new AudioFormat(48_000, 16, 2, true, false))));
+        assertThrows(IllegalArgumentException.class,
+            () -> new CachedAudio.Complete(new PcmAudio(new byte[4], new AudioFormat(48_000, 16, 1, true, true))));
+        assertThrows(IllegalArgumentException.class,
+            () -> new CachedAudio.Complete(new PcmAudio(new byte[4], new AudioFormat(44_100, 16, 1, true, false))));
     }
 
     @Test
@@ -165,8 +166,9 @@ class AudioRetentionCacheTest {
             var prefix = prefix();
             assertTrue(prefix.checkpoint().retainedBytes() > 0);
             assertEquals(prefix.pcm().size() + prefix.checkpoint().retainedBytes(), prefix.retainedBytes());
-            assertThrows(IllegalArgumentException.class, () -> new CachedAudio.Prefix(
-                new PcmAudio(new byte[prefix.pcm().size() + 2], FORMAT), prefix.checkpoint()));
+            assertThrows(IllegalArgumentException.class,
+                () -> new CachedAudio.Prefix(new PcmAudio(new byte[prefix.pcm().size() + 2], FORMAT),
+                    prefix.checkpoint()));
             try (var cache = new AudioRetentionCache(prefix.pcm().size(), 30, () -> 0)) {
                 var key = key(1);
                 assertFalse(cache.publish(key, prefix, cache.begin(key).receipt()));
@@ -233,7 +235,7 @@ class AudioRetentionCacheTest {
         model[0] = (byte)value;
         container[0] = (byte)(value + 1);
         stream[0] = (byte)(value + 2);
-        return new AudioCacheKey(new ModelFileIdentity(new Hash256(model), new Hash256(container)), new Hash256(stream),
-            2, 1_000, 312, 0, 1);
+        return new AudioCacheKey(new ModelFileIdentity(ModelId.fromHash(new Hash256(model)), new Hash256(container)),
+            new Hash256(stream), 2, 1_000, 312, 0, 1);
     }
 }

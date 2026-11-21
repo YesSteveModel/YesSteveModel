@@ -26,7 +26,7 @@ public record ExpressionArtifactIdentity(ExpectedArtifactIdentity expected, Fing
     ExpressionBinding expressionBinding, Fingerprint configFingerprint, Fingerprint eventCatalogFingerprint,
     Fingerprint productionLinkageFingerprint, ModelResourcePurpose purpose) {
 
-    private static final String DOMAIN = "ysm:expression-artifact:" + AbiVersion.CACHE_ANIMATION;
+    private static final String DOMAIN = "ysm:aot-only-v1:" + AbiVersion.CACHE_ANIMATION;
 
     public ExpressionArtifactIdentity {
         Objects.requireNonNull(expected, "expected");
@@ -65,7 +65,8 @@ public record ExpressionArtifactIdentity(ExpectedArtifactIdentity expected, Fing
         var configFingerprint = Fingerprint.compute(ExpressionIdentityHash.SHA_256, ReadOnlyBytes.copyOf(configBytes));
         var standaloneLinkage = expected.identity().input().hostAbi().fingerprint();
         return create(expected, null, model.containerId(), targetId, ExpressionSet.MAIN, expressionBinding,
-            configFingerprint, MolangEventCatalog.production().fingerprint(), standaloneLinkage, ModelResourcePurpose.FULL);
+            configFingerprint, MolangEventCatalog.production().fingerprint(), standaloneLinkage,
+            ModelResourcePurpose.FULL);
     }
 
     public static ExpressionArtifactIdentity create(ExpectedArtifactIdentity expected,

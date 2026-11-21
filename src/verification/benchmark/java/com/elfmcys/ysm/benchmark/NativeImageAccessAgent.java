@@ -9,10 +9,12 @@ import java.util.Arrays;
 
 /** Supplies production Mixin getters and optional priority observations in ordinary benchmark forks. */
 public final class NativeImageAccessAgent {
+    public static Instrumentation instrumentation;
     private static final String IMAGE = "com/mojang/blaze3d/platform/NativeImage";
     private static final String ACCESSOR = "com/elfmcys/ysm/mixin/client/NativeImageAccessor";
 
     public static void premain(String arguments, Instrumentation instrumentation) {
+        NativeImageAccessAgent.instrumentation = instrumentation;
         var priorityProbe = "priority".equals(arguments);
         if (priorityProbe)
             System.setProperty("ysm.priority.probe", "true");
@@ -99,7 +101,8 @@ public final class NativeImageAccessAgent {
                 return new MethodVisitor(Opcodes.ASM9, delegate) {
                     private void probe(String callback) {
                         super.visitMethodInsn(Opcodes.INVOKESTATIC,
-                            "com/elfmcys/ysm/model/resource/client/render/ResourcePriorityProbe", callback, "()V", false);
+                            "com/elfmcys/ysm/model/resource/client/render/ResourcePriorityProbe", callback, "()V",
+                            false);
                     }
 
                     @Override
@@ -110,8 +113,8 @@ public final class NativeImageAccessAgent {
 
                     @Override
                     public void visitInsn(int opcode) {
-                        if (exit != null && (opcode >= Opcodes.IRETURN && opcode <= Opcodes.RETURN
-                            || opcode == Opcodes.ATHROW))
+                        if (exit != null
+                            && (opcode >= Opcodes.IRETURN && opcode <= Opcodes.RETURN || opcode == Opcodes.ATHROW))
                             probe(exit);
                         super.visitInsn(opcode);
                     }

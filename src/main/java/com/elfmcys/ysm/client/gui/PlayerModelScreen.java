@@ -3,7 +3,6 @@ package com.elfmcys.ysm.client.gui;
 import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.capability.AuthModelsCapabilityProvider;
 import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
-import com.elfmcys.ysm.capability.StarModelsCapabilityProvider;
 import com.elfmcys.ysm.client.event.DownloadScreenInterModEvent;
 import com.elfmcys.ysm.client.gui.button.CatalogModelButton;
 import com.elfmcys.ysm.client.gui.button.FailedCatalogModelButton;
@@ -16,7 +15,7 @@ import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.config.ServerConfig;
 import com.elfmcys.ysm.model.catalog.client.ClientCatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.client.ModelPackInfo;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.model.resource.client.ModelResourcePurpose;
@@ -91,7 +90,7 @@ public class PlayerModelScreen extends ModelScreen {
         return new ModelInfoScreen(parent, model);
     }
 
-    protected void selectModel(Hash256 hash, String path, String texture, ModelRenderTarget renderTarget) {
+    protected void selectModel(ModelId hash, String path, String texture, ModelRenderTarget renderTarget) {
         if (!hasCurrentWorld())
             return;
         ClientProtocolGateway.selectModel(hash, texture);
@@ -114,10 +113,8 @@ public class PlayerModelScreen extends ModelScreen {
     }
 
     protected ResourceRequest textureRequest(ClientDemandCoordinator.Target target) {
-        return target.modelId() == null
-            ? service.defaultResourceRequest("player", ModelResourcePurpose.FULL, null)
-            : service.resourceRequest(target.modelId(), "player", target.texture(), ModelResourcePurpose.FULL,
-                null);
+        return target.modelId() == null ? service.defaultResourceRequest("player", ModelResourcePurpose.FULL, null)
+            : service.resourceRequest(target.modelId(), "player", target.texture(), ModelResourcePurpose.FULL, null);
     }
 
     protected @Nullable ResourceLease findTextureReady(ResourceRequest request) {
@@ -318,8 +315,8 @@ public class PlayerModelScreen extends ModelScreen {
             index -= browser.packs().size();
             if (index >= 0 && index < browser.models().size()) {
                 var entry = browser.models().get(index);
-                var button = new CatalogModelButton(xStart, yStart, entry, () -> requiresAuthorization(entry), pageFrame,
-                    pageScope, new CustomGuiPlayerEntity(), this::selectModel, this::openTexturePage,
+                var button = new CatalogModelButton(xStart, yStart, entry, () -> requiresAuthorization(entry),
+                    pageFrame, pageScope, new CustomGuiPlayerEntity(), this::selectModel, this::openTexturePage,
                     this::canOpenTexturePage);
                 modelButtons.add(button);
                 pageWidgets.add(button);
@@ -351,12 +348,10 @@ public class PlayerModelScreen extends ModelScreen {
         var auth = player == null ? null
             : player.getCapability(AuthModelsCapabilityProvider.AUTH_MODELS_CAP).resolve().orElse(null);
         var sessionGrants = ClientSessionRuntime.authoritativeGrants();
-        var stars = player == null ? null
-            : player.getCapability(StarModelsCapabilityProvider.STAR_MODELS_CAP).resolve().orElse(null);
         browser.filter(textField == null ? "" : textField.getValue(), locale(), clientNotDisplayModels,
             hash -> sessionGrants.map(grants -> grants.contains(hash))
                 .orElseGet(() -> auth != null && auth.containModel(hash)),
-            hash -> stars != null && stars.containModel(hash));
+            hash -> ClientModelService.instance().preferences().favourite(hash));
     }
 
     private void rebuildCatalog(ClientCatalogSnapshot next) {
@@ -380,8 +375,8 @@ public class PlayerModelScreen extends ModelScreen {
         updatePointer(mouseX, mouseY);
         var currentPage = pageScope;
         if (pageFrame != null)
-            pageFrame.prepare(List.copyOf(modelButtons), List.copyOf(packButtons), minecraft.getFrameTime(),
-                mouseX, mouseY, Util.getMillis());
+            pageFrame.prepare(List.copyOf(modelButtons), List.copyOf(packButtons), minecraft.getFrameTime(), mouseX,
+                mouseY, Util.getMillis());
         if (!hasCurrentWorld() || pageScope != currentPage || currentPage != null && currentPage.isClosed())
             return;
         if (textureButton != null)
@@ -575,7 +570,9 @@ public class PlayerModelScreen extends ModelScreen {
     private void closeModelButtons() {
         Throwable failure = null;
         for (var button : List.copyOf(modelButtons)) {
-            try { button.close(); } catch (Throwable error) {
+            try {
+                button.close();
+            } catch (Throwable error) {
                 failure = GuiFrameTasks.append(failure, error);
             }
         }
@@ -586,9 +583,15 @@ public class PlayerModelScreen extends ModelScreen {
 
     private void closePageWidgets() {
         Throwable failure = null;
-        try { closeModelButtons(); } catch (Throwable error) { failure = error; }
+        try {
+            closeModelButtons();
+        } catch (Throwable error) {
+            failure = error;
+        }
         for (var button : List.copyOf(packButtons)) {
-            try { button.close(); } catch (Throwable error) {
+            try {
+                button.close();
+            } catch (Throwable error) {
                 failure = GuiFrameTasks.append(failure, error);
             }
         }
@@ -604,15 +607,25 @@ public class PlayerModelScreen extends ModelScreen {
         pageFrame = null;
         Throwable failure = null;
         if (previous != null) {
-            try { previous.close(); } catch (Throwable error) { failure = error; }
+            try {
+                previous.close();
+            } catch (Throwable error) {
+                failure = error;
+            }
         }
-        try { closePageWidgets(); } catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+        try {
+            closePageWidgets();
+        } catch (Throwable error) {
+            failure = GuiFrameTasks.append(failure, error);
+        }
         throwPageCleanup(failure);
     }
 
     private static void throwPageCleanup(Throwable failure) {
-        if (failure instanceof Error error) throw error;
-        if (failure instanceof RuntimeException error) throw error;
+        if (failure instanceof Error error)
+            throw error;
+        if (failure instanceof RuntimeException error)
+            throw error;
     }
 
     private void backToParent() {
@@ -671,7 +684,8 @@ public class PlayerModelScreen extends ModelScreen {
     }
 
     private record PageSignature(int page, CatalogBrowserState.Category category, String pack, String query,
-        List<String> members) {}
+        List<String> members) {
+    }
 
     private String locale() {
         return Minecraft.getInstance().getLanguageManager().getSelected();

@@ -1,7 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
 import com.elfmcys.ysm.expression.aot.FloatExpression;
-import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule;
 import com.elfmcys.ysm.expression.aot.VoidProgram;
 import com.elfmcys.ysm.geckolib3.core.builder.Animation;
 import com.elfmcys.ysm.geckolib3.core.builder.LoopType;
@@ -26,7 +25,7 @@ import java.util.List;
 import java.util.function.IntFunction;
 import java.util.function.ToIntFunction;
 
-/** Converts animation programs to references within the accompanying artifact catalog. */
+/** Converts animation programs to references within an independently owned input index. */
 public final class BakedAnimationMapper {
     private BakedAnimationMapper() {}
 
@@ -81,11 +80,7 @@ public final class BakedAnimationMapper {
         return result.build();
     }
 
-    public static Animation animation(BakedAnimationProto source, RenderTargetExpressionModule module) {
-        return animation(source, module::requireFloatProgram, module::requireVoidProgram);
-    }
-
-    static Animation animation(BakedAnimationProto source, IntFunction<FloatExpression.Program> samples,
+    public static Animation animation(BakedAnimationProto source, IntFunction<FloatExpression.Program> samples,
         IntFunction<VoidProgram> instructionsById) {
         var bones = new ReferenceArrayList<BoneAnimation>(source.boneAnimations().size());
         for (var sourceBone : source.boneAnimations()) {

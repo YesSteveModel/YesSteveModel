@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.catalog.builtin;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.format.parser.DefaultAnimationFilter;
 import com.elfmcys.ysm.model.catalog.content.DefaultAnimationKey;
 import com.elfmcys.ysm.model.domain.Hash256;
@@ -43,26 +44,26 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
     private static final Set<String> HISTORY_ROOT_FIELDS = Set.of("animations");
     private static final Set<String> HISTORY_FIELDS = Set.of("domain", "name", "payloadHashes");
 
-    private final Map<ModelPath, Hash256> models;
+    private final Map<ModelPath, ModelId> models;
     private final Map<DefaultAnimationKey, DefaultAnimationEntry> defaultAnimations;
     private final Hash256 dedupProfileHash;
 
-    private BuiltinModelIndex(Map<ModelPath, Hash256> models,
+    private BuiltinModelIndex(Map<ModelPath, ModelId> models,
         Map<DefaultAnimationKey, DefaultAnimationEntry> defaultAnimations, Hash256 dedupProfileHash) {
         this.models = Map.copyOf(models);
         this.defaultAnimations = Map.copyOf(defaultAnimations);
         this.dedupProfileHash = dedupProfileHash;
     }
 
-    public static BuiltinModelIndex of(Map<ModelPath, Hash256> models) throws IOException {
+    public static BuiltinModelIndex of(Map<ModelPath, ModelId> models) throws IOException {
         return of(models, Map.of(), Map.of());
     }
 
-    public static BuiltinModelIndex of(Map<ModelPath, Hash256> models,
+    public static BuiltinModelIndex of(Map<ModelPath, ModelId> models,
         Map<DefaultAnimationKey, Hash256> currentAnimations,
         Map<DefaultAnimationKey, Set<Hash256>> historicalAnimations) throws IOException {
-        var sorted = new LinkedHashMap<ModelPath, Hash256>();
-        var hashes = new HashSet<Hash256>();
+        var sorted = new LinkedHashMap<ModelPath, ModelId>();
+        var hashes = new HashSet<ModelId>();
         for (var entry : models.entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
             if (sorted.put(entry.getKey(), entry.getValue()) != null) {
                 throw new IOException("Duplicate builtin model path: " + entry.getKey());
@@ -115,8 +116,8 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
             throw new IOException("Builtin model index models must be an array");
         }
 
-        var models = new LinkedHashMap<ModelPath, Hash256>();
-        var hashes = new HashSet<Hash256>();
+        var models = new LinkedHashMap<ModelPath, ModelId>();
+        var hashes = new HashSet<ModelId>();
         ModelPath previous = null;
         for (var element : modelElement.getAsJsonArray()) {
             if (!element.isJsonObject()) {
@@ -140,12 +141,9 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
             previous = path;
 
             var rawHash = requireString(model, "modelHash");
-            if (!HASH_PATTERN.matcher(rawHash).matches()) {
-                throw new IOException("Invalid builtin model hash for " + path + ": " + rawHash);
-            }
-            final Hash256 hash;
+            final ModelId hash;
             try {
-                hash = Hash256.parse(rawHash);
+                hash = ModelId.parse(rawHash);
             } catch (IllegalArgumentException error) {
                 throw new IOException("Invalid builtin model hash for " + path, error);
             }
@@ -220,7 +218,7 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         return List.copyOf(entries);
     }
 
-    public Hash256 require(ModelPath path) throws IOException {
+    public ModelId require(ModelPath path) throws IOException {
         var hash = models.get(path);
         if (hash == null) {
             throw new IOException("Builtin model index has no entry for path: " + path);
@@ -420,7 +418,7 @@ public final class BuiltinModelIndex implements DefaultAnimationFilter {
         return ModelHashing.blake3(output.toByteArray());
     }
 
-    public record Entry(ModelPath path, Hash256 modelHash) implements Comparable<Entry> {
+    public record Entry(ModelPath path, ModelId modelHash) implements Comparable<Entry> {
         @Override
         public int compareTo(Entry other) {
             return path.compareTo(other.path);

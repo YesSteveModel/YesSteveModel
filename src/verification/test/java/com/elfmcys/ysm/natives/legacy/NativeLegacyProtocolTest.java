@@ -43,6 +43,17 @@ class NativeLegacyProtocolTest {
     }
 
     @Test
+    void acceptsDescriptorAboveTheFormerLimit() {
+        var payloads = minimalPayloads();
+        var targetName = "a".repeat(16 * 1024 * 1024);
+        var raw = result(0, "", true, descriptor(payloads, 17, 1234, targetName), payloads);
+
+        try (var success = assertInstanceOf(NativeLegacyProtocol.Success.class, NativeLegacyProtocol.accept(raw))) {
+            assertEquals(targetName, success.descriptor().records().get(2).name());
+        }
+    }
+
+    @Test
     void copiedWriterBufferOutlivesThePublicResultGate() {
         var payloads = minimalPayloads();
         var raw = result(0, "", true, descriptor(payloads, 1, 64), payloads);
@@ -242,8 +253,11 @@ class NativeLegacyProtocolTest {
     }
 
     private static byte[] descriptor(ByteBuffer[] payloads, int innerVersion, long sourceSize) {
-        byte[] player = "player".getBytes(StandardCharsets.UTF_8);
-        int size = 60 + 40 * 3 + player.length;
+        return descriptor(payloads, innerVersion, sourceSize, "player");
+    }
+
+    private static byte[] descriptor(ByteBuffer[] payloads, int innerVersion, long sourceSize, String targetName) {
+        int size = 60 + 40 * 3 + targetName.getBytes(StandardCharsets.UTF_8).length;
         var output = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
         output.put(new byte[] {'Y', 'S', 'M', 'L', 'E', 'G', 'I', 0});
         output.putInt(innerVersion);
@@ -253,7 +267,7 @@ class NativeLegacyProtocolTest {
         output.put(new byte[32]);
         putRecord(output, 1, 0, 0, "", payloads[0].capacity());
         putRecord(output, 2, 0, 1, "", payloads[1].capacity());
-        putRecord(output, 3, 0, 2, "player", payloads[2].capacity());
+        putRecord(output, 3, 0, 2, targetName, payloads[2].capacity());
         return output.array();
     }
 

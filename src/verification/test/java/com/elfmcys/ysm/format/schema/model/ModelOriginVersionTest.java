@@ -6,6 +6,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ModelOriginVersionTest {
     @Test
+    void divisionFallbackRequiresTheCompleteSourceReleaseAndComparesMajorWithoutOverflow() {
+        for (String version : java.util.List.of("0.0.0", "2.6.5", "2.6.6", "2.7.0", "2.99.0-snapshot+build", "2",
+            "00.7", "0002.999", "0".repeat(1000) + "2.0-dev+build"))
+            assertTrue(ModelOriginVersion.usesDivZeroFallback(version), version);
+        for (String version : java.util.List.of("3.0.0", "3.0-dev-forge+mc1.20.1", "4.0.0", "0003.0",
+            "2".repeat(1000) + ".0", "", " ", "2.0 ", " 2.0", "-2.0", "+build", "snapshot", "2..0", "2.", "2-", "2+",
+            "2+build-dev+other", "2.0\n", "2-dev/forge", "２.0"))
+            assertFalse(ModelOriginVersion.usesDivZeroFallback(version), version);
+        assertFalse(ModelOriginVersion.usesDivZeroFallback(null));
+        for (int level = 0; level < ModelOriginVersion.CURRENT; level++)
+            assertTrue(ModelOriginVersion.usesDivZeroFallback(ModelOriginVersion.toModVersion(level)));
+        assertFalse(ModelOriginVersion.usesDivZeroFallback(ModelOriginVersion.CURRENT_RELEASE));
+    }
+
+    @Test
     void roundTripsEveryHistoricalLevelAndCurrentModels() {
         for (int level = 0; level <= ModelOriginVersion.CURRENT; level++)
             assertEquals(level, ModelOriginVersion.fromModVersion(ModelOriginVersion.toModVersion(level)),
@@ -49,7 +64,8 @@ class ModelOriginVersionTest {
     @Test
     void buildMetadataDoesNotChangeTheHistoricalVersion() {
         for (int level = 0; level <= ModelOriginVersion.CURRENT; level++)
-            assertEquals(level, ModelOriginVersion.fromModVersion(ModelOriginVersion.toModVersion(level) + "+build.123"));
+            assertEquals(level,
+                ModelOriginVersion.fromModVersion(ModelOriginVersion.toModVersion(level) + "+build.123"));
         assertEquals(18, ModelOriginVersion.fromModVersion("2.4.2-snapshot-31+build.123"));
     }
 

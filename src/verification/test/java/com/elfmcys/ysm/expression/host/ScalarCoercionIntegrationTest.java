@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.expression.host;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.api.molang.DeclarationSchema;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.expression.EncodedProgramMapper;
@@ -7,13 +8,13 @@ import com.elfmcys.ysm.expression.aot.*;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
 import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
 import com.elfmcys.ysm.expression.inventory.ProgramRole;
-import com.elfmcys.ysm.format.schema.baked.asset.BakedAssetView;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.resource.client.BakeProfile;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.model.resource.client.render.BakedAnimationCache;
+import com.elfmcys.ysm.model.resource.client.render.AnimationInputStore;
 import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.*;
@@ -89,16 +90,6 @@ public final class ScalarCoercionIntegrationTest {
         return new Point(0);
     }
 
-    public static Point badpoint(MolangContext context) {
-        TRACE.add("badpoint");
-        return null;
-    }
-
-    public static FloatList badarray(MolangContext context) {
-        TRACE.add("badarray");
-        return null;
-    }
-
     public static float argument(MolangContext context) {
         TRACE.add("argument");
         return 2;
@@ -158,13 +149,14 @@ public final class ScalarCoercionIntegrationTest {
             for (int pass = 0; pass < 2; pass++) {
                 var store = store(root);
                 var metrics = new ExpressionEngineMetrics();
-                try (var module = create(store, metrics, host, model); var runtime = new EntityExpressionRuntime()) {
+                var module = create(store, metrics, host, model);
+                try (var animations = TestExpressionModules.store(module, Map.of());
+                    var runtime = new EntityExpressionRuntime()) {
                     assertEquals(pass == 0 ? ExpressionArtifactStore.Source.COLD : ExpressionArtifactStore.Source.DISK,
                         module.source());
                     assertTrue(module.compilationReport().replacements().isEmpty());
                     assertTrue(module.compilationReport().localRecoveries().isEmpty());
-                    runtime.replace(module, Map.of(),
-                        scope(module, net.minecraft.world.entity.decoration.ArmorStand.class));
+                    runtime.replace(animations, scope(net.minecraft.world.entity.decoration.ArmorStand.class));
                     TRACE.clear();
                     sourceCalls = 0;
                     int index = 0;
@@ -223,9 +215,10 @@ public final class ScalarCoercionIntegrationTest {
         var host = host();
         var model = model(List.of("scalar.action(scalar.argument());", "scalar.restricted(scalar.argument());",
             "scalar.action(scalar.fail());"));
-        try (var module = create(store(root), new ExpressionEngineMetrics(), host, model);
+        var module = create(store(root), new ExpressionEngineMetrics(), host, model);
+        try (var animations = TestExpressionModules.store(module, Map.of());
             var runtime = new EntityExpressionRuntime()) {
-            runtime.replace(module, Map.of(), scope(module, net.minecraft.world.entity.projectile.Snowball.class));
+            runtime.replace(animations, scope(net.minecraft.world.entity.projectile.Snowball.class));
             TRACE.clear();
             runtime.observe(inputs(), e -> e.evaluate(module.requireFloatProgram(location(0))));
             assertEquals(List.of(), TRACE);
@@ -238,48 +231,27 @@ public final class ScalarCoercionIntegrationTest {
                 assertEquals(List.of("argument", "action:2.0"), TRACE);
             }
             TRACE.clear();
-            try (var session = runtime.compileTransient(runtime.generation(), "return scalar.action(scalar.fail());",
-                TransientExpressionSession.Privilege.LOCAL_EXECUTE, TransientExpressionSession.Purpose.ONE_SHOT,
-                "scalar/failing-argument", () -> false)) {
-                var failure = assertThrows(RuntimeException.class, () -> runtime.executeTransient(inputs(), session));
-                Throwable cause = failure;
-                while (cause.getCause() != null)
-                    cause = cause.getCause();
-                assertEquals("argument failure", cause.getMessage());
+            try (var session = runtime.compileTransient(runtime.generation(),
+                "scalar.action(scalar.fail());scalar.argument();", TransientExpressionSession.Privilege.LOCAL_EXECUTE,
+                TransientExpressionSession.Purpose.ONE_SHOT, "scalar/failing-argument", () -> false)) {
+                var failure = assertThrows(ExecutionFailure.class, () -> runtime.executeTransient(inputs(), session));
+                assertEquals(ExecutionFailure.Reason.INSTANCE_EXECUTION, failure.reason());
+                assertEquals("scalar/failing-argument", failure.provenance().programLocation());
+                assertEquals("argument failure", failure.getCause().getMessage());
                 assertEquals(List.of("fail"), TRACE);
             }
-        }
-    }
-
-    @Test
-    void illegalNullKeepsItsExactMemberBeforeScalarConsumption(@TempDir Path root) throws Exception {
-        ComponentScopeTest.initializeMinecraftEntityClasses();
-        try (var module = create(store(root), new ExpressionEngineMetrics(), host(), model(List.of("1")));
-            var runtime = new EntityExpressionRuntime()) {
-            runtime.replace(module, Map.of(), scope(module, net.minecraft.world.entity.decoration.ArmorStand.class));
-            for (String member : List.of("badarray", "badpoint")) {
-                for (String operation : List.of("scalar.%s();", "scalar.%s()+1;", "scalar.%s()==2;")) {
-                    TRACE.clear();
-                    try (var session = runtime.compileTransient(runtime.generation(),
-                        operation.formatted(member) + "scalar.argument();",
-                        TransientExpressionSession.Privilege.LOCAL_EXECUTE, TransientExpressionSession.Purpose.ONE_SHOT,
-                        "scalar/illegal-null", () -> false)) {
-                        var failure =
-                            assertThrows(ExecutionFailure.class, () -> runtime.executeTransient(inputs(), session));
-                        assertEquals(ExecutionFailure.Reason.NON_NULL_RETURN, failure.reason());
-                        Throwable cause = failure;
-                        while (!(cause instanceof ProviderReturnContractException) && cause.getCause() != null)
-                            cause = cause.getCause();
-                        var contract = assertInstanceOf(ProviderReturnContractException.class, cause);
-                        assertEquals(0, contract.programId());
-                        assertEquals("scalar:" + member, contract.symbol());
-                        assertTrue(contract.method().contains(ScalarCoercionIntegrationTest.class.getName()));
-                        assertTrue(contract.method().contains(member));
-                        assertFalse(contract.nodePath().isBlank());
-                        assertEquals("scalar/illegal-null", failure.provenance().programLocation());
-                        assertEquals(List.of(member), TRACE);
-                    }
-                }
+            TRACE.clear();
+            try (
+                var budget = runtime.compileTransient(runtime.generation(), "loop(1000000,0);scalar.argument();",
+                    TransientExpressionSession.Privilege.LOCAL_EXECUTE, TransientExpressionSession.Purpose.ONE_SHOT,
+                    "scalar/budget", () -> false);
+                var next = runtime.compileTransient(runtime.generation(), "return scalar.argument();",
+                    TransientExpressionSession.Privilege.LOCAL_EXECUTE, TransientExpressionSession.Purpose.ONE_SHOT,
+                    "scalar/next", () -> false)) {
+                assertEquals(2f, runtime.executeTransient(inputs(), budget));
+                assertEquals(List.of("argument"), TRACE);
+                assertEquals(2f, runtime.executeTransient(inputs(), next));
+                assertEquals(List.of("argument", "argument"), TRACE);
             }
         }
     }
@@ -311,15 +283,26 @@ public final class ScalarCoercionIntegrationTest {
         var managerField = AnimationExecutionState.class.getDeclaredField("soundManager");
         managerField.setAccessible(true);
         managerField.set(animation, manager);
-        try (var module = create(store(root), new ExpressionEngineMetrics(), host, model(List.of("1")), strings);
+        var module = create(store(root), new ExpressionEngineMetrics(), host, model(List.of("1")), strings);
+        try (
+            var animations = new com.elfmcys.ysm.model.resource.client.AnimationStore(module,
+                com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.FULL);
             var runtime = new EntityExpressionRuntime()) {
-            var handler = module.requireEventProgram(new ModelProgramInventory.SemanticLocation("player",
-                "function/@defer", ProgramRole.EVENT_DEFER, "defer:0"));
-            runtime.replace(module, Map.of("defer", List.of(handler)),
-                scope(module, net.minecraft.world.entity.decoration.ArmorStand.class));
-            try (var session = runtime.compileTransient(runtime.generation(),
-                "ysm.defer('0',scalar.empty(),scalar.point());ysm.play_sound('0','voice',false);ysm.stop_sound('0');ysm.play_sound(scalar.point(),'voice',false);",
-                TransientExpressionSession.Privilege.LOCAL_EXECUTE, TransientExpressionSession.Purpose.ONE_SHOT,
+            try (var preparation = animations.prepare()) {
+                var handler = preparation.requireEventProgram(new ModelProgramInventory.SemanticLocation("player",
+                    "function/@defer", ProgramRole.EVENT_DEFER, "defer:0"));
+                preparation.initialize(com.elfmcys.ysm.model.resource.client.AnimationStore.Index.eager(Map.of()), null,
+                    Map.of(), Map.of(), Map.of("defer", List.of(handler)));
+            }
+            runtime.replace(animations, scope(net.minecraft.world.entity.decoration.ArmorStand.class));
+            try (var session = runtime.compileTransient(runtime.generation(), """
+                ysm.defer('0',scalar.empty(),scalar.point());
+                ysm.play_sound('0','voice',false);
+                ysm.stop_sound('0');
+                ysm.play_sound(scalar.point(),'voice',false);
+                ysm.play_sound(null,'voice');
+                ysm.stop_sound(null);
+                """, TransientExpressionSession.Privilege.LOCAL_EXECUTE, TransientExpressionSession.Purpose.ONE_SHOT,
                 "scalar/domain", () -> false)) {
                 TRACE.clear();
                 sourceCalls = 0;
@@ -330,8 +313,8 @@ public final class ScalarCoercionIntegrationTest {
                 });
                 assertEquals(List.of("fixed:1.0:false:1"), TRACE);
                 assertEquals(3, sourceCalls);
-                assertEquals(List.of(ModelSoundId.string("0"), ModelSoundId.string("0"), ModelSoundId.numeric(1)),
-                    sounds);
+                assertEquals(List.of(ModelSoundId.string("0"), ModelSoundId.string("0"), ModelSoundId.numeric(1),
+                    ModelSoundId.numeric(0), ModelSoundId.string("")), sounds);
             }
         }
     }
@@ -339,8 +322,8 @@ public final class ScalarCoercionIntegrationTest {
     public static ExpressionHost host() {
         var base = ExpressionHost.create(HostAvailability.none());
         var members = new ArrayList<LinkedDeclaration.Member>();
-        for (String name : List.of("empty", "full", "point", "badarray", "badpoint", "argument", "fail", "accept",
-            "optional", "tail", "action", "restricted")) {
+        for (String name : List.of("empty", "full", "point", "argument", "fail", "accept", "optional", "tail", "action",
+            "restricted")) {
             var method = Arrays.stream(ScalarCoercionIntegrationTest.class.getMethods())
                 .filter(m -> m.getName().equals(name)).findFirst().orElseThrow();
             var parameters = method.getParameterTypes();
@@ -353,14 +336,13 @@ public final class ScalarCoercionIntegrationTest {
                 "m" + members.size(),
                 (name.equals("restricted") ? net.minecraft.world.entity.decoration.ArmorStand.class : Entity.class)
                     .getName(),
-                true, "", name.equals("action") ? "ACTION" : "CONTEXT", optional ? 0 : fixed.size(),
+                true, true, name.equals("action") ? "ACTION" : "CONTEXT", "SUBJECT", optional ? 0 : fixed.size(),
                 tail ? 255 : fixed.size(), fixed, optional ? List.of("16777217") : List.of(),
                 tail ? value(float.class) : null, value(method.getReturnType()), false);
             members.add(new LinkedDeclaration.Member(schema,
                 name.equals("restricted") ? net.minecraft.world.entity.decoration.ArmorStand.class : Entity.class,
                 LinkedDeclaration.binding(ScalarCoercionIntegrationTest.class, name, method.getReturnType(),
-                    parameters),
-                Optional.empty()));
+                    parameters)));
         }
         var schema = new DeclarationSchema(ScalarCoercionIntegrationTest.class.getName(),
             ScalarCoercionIntegrationTest.class.getName() + "MolangBindings", "scalar", "", true, false, "", List.of(),
@@ -394,22 +376,29 @@ public final class ScalarCoercionIntegrationTest {
         return ModelDataProto.newBuilder().putAnimationFiles("main", file.build()).build();
     }
 
-    private static ExpressionArtifactStore store(Path root) {
-        return track(new ExpressionArtifactStore(root, track(new AtomicSharedCache(root))));
+    private record Stores(ExpressionArtifactStore artifacts, AnimationInputStore animations) {
+        void awaitPersistence() throws InterruptedException {
+            artifacts.awaitPersistence();
+        }
     }
 
-    private static RenderTargetExpressionModule create(ExpressionArtifactStore store, ExpressionEngineMetrics metrics,
+    private static Stores store(Path root) {
+        var cache = track(new AtomicSharedCache(root));
+        return new Stores(track(new ExpressionArtifactStore(root, cache)), new AnimationInputStore(root, cache));
+    }
+
+    private static RenderTargetExpressionModule create(Stores store, ExpressionEngineMetrics metrics,
         ExpressionHost host, ModelDataProto model) throws Exception {
         return create(store, metrics, host, model, null);
     }
 
-    private static RenderTargetExpressionModule create(ExpressionArtifactStore store, ExpressionEngineMetrics metrics,
+    private static RenderTargetExpressionModule create(Stores store, ExpressionEngineMetrics metrics,
         ExpressionHost host, ModelDataProto model, StringDataProto strings) throws Exception {
-        var hash = new Hash256(new byte[Hash256.SIZE]);
+        var hash = ModelId.fromHash(new Hash256(new byte[Hash256.SIZE]));
         var settings = SettingsProto.newBuilder().build();
-        return new RenderTargetExpressionModuleFactory(store, host, metrics).create(() -> false,
-            new ModelFileIdentity(hash, hash), "player", "main", new BakeProfile("scalar"), false, model, strings,
-            settings, ProtoUtil.serializeToArray(settings));
+        return new RenderTargetExpressionModuleFactory(store.artifacts(), store.animations(), host, metrics).create(
+            () -> false, new ModelFileIdentity(hash, Hash256.parse(hash.toString().substring(5))), "player", "main",
+            new BakeProfile("scalar"), false, model, strings, settings, ProtoUtil.serializeToArray(settings));
     }
 
     private static ModelProgramInventory.SemanticLocation location(int index) {
@@ -423,12 +412,10 @@ public final class ScalarCoercionIntegrationTest {
                 return currentSubject;
             }
 
-            public void prevalidateEffect(com.elfmcys.ysm.api.molang.PreparedEffect effect, MolangContext<?> context) {}
-        }, EffectSink.direct(), () -> false);
+        });
     }
 
-    private static ComponentScope scope(RenderTargetExpressionModule module, Class<? extends Entity> subjectType)
-        throws Exception {
+    private static ComponentScope scope(Class<? extends Entity> subjectType) throws Exception {
         var subject = (Entity)com.elfmcys.ysm.util.UnsafeUtil.getUnsafe().allocateInstance(subjectType);
         currentSubject = subject;
         return new ComponentScope() {
@@ -473,29 +460,36 @@ public final class ScalarCoercionIntegrationTest {
         var metrics = new ExpressionEngineMetrics();
         var model = model(List.of("return scalar.empty() ? 13 : 29;"));
         Files.write(root.resolve(mode + "-input.pb"), ProtoUtil.serializeToArray(model));
-        try (var module = create(store, metrics, host, model); var runtime = new EntityExpressionRuntime()) {
+        var module = create(store, metrics, host, model);
+        try (var animations = TestExpressionModules.store(module, Map.of());
+            var runtime = new EntityExpressionRuntime()) {
             assertEquals(
                 mode.equals("DISK") ? ExpressionArtifactStore.Source.DISK : ExpressionArtifactStore.Source.COLD,
                 module.source());
-            runtime.replace(module, Map.of(), scope(module, net.minecraft.world.entity.decoration.ArmorStand.class));
+            runtime.replace(animations, scope(net.minecraft.world.entity.decoration.ArmorStand.class));
             float actual = runtime.observe(inputs(), e -> e.evaluate(module.requireFloatProgram(location(0))));
             assertEquals(mode.equals("OLD") ? 13f : 29f, actual);
             assertTrue(module.compilationReport().localRecoveries().isEmpty());
             assertTrue(module.compilationReport().replacements().isEmpty());
             store.awaitPersistence();
-            Path envelope;
-            try (var files = Files.walk(root.resolve("cache"))) {
-                envelope = files
-                    .filter(p -> p.getFileName().toString()
-                        .equals(module.identity().lookupKey() + BakedAnimationCache.CACHE_SUFFIX))
-                    .findFirst().orElseThrow();
-            }
+            var pathMethod = ExpressionArtifactStore.class.getDeclaredMethod("path",
+                com.elfmcys.ysm.expression.aot.ExpressionArtifactIdentity.class);
+            pathMethod.setAccessible(true);
+            var envelope = (Path)pathMethod.invoke(store.artifacts(), module.identity());
             var bytes = Files.readAllBytes(envelope);
             Files.write(root.resolve(mode + ".envelope"), bytes);
             try (var channel = Files.newByteChannel(envelope)) {
-                var view = new BakedAssetView(channel);
-                Files.write(root.resolve(mode + ".swa"), view.readExpression(channel,
-                    ArtifactCodecs.v1().maximumEncodedBytes(module.identity().expected())));
+                var identity = module.identity();
+                var lookup = new ExpressionArtifactLookup(identity.lookupFingerprint(), identity.containerId(),
+                    identity.targetId(), identity.set(), identity.expected(), identity.expressionBinding(),
+                    identity.configFingerprint(), identity.eventCatalogFingerprint(),
+                    identity.productionLinkageFingerprint(), identity.purpose());
+                var read = Class.forName("com.elfmcys.ysm.expression.aot.AotArtifactEnvelope").getDeclaredMethod("read",
+                    java.nio.channels.SeekableByteChannel.class, ExpressionArtifactLookup.class,
+                    ExpressionArtifactIdentity.class);
+                read.setAccessible(true);
+                var artifact = (ReadOnlyBytes)read.invoke(null, channel, lookup, identity);
+                Files.write(root.resolve(mode + ".swa"), artifact.toByteArray());
             }
             String rejection = "none";
             if (mode.equals("CURRENT") || mode.equals("STABLE_HOST")) {

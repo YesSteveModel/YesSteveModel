@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.format.schema.model;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
@@ -122,22 +123,19 @@ class ModelFileViewTest {
     }
 
     @Test
-    void admittedFileReadsRejectLengthRangeAndSameSizeContentChanges(@TempDir Path temp) throws Exception {
+    void admittedFileReadsRejectConsumedRangeAndContentChanges(@TempDir Path temp) throws Exception {
         var file = Files.copy(fixture, temp.resolve("source.ysm"));
         var original = Files.readAllBytes(file);
         var content = ManagedContainer.openIndexed(new CatalogIndexEntry(fixtureIdentity,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("fixture")), file));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture")), file));
         var chunk = content.view().getFileView().getAssetView().getChunkTable().values().stream()
             .filter(candidate -> !candidate.type().equals(AssetContainerConstant.VERIFICATION_CHUNK_TYPE))
             .max(Comparator.comparingInt(AssetContainerView.ChunkInfo::offset)).orElseThrow();
         try {
             Files.write(file, Arrays.copyOf(original, original.length + 1));
-            assertContentFailure(() -> {
-                {
-                    var ignored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
-                    // A successful read would retain a buffer that this negative path must close.
-                }
-            });
+            // Bytes beyond this descriptor do not change the consumed chunk's proof.
+            var stored = content.chunks().readStoredVerified(chunk, BufferType.ARRAY);
+            assertEquals(chunk.size(), stored.size());
 
             Files.write(file, original);
             var changed = original.clone();
@@ -185,8 +183,9 @@ class ModelFileViewTest {
                 .setDisablePreviewRotation(false).build())
             .setMetadata(MetadataProto.newBuilder().setName("").setTips("")
                 .setLicense(LicenseProto.newBuilder().setType("").setDesc("").build()).build())
-            .setProperties(PropertiesProto.newBuilder().setModelId(ByteBuffer.wrap(new byte[32])).setFree(false)
-                .setOriginVer("").build())
+            .setProperties(
+                PropertiesProto.newBuilder().setModelId("hash:" + java.util.HexFormat.of().formatHex(new byte[32]))
+                    .setFree(false).setOriginVer("").build())
             .build();
     }
 

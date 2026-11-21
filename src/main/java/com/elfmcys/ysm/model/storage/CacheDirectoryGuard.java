@@ -35,6 +35,13 @@ public final class CacheDirectoryGuard {
         }
     }
 
+    public FileChannel openRead(Path target) throws IOException {
+        var absolute = target.toAbsolutePath().normalize();
+        if (!absolute.startsWith(root) || absolute.equals(root))
+            throw new IOException("Cache target escapes fixed root: " + target);
+        return rootObservation.openRead(root.relativize(absolute));
+    }
+
     public Observation observe(Path target, boolean createParents) throws IOException {
         var absolute = target.toAbsolutePath().normalize();
         if (!absolute.startsWith(root) || absolute.equals(root))
@@ -74,6 +81,8 @@ public final class CacheDirectoryGuard {
         }
 
         public FileChannel open(Set<? extends OpenOption> options) throws IOException {
+            if (options.equals(Set.of(StandardOpenOption.READ)))
+                return parent.openRead(target.getFileName());
             try (var parent = acquire()) {
                 var result = parent.file(target.getFileName().toString(), options.contains(StandardOpenOption.WRITE),
                     options.contains(StandardOpenOption.CREATE) || options.contains(StandardOpenOption.CREATE_NEW),

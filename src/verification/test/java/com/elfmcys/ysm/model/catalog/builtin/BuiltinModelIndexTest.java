@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.catalog.builtin;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.catalog.content.DefaultAnimationKey;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelPath;
@@ -27,6 +28,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BuiltinModelIndexTest {
+    @Test
+    void mismatchedDefaultSourceCannotPublishTheRequiredContainer() throws Exception {
+        var manifest = getClass().getResource("/assets/ysm/builtin/default/ysm.json");
+        var root = java.nio.file.Path.of(manifest.toURI()).getParent().getParent();
+        var wrong = BuiltinModelIndex.of(Map.of(new ModelPath("default"), hash(127)));
+        var failure = assertThrows(java.io.UncheckedIOException.class, () -> BuiltinModelCatalog.open(wrong, root));
+        org.junit.jupiter.api.Assertions.assertTrue(failure.getCause().getMessage().contains("hash mismatch"));
+    }
+
     @Test
     void writesCanonicalSortedIndexAndReadsItBack() throws Exception {
         var index =
@@ -82,8 +92,8 @@ class BuiltinModelIndexTest {
     @Test
     void mergesKnownAnimationHistoryAndRejectsUnknownNames() throws Exception {
         var key = new DefaultAnimationKey("player/main", "idle");
-        var current = hash(3);
-        var historical = hash(4);
+        var current = Hash256.parse(hash(3).toString().substring(5));
+        var historical = Hash256.parse(hash(4).toString().substring(5));
         var index = BuiltinModelIndex.of(Map.of(new ModelPath("default"), hash(1)), Map.of(key, current),
             Map.of(key, Set.of(historical)));
 
@@ -130,9 +140,9 @@ class BuiltinModelIndexTest {
         assertThrows(IOException.class, () -> BuiltinModelIndex.read(new StringReader(json)));
     }
 
-    private static Hash256 hash(int marker) {
+    private static ModelId hash(int marker) {
         var bytes = new byte[Hash256.SIZE];
         bytes[bytes.length - 1] = (byte)marker;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 }

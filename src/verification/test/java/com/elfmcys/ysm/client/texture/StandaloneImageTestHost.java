@@ -18,19 +18,25 @@ public final class StandaloneImageTestHost {
     public boolean failUpload;
     public final ArrayList<PreviewPixels> pixels = new ArrayList<>();
     private final HashMap<ResourceLocation, AbstractTexture> textures = new HashMap<>();
-    private final CustomTextureManager.Registry registry = new CustomTextureManager.Registry(new CustomTextureManager.Host() {
-        public void register(ResourceLocation id, AbstractTexture texture) {
-            if (reject)
-                throw new java.util.concurrent.RejectedExecutionException("host rejected");
-            registrations++;
-            try { texture.load(null); } catch (java.io.IOException failure) { throw new IllegalStateException(failure); }
-            textures.put(id, texture);
-        }
-        public void release(ResourceLocation id) {
-            releases++;
-            textures.remove(id).close();
-        }
-    });
+    private final CustomTextureManager.Registry registry =
+        new CustomTextureManager.Registry(new CustomTextureManager.Host() {
+            public void register(ResourceLocation id, AbstractTexture texture) {
+                if (reject)
+                    throw new java.util.concurrent.RejectedExecutionException("host rejected");
+                registrations++;
+                try {
+                    texture.load(null);
+                } catch (java.io.IOException failure) {
+                    throw new IllegalStateException(failure);
+                }
+                textures.put(id, texture);
+            }
+
+            public void release(ResourceLocation id) {
+                releases++;
+                textures.remove(id).close();
+            }
+        });
 
     public StandaloneImageTestHost() {
         if (!RenderSystem.isOnRenderThread())
@@ -45,7 +51,8 @@ public final class StandaloneImageTestHost {
             throw new AssertionError("Prepared first upload must use transferred pixels");
         }, (texture, image) -> {
             pixels.add(image);
-            image.borrow(bytes -> org.junit.jupiter.api.Assertions.assertEquals(image.width() * image.height() * 4, bytes.remaining()));
+            image.borrow(bytes -> org.junit.jupiter.api.Assertions.assertEquals(image.width() * image.height() * 4,
+                bytes.remaining()));
             uploads++;
             if (failUpload)
                 throw new IllegalStateException("upload failed");
@@ -70,7 +77,11 @@ public final class StandaloneImageTestHost {
 
     public void reload() {
         textures.values().forEach(texture -> {
-            try { texture.load(null); } catch (java.io.IOException failure) { throw new IllegalStateException(failure); }
+            try {
+                texture.load(null);
+            } catch (java.io.IOException failure) {
+                throw new IllegalStateException(failure);
+            }
         });
     }
 }

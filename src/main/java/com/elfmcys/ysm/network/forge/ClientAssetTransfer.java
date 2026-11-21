@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.BufferStorage;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.UniBuffer;
@@ -232,7 +233,7 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
             });
             send(child,
                 PreviewUploadRequestProto.newBuilder().setDataTransferId(child.id)
-                    .setModelId(ByteBuffer.wrap(identity.modelId().bytes()))
+                    .setModelId(identity.modelId().toString())
                     .setContainerId(ByteBuffer.wrap(identity.containerId().bytes())).setEncodedSize(child.bytes.size())
                     .build());
             return output;
@@ -260,12 +261,12 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
         }
         try {
             for (var entry : message.entries()) {
-                if (entry.modelId().remaining() != Hash256.SIZE || entry.containerId().remaining() != Hash256.SIZE
+                if (!ModelId.isValid(entry.modelId()) || entry.containerId().remaining() != Hash256.SIZE
                     || entry.probeFailure() != ResourceFailureReason.UNSPECIFIED
                         && entry.probeFailure() != ResourceFailureReason.UNAVAILABLE) {
                     throw content("Invalid preview query member");
                 }
-                var identity = new ModelFileIdentity(new Hash256(ProtoBytes.copy(entry.modelId())),
+                var identity = new ModelFileIdentity(ModelId.parse(entry.modelId()),
                     new Hash256(ProtoBytes.copy(entry.containerId())));
                 var path = com.elfmcys.ysm.model.catalog.source.CatalogLocation.parse(entry.hierarchyPath()).value();
                 if (!path.equals(entry.hierarchyPath())
@@ -1027,8 +1028,7 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
     private static ModelChunkRequestProto modelRequest(long id, ModelFileIdentity identity,
         List<AssetContainerView.ChunkInfo> members, ModelChunkPurpose purpose) {
         var request = ModelChunkRequestProto.newBuilder().setPurpose(purpose).setDataTransferId(id)
-            .setModelId(ByteBuffer.wrap(identity.modelId().bytes()))
-            .setContainerId(ByteBuffer.wrap(identity.containerId().bytes()));
+            .setModelId(identity.modelId().toString()).setContainerId(ByteBuffer.wrap(identity.containerId().bytes()));
         members.forEach(chunk -> request.addChunks(
             ChunkMemberProto.newBuilder().setName(chunk.type()).setExpectedHash(ByteBuffer.wrap(chunk.hash()))
                 .setStoredSize(chunk.size()).setDecodedSize(chunk.decodeSize()).setEncoding(chunk.encoding()).build()));
@@ -1041,11 +1041,11 @@ final class ClientAssetTransfer implements RemoteChunkFetcher, RemoteMetadataFet
         for (var member : members) {
             if (member instanceof RemotePresentationFetcher.Preview preview) {
                 request.addPreviews(PreviewMemberProto.newBuilder().setSlot(preview.slot())
-                    .setModelId(ByteBuffer.wrap(preview.identity().modelId().bytes()))
+                    .setModelId(preview.identity().modelId().toString())
                     .setContainerId(ByteBuffer.wrap(preview.identity().containerId().bytes())).build());
             } else if (member instanceof RemotePresentationFetcher.Icon icon) {
                 request.addIcons(IconMemberProto.newBuilder().setSlot(icon.slot())
-                    .setModelId(ByteBuffer.wrap(icon.identity().modelId().bytes()))
+                    .setModelId(icon.identity().modelId().toString())
                     .setContainerId(ByteBuffer.wrap(icon.identity().containerId().bytes())).setName(icon.chunk().type())
                     .setExpectedHash(ByteBuffer.wrap(icon.chunk().hash())).setStoredSize(icon.chunk().size())
                     .setDecodedSize(icon.chunk().decodeSize()).setEncoding(icon.chunk().encoding()).build());

@@ -14,8 +14,8 @@ public final class ImageRequest {
     private final Predicate<ImageSource> current;
     private final Supplier<CompletableFuture<PreviewResult>> acquisition;
 
-    ImageRequest(Function<ImageSource, ImageIdentity> identity, BooleanSupplier allowed,
-        Predicate<ImageSource> current, Supplier<CompletableFuture<PreviewResult>> acquisition) {
+    ImageRequest(Function<ImageSource, ImageIdentity> identity, BooleanSupplier allowed, Predicate<ImageSource> current,
+        Supplier<CompletableFuture<PreviewResult>> acquisition) {
         this.identity = identity;
         this.allowed = allowed;
         this.current = current;

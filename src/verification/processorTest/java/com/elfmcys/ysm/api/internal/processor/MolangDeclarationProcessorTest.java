@@ -16,10 +16,104 @@ class MolangDeclarationProcessorTest {
     Path temporary;
 
     @Test
+    void contextInjectionIsIndependentForEveryOrdinaryCallShape() throws Exception {
+        for (boolean builtin : List.of(false, true)) {
+            StringBuilder body = new StringBuilder();
+            for (boolean stat : List.of(false, true))
+                for (boolean context : List.of(false, true))
+                    for (String shape : List.of("fixed", "optional", "tail")) {
+                        String name = (stat ? "static_" : "member_") + (context ? "view_" : "plain_") + shape;
+                        body.append(builtin ? "@BuiltinFunction" : "@MolangFunction");
+                        var attributes = new ArrayList<String>();
+                        if (!stat)
+                            attributes.add("alwaysOrigin=true");
+                        if (shape.equals("fixed"))
+                            attributes.add("action=true");
+                        if (shape.equals("tail"))
+                            attributes.add("maxArgs=5");
+                        if (builtin)
+                            attributes.add(0, (attributes.isEmpty() ? "" : "value=") + "\"" + name + "\"");
+                        if (!attributes.isEmpty())
+                            body.append('(').append(String.join(",", attributes)).append(')');
+                        body.append(" public ").append(stat ? "static " : "").append("float ").append(name).append('(');
+                        if (context)
+                            body.append("MolangContextView<LivingEntity> context,");
+                        body.append(switch (shape) {
+                            case "fixed" -> "float value){return value;}";
+                            case "optional" -> "int argc,@DefaultValue(\"5\") float value){return argc+value;}";
+                            default -> "int argc,float... values){return argc+values.length;}";
+                        });
+                    }
+            Path output = compile("sample.Shapes", """
+                package sample;
+                import com.elfmcys.ysm.api.annotation.*;
+                import com.elfmcys.ysm.api.molang.*;
+                import com.elfmcys.ysm.expression.host.*;
+                import com.elfmcys.ysm.expression.annotation.*;
+                import com.elfmcys.ysm.client.entity.AnimatableEntity;
+                import net.minecraft.world.entity.*;
+                """ + (builtin ? "@BuiltinComponent(\"shape\")" : "@YsmEntityComponent(\"shape_mod\")")
+                + " public class Shapes implements EntityComponent<LivingEntity>{public Shapes(AnimatableEntity<LivingEntity> owner){}"
+                + body + "}", true);
+            var schema = DeclarationSchema
+                .decode(Files.newInputStream(output.resolve(DeclarationSchema.RESOURCE_ROOT + "sample.Shapes.bin")));
+            assertEquals(12, schema.members().size());
+            try (var loader = new URLClassLoader(new URL[] {output.toUri().toURL()}, getClass().getClassLoader())) {
+                var owner = loader.loadClass("sample.Shapes");
+                var helper = loader.loadClass("sample.ShapesMolangBindings");
+                var provider = helper.getConstructor(com.elfmcys.ysm.client.entity.AnimatableEntity.class)
+                    .newInstance(new Object[] {null});
+                for (var member : schema.members()) {
+                    assertEquals(member.javaName().contains("_view_"), member.injectContext());
+                    assertEquals(member.isStatic() ? "SUBJECT" : "ORIGIN", member.scope());
+                    assertEquals(member.javaName().endsWith("_fixed") ? "ACTION" : "CONTEXT", member.effect());
+                    assertFalse(member.mayReturnMissing());
+                    assertEquals(member.isStatic() && !member.injectContext() ? "net.minecraft.world.entity.Entity"
+                        : "net.minecraft.world.entity.LivingEntity", member.subject());
+                    var original = Arrays.stream(owner.getMethods()).filter(m -> m.getName().equals(member.javaName()))
+                        .findFirst().orElseThrow();
+                    com.elfmcys.ysm.api.molang.DeclarationLinkage.verify(schema, owner, original, member,
+                        MolangContextView.class, net.minecraft.world.entity.Entity.class);
+                    var adapter = Arrays.stream(helper.getMethods()).filter(m -> m.getName().equals(member.adapter()))
+                        .findFirst().orElseThrow();
+                    var arguments = new ArrayList<Object>();
+                    if (member.injectContext())
+                        arguments.add(null);
+                    if (!member.shape().equals("FIXED"))
+                        arguments.add(1);
+                    arguments.add(member.tail() == null ? 4f : new float[] {2, 3});
+                    assertEquals(member.shape().equals("FIXED") ? 4f : member.tail() == null ? 5f : 3f,
+                        adapter.invoke(member.isStatic() ? null : provider, arguments.toArray()));
+                }
+            }
+        }
+    }
+
+    @Test
+    void optionalContextDoesNotEnterTheScriptOverloadKey() throws Exception {
+        String header = "package sample;import com.elfmcys.ysm.api.annotation.*;import com.elfmcys.ysm.api.molang.*;"
+            + "@YsmEntityComponent(\"optional_mod\") public class OptionalContext {";
+        String first =
+            "@MolangFunction(\"pick\") public static float first(MolangContextView<net.minecraft.world.entity.Entity> c,float x){return x;}";
+        compile("sample.OptionalContext",
+            header + first + "@MolangFunction(\"pick\") public static float second(String x){return 1;}}", true);
+        compile("sample.OptionalContext",
+            header + first + "@MolangFunction(\"pick\") public static float duplicate(float x){return x;}}", false);
+        compile("sample.OptionalContext", header + first
+            + "@MolangNullable @MolangFunction(\"pick\") public static float conflict(String x){return Float.NaN;}}",
+            false);
+        Path output = compile("sample.OptionalContext",
+            header + "@MolangNullable @MolangFunction public static float missing(){return Float.NaN;}}", true);
+        var schema = DeclarationSchema.decode(
+            Files.newInputStream(output.resolve(DeclarationSchema.RESOURCE_ROOT + "sample.OptionalContext.bin")));
+        assertTrue(schema.members().get(0).mayReturnMissing());
+    }
+
+    @Test
     void rejectsNestedOptionalMetadataWithoutExhaustingTheStack() throws Exception {
         var bytes = new java.io.ByteArrayOutputStream();
         var out = new java.io.DataOutputStream(bytes);
-        out.writeUTF("YSM-MOLANG-CALLABLE");
+        out.writeUTF("YSM-MOLANG-CALLABLE-SCOPE");
         out.writeUTF(DeclarationSchema.VERSION);
         out.writeUTF("sample.Owner");
         out.writeUTF("sample.OwnerMolangBindings");
@@ -37,8 +131,9 @@ class MolangDeclarationProcessorTest {
         out.writeUTF("m0");
         out.writeUTF("net.minecraft.world.entity.Entity");
         out.writeBoolean(true);
+        out.writeBoolean(true);
         out.writeUTF("CONTEXT");
-        out.writeUTF("CONTEXT");
+        out.writeUTF("SUBJECT");
         out.writeInt(0);
         out.writeInt(0);
         out.writeInt(0);
@@ -76,20 +171,20 @@ class MolangDeclarationProcessorTest {
                 import java.util.*;
                 @YsmEntityComponent("sample_mod") public class Extension {
                     @YsmEntityComponent("nested_mod") public static class Nested {
-                        @MolangFunction(effect=MolangEffect.CONTEXT)
+                        @MolangFunction
                         public static float fixed(MolangContextView<net.minecraft.world.entity.Entity> context){return 1f;}
                     }
                     public record Pair(int count,float value,String label,boolean flag) {
                         @Override public boolean equals(Object other){throw new AssertionError("custom equals");}
                     }
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static Pair pair(MolangContextView<net.minecraft.world.entity.Entity> context){return new Pair(3,1f,"",false);}
-                    @MolangFunction(effect=MolangEffect.CONTEXT,minArgs=3,maxArgs=5)
+                    @MolangFunction(minArgs=3,maxArgs=5)
                     public static int bounded(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,int first,boolean... tail){return argc;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT,minArgs=0)
+                    @MolangFunction
                     public static int optional(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,@DefaultValue("0x1_00_00_01") int first,
                             @DefaultValue("9") int second){return first;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static String text(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("line\\nnext\\t\\\"quoted\\\"") String value){return value;}
                 }
@@ -135,23 +230,22 @@ class MolangDeclarationProcessorTest {
     void rejectsInvalidDeclarationsAtSource() throws Exception {
         List<String> bodies = List.of(
             "@MolangFunction(minArgs=-2) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public float f(MolangContextView<net.minecraft.world.entity.Entity> c){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(Object c){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,float... a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1\") float a,float b){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"2147483648\") int a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1_e2\") float a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"0x1_p0f\") float a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1+2\") float a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1e100f\") float a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1e-50f\") float a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1e-50\") float a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"0x0.000001p-126f\") float a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"0x1.0\") float a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static int f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"08\") int a){return 0;}",
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static java.util.List<?> f(MolangContextView<net.minecraft.world.entity.Entity> c){return null;}",
-            "public record Cycle(Cycle child){} @MolangFunction(effect=MolangEffect.CONTEXT) public static Cycle f(MolangContextView<net.minecraft.world.entity.Entity> c){return null;}",
-            "public record Collision(float Value,float value){} @MolangFunction(effect=MolangEffect.CONTEXT) public static Collision f(MolangContextView<net.minecraft.world.entity.Entity> c){return null;}");
+            "@MolangFunction(alwaysOrigin = true) public float f(MolangContextView<net.minecraft.world.entity.Entity> c){return 0;}",
+            "@MolangFunction public static float f(Object c){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1\") float a,float b){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"2147483648\") int a){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1_e2\") float a){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"0x1_p0f\") float a){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1+2\") float a){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1e100f\") float a){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1e-50f\") float a){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"1e-50\") float a){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"0x0.000001p-126f\") float a){return 0;}",
+            "@MolangFunction public static float f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"0x1.0\") float a){return 0;}",
+            "@MolangFunction public static int f(MolangContextView<net.minecraft.world.entity.Entity> c,int argc,@DefaultValue(\"08\") int a){return 0;}",
+            "@MolangFunction public static java.util.List<?> f(MolangContextView<net.minecraft.world.entity.Entity> c){return null;}",
+            "public record Cycle(Cycle child){} @MolangFunction public static Cycle f(MolangContextView<net.minecraft.world.entity.Entity> c){return null;}",
+            "public record Collision(float Value,float value){} @MolangFunction public static Collision f(MolangContextView<net.minecraft.world.entity.Entity> c){return null;}");
         int index = 0;
         for (String body : bodies)
             compile("sample.Invalid" + (index++),
@@ -174,7 +268,7 @@ class MolangDeclarationProcessorTest {
                 import com.elfmcys.ysm.api.annotation.*;
                 import com.elfmcys.ysm.api.molang.*;
                 @YsmEntityComponent("sample_mod") public class %s {
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float value(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("%s") float value){return value;}
                 }
@@ -190,52 +284,52 @@ class MolangDeclarationProcessorTest {
                 import com.elfmcys.ysm.api.annotation.*;
                 import com.elfmcys.ysm.api.molang.*;
                 @YsmEntityComponent("sample_mod") public class HexDefault {
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static int hexF(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0x1f") int value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static int hexD(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0x1d") int value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static int binary(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0b1__1111") int value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static int octal(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("03_7") int value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static int minimum(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("-2_147_483_648") int value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float decimalIntMaximum(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("2_147_483_647") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float hexadecimalIntBits(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0xffff_ffff") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float octalIntBits(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0377_7777_7777") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float binaryIntBits(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0b11111111_11111111_11111111_11111111") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float decimalLongMaximum(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("9_223_372_036_854_775_807L") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float decimalLongMinimum(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("-9_223_372_036_854_775_808L") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float hexadecimalLongBits(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0xffff_ffff_ffff_ffffL") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float octalLongBits(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("01_777_777_777_777_777_777_777L") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float binaryLongBits(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111L") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float rounded(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0x1.000002p0f") float value){return value;}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float subnormal(MolangContextView<net.minecraft.world.entity.Entity> context,int argc,
                             @DefaultValue("0x0.000002p-126f") float value){return value;}
                 }
@@ -268,25 +362,23 @@ class MolangDeclarationProcessorTest {
     @Test
     void bothMarkersUseStaticMemberFunctionsAndInheritedGenericRules() throws Exception {
         for (boolean builtin : List.of(false, true)) {
-            String marker = builtin ? "@BuiltinComponent(value=\"matrix\")" : "@YsmEntityComponent(\"matrix_mod\")";
-            String function =
-                builtin ? "@BuiltinFunction(namespace=\"matrix\",value=\"value\",effect=MolangEffect.CONTEXT)"
-                    : "@MolangFunction(effect=MolangEffect.CONTEXT)";
-            String variable =
-                builtin ? "@BuiltinFunction(namespace=\"matrix\",value=\"read\",effect=MolangEffect.CONTEXT)"
-                    : "@MolangFunction(effect=MolangEffect.CONTEXT)";
+            String marker = builtin ? "@BuiltinComponent(\"matrix\")" : "@YsmEntityComponent(\"matrix_mod\")";
+            String function = builtin ? "@BuiltinFunction(value=\"value\", alwaysOrigin = true, namespace=\"matrix\")"
+                : "@MolangFunction(alwaysOrigin = true)";
+            String variable = builtin ? "@BuiltinFunction(value=\"read\", alwaysOrigin = true, namespace=\"matrix\")"
+                : "@MolangFunction(alwaysOrigin = true)";
             String staticFunction =
-                builtin ? "@BuiltinFunction(namespace=\"matrix\",value=\"fixed\",effect=MolangEffect.CONTEXT)"
-                    : "@MolangFunction(effect=MolangEffect.CONTEXT)";
+                builtin ? "@BuiltinFunction(value=\"fixed\", alwaysOrigin = true, namespace=\"matrix\")"
+                    : "@MolangFunction(alwaysOrigin = true)";
             String staticVariable =
-                builtin ? "@BuiltinFunction(namespace=\"matrix\",value=\"constant\",effect=MolangEffect.CONTEXT)"
-                    : "@MolangFunction(effect=MolangEffect.CONTEXT)";
+                builtin ? "@BuiltinFunction(value=\"constant\", alwaysOrigin = true, namespace=\"matrix\")"
+                    : "@MolangFunction(alwaysOrigin = true)";
             Path output = compile("sample.Matrix", ("""
                 package sample;
                 import com.elfmcys.ysm.api.annotation.*;
                 import com.elfmcys.ysm.api.molang.*;
                 import com.elfmcys.ysm.expression.host.*;
-                import com.elfmcys.ysm.expression.host.builtin.*;
+                import com.elfmcys.ysm.expression.annotation.*;
                 import net.minecraft.world.entity.*;
                 abstract class Base<E extends Entity,R> implements EntityComponent<E> {
                     %s public R value(MolangContextView<E> context,String value){return null;}
@@ -303,7 +395,6 @@ class MolangDeclarationProcessorTest {
                 .decode(Files.newInputStream(output.resolve(DeclarationSchema.RESOURCE_ROOT + "sample.Matrix.bin")));
             assertEquals(4, schema.members().size());
             assertEquals(2, schema.members().stream().filter(DeclarationSchema.Member::isStatic).count());
-            assertTrue(schema.members().stream().allMatch(m -> m.contextFreeTarget().isEmpty()));
             var value = schema.members().stream().filter(m -> m.javaName().equals("value")).findFirst().orElseThrow();
             assertEquals("RECORD", value.result().kind());
             assertEquals("java.lang.String", value.fixed().get(0).carrier());
@@ -320,16 +411,15 @@ class MolangDeclarationProcessorTest {
     @Test
     void closedResultShapesAreSharedForBothMarkers() throws Exception {
         for (boolean builtin : List.of(false, true)) {
-            String marker = builtin ? "@BuiltinComponent(value=\"budget\")" : "@YsmEntityComponent(\"budget_mod\")";
-            String function =
-                builtin ? "@BuiltinFunction(namespace=\"budget\",value=\"value\",effect=MolangEffect.CONTEXT)"
-                    : "@MolangFunction(effect=MolangEffect.CONTEXT)";
+            String marker = builtin ? "@BuiltinComponent(\"budget\")" : "@YsmEntityComponent(\"budget_mod\")";
+            String function = builtin ? "@BuiltinFunction(value=\"value\", alwaysOrigin = true, namespace=\"budget\")"
+                : "@MolangFunction(alwaysOrigin = true)";
             for (String type : List.of("java.util.List<Float>", "java.util.List<Boolean>", "java.util.List<?>",
                 "java.util.List<java.util.List<String>>", "java.util.Optional<Float>", "java.util.OptionalInt",
                 "com.elfmcys.ysm.expression.host.ModelSoundId", "Nested", "Boxed", "Generic<String>")) {
                 compile("sample.InvalidShape",
                     "package sample;import com.elfmcys.ysm.api.annotation.*;import com.elfmcys.ysm.api.molang.*;"
-                        + "import com.elfmcys.ysm.expression.host.builtin.*;" + marker + " public class InvalidShape {"
+                        + "import com.elfmcys.ysm.expression.annotation.*;" + marker + " public class InvalidShape {"
                         + "public record Flat(float x){} public record Nested(Flat child){} public record Boxed(Float x){} public record Generic<T>(T x){}"
                         + function + " public static " + type
                         + " value(MolangContextView<net.minecraft.world.entity.Entity> c){return null;}}",
@@ -341,14 +431,14 @@ class MolangDeclarationProcessorTest {
     @Test
     void nullableAndFlatRecipesUseBothAuthorEntrypoints() throws Exception {
         for (boolean builtin : List.of(false, true)) {
-            String marker = builtin ? "@BuiltinComponent(value=\"values\")" : "@YsmEntityComponent(\"values_mod\")";
+            String marker = builtin ? "@BuiltinComponent(\"values\")" : "@YsmEntityComponent(\"values_mod\")";
             String[] types = {"Float", "Integer", "Boolean", "String", "Pair", "it.unimi.dsi.fastutil.floats.FloatList",
                 "java.util.List<String>", "java.util.List<Pair>"};
             StringBuilder body = new StringBuilder("public record Pair(float camelCase){}");
             for (int index = 0; index < types.length; index++) {
-                body.append(builtin
-                    ? "@BuiltinFunction(namespace=\"values\",value=\"f" + index + "\",effect=MolangEffect.CONTEXT)"
-                    : "@MolangFunction(effect=MolangEffect.CONTEXT)");
+                body.append(
+                    builtin ? "@BuiltinFunction(value=\"f" + index + "\",namespace=\"values\")" : "@MolangFunction");
+                body.append(' ');
                 if (index == 4)
                     body.append("@MolangNullable ");
                 body.append("public static ").append(types[index]).append(" f").append(index)
@@ -356,7 +446,7 @@ class MolangDeclarationProcessorTest {
             }
             Path output = compile("sample.Values",
                 "package sample;import com.elfmcys.ysm.api.annotation.*;"
-                    + "import com.elfmcys.ysm.api.molang.*;import com.elfmcys.ysm.expression.host.builtin.*;" + marker
+                    + "import com.elfmcys.ysm.api.molang.*;import com.elfmcys.ysm.expression.annotation.*;" + marker
                     + " public class Values {" + body + "}",
                 true);
             try (var input =
@@ -385,13 +475,13 @@ class MolangDeclarationProcessorTest {
     }
 
     @Test
-    void onlyDedicatedRecordNullabilityAndScalarParametersAreAdmitted() throws Exception {
+    void onlyDedicatedFloatOrRecordNullabilityAndScalarParametersAreAdmitted() throws Exception {
         for (String type : List.of("Float", "Integer", "Boolean", "Pair", "java.util.List<String>",
             "it.unimi.dsi.fastutil.floats.FloatList")) {
             compile("sample.Parameter",
                 "package sample;import com.elfmcys.ysm.api.annotation.*;import com.elfmcys.ysm.api.molang.*;"
                     + "@YsmEntityComponent(\"values_mod\") public class Parameter {public record Pair(float x){}"
-                    + "@MolangFunction(effect=MolangEffect.CONTEXT) public static float value(MolangContextView<net.minecraft.world.entity.Entity> c,"
+                    + "@MolangFunction public static float value(MolangContextView<net.minecraft.world.entity.Entity> c,"
                     + type + " value){return 0;}}",
                 false);
         }
@@ -399,7 +489,7 @@ class MolangDeclarationProcessorTest {
             compile("sample.Nullable",
                 "package sample;import com.elfmcys.ysm.api.annotation.*;import com.elfmcys.ysm.api.molang.*;"
                     + "@YsmEntityComponent(\"values_mod\") public class Nullable {@MolangNullable "
-                    + "@MolangFunction(effect=MolangEffect.CONTEXT) public static " + type
+                    + "@MolangFunction public static " + type
                     + " value(MolangContextView<net.minecraft.world.entity.Entity> c){return null;}}",
                 false);
         }
@@ -414,13 +504,12 @@ class MolangDeclarationProcessorTest {
     @Test
     void overloadGroupsRejectNormalizedDuplicatesAndInconsistentContracts() throws Exception {
         for (boolean builtin : List.of(false, true)) {
-            String marker = builtin ? "@BuiltinComponent(value=\"overloads\")" : "@YsmEntityComponent(\"values_mod\")";
-            String function =
-                builtin ? "@BuiltinFunction(namespace=\"values\",value=\"pick\",effect=MolangEffect.CONTEXT)"
-                    : "@MolangFunction(value=\"pick\",effect=MolangEffect.CONTEXT)";
+            String marker = builtin ? "@BuiltinComponent(\"overloads\")" : "@YsmEntityComponent(\"values_mod\")";
+            String function = builtin ? "@BuiltinFunction(value=\"pick\", alwaysOrigin = true, namespace=\"values\")"
+                : "@MolangFunction(value=\"pick\", alwaysOrigin = true)";
             String header =
                 "package sample;import com.elfmcys.ysm.api.annotation.*;import com.elfmcys.ysm.api.molang.*;"
-                    + "import com.elfmcys.ysm.expression.host.builtin.*;" + marker + " public class Overloads {";
+                    + "import com.elfmcys.ysm.expression.annotation.*;" + marker + " public class Overloads {";
             String first = function
                 + " public static float number(MolangContextView<net.minecraft.world.entity.Entity> c,int x){return x;}";
             compile("sample.Overloads", header + first + function
@@ -431,10 +520,10 @@ class MolangDeclarationProcessorTest {
                 false);
             compile("sample.Overloads", header + first + function
                 + " public static Float nullable(MolangContextView<net.minecraft.world.entity.Entity> c,String x){return null;}}",
-                true);
+                false);
             compile("sample.Overloads", header + first + function
                 + " public static int required(MolangContextView<net.minecraft.world.entity.Entity> c,String x){return 1;}}",
-                false);
+                true);
             compile("sample.Overloads", header + function
                 + " public static int required(MolangContextView<net.minecraft.world.entity.Entity> c,int x){return 1;}"
                 + function
@@ -453,7 +542,7 @@ class MolangDeclarationProcessorTest {
             + "import net.minecraft.world.entity.*;@YsmEntityComponent(\"ctor_mod\") "
             + "public class Constructor implements EntityComponent<LivingEntity>{";
         String member =
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public int read(MolangContextView<LivingEntity> c){return 1;}}";
+            "@MolangFunction(alwaysOrigin = true) public int read(MolangContextView<LivingEntity> c){return 1;}}";
         for (String constructor : List.of("public Constructor(){}", "public Constructor(LivingEntity subject){}",
             "public Constructor(AnimatableEntity owner){}", "public Constructor(AnimatableEntity<Entity> owner){}",
             "public Constructor(AnimatableEntity<? extends LivingEntity> owner){}",
@@ -483,11 +572,11 @@ class MolangDeclarationProcessorTest {
                     public void update(float previous,float current,float partial){calls.add("update:"+previous+":"+current+":"+partial);}
                     public void beginEval(AnimationEvent<?> event){calls.add("begin");}
                     public void endEval(){calls.add("end");}
-                    @MolangFunction(effect=MolangEffect.CONTEXT) public int read(MolangContextView<Entity> c){return 1;}
+                    @MolangFunction(alwaysOrigin = true) public int read(MolangContextView<Entity> c){return 1;}
                     @YsmEntityComponent("static_hooks_mod") public static class StaticOnly {
                         public static int constructed;
                         private StaticOnly(){constructed++;throw new AssertionError();}
-                        @MolangFunction(effect=MolangEffect.CONTEXT) public static int read(MolangContextView<Entity> c){return 2;}
+                        @MolangFunction public static int read(MolangContextView<Entity> c){return 2;}
                     }
                 }
                 """,
@@ -530,9 +619,9 @@ class MolangDeclarationProcessorTest {
                     @DefaultValue("11") int value){return argc;}
                 @MolangFunction(minArgs=1,maxArgs=16)
                 public static int tail(MolangContextView<Entity> c,int argc,String... keys){return argc;}
-                @MolangFunction(effect=MolangEffect.ACTION)
-                public static void reset(MolangContextView<Entity> c){c.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> {});}
-                @MolangFunction(effect=MolangEffect.ACTION)
+                @MolangFunction(action = true)
+                public static void reset(MolangContextView<Entity> c){{};}
+                @MolangFunction(action = true)
                 public static void signal(MolangContextView<Entity> c){}
             }
             """, true);
@@ -544,7 +633,7 @@ class MolangDeclarationProcessorTest {
             .toMap(DeclarationSchema.Member::javaName, java.util.function.Function.identity()));
         assertEquals("weapon:isready", byName.get("isReady").symbol());
         assertEquals("combat:is_ready", byName.get("ready").symbol());
-        assertTrue(byName.get("isReady").mayReturnMissing());
+        assertFalse(byName.get("isReady").mayReturnMissing());
         assertTrue(byName.get("ready").mayReturnMissing());
         assertFalse(byName.get("count").mayReturnMissing());
         assertTrue(byName.get("maybe").mayReturnMissing());
@@ -555,7 +644,6 @@ class MolangDeclarationProcessorTest {
         assertEquals(16, byName.get("tail").maximum());
         assertEquals("ACTION", byName.get("reset").effect());
         assertEquals("ACTION", byName.get("signal").effect());
-        assertEquals("", byName.get("signal").contextFreeTarget());
         String helper = Files.readString(output.resolve("sample/WeaponMolangBindings.java"));
         assertTrue(helper.contains("MolangContext<net.minecraft.world.entity.Entity> context"));
         assertTrue(helper.contains("sample.Weapon.reset(context)"));
@@ -569,14 +657,13 @@ class MolangDeclarationProcessorTest {
             + "import com.elfmcys.ysm.api.molang.*;import net.minecraft.world.entity.Entity;"
             + "@YsmEntityComponent(\"weapon\") public class InvalidBoundary {";
         for (String declaration : List.of(
-            "@MolangFunction(value=\"query.foo\") public static int f(MolangContextView<Entity> c){return 1;}",
-            "@MolangFunction(value=\"query:foo\") public static int f(MolangContextView<Entity> c){return 1;}",
+            "@MolangFunction(\"query.foo\") public static int f(MolangContextView<Entity> c){return 1;}",
+            "@MolangFunction(\"query:foo\") public static int f(MolangContextView<Entity> c){return 1;}",
             "@MolangFunction(namespace=\"query\") public static int f(MolangContextView<Entity> c){return 1;}",
             "@MolangFunction(namespace=\"Weapon\") public static int f(MolangContextView<Entity> c){return 1;}",
             "@MolangFunction(minArgs=-2) public static int f(MolangContextView<Entity> c){return 1;}",
             "@MolangFunction(maxArgs=-2) public static int f(MolangContextView<Entity> c){return 1;}",
             "@MolangFunction(minArgs=1) public static int f(MolangContextView<Entity> c){return 1;}",
-            "@MolangFunction(maxArgs=256) public static int f(MolangContextView<Entity> c,int argc,int... x){return 1;}",
             "@MolangFunction public static int f(MolangContextView c){return 1;}",
             "@MolangFunction public static int f(MolangContextView<? extends Entity> c){return 1;}",
             "public interface Custom extends MolangContextView<Entity>{}"
@@ -586,7 +673,7 @@ class MolangDeclarationProcessorTest {
             "@MolangFunction public static int f(MolangContextView<Entity> c){c.batch();return 1;}",
             "@MolangFunction public static int f(MolangContextView<Entity> c){c.execute();return 1;}"))
             compile("sample.InvalidBoundary", header + declaration + "}", false);
-        for (String namespace : List.of("query", "ysm", "Weapon", " weapon", "a".repeat(65)))
+        for (String namespace : List.of("query", "ysm", "Weapon", " weapon"))
             compile("sample.InvalidNamespace",
                 header.replace("InvalidBoundary", "InvalidNamespace").replace("\"weapon\"", "\"" + namespace + "\"")
                     + "@MolangFunction public static int f(MolangContextView<Entity> c){return 1;}}",
@@ -594,25 +681,50 @@ class MolangDeclarationProcessorTest {
     }
 
     @Test
-    void contextFreeMetadataRequiresFixedStaticPrimitiveContextDeclarations() throws Exception {
-        String header = "package sample;import com.elfmcys.ysm.api.annotation.*;"
-            + "import com.elfmcys.ysm.api.molang.*;import net.minecraft.world.entity.Entity;"
-            + "@YsmEntityComponent(\"pure_meta\") public class PureMetadata {";
-        var output = compile("sample.PureMetadata", header +
-            "@MolangFunction(contextFreeTarget=\"target\") public static float declared(MolangContextView<Entity> c,float x){return x;}"
-            + "public static float target(float x){return x;}}", true);
-        var schema = DeclarationSchema.decode(Files.newInputStream(
-            output.resolve(DeclarationSchema.RESOURCE_ROOT + "sample.PureMetadata.bin")));
-        assertEquals("target", schema.members().get(0).contextFreeTarget());
-        assertArrayEquals(schema.encode(), DeclarationSchema.decode(new java.io.ByteArrayInputStream(schema.encode())).encode());
-        for (String declaration : List.of(
-            "@MolangFunction(contextFreeTarget=\"bad.name\") public static float f(MolangContextView<Entity> c,float x){return x;}",
-            "@MolangFunction(contextFreeTarget=\"target\",effect=MolangEffect.ACTION) public static float f(MolangContextView<Entity> c,float x){return x;}",
-            "@MolangFunction(contextFreeTarget=\"target\") public static Float f(MolangContextView<Entity> c,float x){return x;}",
-            "@MolangFunction(contextFreeTarget=\"target\") public static String f(MolangContextView<Entity> c,String x){return x;}",
-            "@MolangFunction(contextFreeTarget=\"target\") public static float f(MolangContextView<Entity> c,int argc,@DefaultValue(\"0\") float x){return x;}",
-            "@MolangFunction(contextFreeTarget=\"target\",maxArgs=5) public static float f(MolangContextView<Entity> c,int argc,float... x){return 0;}"))
-            compile("sample.PureMetadata", header + declaration + "}", false);
+    void acceptsLongNamesAndUnboundedVariadicDeclarations() throws Exception {
+        String namespace = "a".repeat(65);
+        String name = "f".repeat(129);
+        var output = compile("sample.Admission", "package sample;import com.elfmcys.ysm.api.annotation.*;"
+            + "import com.elfmcys.ysm.api.molang.*;import net.minecraft.world.entity.Entity;" + "@YsmEntityComponent(\""
+            + namespace + "\") public class Admission {" + "@MolangFunction(\"" + name
+            + "\") public static int f(MolangContextView<Entity> c,int argc,int... x){return 1;}"
+            + "@MolangFunction(maxArgs=256) public static int g(MolangContextView<Entity> c,int argc,int... x){return 1;}}",
+            true);
+        var schema = DeclarationSchema
+            .decode(Files.newInputStream(output.resolve(DeclarationSchema.RESOURCE_ROOT + "sample.Admission.bin")));
+        assertEquals(Integer.MAX_VALUE,
+            schema.members().stream().filter(m -> m.javaName().equals("f")).findFirst().orElseThrow().maximum());
+        assertEquals(256,
+            schema.members().stream().filter(m -> m.javaName().equals("g")).findFirst().orElseThrow().maximum());
+    }
+
+    @Test
+    void invocationScopeAndExactEntityResultsAreColdAdmissionFacts() throws Exception {
+        String header = "package sample;import java.util.*;import com.elfmcys.ysm.api.annotation.*;"
+            + "import com.elfmcys.ysm.api.molang.*;import net.minecraft.world.entity.*;"
+            + "import com.elfmcys.ysm.expression.host.*;import com.elfmcys.ysm.client.entity.AnimatableEntity;"
+            + "@YsmEntityComponent(\"scope_mod\") public class Scope implements EntityComponent<Entity>{"
+            + "public Scope(AnimatableEntity<Entity> owner){}";
+        for (String declaration : List.of("@MolangFunction public Entity member(){return null;}",
+            "@MolangFunction(\"mixed\") public static float a(float n){return n;}"
+                + "@MolangFunction(value=\"mixed\",alwaysOrigin = true) public static float b(boolean n){return 1;}",
+            "@MolangFunction public static LivingEntity subtype(){return null;}",
+            "@MolangFunction public static List<LivingEntity> subtypes(){return List.of();}",
+            "@MolangNullable @MolangFunction public static List<Entity> nullableList(){return null;}",
+            "@MolangFunction public static float parameter(Entity e){return 1;}"))
+            compile("sample.Scope", header + declaration + "}", false);
+        Path output =
+            compile("sample.Scope",
+                header + "@MolangNullable @MolangFunction public static Entity ref(){return null;}"
+                    + "@MolangFunction(alwaysOrigin = true) public static List<Entity> refs(){return List.of();}}",
+                true);
+        var schema = DeclarationSchema
+            .decode(Files.newInputStream(output.resolve(DeclarationSchema.RESOURCE_ROOT + "sample.Scope.bin")));
+        assertEquals(List.of("SUBJECT", "ORIGIN"),
+            schema.members().stream().map(DeclarationSchema.Member::scope).toList());
+        assertEquals("ENTITY", schema.members().get(0).result().kind());
+        assertTrue(schema.members().get(0).mayReturnMissing());
+        assertEquals("ENTITY", schema.members().get(1).result().element().kind());
     }
 
     private static List<Object> parsedDefaults(DeclarationSchema.Member member) {

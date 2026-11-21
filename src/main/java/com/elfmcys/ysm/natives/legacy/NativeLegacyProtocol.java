@@ -17,7 +17,7 @@ final class NativeLegacyProtocol {
     private static final byte[] MAGIC = {'Y', 'S', 'M', 'L', 'E', 'G', 'I', 0};
     private static final int HEADER_SIZE = 60;
     private static final int PAYLOAD_PREFIX_SIZE = 40;
-    private static final int MAX_DESCRIPTOR_SIZE = 16 * 1024 * 1024;
+    private static final int MAX_DESCRIPTOR_SIZE = 128 * 1024 * 1024;
     private static final int MAX_PAYLOAD_COUNT = 32766;
     private static final long MAX_SOURCE_SIZE = 66L * 1024 * 1024;
     private static final int MAX_IMAGE_DIMENSION = 4096;

@@ -32,6 +32,7 @@
     }
   },
   "properties": {
+    "origin_ver": "2.6.5",
     "extra_animation": {
       "extra0": "#staff",
       "extra1": "#charge_circle",

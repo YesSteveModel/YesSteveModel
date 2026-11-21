@@ -16,16 +16,28 @@ public final class PureDeclarationOracleTest {
     private static int targets, arguments;
     private static final IllegalStateException FAILURE = new IllegalStateException("pure target probe");
 
-    public static float declaredAffine(MolangContext context, float value) { throw new AssertionError("context adapter"); }
-    public static float declaredNonfinite(MolangContext context, float value) { throw new AssertionError("context adapter"); }
-    public static float declaredExplode(MolangContext context, float value) { throw new AssertionError("context adapter"); }
-    public static float affine(float value) { targets++; return 2 * value + 1; }
-    public static float nonfinite(float value) { targets++; return Float.NaN; }
-    public static float explode(float value) { targets++; throw FAILURE; }
-    public static float argument(MolangContext context) { arguments++; return 3; }
+    public static float declaredAffine(MolangContext context, float value) {
+        targets++;
+        return 2 * value + 1;
+    }
+
+    public static float declaredNonfinite(MolangContext context, float value) {
+        targets++;
+        return Float.NaN;
+    }
+
+    public static float declaredExplode(MolangContext context, float value) {
+        targets++;
+        throw FAILURE;
+    }
+
+    public static float argument(MolangContext context) {
+        arguments++;
+        return 3;
+    }
 
     @Test
-    void declarationLocalTargetsKeepPhysicalCallsGuardsBudgetsAndFailures() throws Throwable {
+    void ordinaryDeclarationsKeepCallsGuardsAndFailuresWithoutCallOrTransferQuotas() throws Throwable {
         ComponentScopeTest.initializeMinecraftEntityClasses();
         var entity = (Entity)com.elfmcys.ysm.util.UnsafeUtil.getUnsafe()
             .allocateInstance(net.minecraft.world.entity.decoration.ArmorStand.class);
@@ -36,15 +48,17 @@ public final class PureDeclarationOracleTest {
         var codec = PortableProgramCodecs.v1();
         var builder = CompilationUnit.builder(host.compilationPolicy(), codec, hash);
         String[] expressions = {"freshpure.affine(freshpure.argument())", "freshpure.nonfinite(3) ?? 9",
-            "freshpure.explode(3)"};
+            "freshpure.explode(3)", "loop(10001,{freshpure.affine(freshpure.argument());continue;});return 9;"};
         var keys = new ProgramKey[expressions.length];
         for (int i = 0; i < expressions.length; i++) {
             keys[i] = new ProgramKey(ReadOnlyBytes.copyOf(new byte[] {(byte)i}));
             var portable = new MolangFrontend().compile(expressions[i], MolangFrontend.SourceMode.EXPRESSION,
                 new MolangFrontend.SourceLocation("pure-oracle/" + i)).program();
-            builder.addProgram(new ProgramSource(keys[i], portable,
-                new TopLevelEntrySignature(ProgramShape.F32, new EntryResult.Value(BuiltinType.F32), List.of(), List.of()),
-                Optional.empty(), new DiagnosticLocation("pure-oracle/" + i)));
+            builder
+                .addProgram(new ProgramSource(
+                    keys[i], portable, new TopLevelEntrySignature(ProgramShape.F32,
+                        new EntryResult.Value(BuiltinType.F32), List.of(), List.of()),
+                    Optional.empty(), new DiagnosticLocation("pure-oracle/" + i)));
         }
         var unit = builder.build();
         var backend = new JaninoJavaCompilerBackend();
@@ -61,8 +75,8 @@ public final class PureDeclarationOracleTest {
                         calls.add(call.owner + "." + call.name + call.desc);
         }
         String owner = PureDeclarationOracleTest.class.getName().replace('.', '/');
-        assertTrue(calls.contains(owner + ".affine(F)F"), calls.toString());
-        assertFalse(calls.stream().anyMatch(c -> c.startsWith(owner + ".declared")));
+        assertTrue(calls.contains(owner + ".declaredAffine(Lcom/elfmcys/ysm/expression/host/MolangContext;F)F"),
+            calls.toString());
         var expected = ExpectedArtifactIdentity.create(unit, host.hostAbi(), host.registry(), CompilerOptions.DEFAULT,
             plan, backend.descriptor(), hash);
         try (var resource = ModuleLoaders.<MolangContext>standard().load(artifact, expected, host.registry(),
@@ -70,46 +84,50 @@ public final class PureDeclarationOracleTest {
             var registry = RegistryRuntimeLinkage.<MolangContext>create(
                 ProviderInstanceTable.create(host.registry(), plan, Map.of()), RuntimeSymbolTable.empty());
             try (var instance = resource.newInstance(new RuntimeLinkage<MolangContext>() {
-                public ContextType<MolangContext> contextType() { return host.contextType(); }
-                public RegistryRuntimeLinkage<MolangContext> registry() { return registry; }
-                public BakedConstantTable constants() { return artifact.constants(); }
-                public RuntimeDiagnostics diagnostics() { return RuntimeDiagnostics.none(); }
-                public ResourceLease<MolangContext> retainResource() { return resource.retain(); }
+                public RegistryRuntimeLinkage<MolangContext> registry() {
+                    return registry;
+                }
+
+                public RuntimeDiagnostics diagnostics() {
+                    return RuntimeDiagnostics.none();
+                }
+
             })) {
-                for (int scenario = 0; scenario < 5; scenario++) {
+                for (int scenario : new int[] {0, 1, 3, 4, 5}) {
                     targets = arguments = 0;
                     var subject = scenario == 1 ? other : entity;
                     var roaming = resource.newRoamingState(RoamingRole.PRODUCER);
-                    var inputs = new InvocationInputs<Entity>() { public Entity entity() { return subject; } };
-                    var context = MolangContext.observation(inputs, inputs, inputs, roaming,
-                        new InvocationProvenance("owner", "pure-oracle/" + scenario, scenario, 1, 1),
-                        () -> false, () -> true);
-                    context.configureLimits(host.executionLimits());
-                    if (scenario == 2) {
-                        var limits = host.executionLimits();
-                        context.configureLimits(new ExecutionLimits(limits.maxLoopIterations(), limits.maxUserFunctionDepth(),
-                            1, limits.maxControlTransfers(), limits.maxArgumentScratch()));
-                    }
+                    var inputs = new InvocationInputs<Entity>() {
+                        public Entity entity() {
+                            return subject;
+                        }
+                    };
+                    var context = MolangContext.observation(inputs, inputs, roaming,
+                        new InvocationProvenance("owner", "pure-oracle/" + scenario, scenario, 1, 1));
+                    var limits = host.executionLimits();
+                    context.configureLimits(limits);
                     int program = scenario < 3 ? 0 : scenario - 2;
                     var id = resource.programs().requireId(keys[program]);
                     context.bindExpression("pure-oracle/" + scenario, id.value());
                     try {
                         var binding = instance.bindSubject(subject);
-                        if (scenario == 2 || scenario == 4) {
-                            var failure = assertThrows(Throwable.class, () -> instance.executeFloat(
-                                instance.bindProgram(id, ProgramShape.F32), context, binding, context));
-                            if (scenario == 4) {
-                                while (failure != FAILURE && failure.getCause() != null) failure = failure.getCause();
-                                assertSame(FAILURE, failure);
-                            }
+                        if (scenario == 4) {
+                            var failure = assertThrows(Throwable.class, () -> instance
+                                .executeFloat(instance.bindProgram(id, ProgramShape.F32), context, binding, context));
+                            while (failure != FAILURE && failure.getCause() != null)
+                                failure = failure.getCause();
+                            assertSame(FAILURE, failure);
                         } else {
-                            float result = instance.executeFloat(instance.bindProgram(id, ProgramShape.F32),
-                                context, binding, context);
+                            float result = instance.executeFloat(instance.bindProgram(id, ProgramShape.F32), context,
+                                binding, context);
                             assertEquals(scenario == 0 ? 7f : scenario == 1 ? 0f : 9f, result);
                         }
-                        assertEquals(scenario == 1 || scenario == 2 ? 0 : 1, targets);
-                        assertEquals(scenario == 0 || scenario == 2 ? 1 : 0, arguments);
-                    } finally { context.releaseExpression(); context.closeRound(); }
+                        assertEquals(scenario == 5 ? 1_024 : scenario == 1 ? 0 : 1, targets);
+                        assertEquals(scenario == 5 ? 1_024 : scenario == 0 ? 1 : 0, arguments);
+                    } finally {
+                        context.releaseExpression();
+                        context.closeRound();
+                    }
                 }
             }
         }
@@ -123,21 +141,25 @@ public final class PureDeclarationOracleTest {
             boolean argument = name.equals("argument");
             String declared = "declared" + Character.toUpperCase(name.charAt(0)) + name.substring(1);
             var schema = new DeclarationSchema.Member("freshpure", name, argument ? "argument" : declared,
-                "(Lcom/elfmcys/ysm/api/molang/MolangContextView;" + (argument ? "" : "F") + ")F",
-                "m" + schemas.size(), net.minecraft.world.entity.decoration.ArmorStand.class.getName(), true, argument ? "" : name, "CONTEXT",
-                argument ? 0 : 1, argument ? 0 : 1, argument ? List.of() : List.of(scalar), List.of(), null, scalar, false);
+                "(Lcom/elfmcys/ysm/api/molang/MolangContextView;" + (argument ? "" : "F") + ")F", "m" + schemas.size(),
+                net.minecraft.world.entity.decoration.ArmorStand.class.getName(), true, true, "CONTEXT", "SUBJECT",
+                argument ? 0 : 1, argument ? 0 : 1, argument ? List.of() : List.of(scalar), List.of(), null, scalar,
+                name.equals("nonfinite"));
             schemas.add(schema);
-            members.add(new LinkedDeclaration.Member(schema, net.minecraft.world.entity.decoration.ArmorStand.class, argument
-                ? LinkedDeclaration.binding(PureDeclarationOracleTest.class, "argument", float.class, MolangContext.class)
-                : LinkedDeclaration.binding(PureDeclarationOracleTest.class, declared, float.class, MolangContext.class, float.class),
-                argument ? Optional.empty() : Optional.of(LinkedDeclaration.binding(PureDeclarationOracleTest.class,
-                    name, float.class, float.class))));
+            members.add(new LinkedDeclaration.Member(schema, net.minecraft.world.entity.decoration.ArmorStand.class,
+                argument
+                    ? LinkedDeclaration.binding(PureDeclarationOracleTest.class, "argument", float.class,
+                        MolangContext.class)
+                    : LinkedDeclaration.binding(PureDeclarationOracleTest.class, declared, float.class,
+                        MolangContext.class, float.class)));
         }
         var schema = new DeclarationSchema(PureDeclarationOracleTest.class.getName(),
-            PureDeclarationOracleTest.class.getName() + "MolangBindings", "freshpure", "", true, false, "", List.of(), schemas);
+            PureDeclarationOracleTest.class.getName() + "MolangBindings", "freshpure", "", true, false, "", List.of(),
+            schemas);
         var declaration = new LinkedDeclaration(schema, "ysm", PureDeclarationOracleTest.class,
             PureDeclarationOracleTest.class, PureDeclarationOracleTest.class.getClassLoader(), members);
-        return ExpressionHost.createFrozen(HostAvailability.none(), ExpressionHost.create(HostAvailability.none()).compilationPolicy(),
-            List.of(declaration), List.of(declaration));
+        return ExpressionHost.createFrozen(HostAvailability.none(),
+            ExpressionHost.create(HostAvailability.none()).compilationPolicy(), List.of(declaration),
+            List.of(declaration));
     }
 }

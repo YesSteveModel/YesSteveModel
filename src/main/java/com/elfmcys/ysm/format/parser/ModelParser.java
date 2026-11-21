@@ -4,9 +4,8 @@ import com.elfmcys.ysm.buffer.SharedArrayBuffer;
 import com.elfmcys.ysm.format.schema.model.ModelOriginVersion;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.expression.frontend.MolangFrontend;
-import com.elfmcys.ysm.expression.host.BuiltinDeclarations;
 import com.elfmcys.ysm.format.vfs.VirtualFileSystem;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 
 import java.nio.file.Path;
 import java.io.ByteArrayOutputStream;
@@ -17,10 +16,13 @@ import java.util.Objects;
 /**
  * Coordinates raw source access and model assembly. The caller retains ownership of the VFS.
  *
- * <p>Execution: synchronous parsing and I/O. The caller excludes concurrent mutation or close of
- * each borrowed VFS and output. Independent calls do not share a parser owner.
+ * <p>
+ * Execution: synchronous parsing and I/O. The caller excludes concurrent mutation or close of each borrowed VFS and
+ * output. Independent calls do not share a parser owner.
  *
- * <p>Seam: implements [capture before raw conversion](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换). A scan or written container is not a resource Ready result.
+ * <p>
+ * Seam: implements [raw conversion](docs/architecture/asset-pipeline/overview.md#冻结输入与单向转换). A scan or written
+ * container is not a resource Ready result.
  */
 public final class ModelParser {
     public static final String CANONICALIZER_PROFILE_VERSION = "2";
@@ -32,11 +34,13 @@ public final class ModelParser {
     /**
      * Freezes the directory observations and bytes consumed by the scan, then returns their owning capture.
      *
-     * <p>Ensures: later compilation through this capture does not reopen the original source. This is
-     * a frozen parse closure, not an atomic snapshot of a concurrently changing filesystem.
+     * <p>
+     * Ensures: later compilation through this capture does not reopen the original source. This is a frozen parse
+     * closure, not an atomic snapshot of a concurrently changing filesystem.
      *
-     * <p>Ownership: borrows source only during this call and does not close it. The caller closes the
-     * returned capture after its last compilation or borrowed-buffer use. Failed capture releases its copies.
+     * <p>
+     * Ownership: borrows source only during this call and does not close it. The caller closes the returned capture
+     * after its last compilation or borrowed-buffer use. Failed capture releases its copies.
      */
     public static CapturedModel capture(VirtualFileSystem source) {
         var data = new CapturedSourceData(Objects.requireNonNull(source, "source"));
@@ -87,9 +91,10 @@ public final class ModelParser {
     /**
      * Writes through a caller-owned channel so cache staging cannot reopen a mutable path.
      *
-     * <p>Requires: exclusive use of output and a stable VFS, normally a frozen capture. The label is
-     * result metadata, not a path this overload reopens. Failure may leave partial output; the storage
-     * owner retains responsibility for closing and discarding it. No Catalog publication occurs here.
+     * <p>
+     * Requires: exclusive use of output and a stable VFS whose owner outlives this call. The label is result metadata,
+     * not a path this overload reopens. Failure may leave partial output; the storage owner retains responsibility for
+     * closing and discarding it. No Catalog publication occurs here.
      */
     public static RawCompileResult compile(VirtualFileSystem vfs, java.nio.channels.WritableByteChannel output,
         Path label, DefaultAnimationFilter defaultAnimations, String originVer) {
@@ -104,16 +109,15 @@ public final class ModelParser {
     /** Generates the builtin default without applying the default-animation filter to itself. */
     public static Path parseBuiltinDefault(VirtualFileSystem vfs, Path outputDirectory) {
         return Objects.requireNonNull(parse(vfs, Objects.requireNonNull(outputDirectory, "outputDirectory"), false,
-            DefaultAnimationFilter.keepAll(), false, defaultFrontend(MolangFrontend.CompilationObserver.none()))
-            .output(), "output");
+            DefaultAnimationFilter.keepAll(), false, new MolangFrontend()).output(), "output");
     }
 
     /** Builds the required default as one complete in-memory container. */
     public static MemoryContainer parseBuiltinDefaultMemory(VirtualFileSystem vfs) {
         var bytes = new ByteArrayOutputStream();
         var source = new RawModelSource(Objects.requireNonNull(vfs, "vfs"));
-        try (var output = Channels.newChannel(bytes); var assembler = new RawModelAssembler(source, output,
-            DefaultAnimationFilter.keepAll(), false, defaultFrontend(MolangFrontend.CompilationObserver.none()))) {
+        try (var output = Channels.newChannel(bytes); var assembler =
+            new RawModelAssembler(source, output, DefaultAnimationFilter.keepAll(), false, new MolangFrontend())) {
             var result = assembler.parse();
             return new MemoryContainer(result.modelHash(),
                 SharedArrayBuffer.adopt(ArrayBuffer.move(bytes.toByteArray())));
@@ -126,19 +130,11 @@ public final class ModelParser {
     public static Path parseBuiltinDefault(VirtualFileSystem vfs, Path outputDirectory,
         MolangFrontend.CompilationObserver observer) {
         return Objects.requireNonNull(parse(vfs, Objects.requireNonNull(outputDirectory, "outputDirectory"), false,
-            DefaultAnimationFilter.keepAll(), false, defaultFrontend(observer)).output(), "output");
-    }
-
-    private static MolangFrontend defaultFrontend(MolangFrontend.CompilationObserver observer) {
-        Objects.requireNonNull(observer, "observer");
-        return new MolangFrontend((source, mode, location, result) -> {
-            BuiltinDeclarations.validateDefaultSource(location, result);
-            observer.compiled(source, mode, location, result);
-        });
+            DefaultAnimationFilter.keepAll(), false, new MolangFrontend(observer)).output(), "output");
     }
 
     /** Scans the parse resource set without decoding assets or writing a model container. */
-    public static Hash256 scanModelHash(VirtualFileSystem vfs) {
+    public static ModelId scanModelHash(VirtualFileSystem vfs) {
         return parse(vfs, null, true, DefaultAnimationFilter.keepAll(), false).modelHash();
     }
 
@@ -156,7 +152,7 @@ public final class ModelParser {
         }
     }
 
-    public record MemoryContainer(Hash256 modelHash, SharedArrayBuffer bytes) {
+    public record MemoryContainer(ModelId modelHash, SharedArrayBuffer bytes) {
         public MemoryContainer {
             Objects.requireNonNull(modelHash, "modelHash");
             Objects.requireNonNull(bytes, "bytes");

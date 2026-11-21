@@ -70,8 +70,8 @@ final class AudioRetentionCache implements AutoCloseable {
         entries.put(key, new Entry(audio, candidateReceipt));
         retainedBytes = Math.addExact(retainedBytes, audio.retainedBytes());
         evictToBudget();
-        ResourceDiagnostics.log("audio decoded retain: {} bytes={} entries={} retainedBytes={}", key, audio.retainedBytes(),
-            entries.size(), retainedBytes);
+        ResourceDiagnostics.log("audio decoded retain: {} bytes={} entries={} retainedBytes={}", key,
+            audio.retainedBytes(), entries.size(), retainedBytes);
         return entries.get(key) != null && entries.get(key).audio == audio;
     }
 
@@ -110,8 +110,8 @@ final class AudioRetentionCache implements AutoCloseable {
             retainedBytes -= entry.getValue().audio.retainedBytes();
             latestReceipts.remove(entry.getKey(), entry.getValue().receipt);
             iterator.remove();
-            ResourceDiagnostics.log("audio decoded expire: {} entries={} retainedBytes={}", entry.getKey(), entries.size(),
-                retainedBytes);
+            ResourceDiagnostics.log("audio decoded expire: {} entries={} retainedBytes={}", entry.getKey(),
+                entries.size(), retainedBytes);
         }
         latestReceipts.entrySet()
             .removeIf(entry -> !entries.containsKey(entry.getKey()) && expired(entry.getValue(), now));
@@ -135,8 +135,8 @@ final class AudioRetentionCache implements AutoCloseable {
             entries.remove(oldest.getKey());
             latestReceipts.remove(oldest.getKey(), oldest.getValue().receipt);
             retainedBytes -= oldest.getValue().audio.retainedBytes();
-            ResourceDiagnostics.log("audio decoded evict: {} entries={} retainedBytes={}", oldest.getKey(), entries.size(),
-                retainedBytes);
+            ResourceDiagnostics.log("audio decoded evict: {} entries={} retainedBytes={}", oldest.getKey(),
+                entries.size(), retainedBytes);
         }
     }
 

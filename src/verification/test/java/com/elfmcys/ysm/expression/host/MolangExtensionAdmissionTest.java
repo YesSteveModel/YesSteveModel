@@ -1,6 +1,5 @@
 package com.elfmcys.ysm.expression.host;
 
-import com.elfmcys.ysm.api.molang.PreparedEffect;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.elfmcys.ysm.api.internal.processor.ExtensionCompatibilityProcessor;
@@ -32,7 +31,7 @@ public class MolangExtensionAdmissionTest {
     @Test
     void malformedOptionalMetadataIsRejectedBeforeLoadingAndIndependentClassesStillFreeze() throws Exception {
         Path good = extension(apiJar(), "GoodMetadata", "good_mod", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static float value(MolangContextView<net.minecraft.world.entity.Entity> c){return 3;}
             """);
         for (boolean manual : List.of(false, true)) {
@@ -147,40 +146,40 @@ public class MolangExtensionAdmissionTest {
         Path alpha = extension(api, "Alpha", "alpha_mod",
             """
                 @YsmEntityComponent("alpha_mod") public static class Nested {
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction
                     public static float nested(MolangContextView<net.minecraft.world.entity.Entity> c){return 1f;}
                 }
                 public record Pair(int count,float value) {}
-                @MolangFunction(effect=MolangEffect.CONTEXT)
+                @MolangFunction
                 public static Pair pair(MolangContextView<net.minecraft.world.entity.Entity> c){return new Pair(7,2f);}
-                @MolangFunction(effect=MolangEffect.CONTEXT)
+                @MolangFunction
                 public static int count(MolangContextView<net.minecraft.world.entity.Entity> c,int value){return value;}
-                @MolangFunction(effect=MolangEffect.CONTEXT)
+                @MolangFunction
                 public static java.util.List<String> labels(MolangContextView<net.minecraft.world.entity.Entity> c){return java.util.List.of("one");}
                 """);
         Path beta = extension(api, "Beta", "beta_mod", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static String count(MolangContextView<net.minecraft.world.entity.Entity> c){return "OBSERVATION";}
-            @MolangFunction(effect=MolangEffect.ACTION)
-            public static void reset(MolangContextView<net.minecraft.world.entity.Entity> c){c.submit((com.elfmcys.ysm.api.molang.PreparedEffect)() -> {});}
+            @MolangFunction(action = true)
+            public static void reset(MolangContextView<net.minecraft.world.entity.Entity> c){{};}
             """);
         Path duplicate = extension(api, "Duplicate", "alpha_mod", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static float count(MolangContextView<net.minecraft.world.entity.Entity> c){return 0;}
             """);
         Path spoof =
             extension(api, "Spoof", "alpha_mod", "@YsmEntityComponent(value=\"alpha_mod\",modId=\"alpha_mod\")", """
-                @MolangFunction(effect=MolangEffect.CONTEXT)
+                @MolangFunction
                 public static float spoof(MolangContextView<net.minecraft.world.entity.Entity> c){return 0;}
                 """);
         Path bad = extension(api, "Bad", "bad_mod", """
             public record BadZero(int count){public BadZero{if(count==0)throw new IllegalArgumentException("zero");}}
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static BadZero bad(MolangContextView<net.minecraft.world.entity.Entity> c){return new BadZero(1);}
             """);
         Path more = extension(api, "More", "alpha_mod",
             """
-                @MolangFunction(effect=MolangEffect.CONTEXT)
+                @MolangFunction
                 public static java.util.List<String> more(MolangContextView<net.minecraft.world.entity.Entity> c){return java.util.List.of("two");}
                 """);
         var urls = new ArrayList<URL>();
@@ -201,7 +200,7 @@ public class MolangExtensionAdmissionTest {
     void collectorClosesManualAllOfAndEveryPrepublicationFailureStage() throws Exception {
         Path api = apiJar();
         String function =
-            "@MolangFunction(effect=MolangEffect.CONTEXT) public static float value(MolangContextView<net.minecraft.world.entity.Entity> c){return 3;}";
+            "@MolangFunction public static float value(MolangContextView<net.minecraft.world.entity.Entity> c){return 3;}";
         var jars = new ArrayList<Path>();
         jars.add(extension(api, "Both", "both_mod",
             "@YsmEntityComponent(value=\"both_mod\",dependencies={@MolangDependency(modId=\"dep_a\",version=\"[1,2)\"),@MolangDependency(modId=\"dep_b\")})",
@@ -274,7 +273,7 @@ public class MolangExtensionAdmissionTest {
         accepted.submit(receipt);
         var full = accepted.freeze(HostAvailability.none(), qualification);
         assertEquals("yes", System.getProperty("ysm.fixture.both.initialized"));
-        assertEquals(3, full.host().registry().functions().size());
+        assertEquals(3 + MathDeclarations.ALL.size(), full.host().registry().functions().size());
         assertTrue(full.rejectedMods().isEmpty(), full.diagnostics().toString());
         var duplicate = new MolangExtensions.Collector();
         duplicate.collect(sources.get(2));
@@ -310,8 +309,8 @@ public class MolangExtensionAdmissionTest {
                     var schema = DeclarationSchema.decode(new ByteArrayInputStream(bytes));
                     var m = schema.members().get(0);
                     var changed = new DeclarationSchema.Member(m.namespace(), m.name(), m.javaName(), "()V",
-                        m.adapter(), m.subject(), m.isStatic(), m.contextFreeTarget(), m.effect(), m.minimum(), m.maximum(),
-                        m.fixed(), m.defaults(), m.tail(), m.result(), m.nullableRecord());
+                        m.adapter(), m.subject(), m.isStatic(), m.injectContext(), m.effect(), m.scope(), m.minimum(),
+                        m.maximum(), m.fixed(), m.defaults(), m.tail(), m.result(), m.nullableReturn());
                     bytes = new DeclarationSchema(schema.owner(), schema.helper(), schema.namespace(), schema.modId(),
                         schema.builtin(), schema.manual(), schema.componentSubject(), schema.dependencies(),
                         List.of(changed)).encode();
@@ -414,22 +413,23 @@ public class MolangExtensionAdmissionTest {
                 RoamingRole.class)
             .invoke(null, dev.semaweave.compilation.TestResourceGenerations.create(), RoamingRole.CONSUMER);
         @SuppressWarnings("unchecked")
-        var generated = (GeneratedModuleRoot<MolangContext>)rootClass
-            .getConstructor(Object[].class, Object[].class, ValueType[].class, ChildContextAdapter.class,
-                dev.semaweave.CompiledRoamingState.class, SubjectBindingFactory.class)
-            .newInstance(TestComponentHolders.providers(host).toDenseArray(), new Object[0],
-                host.registry().types().values().stream().map(t -> t.type()).toArray(ValueType[]::new), null, roaming,
-                subjectFactory(rootClass, roaming));
-        var context = MolangContext.observation(new EntityView() {}, new RenderView() {}, (command, scope) -> {
-            throw new AssertionError("unexpected effect " + command);
-        }, roaming, new InvocationProvenance("jar", "test", 0, 1, 1), () -> false, () -> true);
+        var generated =
+            (GeneratedModuleRoot<MolangContext>)rootClass
+                .getConstructor(Object[].class, Object[].class, ValueType[].class,
+                    dev.semaweave.CompiledRoamingState.class, SubjectBindingFactory.class)
+                .newInstance(TestComponentHolders.providers(host).toDenseArray(), new Object[0],
+                    host.registry().types().values().stream().map(t -> t.type()).toArray(ValueType[]::new), roaming,
+                    subjectFactory(rootClass));
+        var context = MolangContext.observation(new EntityView() {}, new RenderView() {}, roaming,
+            new InvocationProvenance("jar", "test", 0, 1, 1));
         var frame = context;
         frame.configureLimits(host.executionLimits());
         frame.bindExpression("admission", 0);
+        frame.bindOrigin(generated.subjectBindingFactory().bind(MolangContext.subjectOrNull(frame)));
         frame.beginTopLevel(false);
         try {
             assertEquals(7f,
-                generated.executeFloat(0, 0, context,
+                generated.executeFloat(0, context,
                     generated.subjectBindingFactory().bind(MolangContext.subjectOrNull(context)), frame,
                     ProgramArguments.empty()));
         } finally {
@@ -439,7 +439,7 @@ public class MolangExtensionAdmissionTest {
     }
 
     @Test
-    void independentMixedOwnersInvalidateDirectoriesAndBorrowedViews() throws Exception {
+    void independentMixedOwnersKeepSeparateInstancesAndInvalidateTheirDirectories() throws Exception {
         Path api = apiJar();
         String imports = "package independent;import com.elfmcys.ysm.api.annotation.*;"
             + "import com.elfmcys.ysm.api.molang.*;import com.elfmcys.ysm.expression.host.*;"
@@ -449,20 +449,19 @@ public class MolangExtensionAdmissionTest {
             public class Lifecycle implements EntityComponent<Entity> {
                 public static int constructed;
                 public int count,updates;
-                public static MolangContextView<Entity> borrowed;
                 public Lifecycle(com.elfmcys.ysm.client.entity.AnimatableEntity<Entity> owner){constructed++;}
                 public void update(float previous,float current,float partial){updates++;}
-                @MolangFunction(effect=MolangEffect.CONTEXT)
-                public int read(MolangContextView<Entity> context){borrowed=context;return ++count;}
-                @MolangFunction(namespace="lifecycle_other")
+                @MolangFunction(alwaysOrigin = true)
+                public int read(MolangContextView<Entity> context){return ++count;}
+                @MolangFunction(alwaysOrigin = true, namespace="lifecycle_other")
                 public int next(MolangContextView<Entity> context){return ++count;}
-                @MolangFunction(effect=MolangEffect.CONTEXT)
+                @MolangFunction
                 public static int fixed(MolangContextView<Entity> context){return 5;}
             }
             """);
         Path statics = extension(api, "StaticOnly", "static_mod", """
             private StaticOnly(){throw new AssertionError("static constructed");}
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static int fixed(MolangContextView<net.minecraft.world.entity.Entity> context){return 5;}
             """);
         Path failing = extensionSource(api, "ZFailure", imports
@@ -470,7 +469,7 @@ public class MolangExtensionAdmissionTest {
                 @YsmEntityComponent("failure_mod")
                 public class ZFailure implements EntityComponent<Entity> {
                     public ZFailure(com.elfmcys.ysm.client.entity.AnimatableEntity<Entity> owner){throw new IllegalStateException("construction-source");}
-                    @MolangFunction(effect=MolangEffect.CONTEXT)
+                    @MolangFunction(alwaysOrigin = true)
                     public int read(MolangContextView<Entity> context){return 1;}
                 }
                 """);
@@ -502,7 +501,7 @@ public class MolangExtensionAdmissionTest {
             distribution.set(null, net.minecraftforge.api.distmarker.Dist.CLIENT);
         }
         var subject = (net.minecraft.world.entity.Entity)com.elfmcys.ysm.util.UnsafeUtil.getUnsafe()
-            .allocateInstance(net.minecraft.world.entity.decoration.ArmorStand.class);
+            .allocateInstance(Class.forName("com.elfmcys.ysm.expression.host.ComponentScopeTest$TestEntity"));
         var position = net.minecraft.world.entity.Entity.class.getDeclaredField("position");
         position.setAccessible(true);
         position.set(subject, net.minecraft.world.phys.Vec3.ZERO);
@@ -566,24 +565,24 @@ public class MolangExtensionAdmissionTest {
                 return subject;
             }
 
-            public void prevalidateEffect(PreparedEffect command, MolangContext<?> scope) {}
         };
-        var state = MolangContext.observation(subject, inputs, inputs, roaming,
-            new InvocationProvenance("owner", "read-order", 0, 1, 1), () -> false, () -> true);
+        var state = MolangContext.observation(subject, inputs, roaming,
+            new InvocationProvenance("owner", "read-order", 0, 1, 1));
         var constructor = rootClass.getConstructor(Object[].class, Object[].class, ValueType[].class,
-            ChildContextAdapter.class, CompiledRoamingState.class, SubjectBindingFactory.class);
+            CompiledRoamingState.class, SubjectBindingFactory.class);
         @SuppressWarnings("unchecked")
         var generated =
             (GeneratedModuleRoot<MolangContext>)constructor.newInstance(first.providers(host, plan).toDenseArray(),
                 new Object[0], host.registry().types().values().stream().map(t -> t.type()).toArray(ValueType[]::new),
-                null, roaming, subjectFactory(rootClass, roaming));
+                roaming, subjectFactory(rootClass));
         var frame = state;
         frame.configureLimits(host.executionLimits());
         frame.bindExpression("admission", 0);
+        frame.bindOrigin(generated.subjectBindingFactory().bind(MolangContext.subjectOrNull(frame)));
         frame.beginTopLevel(false);
         try {
             assertEquals(3f,
-                generated.executeFloat(0,0, state,
+                generated.executeFloat(0, state,
                     generated.subjectBindingFactory().bind(MolangContext.subjectOrNull(state)), frame,
                     ProgramArguments.empty()));
         } finally {
@@ -592,15 +591,15 @@ public class MolangExtensionAdmissionTest {
         }
         assertEquals(2, owner.getField("count").getInt(firstOwner));
         assertEquals(0, owner.getField("count").getInt(secondOwner));
-        @SuppressWarnings("unchecked")
-        var expired = (MolangContextView<Entity>)owner.getField("borrowed").get(null);
-        assertThrows(IllegalStateException.class, expired::subject);
         var declaration = host.declarations().stream().filter(d -> d.owner() == owner).findFirst().orElseThrow();
         var fixed =
             declaration.schema().members().stream().filter(m -> m.javaName().equals("fixed")).findFirst().orElseThrow();
         assertEquals(5, declaration.helper().getMethod(fixed.adapter(), MolangContext.class).invoke(null, state));
         assertEquals(2, owner.getField("constructed").getInt(null));
-        first.update(0, 1, 1, () -> true);
+        first.evaluate(
+            new com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent<>(first.owner(), 1, 0, 1, null,
+                new com.elfmcys.ysm.geckolib3.model.provider.data.EntityModelData(), null),
+            () -> true, () -> first.update(0, 1, 1, () -> true));
         assertEquals(1, owner.getField("updates").getInt(firstOwner));
         assertEquals(0, owner.getField("updates").getInt(secondOwner));
         var all = MolangExtensions.admit(HostAvailability.none(), sources);
@@ -612,7 +611,10 @@ public class MolangExtensionAdmissionTest {
             new DeclarationComponentScope(TestComponentHolders.owner(subject), all.host().builtinOnly().declarations());
         assertTrue(defaultHolder.exact(owner).isEmpty());
         int previousUpdates = owner.getField("updates").getInt(firstOwner);
-        defaultHolder.update(1, 2, 0.5f, () -> true);
+        defaultHolder.evaluate(
+            new com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent<>(defaultHolder.owner(), 1, 0, 0.5f, null,
+                new com.elfmcys.ysm.geckolib3.model.provider.data.EntityModelData(), null),
+            () -> true, () -> defaultHolder.update(1, 2, 0.5f, () -> true));
         assertEquals(previousUpdates, owner.getField("updates").getInt(firstOwner));
         assertEquals(constructionCount, owner.getField("constructed").getInt(null));
         defaultHolder.invalidate();
@@ -621,7 +623,6 @@ public class MolangExtensionAdmissionTest {
         first.invalidate();
         assertTrue(first.exact(owner).isEmpty());
         assertSame(secondOwner, second.exact(owner).orElseThrow());
-        assertThrows(IllegalStateException.class, expired::subject);
         second.invalidate();
     }
 
@@ -648,7 +649,7 @@ public class MolangExtensionAdmissionTest {
             "@MolangFunction(namespace=\"isolated\") public static int one(" + context + " c){return 1;}"));
         jars.add(ownershipFixture(api, "DuplicateOne", "duplicate", "", one));
         jars.add(ownershipFixture(api, "DuplicateTwo", "duplicate", "",
-            "@MolangFunction(value=\"one\") public static int other(" + context + " c,String value){return 1;}"));
+            "@MolangFunction(\"one\") public static int other(" + context + " c,String value){return 1;}"));
         jars.add(ownershipFixture(api, "FactsMismatch", "facts", "", one));
         jars.add(extension(api, "Ineligible", "qualified",
             "@YsmEntityComponent(value=\"qualified\",dependencies=@MolangDependency(modId=\"missing_optional\"))",
@@ -782,19 +783,18 @@ public class MolangExtensionAdmissionTest {
     }
 
     @Test
-    void uniformDeclarationsBindWithoutBusinessCatalogsAndPublicHintsDoNotAuthorizePurity() throws Exception {
+    void uniformDeclarationsBindWithoutBusinessCatalogs() throws Exception {
         Path extension = extension(apiJar(), "Uniform", "uniform", """
             public static final java.util.List<Float> committed = new java.util.ArrayList<>();
             @MolangFunction
             public static float fresh(MolangContextView<net.minecraft.world.entity.Entity> context) { return 7; }
-            @MolangFunction(contextFreeTarget="pure")
+            @MolangFunction
             public static float read(MolangContextView<net.minecraft.world.entity.Entity> context, float value) {
                 return context.inputs().partialTick() + value;
             }
-            public static float pure(float value) { throw new AssertionError("untrusted pure target"); }
-            @MolangFunction(effect=MolangEffect.ACTION)
+            @MolangFunction(action = true)
             public static void apply(MolangContextView<net.minecraft.world.entity.Entity> context, float value) {
-                context.submit((PreparedEffect)() -> committed.add(value));
+                committed.add(value);
             }
             """);
         var urls = new ArrayList<URL>();
@@ -806,8 +806,8 @@ public class MolangExtensionAdmissionTest {
             var previous = Thread.currentThread().getContextClassLoader();
             Thread.currentThread().setContextClassLoader(loader);
             try {
-                loader.loadClass(getClass().getName()).getMethod("verifyUniform", String.class)
-                    .invoke(null, extension.toString());
+                loader.loadClass(getClass().getName()).getMethod("verifyUniform", String.class).invoke(null,
+                    extension.toString());
             } catch (java.lang.reflect.InvocationTargetException failure) {
                 throw new AssertionError(failure.getCause());
             } finally {
@@ -820,8 +820,11 @@ public class MolangExtensionAdmissionTest {
         var loader = MolangExtensionAdmissionTest.class.getClassLoader();
         var dist = loader.loadClass("net.minecraftforge.fml.loading.FMLEnvironment").getField("dist");
         dist.set(null, net.minecraftforge.api.distmarker.Dist.DEDICATED_SERVER);
-        try { ComponentScopeTest.initializeMinecraftEntityClasses(); }
-        finally { dist.set(null, net.minecraftforge.api.distmarker.Dist.CLIENT); }
+        try {
+            ComponentScopeTest.initializeMinecraftEntityClasses();
+        } finally {
+            dist.set(null, net.minecraftforge.api.distmarker.Dist.CLIENT);
+        }
         var sources = MolangExtensionLoader.discover(List.of(scan(Path.of(path), "uniform")), loader);
         var admission = MolangExtensions.admit(HostAvailability.none(), sources);
         assertTrue(admission.rejectedMods().isEmpty(), admission.diagnostics().toString());
@@ -830,23 +833,27 @@ public class MolangExtensionAdmissionTest {
             .findFirst().orElseThrow();
         assertTrue(host.registry().functions().containsKey(new SymbolKey("uniform:fresh")));
         assertTrue(host.registry().functions().containsKey(new SymbolKey("uniform:apply")));
-        assertTrue(declaration.members().stream().allMatch(m -> m.contextFreeTarget().isEmpty()));
+        assertTrue(host.registry().function(new SymbolKey("uniform:read")).orElseThrow().methods().get(0).intrinsic()
+            .isEmpty());
         assertTrue(host.builtinOnly().registry().functions().keySet().stream()
             .noneMatch(key -> key.canonical().startsWith("uniform:")));
         HostLinkage.production(host).requireCompatible(host);
-        var encoded = new com.elfmcys.ysm.expression.frontend.MolangFrontend().compile(
-            "uniform.apply(3); uniform.read(math.abs(-2)); return uniform.fresh();",
-            com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceMode.EXPRESSION,
-            new com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceLocation("uniform")).program();
+        var encoded = new com.elfmcys.ysm.expression.frontend.MolangFrontend()
+            .compile("uniform.apply(3); uniform.read(math.abs(-2)); return uniform.fresh();",
+                com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceMode.EXPRESSION,
+                new com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceLocation("uniform"))
+            .program();
         var source = new ProgramSource(new ProgramKey(ReadOnlyBytes.copyOf(new byte[] {11})), encoded,
             new TopLevelEntrySignature(ProgramShape.F32, new EntryResult.Value(BuiltinType.F32), List.of(), List.of()),
             Optional.empty(), new DiagnosticLocation("uniform"), EntryPermissions.ACTION);
         var plan = host.expressionBinding().bindingPlan();
         var artifact = new DefaultExpressionAotCompiler<MolangContext>(
-            new dev.semaweave.backend.janino.JaninoJavaCompilerBackend()).compile(TaskContext.NONE,
-                CompilationUnit.builder(host.compilationPolicy(), PortableProgramCodecs.v1(), ExpressionIdentityHash.SHA_256)
-                    .addProgram(source).build(), host.hostAbi(), host.registry(), CompilerOptions.DEFAULT, plan,
-                ExpressionIdentityHash.SHA_256);
+            new dev.semaweave.backend.janino.JaninoJavaCompilerBackend())
+            .compile(TaskContext.NONE,
+                CompilationUnit
+                    .builder(host.compilationPolicy(), PortableProgramCodecs.v1(), ExpressionIdentityHash.SHA_256)
+                    .addProgram(source).build(),
+                host.hostAbi(), host.registry(), CompilerOptions.DEFAULT, plan, ExpressionIdentityHash.SHA_256);
         var invocations = new ArrayList<String>();
         for (var bytes : artifact.classes().values()) {
             var node = new org.objectweb.asm.tree.ClassNode();
@@ -856,44 +863,61 @@ public class MolangExtensionAdmissionTest {
                     if (instruction instanceof org.objectweb.asm.tree.MethodInsnNode call)
                         invocations.add(call.owner + "." + call.name + call.desc);
         }
-        assertTrue(invocations.contains("com/elfmcys/ysm/expression/host/builtin/MathBuiltins.abs(F)F"), invocations.toString());
+        assertTrue(invocations.contains("dev/semaweave/internal/IntrinsicMath.abs(F)F"), invocations.toString());
         assertFalse(invocations.stream().anyMatch(i -> i.startsWith("independent/Uniform.pure")));
         var generatedLoader = new ClassLoader(loader) {
             protected Class<?> findClass(String name) throws ClassNotFoundException {
                 var bytes = artifact.classes().get(name);
-                if (bytes == null) throw new ClassNotFoundException(name);
+                if (bytes == null)
+                    throw new ClassNotFoundException(name);
                 var value = bytes.toByteArray();
                 return defineClass(name, value, 0, value.length);
             }
         };
         var root = generatedLoader.loadClass(artifact.manifest().rootBinaryName());
-        var roaming = (CompiledRoamingState)root.getMethod("semaweaveNewRoamingState", ResourceGenerationToken.class,
-            RoamingRole.class).invoke(null, TestResourceGenerations.create(), RoamingRole.PRODUCER);
+        var roaming = (CompiledRoamingState)root
+            .getMethod("semaweaveNewRoamingState", ResourceGenerationToken.class, RoamingRole.class)
+            .invoke(null, TestResourceGenerations.create(), RoamingRole.PRODUCER);
         @SuppressWarnings("unchecked")
-        var generated = (GeneratedModuleRoot<MolangContext>)root.getConstructor(Object[].class, Object[].class,
-            ValueType[].class, ChildContextAdapter.class, CompiledRoamingState.class, SubjectBindingFactory.class)
-            .newInstance(TestComponentHolders.providers(host, plan).toDenseArray(), new Object[0],
-                host.registry().types().values().stream().map(t -> t.type()).toArray(ValueType[]::new), null, roaming,
-                subjectFactory(root, roaming));
+        var generated =
+            (GeneratedModuleRoot<
+                MolangContext>)root
+                    .getConstructor(Object[].class, Object[].class, ValueType[].class, CompiledRoamingState.class,
+                        SubjectBindingFactory.class)
+                    .newInstance(TestComponentHolders.providers(host, plan).toDenseArray(), new Object[0],
+                        host.registry().types().values().stream().map(t -> t.type()).toArray(ValueType[]::new), roaming,
+                        subjectFactory(root));
         var subject = (Entity)com.elfmcys.ysm.util.UnsafeUtil.getUnsafe()
             .allocateInstance(net.minecraft.world.entity.decoration.ArmorStand.class);
         var inputs = new InvocationInputs<Entity>() {
-            public Entity entity() { return subject; }
-            public float partialTick() { return .25f; }
+            public Entity entity() {
+                return subject;
+            }
+
+            public float partialTick() {
+                return .25f;
+            }
         };
-        var context = MolangContext.logical(subject, inputs, MolangContext.LogicalPhase.ACTION, inputs, roaming,
-            new InvocationProvenance("owner", "uniform", 0, 1, 1), () -> false, () -> true, 4);
+        var context = MolangContext.logical(subject, inputs, MolangContext.LogicalPhase.ACTION, roaming,
+            new InvocationProvenance("owner", "uniform", 0, 1, 1));
         context.configureLimits(host.executionLimits());
         try {
-            context.bindExpression("uniform", 0); context.beginTopLevel(true);
+            context.bindExpression("uniform", 0);
+            context.bindOrigin(generated.subjectBindingFactory().bind(subject));
+            context.beginTopLevel(true);
             try {
-                assertEquals(7f, generated.executeFloat(0, 0, context,
-                    generated.subjectBindingFactory().bind(subject), context, ProgramArguments.empty()));
-            } finally { context.endTopLevel(); context.releaseExpression(); }
-            assertEquals(List.of(), declaration.owner().getField("committed").get(null));
-            EffectTransaction.finish(context, EffectSink.direct(), true);
+                assertEquals(7f, generated.executeFloat(0, context, generated.subjectBindingFactory().bind(subject),
+                    context, ProgramArguments.empty()));
+            } finally {
+                context.endTopLevel();
+                context.releaseExpression();
+            }
             assertEquals(List.of(3f), declaration.owner().getField("committed").get(null));
-        } finally { context.closeRound(); }
+
+            assertEquals(List.of(3f), declaration.owner().getField("committed").get(null));
+        } finally {
+            context.closeRound();
+        }
     }
 
     private Path apiJar() throws Exception {
@@ -957,12 +981,10 @@ public class MolangExtensionAdmissionTest {
         return path;
     }
 
-    private static SubjectBindingFactory subjectFactory(Class<?> root, CompiledRoamingState roaming) {
+    private static SubjectBindingFactory subjectFactory(Class<?> root) {
         return subject -> {
             try {
-                return (SubjectBinding)root
-                    .getMethod("semaweaveBindSubject", Object.class, ResourceGenerationToken.class)
-                    .invoke(null, subject, roaming.generation());
+                return (SubjectBinding)root.getMethod("semaweaveBindSubject", Object.class).invoke(null, subject);
             } catch (ReflectiveOperationException failure) {
                 throw new AssertionError(failure);
             }

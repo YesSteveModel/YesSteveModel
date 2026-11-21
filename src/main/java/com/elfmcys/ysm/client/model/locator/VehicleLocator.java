@@ -17,15 +17,12 @@ public class VehicleLocator extends GeoLocatorType {
         super(new ResourceLocation(YesSteveModel.MOD_ID, "vehicle"));
     }
 
+    /** Initializes and freezes declarations on the bootstrap owner before resource workers can read them. */
     public static void init() {
         if (INSTANCE == null) {
-            synchronized (VehicleLocator.class) {
-                if (INSTANCE == null) {
-                    INSTANCE = new VehicleLocator();
-                    YesSteveModel.postEvent(new RegisterModelLocatorEvent(ModelKind.VEHICLE, INSTANCE::register));
-                    INSTANCE.freeze();
-                }
-            }
+            INSTANCE = new VehicleLocator();
+            YesSteveModel.postEvent(new RegisterModelLocatorEvent(ModelKind.VEHICLE, INSTANCE::register));
+            INSTANCE.freeze();
         }
     }
 

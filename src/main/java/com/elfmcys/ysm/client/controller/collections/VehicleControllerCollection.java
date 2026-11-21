@@ -4,7 +4,7 @@ import com.elfmcys.ysm.client.animation.condition.ConditionArmor;
 import com.elfmcys.ysm.client.animation.predicate.*;
 import com.elfmcys.ysm.client.controller.*;
 import com.elfmcys.ysm.client.entity.CustomVehicleEntity;
-import com.elfmcys.ysm.model.resource.client.CommonAsset;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.model.resource.client.VehicleModelResources;
 import com.elfmcys.ysm.geckolib3.core.builder.Animation;
 import com.elfmcys.ysm.geckolib3.core.builder.controller.AnimationControllerData;
@@ -45,16 +45,15 @@ public class VehicleControllerCollection {
             anim != null ? new ParallelPredicate(anim) : EmptyPredicate.INSTANCE, true));
     }
 
-    public static BiConsumer<CustomVehicleEntity, AnimationData> build(VehicleModelResources model,
-        CommonAsset assets) {
+    public static BiConsumer<CustomVehicleEntity, AnimationData> build(VehicleModelResources model) {
         COLLECTION.initialize(VehicleControllerCollection::init);
-        return COLLECTION.build(model, assets, model.animations());
+        return COLLECTION.build(model, model.animations());
     }
 
     private static ControllerDiscovery<CustomVehicleEntity, VehicleModelResources> simple(String name,
         BiFunction<String, CustomVehicleEntity, IAnimationController<CustomVehicleEntity>> simpleFactory) {
         var controllerName = String.format("%s.%s", CATEGORY, name);
-        return COLLECTION.add((model, container, animations) -> (animatable, consumer) -> {
+        return COLLECTION.add((model, animations) -> (animatable, consumer) -> {
             consumer.accept(simpleFactory.apply(controllerName, animatable));
         });
     }
@@ -76,13 +75,12 @@ public class VehicleControllerCollection {
         static final Adapter INSTANCE = new Adapter();
 
         @Override
-        public Object2ReferenceMap<String, AnimationControllerData> getControllers(VehicleModelResources model,
-            CommonAsset assets) {
+        public Object2ReferenceMap<String, AnimationControllerData> getControllers(VehicleModelResources model) {
             return model.controllers();
         }
 
         @Override
-        public ConditionArmor getArmorCondition(VehicleModelResources model, CommonAsset assets) {
+        public ConditionArmor getArmorCondition(VehicleModelResources model) {
             return null;
         }
     }

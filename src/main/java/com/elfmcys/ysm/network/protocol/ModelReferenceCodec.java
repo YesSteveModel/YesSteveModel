@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.network.protocol;
 
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.proto.network.ModelReferenceProto;
 import com.elfmcys.ysm.util.ProtoBytes;
 import java.nio.ByteBuffer;
@@ -9,32 +10,32 @@ import org.jetbrains.annotations.Nullable;
 public final class ModelReferenceCodec {
     private ModelReferenceCodec() {}
 
-    public static ModelReferenceProto create(@Nullable Hash256 hash, @Nullable Hash256 builtinDefaultHash) {
+    public static ModelReferenceProto create(PublishedModelId modelId) {
         var builder = ModelReferenceProto.newBuilder();
-        if (hash == null || hash.equals(builtinDefaultHash)) {
+        if (modelId.isIntrinsicDefault()) {
             builder.setBuiltinDefault(true);
         } else {
-            builder.setModelHash(ByteBuffer.wrap(hash.bytes()));
+            builder.setModelId(((PublishedModelId.Model)modelId).hash().toString());
         }
         return builder.build();
     }
 
     /** Returns null for the intrinsic builtin default. */
-    public static @Nullable Hash256 read(ModelReferenceProto value) {
+    public static @Nullable ModelId read(ModelReferenceProto value) {
         if (value == null) {
             throw new IllegalArgumentException("Missing model reference");
         }
         if (value.hasBuiltinDefault() && value.builtinDefault()) {
             return null;
         }
-        if (!value.hasModelHash() || value.modelHash().remaining() != Hash256.SIZE) {
+        if (!value.hasModelId() || !ModelId.isValid(value.modelId())) {
             throw new IllegalArgumentException("Invalid model reference");
         }
-        return new Hash256(ProtoBytes.copy(value.modelHash()));
+        return ModelId.parse(value.modelId());
     }
 
     public static boolean valid(ModelReferenceProto value) {
         return value != null && (value.hasBuiltinDefault() && value.builtinDefault()
-            || value.hasModelHash() && value.modelHash().remaining() == Hash256.SIZE);
+            || value.hasModelId() && ModelId.isValid(value.modelId()));
     }
 }

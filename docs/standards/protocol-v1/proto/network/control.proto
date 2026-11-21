@@ -4,26 +4,11 @@ package ysm.network;
 
 import "network/common.proto";
 
-message StarredModelsSnapshot {
-  repeated bytes model_hashes = 1;
-}
-
-message UpdateStarredModelRequest {
-  bytes model_hash = 1;
-  StarredModelOperation operation = 2;
-}
-
-enum StarredModelOperation {
-  STARRED_MODEL_OPERATION_UNSPECIFIED = 0;
-  STARRED_MODEL_OPERATION_ADD = 1;
-  STARRED_MODEL_OPERATION_REMOVE = 2;
-}
-
 message ExpressionTargetIdentity {
   // Schema 2: module_identity is the shared model/target/config/event-contract
   // projection. Local artifact, ProgramId, profile, backend and layout are excluded.
   uint32 schema_version = 1;
-  bytes model_id = 2;
+  string model_id = 2;
   string target_id = 3;
   bytes module_identity = 4;
   bytes config_identity = 5;
@@ -51,34 +36,6 @@ message ConfigActionEvent {
   EntityRef subject = 1;
   ExpressionTargetIdentity identity = 2;
   ConfigAction action = 3;
-}
-
-message PrivilegedTransientTarget {
-  EntityRef target = 1;
-  bytes model_id = 2;
-  string target_id = 3;
-}
-
-message PrivilegedTransientEvent {
-  repeated PrivilegedTransientTarget targets = 1;
-  string source = 2;
-  TransientCapability capability = 3;
-}
-
-enum TransientCapability {
-  TRANSIENT_CAPABILITY_UNSPECIFIED = 0;
-  TRANSIENT_CAPABILITY_SERVER_ADMIN_ACTION = 1;
-}
-
-message EmitMolangSync {
-  repeated float arguments = 1;
-  ExpressionTargetIdentity identity = 2;
-}
-
-message MolangSyncEvent {
-  EntityRef subject = 1;
-  repeated float arguments = 2;
-  ExpressionTargetIdentity identity = 3;
 }
 
 message SwingHandRequest {

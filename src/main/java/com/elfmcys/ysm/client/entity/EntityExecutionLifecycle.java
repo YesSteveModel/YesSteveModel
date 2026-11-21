@@ -13,36 +13,66 @@ import java.util.function.Supplier;
 /**
  * Serializes public lifecycle operations, owner execution, candidate activation, and draw borrows.
  *
- * <p>Invariant: a task retains the owner's private state until its corresponding get or GUI join.
- * A completed future remains a task until that handoff. A GUI reservation seals the owner immediately.
+ * <p>
+ * Invariant: a task retains the owner's private state until its corresponding get or GUI join. A completed future
+ * remains a task until that handoff. A GUI reservation seals the owner immediately.
  *
- * <p>Execution: lifecycle operations require the main thread. Only the recorded worker or the exact
- * executing GUI permit can enter its internal window. These rules do not synchronize live host inputs.
+ * <p>
+ * Execution: lifecycle operations require the main thread. Only the recorded worker or the exact executing GUI permit
+ * can enter its internal window. These rules do not synchronize live host inputs.
  *
- * <p>Seam: establishes [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接).
+ * <p>
+ * Seam: establishes [execution authority and task handoff](docs/architecture/animation/entity-lifecycle.md#执行权与任务交接).
  */
 final class EntityExecutionLifecycle {
-    private enum Phase { IDLE, CANDIDATE, CALL, DRAW }
+    /**
+     * Publishes ordinary tasks and transfers execution only after removing the exact queued task. A worker that has
+     * dequeued a task retains execution, even before its body starts.
+     *
+     * <p>
+     * Execution: execute publishes to workers without running on the submitting thread. A successful tryTakeQueued
+     * transfers the original run obligation to the caller; the entity still owns the corresponding get.
+     */
+    interface Scheduler extends java.util.concurrent.Executor {
+        boolean tryTakeQueued(Runnable task);
+    }
+
+    private static final Scheduler DEFAULT_SCHEDULER = new Scheduler() {
+        @Override
+        public void execute(Runnable task) {
+            ResponsiveExecutor.execute(task);
+        }
+
+        @Override
+        public boolean tryTakeQueued(Runnable task) {
+            return ResponsiveExecutor.tryTakeQueued(task);
+        }
+    };
+
+    private enum Phase {
+        IDLE, CANDIDATE, CALL, DRAW
+    }
 
     private final Thread mainThread = Thread.currentThread();
     private final EntityExpressionRuntime runtime;
     private final Runnable cleanup;
     private final Consumer<Throwable> taskFailure;
-    private final java.util.concurrent.Executor executor;
+    private final Scheduler executor;
     private boolean endingUse;
     private boolean retired;
     private Phase phase = Phase.IDLE;
     private FutureTask<Object> asyncTask;
-    private volatile Thread asyncExecutor;
-    private volatile GuiTask<?> guiTask;
+    // Identity checks use the executing thread's own writes; task handoff publishes owner state.
+    private Thread asyncExecutor;
+    private GuiTask<?> guiTask;
     private int guiInternalDepth;
 
     EntityExecutionLifecycle(EntityExpressionRuntime runtime, Runnable cleanup, Consumer<Throwable> taskFailure) {
-        this(runtime, cleanup, taskFailure, task -> ResponsiveExecutor.submit(task));
+        this(runtime, cleanup, taskFailure, DEFAULT_SCHEDULER);
     }
 
     EntityExecutionLifecycle(EntityExpressionRuntime runtime, Runnable cleanup, Consumer<Throwable> taskFailure,
-        java.util.concurrent.Executor executor) {
+        Scheduler executor) {
         this.executor = Objects.requireNonNull(executor);
         this.runtime = Objects.requireNonNull(runtime);
         this.cleanup = Objects.requireNonNull(cleanup);
@@ -51,10 +81,21 @@ final class EntityExecutionLifecycle {
             this::assertInstallationAccess);
     }
 
-    boolean isEndingUse() { return endingUse; }
-    boolean isRetired() { return retired; }
-    boolean hasTask() { return asyncTask != null || guiTask != null; }
-    boolean canAdoptProjection() { return !hasTask() && phase == Phase.IDLE && !endingUse && !retired; }
+    boolean isEndingUse() {
+        return endingUse;
+    }
+
+    boolean isRetired() {
+        return retired;
+    }
+
+    boolean hasTask() {
+        return asyncTask != null || guiTask != null;
+    }
+
+    boolean canAdoptProjection() {
+        return !hasTask() && phase == Phase.IDLE && !endingUse && !retired;
+    }
 
     void assertMainThread() {
         if (Thread.currentThread() != mainThread)
@@ -107,9 +148,13 @@ final class EntityExecutionLifecycle {
             throw new IllegalStateException("Recursive entity evaluation, draw or installation");
     }
 
-    void endUse() { endUse(false); }
+    void endUse() {
+        endUse(false);
+    }
 
-    void retire() { endUse(true); }
+    void retire() {
+        endUse(true);
+    }
 
     private void endUse(boolean permanently) {
         rejectCandidateMutation();
@@ -131,8 +176,10 @@ final class EntityExecutionLifecycle {
         endingUse = true;
         runtime.invalidate();
         finishEndedUse(primary);
-        if (primary instanceof RuntimeException failure) throw failure;
-        if (primary instanceof Error failure) throw failure;
+        if (primary instanceof RuntimeException failure)
+            throw failure;
+        if (primary instanceof Error failure)
+            throw failure;
     }
 
     private void finishEndedUse(Throwable primary) {
@@ -143,8 +190,10 @@ final class EntityExecutionLifecycle {
         } catch (RuntimeException | Error failure) {
             var combined = appendFailure(primary, failure, false);
             if (combined != primary) {
-                if (combined instanceof RuntimeException runtime) throw runtime;
-                if (combined instanceof Error error) throw error;
+                if (combined instanceof RuntimeException runtime)
+                    throw runtime;
+                if (combined instanceof Error error)
+                    throw error;
             }
         } finally {
             endingUse = false;
@@ -178,8 +227,9 @@ final class EntityExecutionLifecycle {
     /**
      * Enters installation only when no task or other operation owns the execution window.
      *
-     * <p>Execution: does not join or wait. An empty result means that the operation never ran,
-     * so the caller retains every resource that the operation would have consumed.
+     * <p>
+     * Execution: does not join or wait. An empty result means that the operation never ran, so the caller retains every
+     * resource that the operation would have consumed.
      */
     <R> Optional<R> tryInstallation(Supplier<R> operation) {
         assertMainThread();
@@ -239,16 +289,39 @@ final class EntityExecutionLifecycle {
     /**
      * Drains the ordinary task's corresponding get before clearing the task slot.
      *
-     * <p>Failure: interruption delays the handoff instead of abandoning it. The interrupt flag is restored.
-     * Task failure enters taskFailure only after all task cleanup completes and the slot is cleared.
+     * <p>
+     * Failure: interruption delays the handoff instead of abandoning it. The interrupt flag is restored. Task failure
+     * enters taskFailure only after all task cleanup completes and the slot is cleared.
      */
     void awaitTask() {
+        awaitTask(false);
+    }
+
+    /** Only an entity render's demand wait may claim queued ordinary work. */
+    void awaitTaskForRender() {
+        awaitTask(true);
+    }
+
+    private void awaitTask(boolean forRender) {
         assertPublicAccess();
         if (phase == Phase.CALL || phase == Phase.CANDIDATE)
             throw new IllegalStateException("An entity call cannot join itself");
         var task = asyncTask;
         if (task == null)
             return;
+        if (forRender && executor.tryTakeQueued(task)) {
+            // The waiter's interrupt is not a cancellation request for the claimed task.
+            boolean waitingInterrupted = Thread.interrupted();
+            // The existing call window also covers the operation's entire finally chain.
+            phase = Phase.CALL;
+            try {
+                task.run();
+            } finally {
+                phase = Phase.IDLE;
+                if (waitingInterrupted)
+                    Thread.currentThread().interrupt();
+            }
+        }
         boolean interrupted = false;
         Throwable failure = null;
         try {
@@ -275,8 +348,10 @@ final class EntityExecutionLifecycle {
     /**
      * Reserves exclusive GUI execution before submission and binds the operation to one permit.
      *
-     * <p>Requires: the caller must later reject an unstarted, unaccepted task or join the accepted task.
-     * Running the task inline does not remove the explicit join obligation.
+     * <p>
+     * Requires: the caller must later reject an unstarted, unaccepted task or join the accepted task. The caller must
+     * safely publish the reserved task before running it on another thread. Running the task inline does not remove the
+     * explicit join obligation.
      */
     <R> GuiTask<R> reserveGuiTask(boolean permitted, Supplier<R> operation) {
         rejectRecursiveCall();
@@ -315,7 +390,7 @@ final class EntityExecutionLifecycle {
         return appendFailure(primary, next, true);
     }
 
-    private static Throwable appendFailure(Throwable primary, Throwable next, boolean promoteOutOfMemory) {
+    static Throwable appendFailure(Throwable primary, Throwable next, boolean promoteOutOfMemory) {
         if (primary == null)
             return next;
         if (fatal(next, promoteOutOfMemory) && !fatal(primary, promoteOutOfMemory)) {
@@ -328,13 +403,13 @@ final class EntityExecutionLifecycle {
     }
 
     private static boolean fatal(Throwable failure, boolean promoteOutOfMemory) {
-        return failure instanceof ThreadDeath || failure instanceof VirtualMachineError
-            && (promoteOutOfMemory || !(failure instanceof OutOfMemoryError));
+        return failure instanceof ThreadDeath
+            || failure instanceof VirtualMachineError && (promoteOutOfMemory || !(failure instanceof OutOfMemoryError));
     }
 
     final class GuiTask<R> implements Runnable {
         private final FutureTask<R> result;
-        private volatile Thread executing;
+        private Thread executing;
         private boolean started;
 
         private GuiTask(Supplier<R> operation) {
@@ -408,9 +483,12 @@ final class EntityExecutionLifecycle {
                         primary = appendGuiFailure(primary, failure);
                     }
                 }
-                if (primary instanceof RuntimeException failure) throw failure;
-                if (primary instanceof Error failure) throw failure;
-                if (primary != null) throw new IllegalStateException("GUI task failed", primary);
+                if (primary instanceof RuntimeException failure)
+                    throw failure;
+                if (primary instanceof Error failure)
+                    throw failure;
+                if (primary != null)
+                    throw new IllegalStateException("GUI task failed", primary);
                 return value;
             } finally {
                 if (interrupted)

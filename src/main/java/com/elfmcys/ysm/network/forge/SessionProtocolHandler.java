@@ -18,7 +18,7 @@ import com.elfmcys.ysm.capability.ModelSelectionService;
 import com.elfmcys.ysm.config.ServerConfig;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.snapshot.ServerCatalog;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.service.ServerModelService;
 import com.elfmcys.ysm.model.session.server.ServerModelSession;
 import com.elfmcys.ysm.model.session.server.state.Selection;
@@ -38,9 +38,6 @@ import com.elfmcys.ysm.proto.network.PreviewFragmentProto;
 import com.elfmcys.ysm.proto.network.PreviewAvailableProto;
 import com.elfmcys.ysm.proto.network.ResourceTransferCancelProto;
 import com.elfmcys.ysm.proto.network.ResourceTransferFailureProto;
-import com.elfmcys.ysm.proto.network.SelectModelRequestProto;
-import com.elfmcys.ysm.proto.network.SelectModelResultProto;
-import com.elfmcys.ysm.proto.network.SelectionStatus;
 import com.elfmcys.ysm.proto.network.ServerHelloProto;
 import com.elfmcys.ysm.proto.network.SessionDecision;
 import com.elfmcys.ysm.proto.network.SessionDeltaFragmentProto;
@@ -374,74 +371,32 @@ public final class SessionProtocolHandler {
         handlePresentationFragment(payload, contextSupplier, ClientSessionRuntime::acceptPackCoverFragment);
     }
 
-    public static void handleSelectModelRequest(NetworkPayload<SelectModelRequestProto> payload,
-        Supplier<NetworkEvent.Context> contextSupplier) {
-        try (payload) {
-            requireNoAttachment(payload, "SelectModelRequest");
-            var context = contextSupplier.get();
-            var sender = context.getSender();
-            if (sender == null) {
-                return;
-            }
-            var connection = context.getNetworkManager();
-            var service = ServerModelService.current().orElse(null);
-            var owner = service == null ? null : service.session(sender, connection).orElse(null);
-            if (owner != null) {
-                var message = payload.protobuf();
-                context.enqueueWork(() -> service.runIfCurrent(sender, connection, owner,
-                    () -> select(sender, service, owner, message)));
-            }
-        }
-    }
-
-    public static void handleSelectModelResult(NetworkPayload<SelectModelResultProto> payload,
-        Supplier<NetworkEvent.Context> contextSupplier) {
-        try (payload) {
-            requireNoAttachment(payload, "SelectModelResult");
-            var message = payload.protobuf();
-            var context = contextSupplier.get();
-            var connection = context.getNetworkManager();
-            context.enqueueWork(() -> acceptSelectModelResult(connection, message));
-        }
-    }
-
-    static void acceptSelectModelResult(Connection connection, SelectModelResultProto message) {
-        ClientSessionRuntime
-            .runIfCurrent(connection,
-                () -> ClientModelService.current()
-                    .ifPresent(service -> service.demands().disposition(connection, message.intentId(),
-                        message.status() == SelectionStatus.ACCEPTED,
-                        message.status() == SelectionStatus.UNAUTHORIZED
-                            || message.status() == SelectionStatus.NOT_FOUND
-                            || message.status() == SelectionStatus.INVALID_REQUEST)));
-    }
-
     public static void refreshGrants(ServerPlayer player) {
         refreshGrants(player, true);
     }
 
     public static boolean applyCommandSelection(ServerPlayer player, ModelInfoCapability persistence,
-        Selection.Model selection, boolean ignoreGrants) {
+        Selection selection) {
         var service = ServerModelService.current().orElse(null);
-        var session = service == null ? null : service.session(player).orElse(null);
-        var previous = session != null && session.active() ? session.authority() : null;
-        var intrinsicDefault = service != null && service.catalog().orElseThrow().defaultModel()
-            .map(ManagedContainer::modelId).filter(selection.modelId()::equals).isPresent();
-        if (session != null && session.active() && intrinsicDefault) {
-            if (session.select(new Selection.IntrinsicDefault()) != ServerModelSession.SelectionResult.ACCEPTED) {
-                return false;
-            }
-        } else if (session != null && session.active()
-            && session.selectForced(selection, ignoreGrants) != ServerModelSession.SelectionResult.ACCEPTED) {
+        if (service == null)
             return false;
+        var session = service.session(player).orElse(null);
+        var identity = selection instanceof Selection.Model model
+            ? com.elfmcys.ysm.model.domain.PublishedModelId.model(model.modelId())
+            : com.elfmcys.ysm.model.domain.PublishedModelId.INTRINSIC_DEFAULT;
+        var texture = selection instanceof Selection.Model model ? model.textureId() : "";
+        if (session != null && session.active()) {
+            if (!identity.isIntrinsicDefault() && !ServerConfig.CAN_SWITCH_MODEL.get())
+                return false;
+            if (session.validateSelection(selection) != ServerModelSession.SelectionResult.ACCEPTED)
+                return false;
+            PlayerStateHandler.sendDirective(player, identity, texture);
+        } else {
+            if (service.catalog().flatMap(catalog -> catalog.find(identity)).isEmpty())
+                return false;
+            persistence.setCommandSelection(identity, texture);
+            PlayerStateHandler.publishSelection(player);
         }
-        var previousModelId = persistence.getModelId();
-        persistence.setCommandSelection(selection.modelId(), selection.textureId(), ignoreGrants && !intrinsicDefault);
-        if (!java.util.Objects.equals(previousModelId, persistence.getModelId())) {
-            persistence.stopAnimation(player);
-        }
-        if (previous != null)
-            sendAuthorityDelta(player, previous);
         return true;
     }
 
@@ -451,17 +406,13 @@ public final class SessionProtocolHandler {
             return;
         }
         var previous = session.authority();
-        var beforeSelection = session.selection();
         player.getCapability(AuthModelsCapabilityProvider.AUTH_MODELS_CAP).ifPresent(capability -> {
             session.setGrants(
                 capability.getAuthModels().stream().filter(session::containsModel).collect(Collectors.toSet()));
-            if (beforeSelection instanceof Selection.Model
-                && session.selection() instanceof Selection.IntrinsicDefault) {
-                ControlHandler.applyAcceptedModelSelection(player, null, "", publish);
-            }
             if (publish && session.hasPublishedCatalog() && !previous.grants().equals(session.grants())) {
                 sendAuthorityDelta(player, previous);
             }
+            invalidateSelection(player, session, publish);
         });
     }
 
@@ -477,23 +428,13 @@ public final class SessionProtocolHandler {
         session.updateContentPolicy(ServerConfig.RESTRICTED_AUTH.get());
         refreshGrants(player, false);
         var serverCatalog = service.catalog().orElseThrow();
-        var defaultModelId = serverCatalog.defaultModel().map(ManagedContainer::modelId).orElse(null);
         player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(capability -> {
-            if (ModelSelectionService.resolve(capability, serverCatalog).isEmpty()) {
-                session.select(new Selection.IntrinsicDefault());
-                return;
-            }
-            var modelId = capability.getModelId();
-            if (modelId != null && modelId.equals(defaultModelId)) {
-                session.select(new Selection.IntrinsicDefault());
-            } else if (modelId != null
-                && session.selectForced(new Selection.Model(modelId, capability.getSelectTexture()),
-                    capability.ignoresGrantsFor(modelId)) != ServerModelSession.SelectionResult.ACCEPTED) {
-                ControlHandler.applyAcceptedModelSelection(player, null, "", false);
-            }
+            capability.retireProducer(session);
+            ModelSelectionService.resolve(capability, serverCatalog);
         });
+        invalidateSelection(player, session, false);
+        service.initializePlayerState(player);
         var catalog = SessionCollectionPublication.distributableCatalog(serverCatalog.catalog());
-        var beforeSelection = session.selection();
         final ServerModelSession.CatalogTransition transition;
         try {
             transition = session.commitCatalog(catalog);
@@ -502,14 +443,17 @@ public final class SessionProtocolHandler {
                 player.getGameProfile().getName(), invalidPublication);
             return;
         }
-        if (beforeSelection instanceof Selection.Model
-            && transition.current().selection() instanceof Selection.IntrinsicDefault) {
-            ControlHandler.applyAcceptedModelSelection(player, null, "", false);
-        }
-        PlayerStateHandler.sendAuthoritativeFull(player, false);
-        sendPublication(player, service, session,
-            SessionCollectionPublication.fullFragments(transition.current(), session.allocatePublicationId()),
-            "initial model-session publication");
+        invalidateSelection(player, session, false);
+        var selected = session.selection();
+        var initial = new java.util.ArrayList<ProtoMessage<?>>();
+        initial
+            .addAll(SessionCollectionPublication.fullFragments(transition.current(), session.allocatePublicationId()));
+        initial.add(PlayerStateHandler.directive(
+            selected instanceof Selection.Model model
+                ? com.elfmcys.ysm.model.domain.PublishedModelId.model(model.modelId())
+                : com.elfmcys.ysm.model.domain.PublishedModelId.INTRINSIC_DEFAULT,
+            selected instanceof Selection.Model model ? model.textureId() : ""));
+        sendPublication(player, service, session, initial, "initial model-session publication");
     }
 
     public static void publishCatalog(ServerPlayer player, CatalogSnapshot globalCatalog) {
@@ -518,31 +462,25 @@ public final class SessionProtocolHandler {
         if (service == null || session == null || !session.active() || !session.hasPublishedCatalog()) {
             return;
         }
-        var requestedGrants = new HashSet<Hash256>();
+        var requestedGrants = new HashSet<ModelId>();
         player.getCapability(AuthModelsCapabilityProvider.AUTH_MODELS_CAP)
             .ifPresent(capability -> requestedGrants.addAll(capability.getAuthModels()));
         var catalog = SessionCollectionPublication.distributableCatalog(globalCatalog);
-        var previousSelection = session.selection();
-        final ServerModelSession.CatalogTransition transition;
+        final ServerModelSession.CatalogTransition committed;
         try {
-            transition = session.commitCatalog(catalog, requestedGrants);
+            committed = session.commitCatalog(catalog, requestedGrants);
         } catch (RuntimeException invalidPublication) {
             YesSteveModel.LOGGER.error("Failed to commit model-session authority for {}",
                 player.getGameProfile().getName(), invalidPublication);
             return;
         }
-        player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP)
-            .ifPresent(capability -> ModelSelectionService.resolve(capability, new ServerCatalog(globalCatalog)));
-        if (previousSelection instanceof Selection.Model
-            && transition.current().selection() instanceof Selection.IntrinsicDefault) {
-            ControlHandler.applyAcceptedModelSelection(player, null, "");
+        var transition = new ServerModelSession.CatalogTransition(committed.previous(), session.authority());
+        if (SessionCollectionPublication.hasDelta(transition)) {
+            var transferId = session.allocatePublicationId();
+            sendPublication(player, service, session,
+                SessionCollectionPublication.deltaFragments(transition, transferId), "model-session catalog delta");
         }
-        if (!SessionCollectionPublication.hasDelta(transition)) {
-            return;
-        }
-        var transferId = session.allocatePublicationId();
-        sendPublication(player, service, session, SessionCollectionPublication.deltaFragments(transition, transferId),
-            "model-session catalog delta");
+        invalidateSelection(player, session, true);
     }
 
     public static void refreshContentPolicy(ServerPlayer player) {
@@ -611,51 +549,18 @@ public final class SessionProtocolHandler {
         });
     }
 
-    private static void select(ServerPlayer player, ServerModelService service, ServerModelSession session,
-        SelectModelRequestProto request) {
-        if (request.intentId() == 0)
+    private static void invalidateSelection(ServerPlayer player, ServerModelSession session, boolean publish) {
+        if (session.validateSelection(session.selection()) == ServerModelSession.SelectionResult.ACCEPTED)
             return;
-        Selection selection;
-        try {
-            if (request.hasIntrinsicDefault() && request.intrinsicDefault()) {
-                selection = new Selection.IntrinsicDefault();
-            } else if (request.hasModelId() && request.modelId().remaining() == Hash256.SIZE) {
-                selection = new Selection.Model(new Hash256(ProtoBytes.copy(request.modelId())), request.textureId());
-            } else {
-                selection = null;
-            }
-        } catch (IllegalArgumentException invalid) {
-            selection = null;
-        }
-        if (selection instanceof Selection.Model model && service.catalog().orElseThrow().defaultModel()
-            .map(ManagedContainer::modelId).filter(model.modelId()::equals).isPresent()) {
-            selection = new Selection.IntrinsicDefault();
-        }
-        var previous = session.authority();
-        var beforeSelection = previous.selection();
-        var result = selection == null || !ServerConfig.CAN_SWITCH_MODEL.get()
-            ? ServerModelSession.SelectionResult.INVALID_REQUEST : session.select(selection);
-        if (result == ServerModelSession.SelectionResult.ACCEPTED) {
-            ControlHandler.applyAcceptedModelSelection(player,
-                selection instanceof Selection.Model model ? model.modelId() : null,
-                selection instanceof Selection.Model model ? model.textureId() : "");
-        } else if (beforeSelection instanceof Selection.Model
-            && session.selection() instanceof Selection.IntrinsicDefault) {
-            ControlHandler.applyAcceptedModelSelection(player, null, "");
-        }
-        sendAuthorityDelta(player, previous);
-        NetworkHandler.sendToClientPlayer(selectionResult(request.intentId(), result), player);
-    }
-
-    private static SelectModelResultProto selectionResult(long intentId, ServerModelSession.SelectionResult result) {
-        if (intentId == 0)
-            throw new IllegalArgumentException("Selection result requires a nonzero intent identifier");
-        return SelectModelResultProto.newBuilder().setIntentId(intentId).setStatus(switch (result) {
-            case ACCEPTED -> SelectionStatus.ACCEPTED;
-            case UNAUTHORIZED -> com.elfmcys.ysm.proto.network.SelectionStatus.UNAUTHORIZED;
-            case NOT_FOUND -> SelectionStatus.NOT_FOUND;
-            case INVALID_REQUEST -> com.elfmcys.ysm.proto.network.SelectionStatus.INVALID_REQUEST;
-        }).build();
+        player.getCapability(ModelInfoCapabilityProvider.MODEL_INFO_CAP).ifPresent(capability -> {
+            capability.commitSelection(com.elfmcys.ysm.capability.CommittedSelection
+                .appearance(com.elfmcys.ysm.model.domain.PublishedModelId.INTRINSIC_DEFAULT, ""));
+            if (publish)
+                PlayerStateHandler.publishSelection(player);
+        });
+        if (publish)
+            PlayerStateHandler.send(com.elfmcys.ysm.proto.network.SelectionInvalidatedProto.newBuilder().build(),
+                player);
     }
 
     @FunctionalInterface

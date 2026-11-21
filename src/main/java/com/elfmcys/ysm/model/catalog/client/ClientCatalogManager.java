@@ -8,7 +8,8 @@ import com.elfmcys.ysm.model.catalog.client.entry.ClientFailedCatalogEntry;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogIndexSnapshot;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogTransition;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.session.client.state.ActivationSnapshot;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
@@ -23,16 +24,25 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import net.minecraft.resources.ResourceLocation;
 
-/** Client-side presentation adapter over its main-thread Catalog owner. */
+/**
+ * Client-side presentation adapter over its main-thread Catalog owner.
+ *
+ * <p>
+ * Execution: current projection reads use the client owner or the published animation/GUI read window. The local index
+ * also serves cross-frame activation workers and retains independent publication.
+ *
+ * <p>
+ * Seam: consumes [shared-fact windows](docs/architecture/integration/overview.md#共享事实读写窗口).
+ */
 public final class ClientCatalogManager implements AutoCloseable {
     private final ReloadableModelCatalog owner;
     private final ReloadableModelCatalog.Subscription subscription;
 
-    private volatile ClientCatalogSnapshot catalog;
+    private ClientCatalogSnapshot catalog;
     private volatile LocalCatalogState local;
     private boolean sessionPublished;
-    private final Map<Hash256, Object> imageMembers = new java.util.HashMap<>();
-    private volatile Consumer<CatalogChange> listener = ignored -> {
+    private final Map<ModelId, Object> imageMembers = new java.util.HashMap<>();
+    private Consumer<CatalogChange> listener = ignored -> {
     };
 
     public ClientCatalogManager(ReloadableModelCatalog owner) {
@@ -64,11 +74,16 @@ public final class ClientCatalogManager implements AutoCloseable {
         return local;
     }
 
-    public boolean contains(Hash256 modelId) {
+    public boolean contains(ModelId modelId) {
         return catalog.catalog().byModelId().containsKey(modelId);
     }
 
-    public Optional<String> findRenderTarget(Hash256 modelId, RenderTargetKind kind, ResourceLocation entityType) {
+    public Optional<String> findRenderTarget(ModelId modelId, RenderTargetKind kind, ResourceLocation entityType) {
+        return findRenderTarget(PublishedModelId.model(modelId), kind, entityType);
+    }
+
+    public Optional<String> findRenderTarget(PublishedModelId modelId, RenderTargetKind kind,
+        ResourceLocation entityType) {
         var entry = catalog.find(modelId).orElse(null);
         if (entry == null) {
             return Optional.empty();
@@ -82,16 +97,19 @@ public final class ClientCatalogManager implements AutoCloseable {
         return Optional.empty();
     }
 
-    public Optional<Hash256> resolvePath(String path) {
-        return com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver.resolve(path, catalog.catalog().byLocation())
-            .found();
+    public Optional<PublishedModelId> resolvePath(String path) {
+        return com.elfmcys.ysm.model.catalog.source.ModelSelector.resolve(path, catalog.catalog().byLocation()).found();
     }
 
-    public String displayPath(Hash256 modelId) {
+    public String displayPath(ModelId modelId) {
         return catalog.find(modelId).map(ClientCatalogEntry::displayPath).orElse(modelId.toString());
     }
 
-    public synchronized CatalogSnapshot beginRemote() {
+    public String displayPath(PublishedModelId modelId) {
+        return modelId instanceof PublishedModelId.Model model ? displayPath(model.hash()) : "default";
+    }
+
+    public CatalogSnapshot beginRemote() {
         sessionPublished = true;
         var active = local.snapshot();
         var change = remoteStartTransition(catalog, local.snapshot());
@@ -110,7 +128,7 @@ public final class ClientCatalogManager implements AutoCloseable {
         return local.index();
     }
 
-    public synchronized void publishSession(ActivationSnapshot activation) {
+    public void publishSession(ActivationSnapshot activation) {
         var previous = catalog;
         var failed =
             activation.failures().stream().map(value -> new ClientFailedCatalogEntry(value.publication().modelId(),
@@ -121,14 +139,14 @@ public final class ClientCatalogManager implements AutoCloseable {
         notifyListener(new CatalogChange(previous, catalog));
     }
 
-    public synchronized void failRemote() {
+    public void failRemote() {
         var previous = catalog;
         catalog = new ClientCatalogSnapshot(local.snapshot().intrinsicDefaultOnly());
         sessionPublished = true;
         notifyListener(new CatalogChange(previous, catalog));
     }
 
-    public synchronized void endRemote() {
+    public void endRemote() {
         if (!sessionPublished) {
             return;
         }
@@ -138,7 +156,7 @@ public final class ClientCatalogManager implements AutoCloseable {
         notifyListener(new CatalogChange(previous, catalog));
     }
 
-    private synchronized void apply(CatalogTransition transition) {
+    private void apply(CatalogTransition transition) {
         local = new LocalCatalogState(transition.currentIndex(), transition.current());
         if (!sessionPublished) {
             var previous = catalog;
@@ -147,7 +165,7 @@ public final class ClientCatalogManager implements AutoCloseable {
         }
     }
 
-    public synchronized Object imageMember(Hash256 modelId) {
+    public Object imageMember(ModelId modelId) {
         return imageMembers.get(modelId);
     }
 
@@ -186,8 +204,8 @@ public final class ClientCatalogManager implements AutoCloseable {
             Objects.requireNonNull(snapshot, "snapshot");
         }
 
-        public Map<Hash256, ManagedContainer> models() {
-            var result = new LinkedHashMap<Hash256, ManagedContainer>();
+        public Map<ModelId, ManagedContainer> models() {
+            var result = new LinkedHashMap<ModelId, ManagedContainer>();
             snapshot.byModelId()
                 .forEach((modelId, record) -> result.put(modelId, (ManagedContainer)record.binding().content()));
             return Map.copyOf(result);

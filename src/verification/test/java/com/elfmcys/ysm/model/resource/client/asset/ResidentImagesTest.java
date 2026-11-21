@@ -15,12 +15,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ResidentImagesTest {
-    private static final byte[] PNG = Base64.getDecoder().decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+    private static final byte[] PNG = Base64.getDecoder()
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
 
     @Test
     void fourImageUsesHitBeforeEveryRepeatedWorkBoundary() throws Exception {
-        for (var kind : new String[]{"preview", "foreground", "background", "avatar/0"}) {
+        for (var kind : new String[] {"preview", "foreground", "background", "avatar/0"}) {
             var f = new Fixture();
             var firstRequest = f.request(kind);
             var source = ((PreviewResult.Data)firstRequest.acquire().join()).image();
@@ -42,7 +42,8 @@ class ResidentImagesTest {
             f.host.tick();
             assertEquals(1, f.host.releases);
             assertNull(f.owner.lookup(next));
-            f.host.pixels.forEach(pixels -> assertThrows(IllegalStateException.class, () -> pixels.borrow(data -> fail())));
+            f.host.pixels
+                .forEach(pixels -> assertThrows(IllegalStateException.class, () -> pixels.borrow(data -> fail())));
         }
     }
 
@@ -112,7 +113,7 @@ class ResidentImagesTest {
 
     @Test
     void rejectedRegistrationAndFailedUploadCloseTransferredPixels() throws Exception {
-        for (boolean upload : new boolean[]{false, true}) {
+        for (boolean upload : new boolean[] {false, true}) {
             var f = new Fixture();
             f.host.reject = !upload;
             f.host.failUpload = upload;
@@ -121,7 +122,8 @@ class ResidentImagesTest {
             assertThrows(RuntimeException.class, () -> f.owner.publish(prepared));
             prepared.close();
             assertNull(f.owner.lookup(request));
-            f.host.pixels.forEach(pixels -> assertThrows(IllegalStateException.class, () -> pixels.borrow(data -> fail())));
+            f.host.pixels
+                .forEach(pixels -> assertThrows(IllegalStateException.class, () -> pixels.borrow(data -> fail())));
             f.host.tick();
             f.host.tick();
             assertEquals(upload ? 1 : 0, f.host.releases);
@@ -173,7 +175,9 @@ class ResidentImagesTest {
         var f = new Fixture();
         var request = f.request("foreground");
         var cause = new java.io.IOException("source unavailable");
-        try (var preparation = f.owner.claim(request, () -> { throw cause; })) {
+        try (var preparation = f.owner.claim(request, () -> {
+            throw cause;
+        })) {
             assertSame(cause, assertThrows(java.io.IOException.class, preparation::prepare));
         }
         assertEquals(0, f.host.constructions);
@@ -216,14 +220,23 @@ class ResidentImagesTest {
         }
 
         int[] counts() {
-            return new int[]{reads, downloads, decodes, host.constructions, host.registrations, host.uploads};
+            return new int[] {reads, downloads, decodes, host.constructions, host.registrations, host.uploads};
         }
 
-        public CustomTexture create(PreviewStore.EncodedPreview image) { return host.create(image); }
-        public TextureHolder register(CustomTexture texture) { return host.register(texture); }
+        public CustomTexture create(PreviewStore.EncodedPreview image) {
+            return host.create(image);
+        }
+
+        public TextureHolder register(CustomTexture texture) {
+            return host.register(texture);
+        }
+
         public CustomTextureManager.Registration observe(CustomTexture texture, Runnable invalidated) {
             return host.observe(texture, invalidated);
         }
-        public void release(CustomTexture texture) { host.release(texture); }
+
+        public void release(CustomTexture texture) {
+            host.release(texture);
+        }
     }
 }

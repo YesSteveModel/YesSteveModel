@@ -1,6 +1,8 @@
 package com.elfmcys.ysm.model.resource.client.remote;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.SharedBuffer;
+
 import java.util.Map;
 
 import com.elfmcys.ysm.buffer.ArrayBuffer;
@@ -41,6 +43,7 @@ import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.natives.Blake3;
 import com.elfmcys.ysm.util.UnsafeUtil;
+
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -63,6 +66,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -72,6 +76,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -102,8 +107,32 @@ class RemoteModelStoreTest {
             identity = ModelFileIdentityReader.read(channel);
         }
         sourceContent = ManagedContainer.openIndexed(new CatalogIndexEntry(identity,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("fixture")), file));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("fixture")), file));
         representation = sourceContent.representation();
+    }
+
+    @Test
+    void usageObservesOnlySuccessfulMetadataAndChunkDeliveryAtEventTime() throws Exception {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
+            var events = new java.util.ArrayList<Long>();
+            var clock = new java.util.concurrent.atomic.AtomicLong(100);
+            store.deliveryClock(clock::get);
+            store.storageBinding().region().usageObserver((container, seconds) -> {
+                assertEquals(representation.containerId(), container);
+                events.add(seconds);
+            });
+            var chunk = lazyChunks().get(0);
+            store.publishChunk(representation.modelId(), chunk, storedBytes(chunk));
+            assertTrue(events.isEmpty());
+            var content = commitMetadata(store);
+            content.representation().close();
+            clock.set(102);
+            store.probeMetadata(representation.identity()).orElseThrow().representation().close();
+            clock.set(101);
+            var bytes = store.chunkSource(representation.identity()).readStoredVerified(chunk, BufferType.ARRAY);
+            assertTrue(bytes.size() > 0);
+            assertEquals(java.util.List.of(100L, 102L, 101L), events);
+        }
     }
 
     @Test
@@ -111,7 +140,7 @@ class RemoteModelStoreTest {
         var root = temp.resolve("remote");
         var retired = temp.resolve("retired");
         var valid = new byte[] {4, 5, 6};
-        try (var store = new RemoteModelStore(root)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(root))) {
             org.junit.jupiter.api.Assumptions.assumeTrue(
                 Files.readAttributes(root, java.nio.file.attribute.BasicFileAttributes.class).fileKey() != null,
                 "Same-path replacement requires a directory file key");
@@ -120,8 +149,8 @@ class RemoteModelStoreTest {
             Files.createDirectory(root);
             Files.writeString(root.resolve("replacement"), "new root");
 
-            var failure =
-                assertThrows(AssetLoadException.class, () -> store.publishChunk(hash(33), chunk(valid), valid));
+            var failure = assertThrows(AssetLoadException.class,
+                () -> store.publishChunk(ModelId.fromHash(hash(33)), chunk(valid), valid));
 
             assertEquals(AssetLoadException.Reason.ACCESS, failure.reason());
             assertEquals("owned root", Files.readString(retired.resolve("original")));
@@ -136,10 +165,10 @@ class RemoteModelStoreTest {
     void corruptCachedContentIsAMissWithoutDeletionOrNetwork() throws Exception {
         var valid = new byte[] {1, 2, 3};
         var chunk = chunk(valid);
-        var modelId = hash(1);
+        var modelId = ModelId.fromHash(hash(1));
         var identity = new ModelFileIdentity(modelId, hash(2));
-        var store = new RemoteModelStore(temp);
-        var path = store.chunkPath(modelId, new Hash256(chunk.hash()), chunk.encoding());
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
+        var path = fixtureChunkPath(store, modelId, new Hash256(chunk.hash()), chunk.encoding());
         Files.createDirectories(path.getParent());
         Files.write(path, new byte[] {9, 9, 9});
 
@@ -155,16 +184,17 @@ class RemoteModelStoreTest {
         var valid = new byte[] {1, 2, 3};
         var corrupt = new byte[] {9, 9, 9};
         var chunk = chunk(valid);
-        var modelId = hash(30);
+        var modelId = ModelId.fromHash(hash(30));
         var identity = new ModelFileIdentity(modelId, hash(31));
         var replaced = new AtomicBoolean();
-        try (var writer = new RemoteModelStore(temp);
-            var reader = new RemoteModelStore(temp, AtomicSharedCache.AtomicReplacement::run, ignored -> {
-                if (replaced.compareAndSet(false, true)) {
-                    writer.publishChunk(modelId, chunk, valid);
-                }
-            })) {
-            var path = reader.chunkPath(modelId, new Hash256(chunk.hash()), chunk.encoding());
+        try (var writer = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
+            var reader = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new RemoteModelStore(temp, AtomicSharedCache.AtomicReplacement::run, ignored -> {
+                    if (replaced.compareAndSet(false, true)) {
+                        writer.publishChunk(modelId, chunk, valid);
+                    }
+                }))) {
+            var path = fixtureChunkPath(reader, modelId, new Hash256(chunk.hash()), chunk.encoding());
             Files.createDirectories(path.getParent());
             Files.write(path, corrupt);
 
@@ -172,7 +202,9 @@ class RemoteModelStoreTest {
                 () -> reader.chunkSource(identity).readStoredVerified(chunk, BufferType.ARRAY));
 
             assertEquals(AssetLoadException.Reason.CONTENT, failure.reason());
-            assertArrayEquals(valid, Files.readAllBytes(path));
+            assertArrayEquals(corrupt, Files.readAllBytes(path));
+            assertArrayEquals(valid,
+                Files.readAllBytes(fixtureChunkPath(writer, modelId, new Hash256(chunk.hash()), chunk.encoding())));
             {
                 var stored = writer.chunkSource(identity).readStoredVerified(chunk, BufferType.ARRAY);
                 assertArrayEquals(valid, bytes(stored));
@@ -185,12 +217,13 @@ class RemoteModelStoreTest {
         var valid = new byte[] {4, 5, 6};
         var previous = new byte[] {9, 8, 7};
         var chunk = chunk(valid);
-        var modelId = hash(32);
-        try (var store = new RemoteModelStore(temp, replacement -> {
-            throw new IOException("injected atomic move failure");
-        }, ignored -> {
-        })) {
-            var path = store.chunkPath(modelId, new Hash256(chunk.hash()), chunk.encoding());
+        var modelId = ModelId.fromHash(hash(32));
+        try (var store =
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp, replacement -> {
+                throw new IOException("injected atomic move failure");
+            }, ignored -> {
+            }))) {
+            var path = fixtureChunkPath(store, modelId, new Hash256(chunk.hash()), chunk.encoding());
             Files.createDirectories(path.getParent());
             Files.write(path, previous);
 
@@ -208,8 +241,9 @@ class RemoteModelStoreTest {
     void twoQualifiedWritersLeaveAValidExactObject() throws Exception {
         var valid = new byte[] {7, 8, 9};
         var chunk = chunk(valid);
-        var modelId = hash(33);
-        try (var firstStore = new RemoteModelStore(temp); var secondStore = new RemoteModelStore(temp)) {
+        var modelId = ModelId.fromHash(hash(33));
+        try (var firstStore = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
+            var secondStore = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             firstStore.publishChunk(modelId, chunk, valid);
             secondStore.publishChunk(modelId, chunk, valid);
 
@@ -222,34 +256,33 @@ class RemoteModelStoreTest {
     }
 
     @Test
-    void remoteCacheKeepsItsDocumentedIdentityPartitioning() throws Exception {
-        var modelId = hash(41);
-        var identity = new ModelFileIdentity(modelId, hash(42));
-        var chunkHash = hash(43);
-        try (var store = new RemoteModelStore(temp)) {
-            assertEquals(Path.of(modelId.toString(), "metadata", identity.containerId().toString(), "metadata.bin"),
-                store.root().relativize(store.metadataPath(identity)));
-            assertEquals(Path.of(modelId.toString(), chunkHash + ".bin"),
-                store.root().relativize(store.chunkPath(modelId, chunkHash, "direct")));
+    void remoteCacheKeepsFullIdentityInSqlite() throws Exception {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
+            var first = fixtureMetadataPath(store, new ModelFileIdentity(ModelId.parse("owner/model@1.0.0"), hash(42)));
+            var second =
+                fixtureMetadataPath(store, new ModelFileIdentity(ModelId.parse("owner/model@2.0.0"), hash(42)));
+            assertNotEquals(first, second);
+            assertTrue(Files.isRegularFile(store.root().resolve("f/remote.sqlite")));
         }
     }
 
     @Test
     void remoteDescriptorFieldsCannotSelectAPathOutsideTheOwnerRoot() throws Exception {
-        var modelId = hash(1);
+        var modelId = ModelId.fromHash(hash(1));
         var identity = new ModelFileIdentity(modelId, hash(2));
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             assertEquals(temp.toRealPath(), store.root());
-            assertTrue(store.metadataPath(identity).startsWith(store.root()));
+            assertTrue(fixtureMetadataPath(store, identity).startsWith(store.root()));
 
-            var direct = store.chunkPath(modelId, hash(3), "../../outside/native.dll");
+            var direct = fixtureChunkPath(store, modelId, hash(3), "../../outside/native.dll");
             assertTrue(direct.startsWith(store.root()));
-            assertTrue(direct.getFileName().toString().endsWith(".bin"));
+            assertTrue(direct.getFileName().toString().matches("[0-9a-f]{16}"));
             assertFalse(direct.getFileName().toString().contains("native"));
 
-            var compressed = store.chunkPath(modelId, hash(3), "zstd");
+            var compressed = fixtureChunkPath(store, modelId, hash(3), "zstd");
             assertTrue(compressed.startsWith(store.root()));
-            assertTrue(compressed.getFileName().toString().endsWith("-zst.bin"));
+            assertTrue(compressed.getFileName().toString().matches("[0-9a-f]{16}"));
+            assertNotEquals(direct, compressed);
         }
     }
 
@@ -257,13 +290,15 @@ class RemoteModelStoreTest {
     void remoteCacheSymlinkCannotEscapeItsOwnerRoot() throws Exception {
         var cache = temp.resolve("cache");
         var outside = Files.createDirectories(temp.resolve("outside"));
-        var modelId = hash(1);
+        var modelId = ModelId.fromHash(hash(1));
         var identity = new ModelFileIdentity(modelId, hash(2));
         var valid = new byte[] {1, 2, 3};
         var chunk = chunk(valid);
-        try (var store = new RemoteModelStore(cache)) {
-            Files.createSymbolicLink(store.root().resolve(modelId.toString()), outside);
-            Files.write(outside.resolve(new Hash256(chunk.hash()) + ".bin"), valid);
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(cache))) {
+            var target = fixtureChunkPath(store, modelId, new Hash256(chunk.hash()), chunk.encoding());
+            Files.move(target.getParent(), store.root().resolve("f/retired-r"));
+            Files.createSymbolicLink(target.getParent(), outside);
+            Files.write(outside.resolve(target.getFileName()), valid);
 
             assertThrows(AssetLoadException.class, () -> {
                 {
@@ -278,14 +313,16 @@ class RemoteModelStoreTest {
     void escapingCachePathCannotInvalidateOrPublishOutsideItsOwnerRoot() throws Exception {
         var cache = temp.resolve("cache-write");
         var outside = Files.createDirectories(temp.resolve("outside-write"));
-        var modelId = hash(3);
+        var modelId = ModelId.fromHash(hash(3));
         var identity = new ModelFileIdentity(modelId, hash(4));
         var valid = new byte[] {4, 5, 6};
         var corrupt = new byte[] {9, 9, 9};
         var chunk = chunk(valid);
         var outsideFile = outside.resolve(new Hash256(chunk.hash()) + ".bin");
-        try (var store = new RemoteModelStore(cache)) {
-            Files.createSymbolicLink(store.root().resolve(modelId.toString()), outside);
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(cache))) {
+            var target = fixtureChunkPath(store, modelId, new Hash256(chunk.hash()), chunk.encoding());
+            Files.move(target.getParent(), store.root().resolve("f/retired-r"));
+            Files.createSymbolicLink(target.getParent(), outside);
             Files.write(outsideFile, corrupt);
 
             assertThrows(AssetLoadException.class,
@@ -301,22 +338,22 @@ class RemoteModelStoreTest {
     void accessFailureIsNotRetriedInternally() throws Exception {
         var valid = new byte[] {4, 5, 6};
         var chunk = chunk(valid);
-        var modelId = hash(3);
+        var modelId = ModelId.fromHash(hash(3));
         var identity = new ModelFileIdentity(modelId, hash(4));
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var source = store.chunkSource(identity);
 
         var failure = assertThrows(AssetLoadException.class, () -> source.readStoredVerified(chunk, BufferType.ARRAY));
 
         assertEquals(AssetLoadException.Reason.ACCESS, failure.reason());
-        assertFalse(Files.exists(store.chunkPath(modelId, new Hash256(chunk.hash()), chunk.encoding())));
+        assertFalse(Files.exists(fixtureChunkPath(store, modelId, new Hash256(chunk.hash()), chunk.encoding())));
     }
 
     @Test
     void metadataProbeRequiresTheExactSingleFileAndIgnoresTheOldLayout() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var identity = representation.identity();
-        var metadata = store.metadataPath(identity);
+        var metadata = fixtureMetadataPath(store, identity);
         Files.createDirectories(metadata.getParent());
         Files.write(metadata.getParent().resolve("preamble.bin"), preamble());
         Files.write(metadata.getParent().resolve("manifest.bin"), manifest());
@@ -331,14 +368,14 @@ class RemoteModelStoreTest {
 
     @Test
     void prefixCommitPublishesOneFileWithoutAMarker() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var identity = representation.identity();
         store.commitMetadataPrefix(identity, ArrayBuffer.borrow(metadataPrefix()));
 
-        assertTrue(Files.exists(store.metadataPath(identity)));
-        assertFalse(Files.exists(store.metadataPath(identity).getParent().resolve("ready")));
-        assertFalse(Files.exists(store.metadataPath(identity).getParent().resolve("preamble.bin")));
-        assertFalse(Files.exists(store.metadataPath(identity).getParent().resolve("manifest.bin")));
+        assertTrue(Files.exists(fixtureMetadataPath(store, identity)));
+        assertFalse(Files.exists(fixtureMetadataPath(store, identity).getParent().resolve("ready")));
+        assertFalse(Files.exists(fixtureMetadataPath(store, identity).getParent().resolve("preamble.bin")));
+        assertFalse(Files.exists(fixtureMetadataPath(store, identity).getParent().resolve("manifest.bin")));
         var cached = store.probeMetadata(identity).orElseThrow();
         {
             var encoded = cached.representation().metadataPrefix().orElseThrow();
@@ -352,20 +389,60 @@ class RemoteModelStoreTest {
 
     @Test
     void corruptSingleFileBecomesAMissWithoutFetching() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var identity = representation.identity();
-        Files.createDirectories(store.metadataPath(identity).getParent());
-        Files.write(store.metadataPath(identity), new byte[] {1, 2, 3});
+        Files.createDirectories(fixtureMetadataPath(store, identity).getParent());
+        Files.write(fixtureMetadataPath(store, identity), new byte[] {1, 2, 3});
 
         assertTrue(store.probeMetadata(identity).isEmpty());
-        assertArrayEquals(new byte[] {1, 2, 3}, Files.readAllBytes(store.metadataPath(identity)));
+        assertArrayEquals(new byte[] {1, 2, 3}, Files.readAllBytes(fixtureMetadataPath(store, identity)));
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "ysm.cacheReadProbe", matches = "true")
+    void metadataAndLaterChunkFailuresKeepTheirPhaseBoundaries() throws Exception {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
+            var remote = commitMetadata(store);
+            var identity = remote.representation().identity();
+            var chunk = lazyChunks().get(0);
+            store.publishChunk(identity.modelId(), chunk, storedBytes(chunk));
+            var metadata = fixtureMetadataPath(store, identity);
+            var payload = fixtureChunkPath(store, identity.modelId(), new Hash256(chunk.hash()), chunk.encoding());
+            for (var target : List.of(metadata, payload)) {
+                for (var failure : List.of("missing", "access", "io", "interrupted", "closed", "close", "cancelled",
+                    "oom", "defect")) {
+                    com.elfmcys.ysm.testutil.CacheReadFaults.set(target, failure);
+                    org.junit.jupiter.api.function.Executable read =
+                        target.equals(metadata) ? () -> store.probeMetadata(identity)
+                            : () -> remote.chunks().readStoredVerified(chunk, BufferType.ARRAY);
+                    try {
+                        switch (failure) {
+                            case "missing", "access", "io" -> {
+                                if (target.equals(metadata))
+                                    assertTrue(store.probeMetadata(identity).isEmpty());
+                                else
+                                    assertThrows(IOException.class, read);
+                            }
+                            case "cancelled" -> assertThrows(CancellationException.class, read);
+                            case "oom" -> assertThrows(OutOfMemoryError.class, read);
+                            case "defect" -> assertThrows(IllegalStateException.class, read);
+                            default -> assertThrows(IOException.class, read);
+                        }
+                        assertEquals(identity, remote.representation().identity());
+                    } finally {
+                        com.elfmcys.ysm.testutil.CacheReadFaults.set(target, null);
+                    }
+                }
+            }
+            assertArrayEquals(storedBytes(chunk), bytes(remote.chunks().readStoredVerified(chunk, BufferType.ARRAY)));
+        }
     }
 
     @Test
     void truncatedOrTrailingMetadataPrefixBecomesAMiss() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var identity = representation.identity();
-        var path = store.metadataPath(identity);
+        var path = fixtureMetadataPath(store, identity);
         Files.createDirectories(path.getParent());
         var valid = metadataPrefix();
 
@@ -378,18 +455,18 @@ class RemoteModelStoreTest {
 
     @Test
     void invalidReplacementDoesNotOverwriteThePreviousPrefix() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var identity = representation.identity();
         var expected = metadataPrefix();
         store.commitMetadataPrefix(identity, ArrayBuffer.borrow(expected));
         var invalid = ArrayBuffer.borrow(new byte[] {1, 2, 3});
         assertThrows(AssetLoadException.class, () -> store.commitMetadataPrefix(identity, invalid));
-        assertArrayEquals(expected, Files.readAllBytes(store.metadataPath(identity)));
+        assertArrayEquals(expected, Files.readAllBytes(fixtureMetadataPath(store, identity)));
     }
 
     @Test
     void cachedOpenVerifiesEveryLazyChunkAndKeepsTheReturnedSourceOffline() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var remote = commitMetadata(store);
         publishLazyChunks(store);
 
@@ -397,13 +474,13 @@ class RemoteModelStoreTest {
         assertSame(remote.representation(), cached.representation());
 
         var victim = lazyChunks().get(0);
-        Files.delete(store.chunkPath(remote.modelId(), new Hash256(victim.hash()), victim.encoding()));
+        Files.delete(fixtureChunkPath(store, remote.modelId(), new Hash256(victim.hash()), victim.encoding()));
         assertThrows(AssetLoadException.class, () -> cached.chunks().readStoredVerified(victim, BufferType.ARRAY));
     }
 
     @Test
     void targetCacheViewReadsItsAvailableChunkWhileUnrelatedChunksAreAbsent() throws Exception {
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             var remote = commitMetadata(store);
             var required = lazyChunks().get(0);
             var unrelated = lazyChunks().get(1);
@@ -417,8 +494,8 @@ class RemoteModelStoreTest {
                 var bytes = targetProbe.chunks().readStoredVerified(required, BufferType.ARRAY);
                 assertArrayEquals(storedBytes(required), bytes(bytes));
             }
-            assertFalse(
-                Files.exists(store.chunkPath(remote.modelId(), new Hash256(unrelated.hash()), unrelated.encoding())));
+            assertFalse(Files.exists(
+                fixtureChunkPath(store, remote.modelId(), new Hash256(unrelated.hash()), unrelated.encoding())));
             assertTrue(remote.openCached(() -> false).isEmpty());
             assertEquals(0, primaryReads.get());
         }
@@ -426,7 +503,7 @@ class RemoteModelStoreTest {
 
     @Test
     void targetCacheViewDecodesMainDefinitionWithoutUnrelatedChunksOrPrimaryAccess() throws Exception {
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             var remote = commitMetadata(store);
             var target = remote.representation().view().requireRenderTarget(selection().targetId());
             var required = remote.representation().view().getFileView().blobChunkInfo(target.descriptor().blobId());
@@ -442,8 +519,8 @@ class RemoteModelStoreTest {
 
             assertArrayEquals(com.elfmcys.ysm.util.ProtoUtil.serializeToArray(expected),
                 com.elfmcys.ysm.util.ProtoUtil.serializeToArray(actual));
-            assertFalse(
-                Files.exists(store.chunkPath(remote.modelId(), new Hash256(unrelated.hash()), unrelated.encoding())));
+            assertFalse(Files.exists(
+                fixtureChunkPath(store, remote.modelId(), new Hash256(unrelated.hash()), unrelated.encoding())));
             assertTrue(remote.openCached(() -> false).isEmpty());
             assertEquals(0, primaryReads.get());
         }
@@ -451,7 +528,7 @@ class RemoteModelStoreTest {
 
     @Test
     void targetCacheViewRejectsItsMissingRequiredChunkWithoutPrimaryAccess() throws Exception {
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             var remote = commitMetadata(store);
             var required = lazyChunks().get(0);
             var primaryReads = new AtomicInteger();
@@ -466,19 +543,20 @@ class RemoteModelStoreTest {
 
     @Test
     void missingCorruptAndInaccessibleChunksAreOfflineMissesWithoutFetch() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var remote = commitMetadata(store);
         var victim = lazyChunks().get(0);
         assertTrue(remote.openCached(() -> false).isEmpty());
 
         publishLazyChunks(store);
-        var path = store.chunkPath(remote.modelId(), new Hash256(victim.hash()), victim.encoding());
+        var path = fixtureChunkPath(store, remote.modelId(), new Hash256(victim.hash()), victim.encoding());
         Files.write(path, new byte[] {1, 2, 3});
         assertTrue(remote.openCached(() -> false).isEmpty());
         assertArrayEquals(new byte[] {1, 2, 3}, Files.readAllBytes(path),
             "a corrupt read must not mutate the exact cache path");
 
         publishLazyChunks(store);
+        path = fixtureChunkPath(store, remote.modelId(), new Hash256(victim.hash()), victim.encoding());
         Files.delete(path);
         Files.createDirectory(path);
         assertTrue(remote.openCached(() -> false).isEmpty());
@@ -487,7 +565,7 @@ class RemoteModelStoreTest {
 
     @Test
     void cancellationIsAnOfflineMissAndDoesNotPoisonLaterCachedOpen() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var remote = commitMetadata(store);
         assertTrue(remote.openCached(() -> true).isEmpty());
 
@@ -501,11 +579,12 @@ class RemoteModelStoreTest {
         var backgroundRelease = new CountDownLatch(1);
         var backgroundEntered = new CountDownLatch(1);
         var persistedOn = new AtomicReference<Thread>();
-        try (var store = new RemoteModelStore(temp, replacement -> {
-            persistedOn.set(Thread.currentThread());
-            replacement.run();
-        }, ignored -> {
-        })) {
+        try (var store =
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp, replacement -> {
+                persistedOn.set(Thread.currentThread());
+                replacement.run();
+            }, ignored -> {
+            }))) {
             var remote = commitMetadata(store);
             persistedOn.set(null);
             var transfer = new PendingTransfer();
@@ -554,7 +633,7 @@ class RemoteModelStoreTest {
     @Test
     void rejectedContinuationPreservesSharedInputsAndRemainsTransient() throws Exception {
         var scheduler = new ClientResourceScheduler(2);
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
             var references = new CopyOnWriteArrayList<SharedBuffer>();
@@ -588,7 +667,7 @@ class RemoteModelStoreTest {
     @Test
     void transferRejectionUsesOnlyTransferFailureCleanup() throws Exception {
         var scheduler = new ClientResourceScheduler(2);
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
             var references = new CopyOnWriteArrayList<SharedBuffer>();
@@ -618,7 +697,7 @@ class RemoteModelStoreTest {
         var releaseLoad = new CountDownLatch(1);
         var inner = innerCompleted ? CompletableFuture.completedFuture(true) : new CompletableFuture<Boolean>();
         var discarded = new AtomicInteger();
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
             var references = new CopyOnWriteArrayList<SharedBuffer>();
@@ -660,12 +739,95 @@ class RemoteModelStoreTest {
     }
 
     @Test
+    void queuedRemotePreparationRetainsMetadataBeforeItsSourceEnds() throws Exception {
+        var queued = new java.util.ArrayDeque<Runnable>();
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
+            var remote = commitMetadata(store);
+            var selected = selection();
+            var transfer = new PendingTransfer();
+            var targetChunks = com.elfmcys.ysm.format.schema.model.RenderTargetChunkPlan.chunks(representation.view(),
+                selected.targetId(), selected.texture());
+            var loading = remote.loadRenderTargetAsync(() -> false, selected.targetId(), selected.texture(), transfer,
+                queued::addLast, prepared -> {
+                    try (var adopted = prepared.retainPreparationInputs()) {
+                        assertTrue(adopted.content().representation().metadataPrefix().isPresent());
+                        verifyChunks(adopted.content(), targetChunks);
+                        return CompletableFuture.completedFuture(true);
+                    } catch (IOException failure) {
+                        throw new CompletionException(failure);
+                    }
+                }, ignored -> {
+                });
+
+            remote.representation().close();
+            queued.removeFirst().run();
+            var input = transfer.input.get(5, TimeUnit.SECONDS);
+            input.receive(new CopyOnWriteArrayList<>());
+            transfer.finished.complete(null);
+            queued.removeFirst().run();
+
+            assertTrue(loading.get(5, TimeUnit.SECONDS));
+            assertTrue(queued.isEmpty());
+        }
+    }
+
+    @Test
+    void cancellationOfAClaimedRemoteContinuationDoesNotCloseItsMetadataBeforeExit() throws Exception {
+        var scheduler = new ClientResourceScheduler(2);
+        var active = new CompletableFuture<ModelContent>();
+        var release = new CountDownLatch(1);
+        var read = new CompletableFuture<Boolean>();
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
+            var remote = commitMetadata(store);
+            var selected = selection();
+            var transfer = new PendingTransfer();
+            var targetChunks = com.elfmcys.ysm.format.schema.model.RenderTargetChunkPlan.chunks(representation.view(),
+                selected.targetId(), selected.texture());
+            var loading = remote.loadRenderTarget(() -> false, selected.targetId(), selected.texture(), transfer,
+                scheduler.backgroundExecutor(), prepared -> {
+                    active.complete(prepared);
+                    try {
+                        assertTrue(release.await(5, TimeUnit.SECONDS));
+                        assertTrue(prepared.representation().metadataPrefix().isPresent());
+                        verifyChunks(prepared, targetChunks);
+                        read.complete(true);
+                        return true;
+                    } catch (InterruptedException failure) {
+                        Thread.currentThread().interrupt();
+                        read.completeExceptionally(failure);
+                        throw new AssertionError(failure);
+                    } catch (RuntimeException | Error failure) {
+                        read.completeExceptionally(failure);
+                        throw failure;
+                    }
+                });
+            transfer.input.get(5, TimeUnit.SECONDS).receive(new CopyOnWriteArrayList<>());
+            transfer.finished.complete(null);
+            var prepared = active.get(5, TimeUnit.SECONDS);
+
+            remote.representation().close();
+            assertTrue(loading.cancel(false));
+            assertTrue(prepared.representation().metadataPrefix().isPresent());
+            release.countDown();
+            assertTrue(read.get(5, TimeUnit.SECONDS));
+            CompletableFuture.runAsync(() -> {
+            }, scheduler.backgroundExecutor()).get(5, TimeUnit.SECONDS);
+            assertThrows(IllegalStateException.class, () -> prepared.representation().metadataPrefix());
+        } finally {
+            release.countDown();
+            scheduler.shutdown();
+            scheduler.awaitTermination();
+        }
+    }
+
+    @Test
     void asyncDeliveryAndRegisteredCancellationKeepTheirOwnInputDisposition() throws Exception {
         for (var cancelAfterRegistration : new boolean[] {false, true}) {
             var scheduler = new ClientResourceScheduler(2);
             var inner = new CompletableFuture<Boolean>();
             var discarded = new AtomicInteger();
-            try (var store = new RemoteModelStore(temp.resolve(Boolean.toString(cancelAfterRegistration)))) {
+            try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new RemoteModelStore(temp.resolve(Boolean.toString(cancelAfterRegistration))))) {
                 var remote = commitMetadata(store);
                 var transfer = new PendingTransfer();
                 var references = new CopyOnWriteArrayList<SharedBuffer>();
@@ -697,11 +859,20 @@ class RemoteModelStoreTest {
         }
     }
 
-    @Test
-    void asyncCompletedTextureSourceCanReopenAfterReceivedInputsAreReleased() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void asyncCompletedTextureSourceCanReopenAfterReceivedInputsAreReleased(boolean persisted) throws Exception {
         var scheduler = new ClientResourceScheduler(2);
-        try (var store = new RemoteModelStore(temp)) {
+        var rejectPersistence = new AtomicBoolean();
+        try (var store =
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp, replacement -> {
+                if (rejectPersistence.get())
+                    throw new IOException("Chunk persistence rejected by fixture");
+                replacement.run();
+            }, ignored -> {
+            }))) {
             var remote = commitMetadata(store);
+            rejectPersistence.set(!persisted);
             var transfer = new PendingTransfer();
             var references = new CopyOnWriteArrayList<SharedBuffer>();
             var selected = selection();
@@ -709,13 +880,18 @@ class RemoteModelStoreTest {
                 scheduler.backgroundExecutor(), prepared -> CompletableFuture.completedFuture(prepared.chunks()),
                 ignored -> {
                 });
-            transfer.input.get(5, TimeUnit.SECONDS).receive(references);
+            var input = transfer.input.get(5, TimeUnit.SECONDS);
+            input.receive(references);
             transfer.finished.complete(null);
             var chunks = loading.get(5, TimeUnit.SECONDS);
             var frontierPassed = new CompletableFuture<Void>();
             scheduler.backgroundExecutor().execute(() -> frontierPassed.complete(null));
             frontierPassed.get(5, TimeUnit.SECONDS);
             assertRetainedInputsValid(references);
+            remote.representation().close();
+            if (!persisted)
+                assertThrows(IOException.class,
+                    () -> remote.cachedOnlyView().chunks().readStoredVerified(input.chunks().get(0), BufferType.ARRAY));
 
             var source = representation.view().requireRenderTarget(selected.targetId())
                 .textureSources(() -> false, chunks, selected.texture()).uv();
@@ -738,7 +914,7 @@ class RemoteModelStoreTest {
     void asyncCancellationDoesNotInvalidateASharedReceivedRead(boolean batch) throws Exception {
         var scheduler = new ClientResourceScheduler(2);
         var inner = new CompletableFuture<Boolean>();
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
             var references = new CopyOnWriteArrayList<SharedBuffer>();
@@ -780,7 +956,7 @@ class RemoteModelStoreTest {
     @Test
     void loadRejectionUsesOnlyClaimedContinuationCleanup() throws Exception {
         var scheduler = new ClientResourceScheduler(2);
-        try (var store = new RemoteModelStore(temp)) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             var remote = commitMetadata(store);
             var transfer = new PendingTransfer();
             var references = new CopyOnWriteArrayList<SharedBuffer>();
@@ -805,13 +981,14 @@ class RemoteModelStoreTest {
 
     @Test
     void cachedTargetProbeAndLoadAreOneWorkerTask() throws Exception {
-        try (var writer = new RemoteModelStore(temp)) {
+        try (var writer = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             commitMetadata(writer);
             publishLazyChunks(writer);
         }
         var cacheReadThread = new AtomicReference<String>();
-        try (var store = new RemoteModelStore(temp, AtomicSharedCache.AtomicReplacement::run,
-            ignored -> cacheReadThread.set(Thread.currentThread().getName()))) {
+        try (var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new RemoteModelStore(temp, AtomicSharedCache.AtomicReplacement::run,
+                ignored -> cacheReadThread.set(Thread.currentThread().getName())))) {
             var remote = store.probeMetadata(representation.identity()).orElseThrow();
             cacheReadThread.set(null);
             var submitted = new AtomicInteger();
@@ -826,10 +1003,10 @@ class RemoteModelStoreTest {
                 var result = remote
                     .loadRenderTarget(() -> false, selection.targetId, selection.texture, null, executor, prepared -> {
                         loadThread.set(Thread.currentThread().getName());
-                        return prepared;
+                        return prepared.representation().identity();
                     }).join();
 
-                assertSame(remote, result);
+                assertEquals(remote.representation().identity(), result);
                 assertEquals(1, submitted.get());
                 assertEquals("remote-load-worker", cacheReadThread.get());
                 assertEquals("remote-load-worker", loadThread.get());
@@ -841,10 +1018,10 @@ class RemoteModelStoreTest {
 
     @Test
     void corruptRequiredChunksAreRefetchedBeforeOneWorkerLoad() throws Exception {
-        var store = new RemoteModelStore(temp);
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         var remote = commitMetadata(store);
         for (var chunk : lazyChunks()) {
-            var path = store.chunkPath(remote.modelId(), new Hash256(chunk.hash()), chunk.encoding());
+            var path = fixtureChunkPath(store, remote.modelId(), new Hash256(chunk.hash()), chunk.encoding());
             Files.createDirectories(path.getParent());
             Files.write(path, new byte[] {1, 2, 3});
         }
@@ -891,13 +1068,14 @@ class RemoteModelStoreTest {
 
     @Test
     void cacheCommitFailureDoesNotWithdrawVerifiedNetworkContent() throws Exception {
-        try (var writer = new RemoteModelStore(temp)) {
+        try (var writer = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp))) {
             commitMetadata(writer);
         }
-        try (var store = new RemoteModelStore(temp, replacement -> {
-            throw new IOException("injected atomic move failure");
-        }, ignored -> {
-        })) {
+        try (var store =
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp, replacement -> {
+                throw new IOException("injected atomic move failure");
+            }, ignored -> {
+            }))) {
             var remote = store.probeMetadata(representation.identity()).orElseThrow();
             var requested = new AtomicReference<List<AssetContainerView.ChunkInfo>>();
             var worker = Executors.newSingleThreadExecutor();
@@ -920,8 +1098,8 @@ class RemoteModelStoreTest {
                     }).join());
                 assertFalse(requested.get().isEmpty());
                 for (var chunk : requested.get()) {
-                    assertFalse(
-                        Files.exists(store.chunkPath(remote.modelId(), new Hash256(chunk.hash()), chunk.encoding())));
+                    assertFalse(Files.exists(
+                        fixtureChunkPath(store, remote.modelId(), new Hash256(chunk.hash()), chunk.encoding())));
                 }
             } finally {
                 worker.shutdownNow();
@@ -933,13 +1111,14 @@ class RemoteModelStoreTest {
     void cancelledReadRejectsBeforeCacheAccess() throws Exception {
         var valid = new byte[] {7, 8, 9};
         var chunk = chunk(valid);
-        var identity = new ModelFileIdentity(hash(20), hash(21));
-        var store = new RemoteModelStore(temp);
+        var identity = new ModelFileIdentity(ModelId.fromHash(hash(20)), hash(21));
+        var store = com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(new RemoteModelStore(temp));
         try {
             var source = store.chunkSource(identity);
 
             assertThrows(CancellationException.class, () -> source.readPayload(() -> true, chunk, BufferType.ARRAY));
-            assertFalse(Files.exists(store.chunkPath(identity.modelId(), new Hash256(chunk.hash()), chunk.encoding())));
+            assertFalse(
+                Files.exists(fixtureChunkPath(store, identity.modelId(), new Hash256(chunk.hash()), chunk.encoding())));
         } finally {
             store.close();
         }
@@ -955,7 +1134,7 @@ class RemoteModelStoreTest {
             unsafe.objectFieldOffset(ClientModelRenderTargetManager.class.getDeclaredField("contentStore")),
             new RuntimeContentStore(ignored -> {
             }));
-        var entry = new ClientCatalogEntry(new CatalogEntry(remote.modelId(), new HierarchyPath("local:custom/fixture"),
+        var entry = new ClientCatalogEntry(new CatalogEntry(remote.modelId(), new HierarchyPath("local:fixture"),
             CatalogAccess.PUBLIC, CatalogPresentation.empty("Fixture")), remote, ClientCatalogEntry.Origin.SERVER);
         var selected = selection();
         var key = new RenderTargetKey(selected.targetId(), selected.texture(), new BakeProfile("remote-admission"),
@@ -1100,6 +1279,23 @@ class RemoteModelStoreTest {
     private static AssetContainerView.ChunkInfo chunk(byte[] bytes) {
         var hash = Blake3.computeHash(ArrayBuffer.borrow(bytes));
         return new AssetContainerView.ChunkInfo("test", "", 0, bytes.length, bytes.length, 0, 0, 0, hash);
+    }
+
+    private static Path fixtureMetadataPath(RemoteModelStore store, ModelFileIdentity identity) throws IOException {
+        return fixturePath(store, com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.METADATA,
+            identity.modelId() + "/" + identity.containerId());
+    }
+
+    private static Path fixtureChunkPath(RemoteModelStore store, ModelId modelId, Hash256 hash, String encoding)
+        throws IOException {
+        return fixturePath(store, com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind.CHUNK,
+            modelId + "/" + hash + "/" + encoding);
+    }
+
+    private static Path fixturePath(RemoteModelStore store,
+        com.elfmcys.ysm.natives.storage.NativeArtifactIndex.ExactKind kind, String key) throws IOException {
+        return com.elfmcys.ysm.model.storage.TestCacheFiles.path(store.storageBinding().region().root(), kind, key,
+            true);
     }
 
     private static Hash256 hash(int marker) {

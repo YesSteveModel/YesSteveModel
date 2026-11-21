@@ -28,8 +28,6 @@ tasks.named('wrapper', Wrapper).configure {
 
 // Build-tool and Forge classpaths need this source set before its compiler setup.
 sourceSets { declaration }
-apply from: 'gradle/abi.gradle'
-
 apply from: 'gradle/local-properties.gradle'
 apply from: 'gradle/native.gradle'
 apply from: 'gradle/fast-run.gradle'
@@ -46,9 +44,12 @@ java {
 
 tasks.withType(Test).configureEach {
     useJUnitPlatform()
+    // Aggregate transfer tests exceed 128 MiB alongside initialized game and compiler fixtures.
+    maxHeapSize = '1g'
 }
 
 def resourceDebug = ysmLocalBooleanProperty('ysm.resource_debug', false)
+def networkDebug = ysmLocalBooleanProperty('ysm.network_debug', false)
 
 legacyForge {
     version = "1.20.1-47.4.3"
@@ -73,6 +74,9 @@ legacyForge {
         configureEach {
             if (resourceDebug) {
                 environment.put('YSM_DEBUG_RESOURCE', '1')
+            }
+            if (networkDebug) {
+                environment.put('YSM_DEBUG_NETWORK', '1')
             }
             logLevel = org.slf4j.event.Level.DEBUG
             jvmArguments = [
@@ -101,8 +105,6 @@ legacyForge {
         }
     }
 }
-
-apply from: 'gradle/mock.gradle'
 
 mixin {
     add sourceSets.main, "ysm.refmap.json"
@@ -192,10 +194,12 @@ dependencies {
     // Forge supplies runtime ASM; relocating it would break the Mixin plugin ABI.
     compileOnly 'org.ow2.asm:asm:9.7.1'
     compileOnly 'org.ow2.asm:asm-tree:9.7.1'
+    compileOnly 'it.unimi.dsi:fastutil:8.5.9'
     implementation 'org.yaml:snakeyaml:2.2'
 
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.xerial:sqlite-jdbc:3.54.1.0'
     testImplementation 'com.google.protobuf:protobuf-java:3.21.12'
     testImplementation files(tasks.named('relocateProcessorAsm', Jar).flatMap { it.archiveFile })
     testImplementation 'com.google.code.gson:gson:2.10.1'
@@ -310,13 +314,12 @@ tasks.register('swarfareTest', Test) {
 }
 
 tasks.register('swarfareNoModTest', Test) {
-    description = 'Runs bootstrap and standard first-person tests with Superb Warfare removed from the JVM classpath.'
+    description = 'Runs Superb Warfare hand adapter tests with Superb Warfare removed from the JVM classpath.'
     group = 'verification'
-    testClassesDirs = sourceSets.test.output.classesDirs + sourceSets.swarfareTest.output.classesDirs
+    testClassesDirs = sourceSets.swarfareTest.output.classesDirs
     classpath = sourceSets.swarfareTest.runtimeClasspath.filter { !it.name.contains('superbwarfare') }
     filter {
         includeTestsMatching 'com.elfmcys.ysm.client.compat.swarfare.SWarfareHandAdapterTest'
-        includeTestsMatching 'com.elfmcys.ysm.client.entity.FirstPersonOwnerIntegrationTest'
     }
     systemProperty 'ysm.test.noSuperb', 'true'
 }
@@ -325,10 +328,24 @@ sourceSets {
     test {
         java.setSrcDirs(['src/verification/test/java', 'src/verification/shared/java'])
         resources.setSrcDirs(['src/verification/test/resources'])
-        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath +
-                sourceSets.mockSupport.output + sourceSets.mockSupervisor.output
-        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath +
-                sourceSets.mockSupport.output + sourceSets.mockSupervisor.output
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform {
+        excludeTags 'mock'
+    }
+}
+
+tasks.register('serverMockTest', Test) {
+    description = 'Runs the 100-player simulated-transport server mock contract tests.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'mock'
     }
 }
 
@@ -390,6 +407,32 @@ tasks.named('shadowJar') {
     relocate 'dev.semaweave', 'com.elfmcys.ysm.internal.expression.semaweave'
     relocate 'org.codehaus.janino', 'com.elfmcys.ysm.internal.expression.janino'
     relocate 'org.codehaus.commons.compiler', 'com.elfmcys.ysm.internal.expression.commonscompiler'
+}
+
+tasks.register('verifyVerificationPackaging') {
+    description = 'Verifies verification, benchmark, and legacy mock classes are absent from release archives.'
+    group = 'verification'
+    dependsOn tasks.named('jar'), tasks.named('shadowJar')
+    def archives = providers.provider {
+        [tasks.named('jar').get().archiveFile.get().asFile,
+         tasks.named('shadowJar').get().archiveFile.get().asFile]
+    }
+    inputs.files(archives)
+    doLast {
+        def forbidden = [
+                'com/elfmcys/ysm/verification/',
+                'com/elfmcys/ysm/benchmark/',
+                'com/elfmcys/ysm/mock/'
+        ]
+        archives.get().each { archive ->
+            def leaked = zipTree(archive).matching {
+                forbidden.each { prefix -> include "${prefix}**" }
+            }.files
+            if (!leaked.isEmpty()) {
+                throw new GradleException("Verification-only classes leaked into ${archive}: ${leaked}")
+            }
+        }
+    }
 }
 
 apply from: 'gradle/expression-verification.gradle'

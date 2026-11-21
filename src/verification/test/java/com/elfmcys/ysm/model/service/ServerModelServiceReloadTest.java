@@ -120,12 +120,15 @@ class ServerModelServiceReloadTest {
 
     private Fixture open() throws Exception {
         var cacheRoot = temp.resolve("cache");
+        var cache = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cacheRoot));
+        var scope = com.elfmcys.ysm.model.storage.ConvertedScope.of(temp, "server-reload-test");
         var root = Files.createDirectories(temp.resolve("models"));
         var intrinsicDefault = ManagedContainer.openResidentDefault(defaultContainer,
             new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
         var resolver = new ModelSourceResolver(new RawModelImporter(DefaultAnimationFilter.keepAll()),
-            new ConvertedSourceIndexStore(cacheRoot, "server-reload-test"), new ConvertedObjectStore(cacheRoot));
-        var reconciler = new CatalogReconciler(List.of(new ModelCatalogSource(CatalogRootKind.CUSTOM, root, false)),
+            new ConvertedSourceIndexStore(scope, cache), new ConvertedObjectStore(cache));
+        var reconciler = new CatalogReconciler(List.of(new ModelCatalogSource(CatalogRootKind.MODELS, root, false)),
             resolver, Set.of(intrinsicDefault.modelId()), intrinsicDefault, CatalogIndexSnapshot.empty());
         var rejectCoordinators = new AtomicBoolean();
         ThreadFactory threads = body -> {
@@ -137,22 +140,25 @@ class ServerModelServiceReloadTest {
         var constructor = ReloadableModelCatalog.class.getDeclaredConstructor(CatalogReconciler.class,
             CatalogCandidate.class, ThreadFactory.class);
         constructor.setAccessible(true);
-        var catalog = constructor.newInstance(reconciler, reconciler.materializeBuiltins(), threads);
-        var runtime = new ServerResourceRuntime(new PreviewStore(cacheRoot), failure -> {
-            throw new AssertionError(failure);
-        });
+        var catalog = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(constructor.newInstance(reconciler, reconciler.materializeBuiltins(), threads));
+        var runtime = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new ServerResourceRuntime(new PreviewStore(cacheRoot, cache), failure -> {
+                throw new AssertionError(failure);
+            }));
         // reload() only needs these owners; Minecraft hosting and dispatch are outside this fixture.
         var service = (ServerModelService)UnsafeUtil.getUnsafe().allocateInstance(ServerModelService.class);
         setField(service, "catalog", catalog);
         setField(service, "serverResources", runtime);
-        var fixture = new Fixture(catalog, runtime, service, rejectCoordinators,
+        var fixture = new Fixture(catalog, runtime, service, rejectCoordinators, intrinsicDefault,
             intrinsicDefault.representation().containerId(), cacheRoot);
         catalog.activate();
         await(() -> {
             catalog.tick();
             return !catalog.busy();
         });
-        assertEquals(1, catalog.current().byModelId().size());
+        assertEquals(0, catalog.current().byModelId().size());
+        assertEquals(intrinsicDefault.modelId(), catalog.current().intrinsicDefault().binding().modelId());
         return fixture;
     }
 
@@ -176,21 +182,25 @@ class ServerModelServiceReloadTest {
     }
 
     private record Fixture(ReloadableModelCatalog catalog, ServerResourceRuntime runtime, ServerModelService service,
-        AtomicBoolean rejectCoordinators, Hash256 containerId, Path cacheRoot) implements AutoCloseable {
+        AtomicBoolean rejectCoordinators, ManagedContainer defaultContent, Hash256 containerId,
+        Path cacheRoot) implements AutoCloseable {
         private void replacePreview(byte[] bytes) throws Exception {
             var root = Files.createDirectories(cacheRoot.resolve("previews"));
             var staged = Files.write(root.resolve("external.image"), bytes);
             Files.move(staged, root.resolve(containerId + ".image"), StandardCopyOption.REPLACE_EXISTING,
                 StandardCopyOption.ATOMIC_MOVE);
+            com.elfmcys.ysm.model.storage.TestPreviews.index(cacheRoot, containerId,
+                root.resolve(containerId + ".image"));
         }
 
         private ServerResourceRuntime.BytesLease acquire() throws Exception {
-            var result = runtime.acquirePreview(containerId);
+            var result = runtime.acquirePreview(defaultContent);
             await(() -> {
                 runtime.tick();
-                return result.isDone();
+                return result.state() != ServerResourceRuntime.State.PENDING;
             });
-            return result.get(1, TimeUnit.SECONDS).orElseThrow();
+            assertEquals(ServerResourceRuntime.State.READY, result.state());
+            return result;
         }
 
         private ServerModelService.ReloadOutcome reload() throws Exception {

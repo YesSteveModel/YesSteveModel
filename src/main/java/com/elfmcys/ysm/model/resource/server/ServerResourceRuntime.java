@@ -1,11 +1,11 @@
 package com.elfmcys.ysm.model.resource.server;
 
+import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.buffer.SharedArrayBuffer;
 import com.elfmcys.ysm.model.storage.PreviewStorage;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.container.AssetContainerView;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.resource.RuntimeContentStore;
 import com.elfmcys.ysm.model.storage.PreviewStore;
@@ -19,13 +19,13 @@ import java.lang.ref.Reference;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -34,23 +34,26 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 /**
  * Retains verified chunk bytes and replaceable encoded preview bytes for server transmissions.
  *
- * <p><b>Execution:</b> Acquisition enqueues a bounded request. The server owner drives tick to admit
- * work and deliver results; callers must not block that owner waiting for a returned future.
- * Workers read sources and return completions. Close seals requests and waits for worker termination.
+ * <p>
+ * <b>Execution:</b> Acquisition returns a caller-owned use immediately and queues a bounded request on cache miss. The
+ * server owner drives tick to admit work and publish readiness. Workers read sources and return completions. Close
+ * seals requests and waits for worker termination.
  *
- * <p><b>Ownership:</b> Each delivered BytesLease is independent. Eviction and preview invalidation
- * remove reuse eligibility without revoking delivered leases. Detached preview reads can still serve
- * their original requests, but cannot replace newer retained bytes. Future cancellation relinquishes
- * only that result; source work can continue for other requests.
+ * <p>
+ * <b>Ownership:</b> Each BytesLease is independent from admission. Eviction and preview invalidation remove reuse
+ * eligibility without revoking existing Ready uses. Detached preview reads still serve their original requests, but
+ * cannot replace newer retained bytes. Closing the last pending use revokes flight join and publication eligibility;
+ * physical capacity remains occupied until the read terminates.
  *
- * <p><b>Seam:</b> [server byte retention and old requests](docs/architecture/model-management/server-resources/overview.md#图片失效与旧请求).
+ * <p>
+ * <b>Seam:</b> [server byte retention and old
+ * requests](docs/architecture/model-management/server-resources/overview.md#图片失效与旧请求).
  */
 public final class ServerResourceRuntime implements AutoCloseable {
     static final long IDLE_NANOS = Duration.ofSeconds(30).toNanos();
@@ -64,7 +67,7 @@ public final class ServerResourceRuntime implements AutoCloseable {
     private final LinkedHashMap<Key, Entry> ready = new LinkedHashMap<>(16, 0.75f, true);
     private final Map<FlightKey, Flight> pending = new LinkedHashMap<>();
     private final Set<Flight> activeFlights = Collections.newSetFromMap(new IdentityHashMap<>());
-    private final ConcurrentLinkedQueue<Request> requests = new ConcurrentLinkedQueue<>();
+    private final ArrayDeque<Request> requests = new ArrayDeque<>();
     private final ConcurrentLinkedQueue<Completion> completions = new ConcurrentLinkedQueue<>();
     private final Set<Request> outstanding = Collections.newSetFromMap(new IdentityHashMap<>());
     private final RuntimeContentStore contentStore;
@@ -72,22 +75,12 @@ public final class ServerResourceRuntime implements AutoCloseable {
     private final ExecutorService workers;
     private final LongSupplier nanoTime;
     private final long maxCachedBytes;
-    private final AtomicInteger requestBacklog = new AtomicInteger();
+    private int requestBacklog;
     private long cachedBytes;
     private boolean closed;
 
     public ServerResourceRuntime(PreviewStorage previewStore, Consumer<IOException> corruptionReporter) {
-        this(previewStore, corruptionReporter, System::nanoTime, MAX_CACHED_BYTES);
-    }
-
-    ServerResourceRuntime(PreviewStorage previewStore, Consumer<IOException> corruptionReporter,
-        LongSupplier nanoTime) {
-        this(previewStore, corruptionReporter, nanoTime, MAX_CACHED_BYTES);
-    }
-
-    ServerResourceRuntime(PreviewStorage previewStore, Consumer<IOException> corruptionReporter, LongSupplier nanoTime,
-        long maxCachedBytes) {
-        this(previewStore, corruptionReporter, nanoTime, maxCachedBytes, createWorkers());
+        this(previewStore, corruptionReporter, System::nanoTime, MAX_CACHED_BYTES, createWorkers());
     }
 
     ServerResourceRuntime(PreviewStorage previewStore, Consumer<IOException> corruptionReporter, LongSupplier nanoTime,
@@ -120,27 +113,24 @@ public final class ServerResourceRuntime implements AutoCloseable {
      *
      * @param content the non-null admitted exact content; the request owner must already check authorization
      * @param chunk the non-null chunk descriptor from that content's established chunk table
-     * @return a non-null future that transfers one open lease on success; capacity rejection is BusyException,
-     *     and source I/O or verification failure completes exceptionally
+     * @return one caller-owned use, including while pending; capacity rejection and source failure are observable
+     *         through its failed state
      */
-    public CompletableFuture<BytesLease> acquireChunk(ModelContent content, AssetContainerView.ChunkInfo chunk) {
+    public BytesLease acquireChunk(ModelContent content, AssetContainerView.ChunkInfo chunk) {
+        return acquireChunk(content, chunk, null);
+    }
+
+    /**
+     * Owns readRelease from entry, including rejection. The callback releases an independent caller retention when this
+     * request no longer borrows the source. It must not throw, block or call back into this runtime. Ending a pending
+     * use does not release a retention already transferred to a flight before that flight's read terminates.
+     */
+    public BytesLease acquireChunk(ModelContent content, AssetContainerView.ChunkInfo chunk, Runnable readRelease) {
         Objects.requireNonNull(content, "content");
         Objects.requireNonNull(chunk, "chunk");
-        var result = new CompletableFuture<BytesLease>();
+        var result = new BytesLease(this);
+        result.readRelease = readRelease;
         enqueue(new ChunkRequest(ChunkKey.of(content, chunk), content, chunk, result));
-        return result;
-    }
-
-    private PreviewStore fixedPreviewStore() {
-        if (previewStore instanceof PreviewStore fixed)
-            return fixed;
-        throw new IllegalStateException("A regional preview request requires content provenance");
-    }
-
-    public CompletableFuture<Optional<BytesLease>> acquirePreview(Hash256 containerId) {
-        var result = new CompletableFuture<Optional<BytesLease>>();
-        enqueue(new PreviewRequest(
-            new PreviewKey(fixedPreviewStore(), Objects.requireNonNull(containerId, "containerId")), result));
         return result;
     }
 
@@ -148,11 +138,10 @@ public final class ServerResourceRuntime implements AutoCloseable {
      * Requests encoded preview bytes in the content's storage region without decoding image media.
      *
      * @param content the non-null content that supplies storage provenance and container identity
-     * @return a non-null future; empty means an observed cache miss, present transfers one open lease,
-     *     and access failure or capacity rejection completes exceptionally
+     * @return one caller-owned use; Missing is an observed cache miss, and Failed reports access or capacity failure
      */
-    public CompletableFuture<Optional<BytesLease>> acquirePreview(ModelContent content) {
-        var result = new CompletableFuture<Optional<BytesLease>>();
+    public BytesLease acquirePreview(ModelContent content) {
+        var result = new BytesLease(this);
         enqueue(new PreviewRequest(
             new PreviewKey(previewStore.forContent(content), content.representation().containerId()), result));
         return result;
@@ -166,33 +155,35 @@ public final class ServerResourceRuntime implements AutoCloseable {
     }
 
     private void enqueue(Request request) {
-        Throwable failure = null;
         synchronized (lock) {
+            var use = request.use();
             if (closed) {
-                failure = new IllegalStateException("Server resource runtime is closed");
-            } else if (requestBacklog.get() >= MAX_REQUEST_BACKLOG) {
-                failure = new BusyException("Server resource request capacity is full");
+                fail(request, new IllegalStateException("Server resource runtime is closed"));
             } else {
-                requestBacklog.incrementAndGet();
-                outstanding.add(request);
-                requests.add(request);
-                request.result().whenComplete((value, terminal) -> {
-                    synchronized (lock) {
-                        outstanding.remove(request);
-                    }
-                });
+                var cached = ready.get(request.key());
+                if (cached != null) {
+                    complete(request, cached);
+                } else if (requestBacklog >= MAX_REQUEST_BACKLOG) {
+                    fail(request, new BusyException("Server resource request capacity is full"));
+                } else {
+                    use.request = request;
+                    requestBacklog++;
+                    outstanding.add(request);
+                    requests.add(request);
+                }
             }
         }
-        if (failure != null)
-            request.result().completeExceptionally(failure);
     }
 
-    public void invalidatePreview(Hash256 containerId) {
-        Objects.requireNonNull(containerId, "containerId");
-        synchronized (lock) {
-            if (!closed)
-                invalidatePreviewKey(new PreviewKey(fixedPreviewStore(), containerId));
-        }
+    private void fail(Request request, Throwable failure) {
+        var use = request.use();
+        if (use.state != State.PENDING)
+            return;
+        outstanding.remove(request);
+        use.request = null;
+        use.failure = failure;
+        use.state = State.FAILED;
+        use.releaseUnstartedRead();
     }
 
     public void invalidatePreviews() {
@@ -237,65 +228,46 @@ public final class ServerResourceRuntime implements AutoCloseable {
         evict();
     }
 
-    int cachedCount() {
-        synchronized (lock) {
-            return ready.size();
-        }
-    }
-
-    long cachedBytes() {
-        synchronized (lock) {
-            return cachedBytes;
-        }
-    }
-
-    int activeFlightCount() {
-        synchronized (lock) {
-            return activeFlights.size();
-        }
-    }
-
     private void processRequests() {
         for (var disposed = 0; disposed < REQUESTS_PER_TICK; disposed++) {
-            final Request request;
             Flight start = null;
-            Entry cached = null;
-            Throwable failure = null;
             synchronized (lock) {
-                request = requests.poll();
+                var request = requests.poll();
                 if (request == null)
                     return;
-                requestBacklog.decrementAndGet();
-                if (request.result().isDone())
-                    continue;
+                requestBacklog--;
                 if (closed) {
-                    failure = new IllegalStateException("Server resource runtime is closed");
-                } else {
-                    cached = ready.get(request.key());
-                    if (cached == null) {
-                        var source = request instanceof ChunkRequest chunk ? chunk.content : null;
-                        var flightKey = new FlightKey(request.key(), source);
-                        var flight = pending.get(flightKey);
-                        if (flight == null) {
-                            if (activeFlights.size() >= MAX_IN_FLIGHT) {
-                                failure = new BusyException("Server resource in-flight capacity is full");
-                            } else {
-                                flight = new Flight(flightKey, request);
-                                pending.put(flightKey, flight);
-                                activeFlights.add(flight);
-                                start = flight;
-                            }
-                        }
-                        if (flight != null)
-                            flight.waiters.add(request);
+                    fail(request, new IllegalStateException("Server resource runtime is closed"));
+                    continue;
+                }
+                var cached = ready.get(request.key());
+                if (cached != null) {
+                    complete(request, cached);
+                    continue;
+                }
+                var source = request instanceof ChunkRequest chunk ? chunk.content : null;
+                var flightKey = new FlightKey(request.key(), source);
+                var flight = pending.get(flightKey);
+                if (flight == null) {
+                    if (activeFlights.size() >= MAX_IN_FLIGHT) {
+                        fail(request, new BusyException("Server resource in-flight capacity is full"));
+                        continue;
                     }
+                    flight = new Flight(flightKey, request);
+                    pending.put(flightKey, flight);
+                    activeFlights.add(flight);
+                    start = flight;
+                }
+                flight.waiters.add(request);
+                request.use().flight = flight;
+                if (request.use().readRelease != null) {
+                    if (flight.readReleases == null)
+                        flight.readReleases = new ArrayList<>();
+                    flight.readReleases.add(request.use().readRelease);
+                    request.use().readRelease = null;
                 }
             }
-            if (failure != null) {
-                request.result().completeExceptionally(failure);
-            } else if (cached != null) {
-                complete(request, cached);
-            } else if (start != null) {
+            if (start != null) {
                 var flight = start;
                 try {
                     workers.execute(() -> load(flight));
@@ -328,26 +300,24 @@ public final class ServerResourceRuntime implements AutoCloseable {
 
     private void enqueueCompletion(Completion completion) {
         synchronized (lock) {
+            completion.flight.releaseReads();
             if (!closed && activeFlights.contains(completion.flight)) {
                 completions.add(completion);
                 return;
             }
+            activeFlights.remove(completion.flight);
         }
     }
 
     private void accept(Completion completion) {
-        final List<Request> waiters;
-        Entry entry = null;
         synchronized (lock) {
             var flight = completion.flight;
-            if (!activeFlights.remove(flight)) {
+            if (!activeFlights.remove(flight))
                 return;
-            }
-            if (pending.get(flight.flightKey) == flight)
-                pending.remove(flight.flightKey);
-            waiters = List.copyOf(flight.waiters);
+            pending.remove(flight.flightKey, flight);
+            Entry entry = null;
             if (completion.failure == null && completion.bytes != null) {
-                // Detached reads can serve their original waiters, but never reuse or replace newer ready bytes.
+                // Detached reads serve their original users without replacing newer ready bytes.
                 if (flight.publishEligible)
                     entry = ready.get(flight.flightKey.key);
                 if (entry == null) {
@@ -358,28 +328,34 @@ public final class ServerResourceRuntime implements AutoCloseable {
                     }
                 }
             }
-        }
-        for (var waiter : waiters) {
-            if (completion.failure != null)
-                waiter.result().completeExceptionally(completion.failure);
-            else if (entry == null)
-                waiter.absent();
-            else
-                complete(waiter, entry);
+            for (var request : flight.waiters) {
+                request.use().flight = null;
+                if (completion.failure != null) {
+                    fail(request, completion.failure);
+                } else if (entry == null) {
+                    if (request instanceof ChunkRequest) {
+                        fail(request, new IllegalStateException("Chunk load produced no bytes"));
+                    } else {
+                        outstanding.remove(request);
+                        request.use().request = null;
+                        request.use().state = State.MISSING;
+                    }
+                } else {
+                    complete(request, entry);
+                }
+            }
+            flight.waiters.clear();
         }
     }
 
-    private void complete(Request result, Entry entry) {
-        var acquiredAt = nanoTime.getAsLong();
-        var lease = new BytesLease(entry);
-        if (result.deliver(lease)) {
-            synchronized (lock) {
-                if (acquiredAt - entry.lastAcquire > 0)
-                    entry.lastAcquire = acquiredAt;
-            }
-        } else {
-            lease.close();
-        }
+    private void complete(Request request, Entry entry) {
+        outstanding.remove(request);
+        var use = request.use();
+        use.request = null;
+        use.entry = entry;
+        use.state = State.READY;
+        entry.lastAcquire = nanoTime.getAsLong();
+        use.releaseUnstartedRead();
     }
 
     private void evict() {
@@ -404,23 +380,22 @@ public final class ServerResourceRuntime implements AutoCloseable {
 
     @Override
     public void close() {
-        var failures = new ArrayList<CompletableFuture<?>>();
         synchronized (lock) {
             if (closed)
                 return;
             closed = true;
-            outstanding.forEach(request -> failures.add(request.result()));
-            outstanding.clear();
-            activeFlights.clear();
+            for (var request : List.copyOf(outstanding)) {
+                request.use().flight = null;
+                fail(request, new IllegalStateException("Server resource runtime is closed"));
+            }
+            activeFlights.forEach(flight -> flight.waiters.clear());
             pending.clear();
             ready.clear();
             cachedBytes = 0;
             for (Request request; (request = requests.poll()) != null;) {
-                requestBacklog.decrementAndGet();
+                requestBacklog--;
             }
         }
-        failures.forEach(
-            result -> result.completeExceptionally(new IllegalStateException("Server resource runtime is closed")));
         completions.clear();
         workers.shutdownNow();
         var interrupted = false;
@@ -430,6 +405,10 @@ public final class ServerResourceRuntime implements AutoCloseable {
             } catch (InterruptedException ignored) {
                 interrupted = true;
             }
+        }
+        synchronized (lock) {
+            activeFlights.forEach(Flight::releaseReads);
+            activeFlights.clear();
         }
         if (interrupted)
             Thread.currentThread().interrupt();
@@ -441,29 +420,67 @@ public final class ServerResourceRuntime implements AutoCloseable {
         }
     }
 
+    public enum State {
+        PENDING, READY, MISSING, FAILED, ENDED
+    }
+
     /**
-     * Retains one immutable encoded byte entry independently of cache membership.
-     * The receiver owns idempotent close and must exclude close from an in-progress read.
-     * Size, share and copy require an open lease. A shared slice retains its own backing beyond lease close;
-     * logical close does not promise immediate pooled-buffer reclamation.
+     * One caller-owned use from request admission through close. Readiness never transfers another lease. The caller
+     * polls state and closes this use on exit, even when pending or missing. Ready bytes remain valid across cache
+     * eviction, preview invalidation and runtime close. The caller must exclude close from its own in-progress reads.
+     * Packet owners obtain an independent Ready use with retain before the acquisition owner closes its use.
+     *
+     * <p>
+     * Seam: implements [byte acquisition](docs/architecture/model-management/server-resources/overview.md#发送字节取得与交付).
      */
     public static final class BytesLease implements AutoCloseable {
+        private final ServerResourceRuntime runtime;
+        private State state = State.PENDING;
         private Entry entry;
+        private Throwable failure;
+        private Request request;
+        private Flight flight;
+        private Runnable readRelease;
 
-        private BytesLease(Entry entry) {
-            this.entry = entry;
+        private BytesLease(ServerResourceRuntime runtime) {
+            this.runtime = runtime;
+        }
+
+        public State state() {
+            synchronized (runtime.lock) {
+                return state;
+            }
+        }
+
+        /** Returns the original cause while this use is Failed. */
+        public Throwable failure() {
+            synchronized (runtime.lock) {
+                if (state != State.FAILED)
+                    throw new IllegalStateException("Bytes use has no failure");
+                return failure;
+            }
+        }
+
+        /** Establishes the receiver's independent Ready use before the caller releases its use. */
+        public BytesLease retain() {
+            synchronized (runtime.lock) {
+                var retained = new BytesLease(runtime);
+                retained.entry = requireReady();
+                retained.state = State.READY;
+                return retained;
+            }
         }
 
         public int size() {
-            return requireOpen().bytes.size();
+            return requireReady().bytes.size();
         }
 
         public SharedArrayBuffer share(int offset, int length) {
-            return requireOpen().bytes.ownedSlice(offset, length);
+            return requireReady().bytes.ownedSlice(offset, length);
         }
 
         public void copyTo(int offset, ByteBuffer target) {
-            var bytes = requireOpen().bytes;
+            var bytes = requireReady().bytes;
             if (offset < 0 || target.remaining() > bytes.size() - offset)
                 throw new IndexOutOfBoundsException("Bytes lease range is invalid");
             try {
@@ -477,50 +494,57 @@ public final class ServerResourceRuntime implements AutoCloseable {
         }
 
         @Override
-        public synchronized void close() {
-            entry = null;
+        public void close() {
+            synchronized (runtime.lock) {
+                if (request != null) {
+                    runtime.outstanding.remove(request);
+                    if (runtime.requests.remove(request))
+                        runtime.requestBacklog--;
+                    if (flight != null) {
+                        flight.waiters.remove(request);
+                        if (flight.waiters.isEmpty()) {
+                            runtime.pending.remove(flight.flightKey, flight);
+                            flight.publishEligible = false;
+                        }
+                    }
+                }
+                request = null;
+                flight = null;
+                entry = null;
+                failure = null;
+                state = State.ENDED;
+                releaseUnstartedRead();
+            }
         }
 
-        private synchronized Entry requireOpen() {
-            if (entry == null)
-                throw new IllegalStateException("Bytes lease is closed");
-            return entry;
+        private void releaseUnstartedRead() {
+            if (readRelease != null) {
+                var release = readRelease;
+                readRelease = null;
+                release.run();
+            }
+        }
+
+        private Entry requireReady() {
+            synchronized (runtime.lock) {
+                if (state != State.READY)
+                    throw new IllegalStateException("Bytes use is not Ready: " + state);
+                return entry;
+            }
         }
     }
 
     private sealed interface Request permits ChunkRequest, PreviewRequest {
         Key key();
 
-        CompletableFuture<?> result();
-
-        boolean deliver(BytesLease lease);
-
-        void absent();
+        BytesLease use();
     }
 
     private record ChunkRequest(ChunkKey key, ModelContent content, AssetContainerView.ChunkInfo chunk,
-        CompletableFuture<BytesLease> result) implements Request {
-        @Override
-        public boolean deliver(BytesLease lease) {
-            return result.complete(lease);
-        }
-
-        @Override
-        public void absent() {
-            result.completeExceptionally(new IllegalStateException("Chunk load produced no bytes"));
-        }
+        BytesLease use) implements Request {
     }
 
-    private record PreviewRequest(PreviewKey key, CompletableFuture<Optional<BytesLease>> result) implements Request {
-        @Override
-        public boolean deliver(BytesLease lease) {
-            return result.complete(Optional.of(lease));
-        }
-
-        @Override
-        public void absent() {
-            result.complete(Optional.empty());
-        }
+    private record PreviewRequest(PreviewKey key, BytesLease use) implements Request {
     }
 
     private static final class Flight {
@@ -528,6 +552,14 @@ public final class ServerResourceRuntime implements AutoCloseable {
         private final Request source;
         private final List<Request> waiters = new ArrayList<>();
         private boolean publishEligible = true;
+        private List<Runnable> readReleases;
+
+        private void releaseReads() {
+            if (readReleases != null) {
+                readReleases.forEach(Runnable::run);
+                readReleases = null;
+            }
+        }
 
         private Flight(FlightKey flightKey, Request source) {
             this.flightKey = flightKey;

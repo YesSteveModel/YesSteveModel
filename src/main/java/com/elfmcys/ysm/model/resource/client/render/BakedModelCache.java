@@ -1,10 +1,11 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.model.storage.BakeIndexStore;
+import com.elfmcys.ysm.natives.storage.CacheStorageTypes.*;
 import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.compatibility.AbiVersion;
 
 import com.elfmcys.ysm.util.ResourceDiagnostics;
-import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.schema.baked.model.BakedModelConstant;
 import com.elfmcys.ysm.format.schema.baked.model.BakedModelView;
@@ -26,17 +27,20 @@ import java.nio.file.Path;
 import java.util.Locale;
 
 public final class BakedModelCache {
-    static final String CACHE_SUFFIX = ".geo.ysm-cache";
     static final String CACHE_ABI = "geometry-" + AbiVersion.CACHE_GEOMETRY;
     private static final byte[] HASH_DOMAIN = ("ysm." + CACHE_ABI + "\0").getBytes(StandardCharsets.UTF_8);
 
-    private final Path bakedRoot;
     private final AtomicSharedCache cache;
     private final String capabilityKey;
+    private final BakeIndexStore index;
 
     public BakedModelCache(Path bakedRoot, AtomicSharedCache cache) {
-        this.bakedRoot = bakedRoot;
+        this(bakedRoot, cache, cache.bakeIndex());
+    }
+
+    public BakedModelCache(Path bakedRoot, AtomicSharedCache cache, BakeIndexStore index) {
         this.cache = cache;
+        this.index = java.util.Objects.requireNonNull(index);
         this.capabilityKey = sanitize(System.getProperty("os.arch", "unknown")) + "-"
             + sanitize(System.getProperty("os.name", "unknown")) + "-simd-"
             + Integer.toUnsignedString(NativeBakedModel.capability()) + "-bake-" + BakedModelConstant.CURRENT_VERSION;
@@ -50,12 +54,9 @@ public final class BakedModelCache {
         TexturePixelsSupplier texture, int originVersion, boolean forceCulling, boolean forceTranslucent,
         boolean hasPbr, GeoLocatorType locatorType) throws IOException {
         var bakeHash = bakeHash(containerId, resourceName, textureHash);
-        var target = path(containerId, bakeHash);
-        try {
-            return read(target, bakeHash, locatorType);
-        } catch (IOException unavailable) {
-            // Only the initial optional-cache acquisition can fall back to production.
-        }
+        var cached = loadExisting(containerId, resourceName, textureHash, locatorType);
+        if (cached != null)
+            return cached;
         var candidate = bake(source, texture, originVersion, forceCulling, forceTranslucent, hasPbr);
         var delivered = false;
         try {
@@ -63,10 +64,15 @@ public final class BakedModelCache {
             delivered = true;
             var backing = candidate.bakedModel();
             var workCache = cache;
-            workCache.derivedWork()
-                .submit(gate -> workCache.replaceValidated("baked", containerId + "/" + bakeHash, target,
-                    file -> validate(file, bakeHash), destination -> write(destination, bakeHash, source, backing),
-                    gate));
+            workCache.derivedWork().submit(gate -> {
+                try (var staging = cache.reserve(Pool.BAKE)) {
+                    write(staging.file(), bakeHash, source, backing);
+                    staging.publish(file -> validate(file, bakeHash), replacement -> gate.commit(() -> {
+                        replacement.run();
+                        index.publish(key(containerId, bakeHash), staging.location());
+                    }));
+                }
+            });
             return model;
         } finally {
             if (!delivered)
@@ -74,16 +80,26 @@ public final class BakedModelCache {
         }
     }
 
-    public GeoModel loadExisting(Hash256 containerId, String resourceName, byte[] textureHash,
-        GeoLocatorType locatorType) throws IOException {
+    public @org.jetbrains.annotations.Nullable GeoModel loadExisting(Hash256 containerId, String resourceName,
+        byte[] textureHash, GeoLocatorType locatorType) throws IOException {
         var bakeHash = bakeHash(containerId, resourceName, textureHash);
-        var target = path(containerId, bakeHash);
-        return read(target, bakeHash, locatorType);
+        try {
+            return read(path(containerId, bakeHash), bakeHash, locatorType);
+        } catch (IOException unavailable) {
+            com.elfmcys.ysm.model.storage.CacheReadFailure.miss(bakeHash, unavailable);
+            return null;
+        }
     }
 
-    Path path(Hash256 containerId, Hash256 bakeHash) {
-        return bakedRoot.resolve(CACHE_ABI).resolve(capabilityKey).resolve(containerId.toString())
-            .resolve(bakeHash + CACHE_SUFFIX);
+    BakeKey key(Hash256 container, Hash256 bake) {
+        return new BakeKey(new Partition(BakeKind.GEOMETRY, AbiVersion.CACHE_GEOMETRY, container, "", ""),
+            bake.toString(), AbiVersion.CACHE_GEOMETRY, capabilityKey, "", "", "");
+    }
+
+    Path path(Hash256 containerId, Hash256 bakeHash) throws IOException {
+        var file = index.find(key(containerId, bakeHash))
+            .orElseThrow(() -> new java.nio.file.NoSuchFileException("Geometry index miss"));
+        return cache.path(Pool.BAKE, file.location().fileId());
     }
 
     public static GeoModel bakeResident(GeoModelProto source, String resourceName, TexturePixelsSupplier textureSource,
@@ -150,17 +166,13 @@ public final class BakedModelCache {
                     throw AssetLoadException.content("Baked model cache has no native payload");
                 }
                 try (data) {
-                    try {
-                        candidate = NativeBakedModel.read(data, view.model().bones().size());
-                    } catch (RuntimeException error) {
-                        throw AssetLoadException.content("Failed to decode baked model cache", error);
-                    }
+                    candidate = NativeBakedModel.read(data, view.model().bones().size());
                     model = new GeoModel(expected.toString(), view.model(), locatorType, candidate);
                     operation.succeeded();
                 }
             } catch (AssetLoadException error) {
                 throw error;
-            } catch (IOException | RuntimeException error) {
+            } catch (IOException error) {
                 throw AssetLoadException.content("Invalid baked model cache", error);
             }
         } catch (IOException | RuntimeException | Error failure) {
@@ -185,11 +197,13 @@ public final class BakedModelCache {
                 return data != null;
             }
         } catch (AssetLoadException error) {
-            if (error.reason() == AssetLoadException.Reason.ACCESS) {
+            if (error.reason() == AssetLoadException.Reason.ACCESS
+                || !com.elfmcys.ysm.model.storage.CacheReadFailure.recoverable(error)) {
                 throw error;
             }
             return false;
-        } catch (IOException | RuntimeException ignored) {
+        } catch (IOException invalid) {
+            com.elfmcys.ysm.model.storage.CacheReadFailure.miss(expected, invalid);
             return false;
         }
     }

@@ -13,8 +13,7 @@ public final class FileIdentity {
     public static Object read(Path path) throws IOException {
         var absolute = path.toAbsolutePath().normalize();
         var attributes = Files.readAttributes(absolute, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-        if (attributes.isSymbolicLink() || attributes.isOther()
-            || !absolute.equals(absolute.toRealPath()))
+        if (attributes.isSymbolicLink() || attributes.isOther() || !absolute.equals(absolute.toRealPath()))
             throw new IOException("Linked filesystem entry: " + path);
         return observe(attributes);
     }
@@ -23,5 +22,6 @@ public final class FileIdentity {
         return new Observation(attributes.fileKey(), attributes.isDirectory());
     }
 
-    private record Observation(Object fileKey, boolean directory) {}
+    private record Observation(Object fileKey, boolean directory) {
+    }
 }

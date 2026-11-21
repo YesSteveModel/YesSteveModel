@@ -27,8 +27,7 @@ final class MolangEventCatalogTest {
         assertEquals(ExpressionHost.FLOAT_LIST, parameter(route(catalog, ProgramRole.EVENT_DEFER)));
         assertEquals(0, route(catalog, ProgramRole.EVENT_CODED_CONTROLLER).signature().parameters().size());
         assertEquals(MolangEventCatalog.SYNC_MAX_ARGUMENTS, route(catalog, ProgramRole.EVENT_SYNC).maximumArguments());
-        assertEquals(MolangEventCatalog.DEFER_MAX_ARGUMENTS,
-            route(catalog, ProgramRole.EVENT_DEFER).maximumArguments());
+        assertEquals(Integer.MAX_VALUE, route(catalog, ProgramRole.EVENT_DEFER).maximumArguments());
     }
 
     @Test
@@ -53,10 +52,7 @@ final class MolangEventCatalogTest {
         assertEquals(0, EventArguments.deferredFloats().size());
         assertEquals(2, deferred.size());
         assertThrows(IndexOutOfBoundsException.class, () -> deferred.getFloat(100));
-        assertEquals(MolangEventCatalog.DEFER_MAX_ARGUMENTS,
-            EventArguments.deferredFloats(new float[MolangEventCatalog.DEFER_MAX_ARGUMENTS]).size());
-        assertThrows(IllegalArgumentException.class,
-            () -> EventArguments.deferredFloats(new float[MolangEventCatalog.DEFER_MAX_ARGUMENTS + 1]));
+        assertEquals(256, EventArguments.deferredFloats(new float[256]).size());
         assertThrows(IllegalArgumentException.class, () -> EventArguments.deferredFloats(Float.NaN));
         assertThrows(IllegalArgumentException.class, () -> EventArguments.sync(Float.NaN));
         assertThrows(IllegalArgumentException.class, () -> EventArguments.sync(Float.POSITIVE_INFINITY));

@@ -7,14 +7,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CommandAddressSuggestionTest {
     @Test
-    void quotingRoundTripsEveryAddressWithoutChangingItsValue() throws Exception {
-        var quote = CommandRegistry.class.getDeclaredMethod("filterSuggestionStr", String.class);
-        quote.setAccessible(true);
-        for (var address : List.of("default", "global:custom/team/model.mxc", "local:auth/a b/模型.mxc",
-            "local:custom/a'quote.mxc", "global:auth/a\"quote.mxc", "builtin:%2e%2e")) {
-            var reader = new StringReader((String)quote.invoke(null, address));
-            assertEquals(address, reader.readString());
-            assertFalse(reader.canRead());
+    void selectorArgumentPreservesCanonicalPunctuationAndQuotedPaths() throws Exception {
+        var parser = com.elfmcys.ysm.command.ModelSelectorArgument.selector();
+        for (var value : List.of("id:Author/model@1.2.0+pc", "id:hash:" + "a".repeat(64), "global:pack/a.mxc")) {
+            var reader = new StringReader(value + " texture");
+            assertEquals(value, parser.parse(reader));
+            assertEquals(" texture", reader.getRemaining());
         }
+        assertEquals("local:a \"quoted\"/猫.mxc", parser.parse(new StringReader("\"local:a \\\"quoted\\\"/猫.mxc\"")));
     }
 }

@@ -26,8 +26,9 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> {
     public CustomPlayerEntity(Player player, boolean localPlayer, boolean asyncUpdate) {
         super(player, asyncUpdate);
         this.localPlayer = localPlayer;
-        if (player instanceof LocalPlayer) {
-            updateModelHash(null);
+        if (player instanceof LocalPlayer && com.elfmcys.ysm.network.forge.ClientSessionRuntime.state().orElse(
+            com.elfmcys.ysm.model.session.client.ClientModelSession.State.LOCAL) == com.elfmcys.ysm.model.session.client.ClientModelSession.State.LOCAL) {
+            requestBuiltinDefault();
         }
     }
 
@@ -137,7 +138,7 @@ public abstract class CustomPlayerEntity extends CustomHumanoidEntity<Player> {
                 && getCodedAnimationStates(PlayerControllerCollection.CAP_CONTROLLER) == AnimationState.IDLE) {
                 isPlayingExtraAnimation = false;
                 if (NetworkHandler.isRemoteChannelPresent()) {
-                    ClientProtocolGateway.stopSelfAnimation();
+                    ClientProtocolGateway.reportAnimationStopped();
                 }
             }
         }

@@ -9,6 +9,6 @@ public interface PreviewStorage {
     PreviewStore forContent(ModelContent content);
 
     static PreviewStorage routed() {
-        return content -> Objects.requireNonNull(content.storageBinding(), "Storage provenance").region().previews();
+        return content -> Objects.requireNonNull(content.storageBinding(), "Storage provenance").previews();
     }
 }

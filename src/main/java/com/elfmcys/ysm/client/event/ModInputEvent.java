@@ -10,8 +10,9 @@ import org.lwjgl.glfw.GLFW;
 
 @Mod.EventBusSubscriber(value = Dist.CLIENT, modid = YesSteveModel.MOD_ID)
 public class ModInputEvent {
-    public static volatile boolean[] KEY_STATES = new boolean[GLFW.GLFW_KEY_LAST + 1];
-    public static volatile boolean[] MOUSE_STATES = new boolean[GLFW.GLFW_MOUSE_BUTTON_LAST + 1];
+    // Input callbacks finish before animation publication; frame owners join readers before the next input poll.
+    public static final boolean[] KEY_STATES = new boolean[GLFW.GLFW_KEY_LAST + 1];
+    public static final boolean[] MOUSE_STATES = new boolean[GLFW.GLFW_MOUSE_BUTTON_LAST + 1];
 
     @SubscribeEvent
     public static void onKeyInput(InputEvent.Key event) {

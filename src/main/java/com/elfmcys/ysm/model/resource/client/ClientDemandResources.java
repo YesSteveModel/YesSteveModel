@@ -2,7 +2,8 @@ package com.elfmcys.ysm.model.resource.client;
 
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.service.ClientModelService;
 import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
 
@@ -18,12 +19,23 @@ public final class ClientDemandResources implements ClientDemandCoordinator.Reso
     }
 
     @Override
-    public ModelContent content(Hash256 modelId) {
+    public ResourceRequest playerRequest(ClientDemandCoordinator.Target target) {
+        return service.resourceRequest(target.identity(), "player", target.texture(), ModelResourcePurpose.FULL,
+            net.minecraft.client.player.AbstractClientPlayer.class);
+    }
+
+    @Override
+    public ModelContent content(ModelId modelId) {
         return service.catalog().find(modelId).map(entry -> entry.content()).orElse(null);
     }
 
     @Override
-    public ResourceRequest resourceRequest(Hash256 modelId, String target, String texture, ModelResourcePurpose purpose,
+    public ModelContent content(PublishedModelId modelId) {
+        return service.catalog().find(modelId).map(entry -> entry.content()).orElse(null);
+    }
+
+    @Override
+    public ResourceRequest resourceRequest(ModelId modelId, String target, String texture, ModelResourcePurpose purpose,
         Class<?> subject) {
         return service.resourceRequest(modelId, target, texture, purpose, subject);
     }
@@ -43,14 +55,13 @@ public final class ClientDemandResources implements ClientDemandCoordinator.Reso
         return service.findReady(request);
     }
 
-
     @Override
-    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, WorkPriority priority) {
+    public ResourceLease getOrStartCached(ResourceRequest request, WorkPriority priority) {
         return service.getOrStartCached(request, priority);
     }
 
     @Override
-    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request, WorkPriority priority) {
+    public ResourceLease getOrStartOffline(ResourceRequest request, WorkPriority priority) {
         return service.getOrStartOffline(request, priority);
     }
 

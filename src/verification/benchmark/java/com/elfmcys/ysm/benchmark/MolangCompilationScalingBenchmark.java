@@ -42,8 +42,8 @@ public class MolangCompilationScalingBenchmark {
 
         @Setup(Level.Trial)
         public void setup() throws Exception {
-            registry = ExpressionRegistry.builder(ContextTypes.create("benchmark:scaling", 1, Object.class, HASH), HASH,
-                ExpressionPolicy.COMPILER_LIMITS).freeze();
+            registry = ExpressionRegistry.builder(ContextTypes.create("benchmark:scaling", 1, Object.class, HASH), HASH)
+                .freeze();
             sources = new ArrayList<>();
             if (scenario.equals("repeated") || scenario.equals("unique")) {
                 for (int index = 0; index < size; index++) {
@@ -100,9 +100,9 @@ public class MolangCompilationScalingBenchmark {
             var report = artifact.report();
             PlayerMolangCompileBenchmark.PHASES.add(new PlayerMolangCompileBenchmark.PhaseSample(
                 nanos[EngineMetrics.Stage.SEMANTIC_ANALYSIS.ordinal()] / 1e6,
-                nanos[EngineMetrics.Stage.SOURCE_GENERATION.ordinal()] / 1e6,
+                nanos[EngineMetrics.Stage.SYNTAX_GENERATION.ordinal()] / 1e6,
                 nanos[EngineMetrics.Stage.BACKEND_COMPILATION.ordinal()] / 1e6, sources.size(),
-                report.metrics().typedNodes(), report.metrics().generatedSourceBytes(), report.replacements().size()));
+                report.metrics().typedNodes(), report.metrics().generatedNodes(), report.replacements().size()));
             if (scenario.startsWith("scalar")) {
                 require(artifact.catalog().size() == sources.size(), "scalar source inventory");
                 return;

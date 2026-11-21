@@ -69,7 +69,8 @@ public final class NativeRuntime {
         return path.normalize();
     }
 
-    public record MacUserDirectories(Path applicationSupport, Path caches) {}
+    public record MacUserDirectories(Path applicationSupport, Path caches) {
+    }
 
     public static ThreadSchedulingResult applyCurrentThreadPolicy(ThreadPolicy policy) {
         Objects.requireNonNull(policy, "policy");

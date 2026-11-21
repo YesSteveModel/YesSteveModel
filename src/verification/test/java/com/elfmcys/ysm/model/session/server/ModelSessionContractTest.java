@@ -1,5 +1,7 @@
 package com.elfmcys.ysm.model.session.server;
 
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.capability.ModelInfoCapability;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.format.schema.model.ModelFileView;
@@ -31,9 +33,7 @@ import com.elfmcys.ysm.network.session.SessionMode;
 import com.elfmcys.ysm.proto.network.AnimationStateProto;
 import com.elfmcys.ysm.proto.network.EntityRefProto;
 import com.elfmcys.ysm.proto.network.GameplayStateProto;
-import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
 import com.elfmcys.ysm.proto.network.RoamingStateProto;
-import com.elfmcys.ysm.proto.network.StateWriteMode;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -64,15 +64,17 @@ class ModelSessionContractTest {
         assertTrue(server.authority().runtimeContentAllowed(hash(2)));
         server.setGrants(Set.of());
         assertFalse(server.authority().runtimeContentAllowed(hash(2)));
-        server.selectForced(new Selection.Model(hash(2)), true);
+        server.setGrants(Set.of(hash(2)));
+        select(server, new Selection.Model(hash(2)));
         assertTrue(server.authority().runtimeContentAllowed(hash(2)));
         assertFalse(server.authority().runtimeContentAllowed(hash(3)));
-        assertEquals(Set.of(), server.grants());
-        server.select(new Selection.IntrinsicDefault());
+        assertEquals(Set.of(hash(2)), server.grants());
+        select(server, new Selection.IntrinsicDefault());
+        server.setGrants(Set.of());
         assertFalse(server.authority().runtimeContentAllowed(hash(2)));
         server.updateContentPolicy(false);
         assertTrue(server.authority().runtimeContentAllowed(hash(3)));
-        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, server.select(new Selection.Model(hash(3))));
+        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, select(server, new Selection.Model(hash(3))));
     }
 
     @Test
@@ -92,7 +94,7 @@ class ModelSessionContractTest {
         assertTrue(new com.elfmcys.ysm.model.catalog.client.ClientCatalogSnapshot(projected.catalog())
             .permitsRuntimeContent(hash(1)));
         var builtin = new CatalogRecord(
-            new CatalogEntry(record.entry().modelId(), new HierarchyPath("default"), record.entry().access(),
+            new CatalogEntry(record.entry().modelId(), new HierarchyPath("builtin:default"), record.entry().access(),
                 record.entry().presentation()),
             new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")), record.binding());
         assertFalse(new com.elfmcys.ysm.model.catalog.client.ClientCatalogSnapshot(
@@ -137,8 +139,7 @@ class ModelSessionContractTest {
         assertSame(token, client.observePreview(identity).orElseThrow());
         var replacement = new ModelFileIdentity(identity.modelId(), container(2));
         client.publishPublication(new RemotePublicationSnapshot(
-            List.of(
-                new PublicationEntry(replacement, new HierarchyPath("local:custom/one"), CatalogAccess.PUBLIC, true)),
+            List.of(new PublicationEntry(replacement, new HierarchyPath("local:one"), CatalogAccess.PUBLIC, true)),
             Set.of(), List.of(), Map.of()));
         assertFalse(client.completePreviewAbsent(token));
         assertFalse(client.previewAbsent(identity));
@@ -148,7 +149,8 @@ class ModelSessionContractTest {
     @Test
     void commitsLeanAuthorityBeforeTerminalActivation() {
         var intrinsic = record(1, "default", CatalogAccess.PUBLIC, CatalogRootKind.BUILTIN);
-        var local = snapshot(intrinsic, record(3, "local", CatalogAccess.PUBLIC));
+        var localRecord = record(3, "local", CatalogAccess.PUBLIC);
+        var local = new CatalogSnapshot(Map.of(hash(3), localRecord), intrinsic, List.of(), ModelScanReport.empty());
         var explicitLocal = new ClientModelSession(SessionMode.LOCAL, true, local);
         assertEquals(ClientModelSession.State.LOCAL, explicitLocal.state());
         assertFalse(explicitLocal.onServerHello("bad", false).orElseThrow().accepted());
@@ -161,17 +163,19 @@ class ModelSessionContractTest {
 
         assertEquals(ClientModelSession.State.ACTIVE, remote.state());
         assertSame(publication, remote.remoteSnapshot().orElseThrow());
-        assertEquals(Set.of(intrinsic.entry().modelId()), remote.catalog().byModelId().keySet());
+        assertTrue(remote.catalog().byModelId().isEmpty());
+        assertSame(intrinsic, remote.catalog().intrinsicDefault());
         assertFalse(remote.activationSnapshot().orElseThrow().terminal());
 
-        var states = Map.<Hash256, ActivationSnapshot.State>of(record.entry().modelId(),
+        var states = Map.<ModelId, ActivationSnapshot.State>of(record.entry().modelId(),
             new ActivationSnapshot.Ready(publication.entries().get(record.entry().modelId()), record));
         remote.publishActivation(new ActivationSnapshot(publication, states));
         assertSame(record, remote.catalog().byModelId().get(record.entry().modelId()));
-        assertSame(intrinsic, remote.catalog().byModelId().get(intrinsic.entry().modelId()));
+        assertSame(intrinsic, remote.catalog().intrinsicDefault());
 
         remote.failCompleteTransfer();
-        assertEquals(Set.of(intrinsic.entry().modelId()), remote.catalog().byModelId().keySet());
+        assertTrue(remote.catalog().byModelId().isEmpty());
+        assertSame(intrinsic, remote.catalog().intrinsicDefault());
     }
 
     @Test
@@ -287,96 +291,6 @@ class ModelSessionContractTest {
     }
 
     @Test
-    void serverReportBaselineBelongsToTheActiveModelSession() {
-        var catalog = snapshot(record(1, "first", CatalogAccess.PUBLIC));
-        var server = new ServerModelSession(() -> catalog, false);
-        var full = report(StateWriteMode.FULL);
-        var delta = report(StateWriteMode.DELTA);
-
-        assertFalse(server.acceptsPlayerStateReport(full));
-        assertTrue(server.activate());
-        assertFalse(server.acceptsPlayerStateReport(delta));
-        assertTrue(server.acceptsPlayerStateReport(full));
-        server.commitPlayerStateReport(true);
-        assertTrue(server.acceptsPlayerStateReport(delta));
-        server.commitPlayerStateReport(false);
-
-        server.commitCatalog(catalog);
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, server.select(new Selection.Model(hash(1))));
-        assertFalse(server.acceptsPlayerStateReport(delta));
-        assertTrue(server.acceptsPlayerStateReport(full));
-    }
-
-    @Test
-    void intrinsicDefaultReplacementRequiresANewReportBaseline() {
-        var first = snapshot(record(1, "default", CatalogAccess.PUBLIC, CatalogRootKind.BUILTIN));
-        var second = snapshot(record(2, "default", CatalogAccess.PUBLIC, CatalogRootKind.BUILTIN));
-        var server = new ServerModelSession(() -> first, false);
-        var full = report(StateWriteMode.FULL);
-        var delta = report(StateWriteMode.DELTA);
-
-        assertTrue(server.activate());
-        server.commitCatalog(first);
-        assertTrue(server.acceptsPlayerStateReport(full));
-        server.commitPlayerStateReport(true);
-        assertTrue(server.acceptsPlayerStateReport(delta));
-
-        server.commitCatalog(second);
-        assertFalse(server.acceptsPlayerStateReport(delta));
-        assertTrue(server.acceptsPlayerStateReport(full));
-    }
-
-    @Test
-    void textureSelectionPreservesAnimationAndReportBaselineUntilTheModelChanges() {
-        var catalog = snapshot(record(1, "first", CatalogAccess.PUBLIC), record(2, "second", CatalogAccess.PUBLIC));
-        var server = new ServerModelSession(() -> catalog, false);
-        assertTrue(server.activate());
-        server.commitCatalog(catalog);
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, server.select(new Selection.Model(hash(1), "first")));
-        var planner = new PlayerStateReportPlanner();
-        planner.beginSession(server.playerStateReportPolicy());
-        planner.acceptAuthority(hash(1), null);
-        planner.setAnimation("extra0");
-        var full = planner.observe(1, 1, PlayerStateReportPlanner.RoamingSample.absent()).orElseThrow();
-        assertEquals(StateWriteMode.FULL, full.mode());
-        assertTrue(server.acceptsPlayerStateReport(full));
-        server.commitPlayerStateReport(true);
-
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED,
-            server.select(new Selection.Model(hash(1), "second")));
-        planner.acceptAuthority(hash(1), null);
-        assertTrue(planner.observe(50_000_001L, 1, PlayerStateReportPlanner.RoamingSample.absent()).isEmpty());
-        planner.setAnimation("extra1");
-        var delta = planner.observe(100_000_001L, 1, PlayerStateReportPlanner.RoamingSample.absent()).orElseThrow();
-        assertEquals(StateWriteMode.DELTA, delta.mode());
-        assertEquals("extra1", delta.animationUnsafe().animationId());
-        assertTrue(server.acceptsPlayerStateReport(delta));
-
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED,
-            server.selectForced(new Selection.Model(hash(1), "third"), false));
-        assertTrue(server.acceptsPlayerStateReport(delta));
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, server.select(new Selection.Model(hash(2), "first")));
-        assertFalse(server.acceptsPlayerStateReport(delta));
-        planner.acceptAuthority(hash(2), null);
-        var replacement =
-            planner.observe(150_000_001L, 1, PlayerStateReportPlanner.RoamingSample.absent()).orElseThrow();
-        assertEquals(StateWriteMode.FULL, replacement.mode());
-        assertTrue(replacement.animationUnsafe().stopped());
-        assertTrue(server.acceptsPlayerStateReport(replacement));
-    }
-
-    @Test
-    void gameServerReportProfileRejectsGameplayAndUnauthorizedRoaming() {
-        var server = new ServerModelSession(CatalogSnapshot::empty, false);
-        assertTrue(server.activate());
-
-        assertFalse(server.acceptsPlayerStateReport(report(StateWriteMode.FULL)
-            .withGameplay(GameplayStateProto.newBuilder().setHealth(1).setMaxHealth(1).build())));
-        assertFalse(server.acceptsPlayerStateReport(
-            report(StateWriteMode.FULL).withRoaming(RoamingStateProto.newBuilder().setModelKey(1).build())));
-    }
-
-    @Test
     void serverUsesOnlyTheLastPublishedSnapshotForAssetLookup() {
         var first = snapshot(record(1, "first", CatalogAccess.PUBLIC));
         var live = new AtomicReference<>(first);
@@ -399,7 +313,7 @@ class ModelSessionContractTest {
         var session = new ServerModelSession(() -> first, false);
         assertTrue(session.activate());
         session.commitCatalog(first, Set.of(hash(2)));
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, session.select(new Selection.Model(hash(2))));
+        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, select(session, new Selection.Model(hash(2))));
         assertTrue(session.findModel(hash(1)).isPresent());
 
         var transition = session.commitCatalog(second, Set.of(hash(2)));
@@ -408,7 +322,7 @@ class ModelSessionContractTest {
         assertTrue(session.findModel(hash(2)).isPresent());
         assertEquals(Set.of(hash(2)), session.grants());
         assertEquals(new Selection.Model(hash(2)), session.selection());
-        assertSame(transition.current(), session.authority());
+        assertEquals(transition.current(), session.authority());
     }
 
     @Test
@@ -420,83 +334,65 @@ class ModelSessionContractTest {
         assertTrue(session.activate());
         session.commitCatalog(catalog);
 
-        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, session.select(new Selection.Model(authId)));
+        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, select(session, new Selection.Model(authId)));
         assertTrue(session.canRequest(authId, AssetRef.Kind.CHUNK, false));
         assertFalse(session.canRequest(authId, AssetRef.Kind.CHUNK, true));
         assertTrue(session.canRequest(authId, AssetRef.Kind.PREVIEW, true));
         assertTrue(session.canRequest(authId, AssetRef.Kind.ICON, true));
         session.setGrants(Set.of(authId));
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, session.select(new Selection.Model(authId)));
+        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, select(session, new Selection.Model(authId)));
         session.setGrants(Set.of());
-        assertInstanceOf(Selection.IntrinsicDefault.class, session.selection());
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, session.select(new Selection.Model(publicId)));
+        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, session.validateSelection(session.selection()));
+        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, select(session, new Selection.Model(publicId)));
     }
 
     @Test
-    void forcedSelectionBypassesOnlyItsOwnChunksWithoutMutatingGrants() {
-        var forcedId = hash(2);
-        var otherId = hash(3);
-        var catalog = snapshot(record(1, "public", CatalogAccess.PUBLIC), record(2, "forced", CatalogAccess.AUTHORIZED),
-            record(3, "other", CatalogAccess.AUTHORIZED));
+    void forcedSelectionRequiresTheSameGrantAsSelfSelectionAndLosesItOnRevocation() {
+        var id = hash(2);
+        var catalog =
+            snapshot(record(1, "public", CatalogAccess.PUBLIC), record(2, "restricted", CatalogAccess.AUTHORIZED));
         var session = new ServerModelSession(() -> catalog, false);
         assertTrue(session.activate());
         session.commitCatalog(catalog);
-
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED,
-            session.selectForced(new Selection.Model(forcedId), true));
-        assertEquals(Set.of(), session.grants());
-        assertTrue(session.canRequest(forcedId, AssetRef.Kind.CHUNK, true));
-        assertFalse(session.canRequest(otherId, AssetRef.Kind.CHUNK, true));
-        assertTrue(session.canRequest(otherId, AssetRef.Kind.PREVIEW, true));
-        assertTrue(session.canRequest(otherId, AssetRef.Kind.ICON, true));
-
-        session.setGrants(Set.of(otherId));
+        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, select(session, new Selection.Model(id)));
+        assertFalse(session.canRequest(id, AssetRef.Kind.CHUNK, true));
+        assertTrue(session.canRequest(id, AssetRef.Kind.PREVIEW, true));
+        session.setGrants(Set.of(id));
+        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, select(session, new Selection.Model(id)));
+        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, select(session, new Selection.Model(id, "updated")));
+        assertTrue(session.canRequest(id, AssetRef.Kind.CHUNK, true));
         session.setGrants(Set.of());
-        assertEquals(new Selection.Model(forcedId), session.selection());
-        assertTrue(session.canRequest(forcedId, AssetRef.Kind.CHUNK, true));
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED,
-            session.select(new Selection.Model(forcedId, "updated")));
-        assertTrue(session.canRequest(forcedId, AssetRef.Kind.CHUNK, true));
-
-        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, session.select(new Selection.Model(otherId)));
-        assertInstanceOf(Selection.IntrinsicDefault.class, session.selection());
-        assertFalse(session.canRequest(forcedId, AssetRef.Kind.CHUNK, true));
+        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, session.validateSelection(session.selection()));
+        assertFalse(session.canRequest(id, AssetRef.Kind.CHUNK, true));
+        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, select(session, new Selection.Model(id)));
     }
 
     @Test
-    void publicationRemovalClearsForcedSelectionAndPrivateMode() {
-        var forcedId = hash(2);
-        var catalog = snapshot(record(2, "forced", CatalogAccess.AUTHORIZED));
-        var session = new ServerModelSession(() -> catalog, false);
-        assertTrue(session.activate());
-        session.commitCatalog(catalog);
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED,
-            session.selectForced(new Selection.Model(forcedId), true));
-
-        var transition = session.commitCatalog(CatalogSnapshot.empty(), Set.of());
-
-        assertInstanceOf(Selection.IntrinsicDefault.class, transition.current().selection());
-        assertFalse(transition.current().ignoreGrants());
-        assertFalse(session.canRequest(forcedId, AssetRef.Kind.CHUNK, true));
-    }
-
-    @Test
-    void persistedForcedSelectionCanBeRestoredIntoANewSession() {
-        var forcedId = hash(2);
+    void persistedCommandSelectionDoesNotRestoreAuthorization() {
+        var id = hash(2);
         var persistent = new ModelInfoCapability();
-        persistent.setCommandSelection(forcedId, "skin", true);
+        persistent.setCommandSelection(id, "skin");
         var restored = new ModelInfoCapability();
         restored.deserializeNBT(persistent.serializeNBT());
-
-        var catalog = snapshot(record(2, "forced", CatalogAccess.AUTHORIZED));
+        var catalog = snapshot(record(2, "restricted", CatalogAccess.AUTHORIZED));
         var session = new ServerModelSession(() -> catalog, false);
         assertTrue(session.activate());
         session.commitCatalog(catalog);
+        var requested =
+            new Selection.Model(((PublishedModelId.Model)restored.getModelId()).hash(), restored.getSelectTexture());
+        assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED, select(session, requested));
+        session.setGrants(Set.of(id));
+        assertEquals(ServerModelSession.SelectionResult.ACCEPTED, select(session, requested));
+        var transition = session.commitCatalog(CatalogSnapshot.empty());
+        assertEquals(ServerModelSession.SelectionResult.NOT_FOUND,
+            session.validateSelection(transition.current().selection()));
+    }
 
-        assertEquals(ServerModelSession.SelectionResult.ACCEPTED,
-            session.selectForced(new Selection.Model(restored.getModelId(), restored.getSelectTexture()),
-                restored.ignoresGrantsFor(restored.getModelId())));
-        assertTrue(session.canRequest(forcedId, AssetRef.Kind.CHUNK, true));
+    private static ServerModelSession.SelectionResult select(ServerModelSession session, Selection selection) {
+        var result = session.validateSelection(selection);
+        if (result == ServerModelSession.SelectionResult.ACCEPTED)
+            session.bindSelection(() -> selection);
+        return result;
     }
 
     private static ClientModelSession activeClient(CatalogRecord record) {
@@ -516,13 +412,8 @@ class ModelSessionContractTest {
             Set.of(), List.of(), Map.of());
     }
 
-    private static PlayerStateReportProto report(StateWriteMode mode) {
-        return PlayerStateReportProto.newBuilder().setSubject(EntityRefProto.newBuilder().setEntityId(1).build())
-            .setMode(mode).setAnimation(AnimationStateProto.newBuilder().setStopped(true).build()).build();
-    }
-
     private static CatalogSnapshot snapshot(CatalogRecord... records) {
-        var map = new LinkedHashMap<Hash256, CatalogRecord>();
+        var map = new LinkedHashMap<ModelId, CatalogRecord>();
         for (var record : records) {
             map.put(record.entry().modelId(), record);
         }
@@ -530,8 +421,7 @@ class ModelSessionContractTest {
     }
 
     private static CatalogRecord record(int seed, String path, CatalogAccess access) {
-        return record(seed, path, access,
-            access == CatalogAccess.AUTHORIZED ? CatalogRootKind.AUTH : CatalogRootKind.CUSTOM);
+        return record(seed, path, access, CatalogRootKind.MODELS);
     }
 
     private static CatalogRecord record(int seed, String path, CatalogAccess access, CatalogRootKind root) {
@@ -543,17 +433,17 @@ class ModelSessionContractTest {
             new CatalogLocation(root, new ModelPath(path)), new CatalogContentBinding(id, content));
     }
 
-    private static Hash256 hash(int seed) {
+    private static ModelId hash(int seed) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)seed;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 
     private static Hash256 container(int seed) {
-        return hash(seed + 20);
+        return Hash256.parse(hash(seed + 20).toString().substring(5));
     }
 
-    private record StubContent(Hash256 modelId) implements ModelContent {
+    private record StubContent(ModelId modelId) implements ModelContent {
         @Override
         public ModelRepresentation representation() {
             return null;

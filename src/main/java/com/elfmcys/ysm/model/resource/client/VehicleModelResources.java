@@ -12,28 +12,25 @@ import com.elfmcys.ysm.geckolib3.core.manager.AnimationData;
 
 public class VehicleModelResources implements RenderTargetResources {
     private final GeoModel model;
-    private final AnimationStore animations;
-    private final Object2ReferenceMap<String, AnimationControllerData> controllers;
+    private final AnimationStore.View animations;
     private final BiConsumer<CustomVehicleEntity, AnimationData> controllerFactory;
 
-    public VehicleModelResources(GeoModel model, AnimationStore animations,
-        Object2ReferenceMap<String, AnimationControllerData> controllers, CommonAsset assets) {
+    public VehicleModelResources(GeoModel model, AnimationStore.View animations) {
         this.model = model;
         this.animations = animations;
-        this.controllers = controllers;
-        this.controllerFactory = VehicleControllerCollection.build(this, assets);
+        this.controllerFactory = VehicleControllerCollection.build(this);
     }
 
     public GeoModel model() {
         return model;
     }
 
-    public AnimationStore animations() {
+    public AnimationStore.View animations() {
         return animations;
     }
 
     public Object2ReferenceMap<String, AnimationControllerData> controllers() {
-        return controllers;
+        return animations.controllers();
     }
 
     public BiConsumer<CustomVehicleEntity, AnimationData> controllerFactory() {

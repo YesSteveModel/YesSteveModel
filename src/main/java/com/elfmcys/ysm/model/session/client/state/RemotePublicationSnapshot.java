@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.model.session.client.state;
 
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.HierarchyPath;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import java.util.Collections;
@@ -12,9 +13,9 @@ import java.util.Objects;
 import java.util.Set;
 
 /** Immutable remote collection authority; entries do not imply locally available content. */
-public record RemotePublicationSnapshot(Map<Hash256, PublicationEntry> entries, Set<Hash256> grants,
+public record RemotePublicationSnapshot(Map<ModelId, PublicationEntry> entries, Set<ModelId> grants,
     List<ModelPackDescriptor> packs, Map<String, Hash256> defaultAnimations) {
-    public RemotePublicationSnapshot(List<PublicationEntry> entries, Set<Hash256> grants,
+    public RemotePublicationSnapshot(List<PublicationEntry> entries, Set<ModelId> grants,
         List<ModelPackDescriptor> packs, Map<String, Hash256> defaultAnimations) {
         this(index(entries), grants, packs, defaultAnimations);
     }
@@ -29,14 +30,14 @@ public record RemotePublicationSnapshot(Map<Hash256, PublicationEntry> entries, 
         }
     }
 
-    public RemotePublicationSnapshot withCollections(Set<Hash256> nextGrants, List<ModelPackDescriptor> nextPacks,
+    public RemotePublicationSnapshot withCollections(Set<ModelId> nextGrants, List<ModelPackDescriptor> nextPacks,
         Map<String, Hash256> nextAnimations) {
         return new RemotePublicationSnapshot(entries, nextGrants, nextPacks, nextAnimations);
     }
 
-    private static Map<Hash256, PublicationEntry> index(List<PublicationEntry> entries) {
+    private static Map<ModelId, PublicationEntry> index(List<PublicationEntry> entries) {
         Objects.requireNonNull(entries, "entries");
-        var result = new LinkedHashMap<Hash256, PublicationEntry>();
+        var result = new LinkedHashMap<ModelId, PublicationEntry>();
         for (var entry : entries) {
             Objects.requireNonNull(entry, "entry");
             if (result.putIfAbsent(entry.modelId(), entry) != null) {
@@ -46,9 +47,9 @@ public record RemotePublicationSnapshot(Map<Hash256, PublicationEntry> entries, 
         return result;
     }
 
-    private static Map<Hash256, PublicationEntry> validateEntries(Map<Hash256, PublicationEntry> entries) {
+    private static Map<ModelId, PublicationEntry> validateEntries(Map<ModelId, PublicationEntry> entries) {
         Objects.requireNonNull(entries, "entries");
-        var result = new LinkedHashMap<Hash256, PublicationEntry>();
+        var result = new LinkedHashMap<ModelId, PublicationEntry>();
         var paths = new LinkedHashSet<HierarchyPath>();
         entries.forEach((modelId, entry) -> {
             Objects.requireNonNull(modelId, "modelId");

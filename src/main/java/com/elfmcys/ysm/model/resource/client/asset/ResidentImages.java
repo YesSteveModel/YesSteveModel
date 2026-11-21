@@ -14,11 +14,15 @@ import java.util.Objects;
 /**
  * Content associations and consumer uses; host retention and physical release stay in the manager.
  *
- * <p>Execution: lookup, claim, publication, and Use access run on the render owner. Synchronization
- * also permits preparation completion from workers; it does not permit host texture work on any thread.
- * A Preparation is single-consumer work and a Prepared result needs an ordered handoff before publication.
+ * <p>
+ * Execution: lookup, claim, publication, and Use access run on the render owner. Synchronization also permits
+ * preparation completion from workers; it does not permit host texture work on any thread. A Preparation is
+ * single-consumer work and a Prepared result needs an ordered handoff before publication.
  *
- * <p>Seam: implements [independent image use and host retention](docs/architecture/client-presentation/implementation/page-runtime.md#页面与资源-owner) without owning model-target textures.
+ * <p>
+ * Seam: implements [independent image use and host
+ * retention](docs/architecture/client-presentation/implementation/page-runtime.md#页面与资源-owner) without owning
+ * model-target textures.
  */
 public final class ResidentImages {
     private final Map<ImageIdentity, Entry> residents = new HashMap<>();
@@ -31,12 +35,15 @@ public final class ResidentImages {
             public CustomTexture create(PreviewStore.EncodedPreview image) {
                 return new CustomTexture(image);
             }
+
             public TextureHolder register(CustomTexture texture) {
                 return CustomTextureManager.register(texture);
             }
+
             public CustomTextureManager.Registration observe(CustomTexture texture, Runnable invalidated) {
                 return CustomTextureManager.observe(texture, invalidated);
             }
+
             public void release(CustomTexture texture) {
                 CustomTextureManager.release(texture);
             }
@@ -53,8 +60,8 @@ public final class ResidentImages {
     }
 
     /**
-     * Returns an independently closeable use only for current authority and a live host registration;
-     * returns null on a miss. Does not read, decode, or acquire model content.
+     * Returns an independently closeable use only for current authority and a live host registration; returns null on a
+     * miss. Does not read, decode, or acquire model content.
      */
     public synchronized Use lookup(ImageRequest request) {
         if (!request.current(null))
@@ -75,8 +82,9 @@ public final class ResidentImages {
     /**
      * Reserves one current identity for CPU preparation, or returns null if stale, resident, or already claimed.
      *
-     * <p>Ownership: retains an independent use of encoded input on success. The caller remains responsible
-     * for its original input and must close an unused claim; successful prepare transfers cleanup to Prepared.
+     * <p>
+     * Ownership: retains an independent use of encoded input on success. The caller remains responsible for its
+     * original input and must close an unused claim; successful prepare transfers cleanup to Prepared.
      */
     public synchronized Preparation claim(ImageRequest request, ImageSource source) {
         if (!request.current(source))
@@ -95,9 +103,9 @@ public final class ResidentImages {
     }
 
     /**
-     * Consumes a non-null, unconsumed Prepared result on every path, including rejection and failure.
-     * Normal return may discard a stale or duplicate result; it does not create a consumer use.
-     * Host registration/upload failures propagate after this result's cleanup.
+     * Consumes a non-null, unconsumed Prepared result on every path, including rejection and failure. Normal return may
+     * discard a stale or duplicate result; it does not create a consumer use. Host registration/upload failures
+     * propagate after this result's cleanup.
      */
     public synchronized void publish(Prepared image) {
         Objects.requireNonNull(image);
@@ -116,7 +124,8 @@ public final class ResidentImages {
                 var holder = host.register(texture);
                 registered = true;
                 if (texture.failure().isPresent())
-                    throw new IllegalStateException("Standalone texture upload failed", texture.failure().orElseThrow());
+                    throw new IllegalStateException("Standalone texture upload failed",
+                        texture.failure().orElseThrow());
                 var entry = new Entry(identity, texture, holder);
                 entry.registration = host.observe(texture, () -> invalidate(entry));
                 residents.put(identity, entry);
@@ -189,9 +198,9 @@ public final class ResidentImages {
         }
 
         /**
-         * Performs synchronous CPU work once on the designated task; does not register a host texture.
-         * Normal return transfers the prepared input to the caller, who must publish or close it.
-         * Failure releases this claim; closing Preparation after consumption does not close its result.
+         * Performs synchronous CPU work once on the designated task; does not register a host texture. Normal return
+         * transfers the prepared input to the caller, who must publish or close it. Failure releases this claim;
+         * closing Preparation after consumption does not close its result.
          *
          * @throws IllegalStateException if this preparation was already executed or closed
          * @throws IOException if image preparation fails
@@ -219,7 +228,11 @@ public final class ResidentImages {
             } catch (IOException | RuntimeException | Error failure) {
                 returned(this);
                 if (encoded != null) {
-                    try { encoded.close(); } catch (Throwable cleanup) { failure.addSuppressed(cleanup); }
+                    try {
+                        encoded.close();
+                    } catch (Throwable cleanup) {
+                        failure.addSuppressed(cleanup);
+                    }
                 }
                 throw failure;
             }
@@ -245,8 +258,8 @@ public final class ResidentImages {
     }
 
     /**
-     * One owning CPU result, used exclusively until publish or close consumes it. Closing an unpublished
-     * result releases its input and identity reservation; it does not invalidate another resident entry.
+     * One owning CPU result, used exclusively until publish or close consumes it. Closing an unpublished result
+     * releases its input and identity reservation; it does not invalidate another resident entry.
      */
     public final class Prepared implements AutoCloseable {
         private final Preparation preparation;
@@ -293,8 +306,11 @@ public final class ResidentImages {
 
     interface Host {
         CustomTexture create(PreviewStore.EncodedPreview image);
+
         TextureHolder register(CustomTexture texture);
+
         CustomTextureManager.Registration observe(CustomTexture texture, Runnable invalidated);
+
         void release(CustomTexture texture);
     }
 }

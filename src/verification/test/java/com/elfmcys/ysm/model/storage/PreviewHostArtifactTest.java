@@ -32,7 +32,7 @@ class PreviewHostArtifactTest {
         try (var source = new Directory(sourceDirectory)) {
             converted = ModelParser.parse(source, temp, DefaultAnimationFilter.keepAll());
         }
-        var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("preview-host-artifact"));
+        var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("preview-host-artifact"));
         var source = ManagedContainer.openDirect(converted, location);
         try (var sourceRepresentation = source.representation()) {
             var artifact = ManagedContainer.openDirect(output, location);

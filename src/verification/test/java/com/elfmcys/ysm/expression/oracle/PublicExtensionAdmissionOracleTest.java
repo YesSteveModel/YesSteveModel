@@ -40,7 +40,6 @@ import java.util.jar.JarOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -59,23 +58,23 @@ public final class PublicExtensionAdmissionOracleTest {
     void publicExtensionBoundaryMatchesTheFrozenExtensionCases() throws Exception {
         var api = apiJar();
         var valid = extension(api, "Valid", "oracle_valid", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static float ping(MolangContextView<net.minecraft.world.entity.Entity> c){return 1f;}
             """);
         var control = extension(api, "Control", "oracle_control", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static float pong(MolangContextView<net.minecraft.world.entity.Entity> c){return 2f;}
             """);
         var spoof = extension(api, "Spoof", "oracle_valid", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static float spoofed(MolangContextView<net.minecraft.world.entity.Entity> c){return 0f;}
             """);
         var brokenA = extension(api, "BrokenA", "oracle_broken", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static float duplicated(MolangContextView<net.minecraft.world.entity.Entity> c){return 1f;}
             """);
         var brokenB = extension(api, "BrokenB", "oracle_broken", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static float duplicated(MolangContextView<net.minecraft.world.entity.Entity> c){return 2f;}
             """);
         runInSharedLoader("verifyExtensionBoundary", List.of(valid, control, spoof, brokenA, brokenB),
@@ -86,7 +85,7 @@ public final class PublicExtensionAdmissionOracleTest {
     void reservedRootIsRefusedAtTheCompileBoundary() throws Exception {
         var api = apiJar();
         var compiled = compile(api, temporary.resolve("reserved"), "Reserved", "ysm", """
-            @MolangFunction(effect=MolangEffect.CONTEXT)
+            @MolangFunction
             public static float reserved_claim(MolangContextView<net.minecraft.world.entity.Entity> c){return 0f;}
             """);
         assertFalse(compiled.ok, "claiming the reserved ysm root must be refused: " + compiled.diagnostics);
@@ -103,7 +102,7 @@ public final class PublicExtensionAdmissionOracleTest {
             "public static float leak(MolangContextView<net.minecraft.world.entity.Entity> c){c.batch();return 1f;}",
             "public static float leak(MolangContextView<net.minecraft.world.entity.Entity> c){c.execute();return 1f;}")) {
             var compiled = compile(api, temporary.resolve("leak" + Math.abs(signature.hashCode())), "Leak",
-                "oracle_valid", "@MolangFunction(effect=MolangEffect.CONTEXT) " + signature);
+                "oracle_valid", "@MolangFunction(alwaysOrigin = true) " + signature);
             assertFalse(compiled.ok, "the public API must not expose engine carriers or host contexts: " + signature
                 + " / " + compiled.diagnostics);
         }
@@ -115,9 +114,9 @@ public final class PublicExtensionAdmissionOracleTest {
         var compiled = compile(api, temporary.resolve("hidden"), "Hidden", "oracle_fixture",
             """
                 private record HiddenRecord(float value) {}
-                @MolangFunction(effect=MolangEffect.CONTEXT)
+                @MolangFunction
                 public static float plain(MolangContextView<net.minecraft.world.entity.Entity> c,float value){return value;}
-                @MolangFunction(effect=MolangEffect.CONTEXT)
+                @MolangFunction
                 public static HiddenRecord leak(MolangContextView<net.minecraft.world.entity.Entity> c){return new HiddenRecord(1);}
                 """);
         assertFalse(compiled.ok, compiled.diagnostics);
@@ -170,9 +169,8 @@ public final class PublicExtensionAdmissionOracleTest {
         try {
             var method = member.owner().getMethod(member.methodName(), member.methodType().parameterArray());
             var state = MolangContext.observation(new EntityView() {}, new RenderView() {},
-                new com.elfmcys.ysm.expression.host.ControlledHostFixture(),
                 com.elfmcys.ysm.expression.TestRoamingStates.create(null, dev.semaweave.RoamingRole.PRODUCER),
-                new InvocationProvenance("oracle", "control", 0, 1, 1), () -> false, () -> true);
+                new InvocationProvenance("oracle", "control", 0, 1, 1));
             return (float)method.invoke(null, state);
         } catch (ReflectiveOperationException failure) {
             throw new IllegalStateException("admitted extension is not callable", failure);

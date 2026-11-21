@@ -9,9 +9,10 @@ public final class BuiltinDeclarations {
     private BuiltinDeclarations() {}
 
     private static final List<DeclarationSchema> SCHEMAS = readSchemas();
-    private static final List<BuiltinSurface> SURFACES =
-        SCHEMAS.stream().flatMap(s -> s.members().stream().map(m -> surface(s, m)))
-            .sorted(Comparator.comparing(BuiltinSurface::stableId)).toList();
+    private static final List<BuiltinSurface> SURFACES = java.util.stream.Stream
+        .concat(SCHEMAS.stream().flatMap(s -> s.members().stream().map(m -> surface(s, m))),
+            MathDeclarations.ALL.stream().map(MathDeclarations.Declaration::surface))
+        .sorted(Comparator.comparing(BuiltinSurface::stableId)).toList();
     private static final Map<String, Group> BY_SYMBOL =
         SURFACES.stream().collect(java.util.stream.Collectors.groupingBy(BuiltinSurface::stableId,
             java.util.stream.Collectors.collectingAndThen(java.util.stream.Collectors.toList(), Group::new)));
@@ -52,15 +53,6 @@ public final class BuiltinDeclarations {
         return SURFACES;
     }
 
-    public static void validateDefaultSource(com.elfmcys.ysm.expression.frontend.MolangFrontend.SourceLocation location,
-        com.elfmcys.ysm.expression.frontend.MolangFrontend.Result result) {
-        for (var symbol : result.referencedSymbols())
-            if (symbol.domain() == dev.semaweave.program.ProgramNode.SymbolDomain.EXTERNAL
-                && !BY_SYMBOL.containsKey(symbol.name()))
-                throw new IllegalArgumentException("Intrinsic default source requires a builtin declaration candidate: "
-                    + location + " symbol=" + symbol.name());
-    }
-
     public static Group group(String symbol) {
         return BY_SYMBOL.get(symbol);
     }
@@ -92,8 +84,13 @@ public final class BuiltinDeclarations {
             return methods.stream().mapToInt(BuiltinSurface::maximumArguments).max().orElseThrow();
         }
 
-        public List<DeclarationSchema.Dependency> dependencies() { return methods.get(0).dependencies(); }
-        public com.elfmcys.ysm.api.molang.MolangEffect effect() { return methods.get(0).effect(); }
+        public List<DeclarationSchema.Dependency> dependencies() {
+            return methods.get(0).dependencies();
+        }
+
+        public com.elfmcys.ysm.api.molang.MolangEffect effect() {
+            return methods.get(0).effect();
+        }
 
     }
 
@@ -104,8 +101,9 @@ public final class BuiltinDeclarations {
 
     static BuiltinSurface surface(DeclarationSchema owner, DeclarationSchema.Member m) {
         return new BuiltinSurface(m.symbol(), m.symbol(), LinkedDeclaration.type(m.result()), m.minimum(), m.maximum(),
-            m.fixed().stream().map(LinkedDeclaration::type).toList(), Optional.ofNullable(m.tail()).map(LinkedDeclaration::type),
-            owner.dependencies(), com.elfmcys.ysm.api.molang.MolangEffect.valueOf(m.effect()), m.defaults(),
-            owner.owner(), m.adapter(), m.subject());
+            m.fixed().stream().map(LinkedDeclaration::type).toList(),
+            Optional.ofNullable(m.tail()).map(LinkedDeclaration::type), owner.dependencies(),
+            com.elfmcys.ysm.api.molang.MolangEffect.valueOf(m.effect()), m.defaults(), owner.owner(), m.adapter(),
+            m.subject());
     }
 }

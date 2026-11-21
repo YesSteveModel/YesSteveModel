@@ -1,8 +1,8 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.expression.inventory.MolangEventCatalog;
 import com.elfmcys.ysm.model.domain.Hash256;
-import com.elfmcys.ysm.network.protocol.StarredModelSnapshots;
 import com.elfmcys.ysm.proto.mixel.common.ProgramProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.ConfigFormsProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.ConfigLabelProto;
@@ -10,9 +10,6 @@ import com.elfmcys.ysm.proto.mixel.manifest.info.ExtraAnimationButtonProto;
 import com.elfmcys.ysm.proto.mixel.manifest.info.SettingsProto;
 import com.elfmcys.ysm.proto.network.ConfigActionProto;
 import com.elfmcys.ysm.proto.network.EntityRefProto;
-import com.elfmcys.ysm.proto.network.PrivilegedTransientEventProto;
-import com.elfmcys.ysm.proto.network.PrivilegedTransientTargetProto;
-import com.elfmcys.ysm.proto.network.StarredModelsSnapshotProto;
 
 import java.nio.ByteBuffer;
 import java.util.Set;
@@ -24,32 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ControlHandlerTest {
-    @Test
-    void absentStarredModelHashesAreAnEmptySet() {
-        var snapshot = StarredModelSnapshots.create(Set.of());
-
-        assertEquals(0, snapshot.modelHashes().size());
-        assertEquals(Set.of(), ControlHandler.readHashSet(snapshot.modelHashes()));
-    }
-
-    @Test
-    void presentModelHashesRoundTrip() {
-        var bytes = new byte[Hash256.SIZE];
-        bytes[0] = 1;
-        var hash = new Hash256(bytes);
-        var snapshot = StarredModelSnapshots.create(Set.of(hash));
-
-        assertEquals(Set.of(hash), ControlHandler.readHashSet(snapshot.modelHashes()));
-    }
-
-    @Test
-    void invalidModelHashRejectsTheWholeSnapshot() {
-        var snapshot = StarredModelsSnapshotProto.newBuilder().addModelHashes(ByteBuffer.wrap(new byte[Hash256.SIZE]))
-            .addModelHashes(ByteBuffer.wrap(new byte[Hash256.SIZE - 1])).build();
-
-        assertNull(ControlHandler.readHashSet(snapshot.modelHashes()));
-    }
-
     @Test
     void syncValidationUsesProductionBoundAndFiniteNumericPolicy() {
         var zero = new it.unimi.dsi.fastutil.floats.FloatArrayList();
@@ -102,26 +73,6 @@ class ControlHandlerTest {
         assertFalse(ControlHandler.validCatalogAction(action("mode", 2).setLabelIndex(0).setLabelName("other").build(),
             settings));
         assertFalse(ControlHandler.validCatalogAction(action("mode", 3).setBoolValue(true).build(), settings));
-    }
-
-    @Test
-    void privilegedTransientRequiresNamedCapabilityAndBoundedExactTarget() {
-        var target =
-            PrivilegedTransientTargetProto.newBuilder().setTarget(EntityRefProto.newBuilder().setEntityId(7).build())
-                .setModelId(java.nio.ByteBuffer.wrap(new byte[Hash256.SIZE])).setTargetId("player").build();
-        var accepted = PrivilegedTransientEventProto.newBuilder().addTargets(target).setSource("1")
-            .setCapability(com.elfmcys.ysm.proto.network.TransientCapability.SERVER_ADMIN_ACTION).build();
-        assertTrue(ControlHandler.validPrivilegedTransient(accepted));
-
-        assertFalse(
-            ControlHandler.validPrivilegedTransient(PrivilegedTransientEventProto.newBuilder().addTargets(target)
-                .setSource("1").setCapability(com.elfmcys.ysm.proto.network.TransientCapability.UNSPECIFIED).build()));
-        assertFalse(ControlHandler.validPrivilegedTransient(PrivilegedTransientEventProto.newBuilder()
-            .addTargets(PrivilegedTransientTargetProto.newBuilder()
-                .setTarget(EntityRefProto.newBuilder().setEntityId(7).build())
-                .setModelId(java.nio.ByteBuffer.wrap(new byte[Hash256.SIZE - 1])).setTargetId("player").build())
-            .setSource("1").setCapability(com.elfmcys.ysm.proto.network.TransientCapability.SERVER_ADMIN_ACTION)
-            .build()));
     }
 
     private static ConfigActionProto.Builder action(String buttonId, int formIndex) {

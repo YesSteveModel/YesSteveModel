@@ -1,6 +1,6 @@
 package com.elfmcys.ysm.model.catalog.snapshot;
 
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.domain.ModelScanReport;
@@ -14,7 +14,7 @@ import java.util.Objects;
 /** Immutable ordered index of reopenable local container identities. */
 public final class CatalogIndexSnapshot {
     private final List<CatalogIndexEntry> entries;
-    private final Map<Hash256, List<CatalogIndexEntry>> byModelId;
+    private final Map<ModelId, List<CatalogIndexEntry>> byModelId;
     private final List<ModelPackDescriptor> packs;
     private final ModelScanReport report;
 
@@ -23,12 +23,12 @@ public final class CatalogIndexSnapshot {
         this.entries = List.copyOf(entries);
         this.packs = List.copyOf(packs);
         this.report = Objects.requireNonNull(report, "report");
-        var candidates = new LinkedHashMap<Hash256, ArrayList<CatalogIndexEntry>>();
+        var candidates = new LinkedHashMap<ModelId, ArrayList<CatalogIndexEntry>>();
         for (var entry : this.entries) {
             Objects.requireNonNull(entry, "entry");
             candidates.computeIfAbsent(entry.modelId(), ignored -> new ArrayList<>()).add(entry);
         }
-        var immutable = new LinkedHashMap<Hash256, List<CatalogIndexEntry>>();
+        var immutable = new LinkedHashMap<ModelId, List<CatalogIndexEntry>>();
         candidates.forEach((key, value) -> immutable.put(key, List.copyOf(value)));
         byModelId = Map.copyOf(immutable);
     }

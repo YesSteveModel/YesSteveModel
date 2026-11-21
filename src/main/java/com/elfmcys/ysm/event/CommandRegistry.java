@@ -29,8 +29,9 @@ public final class CommandRegistry {
         SuggestionProviders.register(new ResourceLocation(YesSteveModel.MOD_ID, "models"), (source, builder) -> {
             if (source.getSource() instanceof SharedSuggestionProvider) {
                 var paths = ServerModelService.current().flatMap(ServerModelService::catalog)
-                    .map(snapshot -> snapshot.models().values().stream().map(handle -> handle.location().value())
-                        .distinct().map(CommandRegistry::filterSuggestionStr).toList())
+                    .map(snapshot -> com.elfmcys.ysm.model.catalog.source.ModelSelector
+                        .suggestions(snapshot.catalog().byLocation()).stream().map(CommandRegistry::filterSuggestionStr)
+                        .toList())
                     .orElse(List.of());
                 return SharedSuggestionProvider.suggest(paths, builder);
             } else {

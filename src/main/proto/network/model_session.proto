@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package ysm.network;
 
+
 message ServerHello {
   string protocol_version = 1;
   bool sync_roaming = 2;
@@ -52,12 +53,12 @@ enum CollectionOperationType {
 message CatalogCollectionOperation {
   CollectionOperationType op_type = 1;
   repeated CatalogPublication entries = 2;
-  repeated bytes model_ids = 3;
+  repeated string model_ids = 3;
 }
 
 message GrantCollectionOperation {
   CollectionOperationType op_type = 1;
-  repeated bytes model_ids = 2;
+  repeated string model_ids = 2;
 }
 
 message PackPresentationCollectionOperation {
@@ -79,7 +80,7 @@ message MetadataPrefixRequest {
 
 message ModelChunkRequest {
   uint64 data_transfer_id = 1;
-  bytes model_id = 2;
+  string model_id = 2;
   bytes container_id = 3;
   repeated ChunkMember chunks = 4;
   ModelChunkPurpose purpose = 5;
@@ -95,7 +96,7 @@ message GenPreviewStart {}
 message MissingPreviewQuery { uint64 data_transfer_id = 1; }
 
 message MissingPreviewEntry {
-  bytes model_id = 1;
+  string model_id = 1;
   bytes container_id = 2;
   string hierarchy_path = 3;
   ResourceFailureReason probe_failure = 4;
@@ -110,7 +111,7 @@ message MissingPreviewFragment {
 
 message PreviewUploadRequest {
   uint64 data_transfer_id = 1;
-  bytes model_id = 2;
+  string model_id = 2;
   bytes container_id = 3;
   uint32 encoded_size = 4;
 }
@@ -153,14 +154,14 @@ message PresentationPageRequest {
 
 message PreviewMember {
   uint32 slot = 1;
-  bytes model_id = 2;
+  string model_id = 2;
   bytes container_id = 3;
   reserved 4 to 8;
 }
 
 message IconMember {
   uint32 slot = 1;
-  bytes model_id = 2;
+  string model_id = 2;
   bytes container_id = 3;
   string name = 4;
   bytes expected_hash = 5;
@@ -197,28 +198,6 @@ enum ResourceFailureReason {
   RESOURCE_FAILURE_REASON_UNAVAILABLE = 6;
 }
 
-message SelectModelRequest {
-  oneof selection {
-    bytes model_id = 1;
-    bool intrinsic_default = 2;
-  }
-  string texture_id = 3;
-  uint64 intent_id = 4;
-}
-
-message SelectModelResult {
-  SelectionStatus status = 1;
-  uint64 intent_id = 2;
-}
-
-enum SelectionStatus {
-  SELECTION_STATUS_UNSPECIFIED = 0;
-  SELECTION_STATUS_ACCEPTED = 1;
-  SELECTION_STATUS_UNAUTHORIZED = 2;
-  SELECTION_STATUS_NOT_FOUND = 3;
-  SELECTION_STATUS_INVALID_REQUEST = 4;
-}
-
 message MetadataPrefixFragment {
   uint64 data_transfer_id = 1;
   bytes container_id = 2;
@@ -242,7 +221,7 @@ enum PresentationDelivery {
 }
 
 message PreviewAvailable {
-  bytes model_id = 1;
+  string model_id = 1;
   bytes container_id = 2;
 }
 
@@ -271,7 +250,7 @@ message PackCoverFragment {
 }
 
 message CatalogPublication {
-  bytes model_id = 1;
+  string model_id = 1;
   bytes container_id = 2;
   string hierarchy_path = 3;
   CatalogAccess access = 4;

@@ -11,7 +11,7 @@
 |---|---|
 | 层级姿态与可覆盖复用的动作基线 | [bone-and-controller](../decisions/bone-and-controller.md) |
 | 动画输入来源、整体表现与逻辑因果关系 | [animation-sampling](../decisions/animation-sampling.md) |
-| 动画/脚本声音触发与播放义务 | [model-sound](../decisions/model-sound.md) |
+| 动画与脚本的声音触发及播放义务 | [model-sound](../decisions/model-sound.md) |
 | 实体状态隔离、多 pass 副作用去重与单动画失败 | [animation-isolation](../decisions/animation-isolation.md) |
 
 ## Uses

@@ -64,7 +64,7 @@ public final class TopPlugin implements Function<ITheOneProbe, Void> {
             } else {
                 entity.getCapability(VehicleModelInfoCapabilityProvider.CAP).ifPresent(cap -> {
                     if (cap.isInitialized()) {
-                        var hash = cap.getOwnerModelHash();
+                        var hash = cap.getOwnerModelId();
                         if (hash == null) {
                             return;
                         }

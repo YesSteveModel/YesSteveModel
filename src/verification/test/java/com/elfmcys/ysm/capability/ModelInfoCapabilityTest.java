@@ -1,6 +1,8 @@
 package com.elfmcys.ysm.capability;
 
 import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
+import com.elfmcys.ysm.model.domain.ModelId;
 import net.minecraft.nbt.CompoundTag;
 import org.junit.jupiter.api.Test;
 
@@ -20,64 +22,69 @@ class ModelInfoCapabilityTest {
         assertFalse(capability.consumeDirty());
 
         capability.setDisabled(true);
-        assertTrue(capability.consumeDirty());
+        assertFalse(capability.consumeDirty());
+        assertTrue(capability.consumeFlagsDirty());
+        assertFalse(capability.consumeFlagsDirty());
     }
 
     @Test
-    void commandSelectionKeepsItsPrivateModeOnlyForTheSameModel() {
-        var first = hash(1);
-        var second = hash(2);
+    void commandSelectionKeepsOnlyTheOrdinarySelectionAndMandatoryFlag() {
         var capability = new ModelInfoCapability();
-
-        capability.setCommandSelection(first, "first", true);
+        capability.setCommandSelection(hash(1), "first");
         assertTrue(capability.isMandatory());
-        assertTrue(capability.ignoresGrantsFor(first));
-
-        capability.setModelAndTexture(first, "second");
-        assertTrue(capability.ignoresGrantsFor(first));
-
-        capability.setModelAndTexture(second, "first");
-        assertFalse(capability.ignoresGrantsFor(first));
-        assertFalse(capability.ignoresGrantsFor(second));
-
-        capability.setCommandSelection(second, "first", true);
-        capability.setCommandSelection(second, "first", false);
-        assertFalse(capability.ignoresGrantsFor(second));
+        assertFalse(capability.serializeNBT().contains("ignore_grants"));
+        capability.setModelAndTexture(hash(2), "second");
+        assertEquals(PublishedModelId.model(hash(2)), capability.getModelId());
     }
 
     @Test
     void cloneAndNbtRoundTripKeepTheForcedSelection() {
         var selected = hash(3);
         var source = new ModelInfoCapability();
-        source.setCommandSelection(selected, "skin", true);
+        source.setCommandSelection(selected, "skin");
 
         var clone = new ModelInfoCapability();
         clone.moveFrom(source);
-        assertTrue(clone.ignoresGrantsFor(selected));
+        assertNull(source.getModelId());
+        assertEquals(PublishedModelId.model(selected), clone.getModelId());
 
         var restored = new ModelInfoCapability();
-        restored.deserializeNBT(source.serializeNBT());
-        assertEquals(selected, restored.getModelId());
+        restored.deserializeNBT(clone.serializeNBT());
+        assertEquals(PublishedModelId.model(selected), restored.getModelId());
         assertEquals("skin", restored.getSelectTexture());
-        assertTrue(restored.ignoresGrantsFor(selected));
+        assertFalse(restored.serializeNBT().contains("ignore_grants"));
+    }
+
+    @Test
+    void persistenceKeepsIntrinsicAndOrdinaryDefaultDistinct() {
+        var capability = new ModelInfoCapability();
+        capability.setModelSelection(PublishedModelId.INTRINSIC_DEFAULT, "skin");
+        assertEquals("default", capability.serializeNBT().getString("model_id"));
+        var restored = new ModelInfoCapability();
+        restored.deserializeNBT(capability.serializeNBT());
+        assertEquals(PublishedModelId.INTRINSIC_DEFAULT, restored.getModelId());
+        capability.setModelAndTexture(hash(3), "skin");
+        assertEquals(hash(3).toString(), capability.serializeNBT().getString("model_id"));
+        restored.deserializeNBT(capability.serializeNBT());
+        assertEquals(PublishedModelId.model(hash(3)), restored.getModelId());
     }
 
     @Test
     void invalidPersistedModelFailsClosedWithoutBypass() {
         var tag = new CompoundTag();
-        tag.putString("model_hash", "invalid");
+        tag.putString("model_id", "invalid");
         tag.putBoolean("ignore_grants", true);
 
         var restored = new ModelInfoCapability();
         restored.deserializeNBT(tag);
 
         assertNull(restored.getModelId());
-        assertFalse(restored.ignoresGrantsFor(hash(1)));
+        assertFalse(restored.serializeNBT().contains("ignore_grants"));
     }
 
-    private static Hash256 hash(int seed) {
+    private static ModelId hash(int seed) {
         var bytes = new byte[Hash256.SIZE];
         bytes[0] = (byte)seed;
-        return new Hash256(bytes);
+        return ModelId.fromHash(new Hash256(bytes));
     }
 }

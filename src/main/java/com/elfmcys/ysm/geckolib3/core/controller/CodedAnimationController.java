@@ -65,10 +65,10 @@ public class CodedAnimationController<T extends AnimatableEntity<?>> implements 
 
     @Override
     public void process(AnimationEvent<T> event, EntityExpressionRuntime.Evaluation evaluation, boolean executeEvents) {
-        event.setCodedAnimationController(this);
         evaluation.setControllerContext(ctx);
         evaluation.setAnimationContext(this.animationPlayer.getAnimationContext());
         try {
+            event.setCodedAnimationController(this);
             PlayState playState = evalMolangPredicate(evaluation);
             if (playState == null) {
                 playState = this.animationPredicate.test(event);

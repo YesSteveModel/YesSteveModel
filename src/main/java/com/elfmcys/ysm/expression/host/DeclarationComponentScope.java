@@ -14,13 +14,17 @@ import net.minecraft.world.entity.Entity;
 /**
  * Constructs one instance for each applicable declaration and binds its exact provider directory.
  *
- * <p>Invariant: provider lookup happens at Root construction, never during generated calls.
- * Successful begin hooks form the cleanup prefix, so a hook that throws before returning must release its own unfinished borrow.
+ * <p>
+ * Invariant: provider lookup happens at Root construction, never during generated calls. Successful begin hooks form
+ * the cleanup prefix, so a hook that throws before returning must release its own unfinished borrow.
  *
- * <p>Failure: hook failure does not undo prior component mutations. Invalidation during evaluation
- * revokes directory access immediately and retains the entered lifecycle prefix only for cleanup.
+ * <p>
+ * Failure: hook failure does not undo prior component mutations. Invalidation during evaluation revokes directory
+ * access immediately and retains the entered lifecycle prefix only for cleanup.
  *
- * <p>Seam: implements [component lifecycle](docs/architecture/animation/molang-declarations.md#组件生命周期) through the ComponentScope contract.
+ * <p>
+ * Seam: implements [component lifecycle](docs/architecture/animation/molang-declarations.md#组件生命周期) through the
+ * ComponentScope contract.
  */
 public final class DeclarationComponentScope implements ComponentScope {
     private final AnimatableEntity<?> owner;
@@ -41,7 +45,7 @@ public final class DeclarationComponentScope implements ComponentScope {
         var entries = new ArrayList<Entry>();
         for (var declaration : declarations) {
             try {
-                if (!declaration.hasMembers() || !declaration.componentSubject().isInstance(subject))
+                if (!declaration.hasComponent() || !declaration.componentSubject().isInstance(subject))
                     continue;
                 Object helper = declaration.helper().getConstructor(AnimatableEntity.class).newInstance(owner);
                 providers.put(LinkedDeclaration.providerId(declaration.schema()), helper);
@@ -67,6 +71,10 @@ public final class DeclarationComponentScope implements ComponentScope {
         return subject;
     }
 
+    public SubjectSample captureSubjectSample() {
+        return owner.subjectSampleDraft().freeze();
+    }
+
     public void setRenderTarget(ModelRenderTarget next, BooleanSupplier current) {
         requireCurrent(current);
         Objects.requireNonNull(next);
@@ -86,6 +94,7 @@ public final class DeclarationComponentScope implements ComponentScope {
         if (evaluating)
             throw new IllegalStateException("component evaluation is already active");
         evaluating = true;
+        owner.subjectSampleDraft().clear();
         Entry[] captured = lifecycle;
         int begun = 0;
         Throwable primary = null;
@@ -112,6 +121,7 @@ public final class DeclarationComponentScope implements ComponentScope {
                 }
             }
             evaluating = false;
+            owner.subjectSampleDraft().clear();
             if (invalidated)
                 clearReferences();
         }

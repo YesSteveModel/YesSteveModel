@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.dispatch;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.format.parser.ModelParser;
@@ -110,7 +111,10 @@ class ServerPreviewRepairTest {
     void setUp() throws Exception {
         content = ManagedContainer.openDirect(Files.copy(missingFile, temp.resolve("model.mxc")), location("missing"));
         catalog = catalog(record(content));
-        store = new PreviewStore(temp.resolve("cache"), id -> chunks.invalidatePreview(id));
+        store = new PreviewStore(temp.resolve("cache"),
+            com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("cache"))),
+            id -> chunks.invalidatePreview(store, id));
         chunks = new ServerResourceRuntime(store, ignored -> {
         });
         work = new ServerPreviewWork();
@@ -155,14 +159,18 @@ class ServerPreviewRepairTest {
             await(() -> owner.results.stream().anyMatch(message -> message instanceof PreviewRepairResultProto));
             assertEquals(PreviewRepairStatus.COMMITTED, result(owner).status());
             assertArrayEquals(preview.bytes(),
-                new PreviewStore(temp.resolve("cache")).load(identity.containerId()).orElseThrow().bytes());
-            store = new PreviewStore(temp.resolve("cache"));
+                new PreviewStore(temp.resolve("cache"),
+                    com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                        .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("cache"))))
+                    .load(identity.containerId()).orElseThrow().bytes());
+            store = new PreviewStore(temp.resolve("cache"), com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("cache"))));
             var reopened = harness(catalog);
             reopened.authorized.set(false);
             reopened.transfers
                 .accept(com.elfmcys.ysm.proto.network.PresentationPageRequestProto.newBuilder().setDataTransferId(1)
                     .addPreviews(com.elfmcys.ysm.proto.network.PreviewMemberProto.newBuilder().setSlot(0)
-                        .setModelId(ByteBuffer.wrap(identity.modelId().bytes()))
+                        .setModelId(identity.modelId().toString())
                         .setContainerId(ByteBuffer.wrap(identity.containerId().bytes())).build())
                     .build());
             await(() -> !reopened.port.previewBytes.isEmpty());
@@ -174,7 +182,6 @@ class ServerPreviewRepairTest {
                 .representation().identity());
             fragment(owner, 1, preview.bytes(), 0, true);
             assertEquals(1, owner.notifications.size());
-            assertEquals(0, owner.transfers.activeCount());
             await(() -> work.activeRequests() == 0);
             assertEquals(0, work.retainedEncodedBytes());
             assertTrue(owner.transfers.accept(upload(2, preview.bytes().length)));
@@ -190,6 +197,7 @@ class ServerPreviewRepairTest {
         var previousBytes = new byte[] {1, 2, 3};
         var root = Files.createDirectories(temp.resolve("cache/previews"));
         Files.write(root.resolve(identity.containerId() + ".image"), previousBytes);
+        TestPreviews.index(root.getParent(), identity.containerId(), root.resolve(identity.containerId() + ".image"));
         try (var previous = acquirePreview(); var preview = TestPreviews.blank()) {
             owner.afterCommitNotification = () -> {
                 throw new IllegalStateException("Injected notification failure");
@@ -207,7 +215,6 @@ class ServerPreviewRepairTest {
             }
             assertArrayEquals(previousBytes, copy(previous));
             await(() -> work.activeRequests() == 0);
-            assertEquals(0, owner.transfers.activeCount());
         }
     }
 
@@ -218,6 +225,7 @@ class ServerPreviewRepairTest {
         var previousBytes = new byte[] {4, 5, 6};
         var root = Files.createDirectories(temp.resolve("cache/previews"));
         Files.write(root.resolve(identity.containerId() + ".image"), previousBytes);
+        TestPreviews.index(root.getParent(), identity.containerId(), root.resolve(identity.containerId() + ".image"));
         try (var previous = acquirePreview(); var preview = TestPreviews.blank()) {
             owner.afterCommitNotification = () -> {
                 owner.transfers.close();
@@ -235,7 +243,6 @@ class ServerPreviewRepairTest {
                 assertArrayEquals(preview.bytes(), stored.bytes());
             }
             assertArrayEquals(previousBytes, copy(previous));
-            assertEquals(0, owner.transfers.activeCount());
         }
     }
 
@@ -250,12 +257,11 @@ class ServerPreviewRepairTest {
             admit(owner, 2, preview);
             owner.authorized.set(false);
             fragment(owner, 2, preview.bytes(), 0, true);
-            await(() -> !owner.notifications.isEmpty());
-            await(() -> owner.transfers.activeCount() == 0);
+            await(() -> !owner.notifications.isEmpty() && work.activeRequests() == 0);
             assertTrue(owner.transfers.accept(upload(3, preview.bytes().length)));
             assertEquals(ResourceFailureReason.UNAUTHORIZED, owner.failures.get(owner.failures.size() - 1).reason());
             assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED,
-                owner.session.select(new Selection.Model(content.modelId(), "")));
+                owner.session.validateSelection(new Selection.Model(content.modelId(), "")));
         }
     }
 
@@ -374,13 +380,13 @@ class ServerPreviewRepairTest {
         assertTrue(owner.notifications.isEmpty());
         try (var preview = TestPreviews.blank()) {
             admit(owner, 2, preview);
-            Files.createDirectories(temp.resolve("cache"));
-            Files.write(temp.resolve("cache/previews"), new byte[] {7});
+            Files.createDirectories(temp.resolve("cache/f"));
+            Files.write(temp.resolve("cache/f/p"), new byte[] {7});
             fragment(owner, 2, preview.bytes(), 0, true);
             await(() -> owner.failures.size() == 2);
             assertTrue(owner.notifications.isEmpty());
             assertEquals(0, owner.results.stream().filter(PreviewRepairResultProto.class::isInstance).count());
-            assertArrayEquals(new byte[] {7}, Files.readAllBytes(temp.resolve("cache/previews")));
+            assertArrayEquals(new byte[] {7}, Files.readAllBytes(temp.resolve("cache/f/p")));
         }
     }
 
@@ -400,7 +406,6 @@ class ServerPreviewRepairTest {
                 fragment(owner, 1, new byte[] {1}, 0, true);
             assertEquals(ResourceFailureReason.INVALID_REQUEST, owner.failures.get(0).reason());
             assertTrue(owner.session.active());
-            assertEquals(0, owner.transfers.activeCount());
         }
     }
 
@@ -414,12 +419,10 @@ class ServerPreviewRepairTest {
             fragment(owner, 1, new byte[] {1}, offset, false);
         }
         assertTrue(owner.failures.isEmpty());
-        assertEquals(1, owner.transfers.activeCount());
 
         fragment(owner, 1, new byte[] {1}, recordLimit, false);
 
         assertEquals(1, owner.failures.size(), "W02 limits one upload to 16,384 fragment records");
-        assertEquals(0, owner.transfers.activeCount());
         assertEquals(0, work.activeRequests());
         assertEquals(0, work.retainedEncodedBytes());
         assertTrue(owner.session.active());
@@ -469,7 +472,6 @@ class ServerPreviewRepairTest {
             assertEquals(1,
                 entries.stream().filter(entry -> entry.probeFailure() == ResourceFailureReason.UNSPECIFIED).count());
             await(() -> work.activeRequests() == 0);
-            assertEquals(0, owner.transfers.activeCount());
         } finally {
             authored.representation().close();
         }
@@ -480,18 +482,17 @@ class ServerPreviewRepairTest {
         var owner = harness(catalog);
         var closure = RenderTargetChunkPlan.chunks(content.modelFile(), RenderTargetIds.PLAYER, "");
         var chunk = closure.get(0);
-        var request = ModelChunkRequestProto.newBuilder().setDataTransferId(1)
-            .setModelId(ByteBuffer.wrap(content.modelId().bytes()))
+        var request = ModelChunkRequestProto.newBuilder().setDataTransferId(1).setModelId(content.modelId().toString())
             .setContainerId(ByteBuffer.wrap(content.representation().containerId().bytes())).addChunks(member(chunk))
             .build();
         assertTrue(owner.transfers.accept(request));
         assertEquals(ResourceFailureReason.UNAUTHORIZED, owner.failures.get(0).reason());
         assertTrue(owner.transfers
             .accept(request.toBuilder().setDataTransferId(2).setPurpose(ModelChunkPurpose.GEN_PREVIEW_MAIN).build()));
-        await(() -> owner.transfers.activeCount() == 0);
+        await(() -> owner.port.chunks >= 1 && owner.dispatch.queued(owner.session) == 0);
         assertTrue(owner.port.chunks >= 1);
         assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED,
-            owner.session.select(new Selection.Model(content.modelId(), "")));
+            owner.session.validateSelection(new Selection.Model(content.modelId(), "")));
         var unrelated = content.modelFile().getFileView().getAssetView().getChunkTable().values().stream()
             .filter(candidate -> closure.stream().noneMatch(allowed -> allowed.type().equals(candidate.type())))
             .filter(candidate -> candidate.size() > 0).findFirst().orElseThrow();
@@ -499,6 +500,57 @@ class ServerPreviewRepairTest {
             .addChunks(member(unrelated)).setPurpose(ModelChunkPurpose.GEN_PREVIEW_MAIN).build()));
         await(() -> owner.failures.size() == 2);
         assertEquals(ResourceFailureReason.INVALID_REQUEST, owner.failures.get(1).reason());
+    }
+
+    @Test
+    void sessionCloseDoesNotReclaimManagementQuotaDuringAcceptedDispatch() throws Exception {
+        var owner = harness(catalog);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        owner.port.beforeSend = frame -> {
+            entered.countDown();
+            try {
+                if (!release.await(5, TimeUnit.SECONDS))
+                    throw new AssertionError("Dispatch was not released");
+            } catch (InterruptedException interrupted) {
+                throw new AssertionError(interrupted);
+            }
+        };
+        var closure = RenderTargetChunkPlan.chunks(content.modelFile(), RenderTargetIds.PLAYER, "");
+        assertTrue(owner.transfers
+            .accept(ModelChunkRequestProto.newBuilder().setDataTransferId(1).setModelId(content.modelId().toString())
+                .setContainerId(ByteBuffer.wrap(content.representation().containerId().bytes()))
+                .setPurpose(ModelChunkPurpose.GEN_PREVIEW_MAIN).addChunks(member(closure.get(0))).build()));
+        var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (owner.dispatch.queued(owner.session) == 0 && System.nanoTime() < deadline) {
+            chunks.tick();
+            owner.transfers.tick();
+            Thread.yield();
+        }
+        assertEquals(1, owner.dispatch.queued(owner.session));
+        var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var dispatcher = new Thread(() -> {
+            try {
+                owner.dispatch.dispatchOnce();
+            } catch (Throwable unexpected) {
+                failure.set(unexpected);
+            }
+        });
+        dispatcher.start();
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            owner.transfers.close();
+            owner.session.close();
+            assertEquals(1, work.activeRequests());
+        } finally {
+            release.countDown();
+            dispatcher.join(5_000);
+        }
+        assertFalse(dispatcher.isAlive());
+        assertEquals(null, failure.get());
+        assertEquals(0, work.activeRequests());
+        assertEquals(0, owner.dispatch.queued(owner.session));
+        assertTrue(owner.failures.isEmpty());
     }
 
     @Test
@@ -514,8 +566,8 @@ class ServerPreviewRepairTest {
                 images.add(author.avatarUnsafe());
         assertEquals(8, images.size());
         var identity = content.representation().identity();
-        var request = PresentationPageRequestProto.newBuilder().setDataTransferId(1).addPreviews(
-            PreviewMemberProto.newBuilder().setSlot(0).setModelId(ByteBuffer.wrap(identity.modelId().bytes()))
+        var request = PresentationPageRequestProto.newBuilder().setDataTransferId(1)
+            .addPreviews(PreviewMemberProto.newBuilder().setSlot(0).setModelId(identity.modelId().toString())
                 .setContainerId(ByteBuffer.wrap(identity.containerId().bytes())).build());
         var expected = new ArrayList<byte[]>();
         for (var image : images) {
@@ -531,7 +583,7 @@ class ServerPreviewRepairTest {
         }
         assertTrue(owner.transfers.accept(request.build()));
         assertTrue(owner.failures.isEmpty(), "Declared presentation images must not reject their mixed preview batch");
-        await(() -> owner.transfers.activeCount() == 0);
+        await(() -> owner.port.previewBytes.size() == 1 && owner.port.completedIcons.size() == images.size());
         assertTrue(owner.failures.isEmpty());
         assertEquals(1, owner.port.previewBytes.size());
         assertEquals(images.size(), owner.port.icons.size());
@@ -540,11 +592,11 @@ class ServerPreviewRepairTest {
             assertArrayEquals(expected.get(slot), owner.port.icons.get(slot).toByteArray());
         }
         assertEquals(ServerModelSession.SelectionResult.UNAUTHORIZED,
-            owner.session.select(new Selection.Model(content.modelId(), "")));
+            owner.session.validateSelection(new Selection.Model(content.modelId(), "")));
         var runtimeChunk = RenderTargetChunkPlan.chunks(view, RenderTargetIds.PLAYER, "").get(0);
         assertTrue(owner.transfers.accept(ModelChunkRequestProto.newBuilder().setDataTransferId(2)
-            .setModelId(ByteBuffer.wrap(identity.modelId().bytes()))
-            .setContainerId(ByteBuffer.wrap(identity.containerId().bytes())).addChunks(member(runtimeChunk)).build()));
+            .setModelId(identity.modelId().toString()).setContainerId(ByteBuffer.wrap(identity.containerId().bytes()))
+            .addChunks(member(runtimeChunk)).build()));
         assertEquals(ResourceFailureReason.UNAUTHORIZED, owner.failures.get(0).reason());
     }
 
@@ -558,7 +610,6 @@ class ServerPreviewRepairTest {
         assertTrue(owner.transfers.accept(
             PresentationPageRequestProto.newBuilder().setDataTransferId(1).addIcons(imageMember(0, chunk)).build()));
         assertEquals(ResourceFailureReason.INVALID_REQUEST, owner.failures.get(0).reason());
-        assertEquals(0, owner.transfers.activeCount());
         assertEquals(0, owner.dispatch.queued(owner.session));
         assertTrue(owner.port.icons.isEmpty());
     }
@@ -574,13 +625,12 @@ class ServerPreviewRepairTest {
         assertTrue(owner.transfers.accept(PresentationPageRequestProto.newBuilder().setDataTransferId(1).addIcons(valid)
             .addIcons(valid.toBuilder().setSlot(1).setStoredSize(chunk.size() + 1).build()).build()));
         assertEquals(ResourceFailureReason.INVALID_REQUEST, owner.failures.get(0).reason());
-        assertEquals(0, owner.transfers.activeCount());
         assertEquals(0, owner.dispatch.queued(owner.session));
         assertTrue(owner.port.icons.isEmpty());
     }
 
     private IconMemberProto imageMember(int slot, com.elfmcys.ysm.format.container.AssetContainerView.ChunkInfo chunk) {
-        return IconMemberProto.newBuilder().setSlot(slot).setModelId(ByteBuffer.wrap(content.modelId().bytes()))
+        return IconMemberProto.newBuilder().setSlot(slot).setModelId(content.modelId().toString())
             .setContainerId(ByteBuffer.wrap(content.representation().containerId().bytes())).setName(chunk.type())
             .setExpectedHash(ByteBuffer.wrap(chunk.hash())).setStoredSize(chunk.size())
             .setDecodedSize(chunk.decodeSize()).setEncoding(chunk.encoding()).build();
@@ -593,9 +643,10 @@ class ServerPreviewRepairTest {
     }
 
     private ServerResourceRuntime.BytesLease acquirePreview() throws Exception {
-        var acquisition = chunks.acquirePreview(content.representation().containerId());
-        await(acquisition::isDone);
-        return acquisition.join().orElseThrow();
+        var acquisition = chunks.acquirePreview(content);
+        await(() -> acquisition.state() != ServerResourceRuntime.State.PENDING);
+        assertEquals(ServerResourceRuntime.State.READY, acquisition.state());
+        return acquisition;
     }
 
     private static byte[] copy(ServerResourceRuntime.BytesLease lease) {
@@ -612,8 +663,7 @@ class ServerPreviewRepairTest {
 
     private PreviewUploadRequestProto upload(long id, int size) {
         var identity = content.representation().identity();
-        return PreviewUploadRequestProto.newBuilder().setDataTransferId(id)
-            .setModelId(ByteBuffer.wrap(identity.modelId().bytes()))
+        return PreviewUploadRequestProto.newBuilder().setDataTransferId(id).setModelId(identity.modelId().toString())
             .setContainerId(ByteBuffer.wrap(identity.containerId().bytes())).setEncodedSize(size).build();
     }
 
@@ -649,7 +699,7 @@ class ServerPreviewRepairTest {
     }
 
     private static CatalogLocation location(String path) {
-        return new CatalogLocation(CatalogRootKind.AUTH, new ModelPath(path));
+        return new CatalogLocation(CatalogRootKind.MODELS, new ModelPath(path));
     }
 
     private static CatalogRecord record(ManagedContainer content) {
@@ -657,10 +707,12 @@ class ServerPreviewRepairTest {
     }
 
     private static CatalogSnapshot catalog(CatalogRecord... records) {
-        var map = new java.util.LinkedHashMap<com.elfmcys.ysm.model.domain.Hash256, CatalogRecord>();
+        var map = new java.util.LinkedHashMap<ModelId, CatalogRecord>();
         for (var record : records)
             map.put(record.entry().modelId(), record);
-        return new CatalogSnapshot(map, List.of(), ModelScanReport.empty());
+        return com.elfmcys.ysm.model.session.server.RestrictedModelPolicy.classify(
+            new CatalogSnapshot(map, List.of(), ModelScanReport.empty()),
+            com.elfmcys.ysm.model.session.server.RestrictedModelPolicy.parse(List.of("path:*")));
     }
 
     private final class Harness implements AutoCloseable {
@@ -695,6 +747,8 @@ class ServerPreviewRepairTest {
     }
 
     private static final class Port implements TransportPort {
+        volatile java.util.function.Consumer<OutboundFrame> beforeSend = ignored -> {
+        };
         final List<MissingPreviewFragmentProto> parts = new ArrayList<>();
         int chunks;
         final List<byte[]> previewBytes = new ArrayList<>();
@@ -723,6 +777,7 @@ class ServerPreviewRepairTest {
 
         @Override
         public SendResult trySend(OutboundFrame frame) {
+            beforeSend.accept(frame);
             try (var decoded = FrameCodec.decode(frame.bytes(), ignored -> true)) {
                 if (decoded.messageId() == ProtocolMessages.MISSING_PREVIEW_FRAGMENT_ID)
                     parts.add(ProtocolBuffer.parse(decoded.protobuf(), MissingPreviewFragmentProto::parseFrom));

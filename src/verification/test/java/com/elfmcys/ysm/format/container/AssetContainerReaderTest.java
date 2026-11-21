@@ -9,7 +9,6 @@ import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import org.apache.commons.lang3.SerializationException;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -20,6 +19,42 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class AssetContainerReaderTest {
+    @Test
+    void preambleAdmissionNeverReadsOrdinaryPayloadEvenForSmallContainers() throws Exception {
+        var output = new ByteArrayOutputStream();
+        try (var writer = new AssetContainerWriter(); var channel = Channels.newChannel(output);
+            var payload = com.elfmcys.ysm.buffer.ArrayBuffer.move(new byte[8192])) {
+            writer.setSchema("test");
+            writer.addChunk("ordinary", "", 0, 0, 0, payload, 0);
+            writer.write(channel);
+        }
+        var bytes = output.toByteArray();
+        var preambleSize = bytes.length - 8192;
+        var expected = AssetContainerReader.readPreamble(bytes);
+        assertEquals(preambleSize, expected.getContainerPreambleSize());
+        assertTrue(expected.sameContents(AssetContainerReader.readPreamble(Arrays.copyOf(bytes, preambleSize))));
+        var changedPayload = bytes.clone();
+        changedPayload[changedPayload.length - 1] ^= 1;
+        assertTrue(expected.sameContents(AssetContainerReader.readPreamble(changedPayload)));
+        var changedCid = bytes.clone();
+        changedCid[expected.getChunkInfo(AssetContainerConstant.VERIFICATION_CHUNK_TYPE).offset()] ^= 1;
+        assertThrows(IOException.class, () -> AssetContainerReader.readPreamble(changedCid));
+        try (var physical = new ByteArraySeekableChannel(bytes)) {
+            var guarded = (java.nio.channels.SeekableByteChannel)java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[] {java.nio.channels.SeekableByteChannel.class},
+                (proxy, method, arguments) -> {
+                    if (method.getName().equals("read")) {
+                        var requested = ((ByteBuffer)arguments[0]).remaining();
+                        assertTrue(physical.position() + requested <= preambleSize,
+                            "Preamble reader requested ordinary payload bytes");
+                    }
+                    var result = method.invoke(physical, arguments);
+                    return result == physical ? proxy : result;
+                });
+            assertTrue(expected.sameContents(AssetContainerReader.read(guarded)));
+        }
+    }
+
     @Test
     void preambleValueComparisonIncludesHashBytesAndItsCollectionsStayReadOnly() throws Exception {
         var bytes = writeEmptyContainer();
@@ -68,7 +103,7 @@ class AssetContainerReaderTest {
             AssetContainerConstant.HASH_SIZE);
         var legacy = Arrays.copyOf(current, current.length - Short.BYTES);
 
-        assertThrows(SerializationException.class, () -> AssetContainerReader.readPreamble(legacy));
+        assertThrows(IOException.class, () -> AssetContainerReader.readPreamble(legacy));
     }
 
     @Test

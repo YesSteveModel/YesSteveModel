@@ -75,3 +75,32 @@ tasks.withType(Test).configureEach {
         environment ysmNativeEnvironment, nativeLibraryPath.get()
     }
 }
+
+def packagedNativeProbeClasses = layout.buildDirectory.dir('packaged-native-probe/classes')
+
+tasks.register('compilePackagedNativeProbe', JavaCompile) {
+    dependsOn tasks.named('shadowJar')
+    source = fileTree('src/verification/native/java') { include '**/*.java' }
+    classpath = files(tasks.named('shadowJar').flatMap { it.archiveFile }, configurations.compileClasspath)
+    destinationDirectory = packagedNativeProbeClasses
+    options.compilerArgs += ['-proc:none']
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('verifyPackagedNativeStorage', JavaExec) {
+    group = 'verification'
+    description = 'Checks all native resources and executes storage from the final jar on the current platform.'
+    dependsOn tasks.named('compilePackagedNativeProbe')
+    classpath = files(packagedNativeProbeClasses,
+            tasks.named('shadowJar').flatMap { it.archiveFile }, configurations.compileClasspath)
+    mainClass = 'com.elfmcys.ysm.natives.PackagedNativeStorageProbe'
+    doFirst {
+        args tasks.named('shadowJar').get().archiveFile.get().asFile.absolutePath,
+                layout.buildDirectory.dir('packaged-native-probe/work').get().asFile.absolutePath
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyPackagedNativeStorage')
+}

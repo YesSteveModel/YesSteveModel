@@ -37,7 +37,8 @@ public class CacheDirectoryAccessBenchmark {
     public void setup() throws IOException {
         root = Files.createTempDirectory("ysm-directory-benchmark-").toRealPath();
         var parent = root;
-        for (int index = 0; index < depth; index++) parent = parent.resolve("level-" + index);
+        for (int index = 0; index < depth; index++)
+            parent = parent.resolve("level-" + index);
         Files.createDirectories(parent);
         target = Files.write(parent.resolve("chunk"), new byte[] {42});
         guard = CacheDirectoryGuard.open(root);
@@ -64,7 +65,8 @@ public class CacheDirectoryAccessBenchmark {
     @TearDown(Level.Trial)
     public void cleanup() throws IOException {
         try (var paths = Files.walk(root)) {
-            for (var path : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(path);
+            for (var path : paths.sorted(Comparator.reverseOrder()).toList())
+                Files.delete(path);
         }
     }
 }

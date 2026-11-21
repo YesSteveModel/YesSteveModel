@@ -8,6 +8,7 @@ import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.format.schema.model.views.SoundMedia;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -22,23 +23,31 @@ import java.util.function.BooleanSupplier;
 /** Owns one preparation or consumer's references to validated first chunks. */
 public final class TargetSoundResources implements AutoCloseable {
     private final ModelFileIdentity representation;
+    private final PublishedModelId modelId;
     private Map<String, SharedBuffer> firstChunks;
     private final Set<Hash256> validatedMedia;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private TargetSoundResources(ModelFileIdentity representation, Map<String, SharedBuffer> firstChunks,
-        Set<Hash256> validatedMedia) {
+        Set<Hash256> validatedMedia, PublishedModelId modelId) {
         this.representation = representation;
+        this.modelId = modelId;
         this.firstChunks = Map.copyOf(firstChunks);
         this.validatedMedia = Set.copyOf(validatedMedia);
     }
 
     public static TargetSoundResources empty(ModelFileIdentity representation) {
-        return new TargetSoundResources(Objects.requireNonNull(representation, "representation"), Map.of(), Set.of());
+        return new TargetSoundResources(Objects.requireNonNull(representation, "representation"), Map.of(), Set.of(),
+            PublishedModelId.model(representation.modelId()));
     }
 
     public static TargetSoundResources prepare(BooleanSupplier cancelled, ModelFileIdentity representation,
         Map<String, SoundMedia> sounds, ChunkDataSource source) throws IOException {
+        return prepare(cancelled, representation, sounds, source, PublishedModelId.Role.MODEL);
+    }
+
+    public static TargetSoundResources prepare(BooleanSupplier cancelled, ModelFileIdentity representation,
+        Map<String, SoundMedia> sounds, ChunkDataSource source, PublishedModelId.Role role) throws IOException {
         Objects.requireNonNull(cancelled, "cancelled");
         Objects.requireNonNull(representation, "representation");
         Objects.requireNonNull(sounds, "sounds");
@@ -55,12 +64,14 @@ public final class TargetSoundResources implements AutoCloseable {
         }
         if (cancelled.getAsBoolean())
             throw new CancellationException("Sound preparation was cancelled");
-        return new TargetSoundResources(representation, firstChunks, validated);
+        return new TargetSoundResources(representation, firstChunks, validated,
+            role == PublishedModelId.Role.INTRINSIC_DEFAULT ? PublishedModelId.INTRINSIC_DEFAULT
+                : PublishedModelId.model(representation.modelId()));
     }
 
     public synchronized TargetSoundResources acquire() {
         requireOpen();
-        return new TargetSoundResources(representation, firstChunks, validatedMedia);
+        return new TargetSoundResources(representation, firstChunks, validatedMedia, modelId);
     }
 
     public SoundSource bind(SoundMedia media) {
@@ -70,7 +81,7 @@ public final class TargetSoundResources implements AutoCloseable {
         if (!validatedMedia.contains(media.mediaIdentity()) || !firstChunks.containsKey(first.type())) {
             throw new IllegalArgumentException("Sound first chunk was not prepared for this target: " + media.name());
         }
-        return new SoundSource(representation, media, this);
+        return new SoundSource(representation, modelId, media, this);
     }
 
     synchronized SharedBuffer acquireFirstChunk(ModelFileIdentity expected, SoundMedia media)

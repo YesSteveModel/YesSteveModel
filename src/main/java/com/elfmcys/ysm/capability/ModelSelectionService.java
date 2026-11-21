@@ -5,6 +5,7 @@ import com.elfmcys.ysm.model.catalog.snapshot.ServerCatalog;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 
 import java.util.Optional;
 
@@ -13,7 +14,11 @@ public final class ModelSelectionService {
     private ModelSelectionService() {}
 
     public static boolean selectDefault(ModelInfoCapability capability, ServerCatalog snapshot) {
-        var model = snapshot.findPath(ServerConfig.DEFAULT_MODEL_PATH.get()).or(snapshot::defaultModel).orElse(null);
+        var configuredId = snapshot.resolvePath(ServerConfig.DEFAULT_MODEL_PATH.get()).found()
+            .filter(id -> snapshot.find(id).isPresent());
+        var id = configuredId.or(() -> snapshot.defaultModel().map(model -> PublishedModelId.model(model.modelId())))
+            .orElse(null);
+        var model = id == null ? null : snapshot.find(id).or(() -> snapshot.defaultModel()).orElse(null);
         if (model == null) {
             return false;
         }
@@ -23,15 +28,13 @@ public final class ModelSelectionService {
             : view.getMetadata().getSettings().defaultTexture().orElse("");
         var texture = view.getPlayer().getTextureNames().contains(requested) ? requested
             : view.getPlayer().getTextureNames().stream().sorted().findFirst().orElse("");
-        capability.setModelAndTexture(model.representation().modelId(), texture);
+        capability.setModelSelection(id, texture);
         return true;
     }
 
     public static boolean selectBuiltinDefault(ModelInfoCapability capability, ServerCatalog snapshot,
         String requestedTexture) {
-        var model =
-            snapshot.models().values().stream().filter(handle -> handle.location().rootKind() == CatalogRootKind.BUILTIN
-                && handle.location().path().value().equals("default")).findFirst().orElse(null);
+        var model = snapshot.defaultModel().orElse(null);
         if (model == null) {
             return false;
         }
@@ -39,8 +42,7 @@ public final class ModelSelectionService {
         var configured = model.view().getMetadata().getSettings().defaultTexture().orElse("");
         var texture = textures.contains(requestedTexture) ? requestedTexture
             : textures.contains(configured) ? configured : textures.stream().sorted().findFirst().orElse("");
-        capability.clearIgnoreGrants();
-        capability.setModelAndTexture(model.representation().modelId(), texture);
+        capability.setModelSelection(PublishedModelId.INTRINSIC_DEFAULT, texture);
         return true;
     }
 
@@ -49,24 +51,21 @@ public final class ModelSelectionService {
             return Optional.empty();
         }
         var model = snapshot.find(capability.getModelId()).orElse(null);
-        if (model == null || !model.view().getPlayer().getTextureNames().contains(capability.getSelectTexture())) {
-            capability.clearIgnoreGrants();
+        if (model == null) {
             if (!selectDefault(capability, snapshot)) {
                 capability.setModelAndTexture(null, "");
                 return Optional.empty();
             }
             model = snapshot.find(capability.getModelId()).orElse(null);
         }
-        if (model != null && model.location().rootKind() == CatalogRootKind.BUILTIN
-            && model.location().path().value().equals("default")) {
-            capability.clearIgnoreGrants();
+        if (capability.getModelId() != null && capability.getModelId().isIntrinsicDefault()) {
         }
         return Optional.ofNullable(model);
     }
 
     public static String displayId(ModelInfoCapability capability, ServerCatalog snapshot) {
         var hash = capability.getModelId();
-        return hash == null ? CatalogLocation.DEFAULT.value()
+        return hash == null ? CatalogLocation.BUILTIN_DEFAULT.value() : hash.isIntrinsicDefault() ? "default"
             : snapshot.find(hash).map(model -> model.location().value()).orElse(hash.toString());
     }
 }

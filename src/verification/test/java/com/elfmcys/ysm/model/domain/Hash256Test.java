@@ -54,17 +54,6 @@ class Hash256Test {
         }
     }
 
-    @Test
-    void roamingHashUsesTheFirstFourBytesInBigEndianOrder() {
-        var bytes = new byte[Hash256.SIZE];
-        bytes[0] = (byte)0x89;
-        bytes[1] = (byte)0xab;
-        bytes[2] = (byte)0xcd;
-        bytes[3] = (byte)0xef;
-
-        assertEquals(0x89abcdef, new Hash256(bytes).roamingHash());
-    }
-
     private static byte[] bytes(int start) {
         var result = new byte[Hash256.SIZE];
         for (var index = 0; index < result.length; index++) {

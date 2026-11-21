@@ -4,7 +4,8 @@ import com.elfmcys.ysm.model.catalog.content.ContentBinding;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.domain.HierarchyPath;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.domain.ModelScanReport;
@@ -16,11 +17,17 @@ import java.util.Objects;
 import java.util.Optional;
 
 /** Immutable authoritative current-content map. */
-public record CatalogSnapshot(Map<Hash256, CatalogRecord> byModelId, Map<HierarchyPath, Hash256> byPath,
-    Map<CatalogLocation, Hash256> byLocation, List<ModelPackDescriptor> packs, ModelScanReport report) {
-    public CatalogSnapshot(Map<Hash256, CatalogRecord> byModelId, List<ModelPackDescriptor> packs,
+public record CatalogSnapshot(Map<ModelId, CatalogRecord> byModelId, Map<HierarchyPath, ModelId> byPath,
+    Map<CatalogLocation, ModelId> byLocation, CatalogRecord intrinsicDefault, List<ModelPackDescriptor> packs,
+    ModelScanReport report) {
+    public CatalogSnapshot(Map<ModelId, CatalogRecord> byModelId, List<ModelPackDescriptor> packs,
         ModelScanReport report) {
-        this(validate(byModelId), paths(byModelId), locations(byModelId), List.copyOf(packs),
+        this(byModelId, null, packs, report);
+    }
+
+    public CatalogSnapshot(Map<ModelId, CatalogRecord> byModelId, CatalogRecord intrinsicDefault,
+        List<ModelPackDescriptor> packs, ModelScanReport report) {
+        this(validate(byModelId), paths(byModelId), locations(byModelId), intrinsicDefault, List.copyOf(packs),
             Objects.requireNonNull(report, "report"));
     }
 
@@ -47,44 +54,36 @@ public record CatalogSnapshot(Map<Hash256, CatalogRecord> byModelId, Map<Hierarc
 
     /** Retains the one process-resident model while dropping every optional view. */
     public CatalogSnapshot intrinsicDefaultOnly() {
-        return new CatalogSnapshot(intrinsicDefaultRecords(), packs, report);
+        return new CatalogSnapshot(Map.of(), intrinsicDefault, List.of(), report);
     }
 
     /** Adds only the process-resident default from another side-local snapshot. */
     public CatalogSnapshot withIntrinsicDefaultFrom(CatalogSnapshot source) {
         Objects.requireNonNull(source, "source");
-        var records = new LinkedHashMap<Hash256, CatalogRecord>(source.intrinsicDefaultRecords());
-        records.putAll(byModelId);
-        return new CatalogSnapshot(records, packs, report);
+        return new CatalogSnapshot(byModelId, source.intrinsicDefault, packs, report);
     }
 
-    public Optional<ContentBinding> binding(Hash256 modelId) {
+    public Optional<ContentBinding> binding(PublishedModelId modelId) {
+        return modelId instanceof PublishedModelId.Model model ? binding(model.hash())
+            : Optional.ofNullable(intrinsicDefault).map(CatalogRecord::binding);
+    }
+
+    public Optional<ContentBinding> binding(ModelId modelId) {
         var record = byModelId.get(modelId);
         return record == null ? Optional.empty() : Optional.of(record.binding());
     }
 
-    public Optional<Hash256> resolve(CatalogLocation location) {
+    public Optional<ModelId> resolve(CatalogLocation location) {
         return Optional.ofNullable(byLocation.get(location));
     }
 
-    public Optional<Hash256> resolve(HierarchyPath path) {
+    public Optional<ModelId> resolve(HierarchyPath path) {
         return Optional.ofNullable(byPath.get(path));
     }
 
-    private Map<Hash256, CatalogRecord> intrinsicDefaultRecords() {
-        var records = new LinkedHashMap<Hash256, CatalogRecord>();
-        byModelId.forEach((modelId, record) -> {
-            if (record.location().rootKind() == CatalogRootKind.BUILTIN
-                && record.location().path().value().equals("default")) {
-                records.put(modelId, record);
-            }
-        });
-        return records;
-    }
-
-    private static Map<Hash256, CatalogRecord> validate(Map<Hash256, CatalogRecord> records) {
+    private static Map<ModelId, CatalogRecord> validate(Map<ModelId, CatalogRecord> records) {
         Objects.requireNonNull(records, "byModelId");
-        var result = new LinkedHashMap<Hash256, CatalogRecord>();
+        var result = new LinkedHashMap<ModelId, CatalogRecord>();
         records.forEach((modelId, record) -> {
             Objects.requireNonNull(modelId, "modelId");
             Objects.requireNonNull(record, "record");
@@ -99,8 +98,8 @@ public record CatalogSnapshot(Map<Hash256, CatalogRecord> byModelId, Map<Hierarc
         return result;
     }
 
-    private static Map<HierarchyPath, Hash256> paths(Map<Hash256, CatalogRecord> records) {
-        var result = new LinkedHashMap<HierarchyPath, Hash256>();
+    private static Map<HierarchyPath, ModelId> paths(Map<ModelId, CatalogRecord> records) {
+        var result = new LinkedHashMap<HierarchyPath, ModelId>();
         records.forEach((modelId, record) -> {
             if (result.putIfAbsent(record.entry().path(), modelId) != null) {
                 throw new IllegalArgumentException("Duplicate catalog hierarchy path: " + record.entry().path());
@@ -109,8 +108,8 @@ public record CatalogSnapshot(Map<Hash256, CatalogRecord> byModelId, Map<Hierarc
         return result;
     }
 
-    private static Map<CatalogLocation, Hash256> locations(Map<Hash256, CatalogRecord> records) {
-        var result = new LinkedHashMap<CatalogLocation, Hash256>();
+    private static Map<CatalogLocation, ModelId> locations(Map<ModelId, CatalogRecord> records) {
+        var result = new LinkedHashMap<CatalogLocation, ModelId>();
         records.forEach((modelId, record) -> {
             if (result.putIfAbsent(record.location(), modelId) != null) {
                 throw new IllegalArgumentException("Duplicate catalog location: " + record.location());

@@ -506,9 +506,8 @@ class ResourceDispatchWorkerContractTest {
     }
 
     private static CatalogSnapshot catalog(String hierarchy) {
-        var pack = new ModelPackDescriptor(CatalogRootKind.CUSTOM,
-            "local:custom" + (hierarchy.isEmpty() ? ""
-                : "/" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy)),
+        var pack = new ModelPackDescriptor(CatalogRootKind.MODELS,
+            "local:" + (hierarchy.endsWith("/") ? hierarchy.substring(0, hierarchy.length() - 1) : hierarchy),
             hierarchy, "", Map.of(), null, "", 0);
         return new CatalogSnapshot(Map.of(), List.of(pack), ModelScanReport.empty());
     }

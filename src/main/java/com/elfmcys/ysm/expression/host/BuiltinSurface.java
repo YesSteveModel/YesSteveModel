@@ -15,7 +15,16 @@ public record BuiltinSurface(String stableId, String sourceSpelling, dev.semawea
         dependencies = List.copyOf(dependencies);
         defaultRecipes = List.copyOf(defaultRecipes);
     }
-    public boolean isRead() { return effect == MolangEffect.CONTEXT; }
-    public boolean variadic() { return variadicElement.isPresent(); }
-    public boolean optionalArguments() { return !variadic() && minimumArguments != maximumArguments; }
+
+    public boolean isRead() {
+        return effect == MolangEffect.CONTEXT;
+    }
+
+    public boolean variadic() {
+        return variadicElement.isPresent();
+    }
+
+    public boolean optionalArguments() {
+        return !variadic() && minimumArguments != maximumArguments;
+    }
 }

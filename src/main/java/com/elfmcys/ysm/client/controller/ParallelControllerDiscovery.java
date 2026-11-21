@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.client.controller;
 
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
-import com.elfmcys.ysm.model.resource.client.CommonAsset;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceMaps;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceRBTreeMap;
@@ -41,15 +41,14 @@ public class ParallelControllerDiscovery<T extends AnimatableEntity<?>, TModel>
     }
 
     @Override
-    public ControllerFactory<T> process(TModel model, CommonAsset assets,
-        com.elfmcys.ysm.model.resource.client.AnimationStore animations) {
+    public ControllerFactory<T> process(TModel model, AnimationStore.View animations) {
         var names = new Object2ReferenceRBTreeMap<String, String>();
-        Object2ReferenceMaps.fastForEach(resourceAdapter.getControllers(model, assets), entry -> {
+        Object2ReferenceMaps.fastForEach(resourceAdapter.getControllers(model), entry -> {
             if (controllerNamePattern.test(entry.getKey())) {
                 names.put(entry.getKey(), null);
             }
         });
-        Object2ReferenceMaps.fastForEach(assets.eventHandlers(), entry -> {
+        Object2ReferenceMaps.fastForEach(animations.eventHandlers(), entry -> {
             if (eventNamePattern.test(entry.getKey())) {
                 var controllerName = entry.getKey().replace("_ctrl_", ".");
                 try {

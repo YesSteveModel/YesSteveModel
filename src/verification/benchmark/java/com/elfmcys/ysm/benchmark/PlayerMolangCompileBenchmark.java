@@ -1,5 +1,8 @@
 package com.elfmcys.ysm.benchmark;
 
+import com.elfmcys.ysm.model.resource.client.render.AnimationInputStore;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
+
 import com.elfmcys.ysm.expression.aot.*;
 import com.elfmcys.ysm.expression.host.*;
 import com.elfmcys.ysm.expression.inventory.ExpressionSet;
@@ -36,8 +39,8 @@ import java.util.concurrent.TimeUnit;
 public class PlayerMolangCompileBenchmark {
     static final Queue<PhaseSample> PHASES = new ConcurrentLinkedQueue<>();
 
-    record PhaseSample(double semantic, double source, double backend, int programs, long typedNodes, long sourceBytes,
-        int replacements) {
+    record PhaseSample(double semantic, double generation, double backend, int programs, long typedNodes,
+        long generatedNodes, int replacements) {
     }
 
     record Animation(String file, AnimationProto value) {
@@ -51,6 +54,11 @@ public class PlayerMolangCompileBenchmark {
         public String input = "builtin";
         @Param({"FULL"})
         public String purpose = "FULL";
+        @Param({"ordinary"})
+        public String hostMode = "ordinary";
+        @Param({"false", "true"})
+        public boolean divZeroFallback = Boolean.getBoolean("ysm.benchmark.divZeroFallback");
+        public Class<?> subjectType;
         private ModelMolangBenchmarkInput modelInput;
         private Path root;
         private Path cache;
@@ -62,7 +70,7 @@ public class PlayerMolangCompileBenchmark {
         private Hash256 containerId;
         private ExpressionEngineMetrics metrics;
         private RenderTargetExpressionModuleFactory factory;
-        RenderTargetExpressionModule module;
+        AnimationStore store;
         private DerivedStorageWork storage;
         private int expectedPrograms = -1;
 
@@ -70,6 +78,13 @@ public class PlayerMolangCompileBenchmark {
         public void setup() throws Exception {
             NativeLibUtil.load();
             host = ExpressionHost.create(HostAvailability.none());
+            if ("intrinsic".equals(hostMode)) {
+                host = host.builtinOnly();
+                subjectType = net.minecraft.world.entity.LivingEntity.class;
+            } else if ("ordinary-player".equals(hostMode)) {
+                subjectType = net.minecraft.client.player.AbstractClientPlayer.class;
+            } else if (!"ordinary".equals(hostMode))
+                throw new IllegalArgumentException("unknown hostMode: " + hostMode);
             if ("model".equals(input)) {
                 if (!"full".equals(selection))
                     throw new IllegalArgumentException("model input requires selection=full");
@@ -118,43 +133,44 @@ public class PlayerMolangCompileBenchmark {
             // A fresh store and factory also prevent in-memory artifact and backend linkage reuse.
             metrics = new ExpressionEngineMetrics();
             var sharedCache = new AtomicSharedCache(cache);
+            ownedCache = sharedCache;
             storage = sharedCache.derivedWork();
-            factory =
-                new RenderTargetExpressionModuleFactory(new ExpressionArtifactStore(cache, sharedCache), host, metrics);
+            factory = new RenderTargetExpressionModuleFactory(new ExpressionArtifactStore(cache, sharedCache),
+                new AnimationInputStore(cache, sharedCache), host, metrics);
         }
 
         @TearDown(Level.Invocation)
         public void verifyCold() throws Exception {
-            if (module == null)
-                throw new IllegalStateException("compilation did not publish a module");
+            if (store == null)
+                throw new IllegalStateException("compilation did not publish a store");
             try {
                 var snapshot = metrics.snapshot();
-                if (module.source() != ExpressionArtifactStore.Source.COLD
+                if (store.diagnostics().source() != ExpressionArtifactStore.Source.COLD
                     || snapshot.stageCalls(EngineMetrics.Stage.SEMANTIC_ANALYSIS) != 1
-                    || snapshot.stageCalls(EngineMetrics.Stage.SOURCE_GENERATION) != 1
+                    || snapshot.stageCalls(EngineMetrics.Stage.SYNTAX_GENERATION) != 1
                     || snapshot.stageCalls(EngineMetrics.Stage.BACKEND_COMPILATION) != 1
                     || snapshot.portableProgramDecodes() != 1) {
                     throw new IllegalStateException("expected one complete cold compilation");
                 }
-                int programs = module.programs().size();
+                int programs = store.diagnostics().programLocations().size();
                 if (expectedPrograms < 0)
                     expectedPrograms = programs;
                 if (programs != expectedPrograms)
                     throw new IllegalStateException("inventory changed");
                 var nanos = snapshot.stageNanos();
-                var report = module.compilationReport();
+                var report = store.diagnostics().compilationReport();
                 PHASES.add(new PhaseSample(nanos[EngineMetrics.Stage.SEMANTIC_ANALYSIS.ordinal()] / 1e6,
-                    nanos[EngineMetrics.Stage.SOURCE_GENERATION.ordinal()] / 1e6,
+                    nanos[EngineMetrics.Stage.SYNTAX_GENERATION.ordinal()] / 1e6,
                     nanos[EngineMetrics.Stage.BACKEND_COMPILATION.ordinal()] / 1e6, programs,
-                    report.metrics().typedNodes(), report.metrics().generatedSourceBytes(),
-                    report.replacements().size()));
+                    report.metrics().typedNodes(), report.metrics().generatedNodes(), report.replacements().size()));
             } finally {
-                module.close();
-                module = null;
+                store.close();
+                store = null;
                 // The process owner must release asynchronous writers before deleting their cache.
                 storage.awaitIdle();
                 var writes = storage.snapshot();
-                storage.close();
+                ownedCache.close();
+                ownedCache = null;
                 storage = null;
                 if (writes.failed() != 0 || writes.cancelled() != 0 || writes.shutdown() != 0)
                     throw new IllegalStateException("artifact persistence failed: " + writes);
@@ -163,8 +179,8 @@ public class PlayerMolangCompileBenchmark {
 
         @TearDown(Level.Trial)
         public void close() throws Exception {
-            if (storage != null)
-                storage.close();
+            if (ownedCache != null)
+                ownedCache.close();
             if (modelInput != null)
                 modelInput.close();
             deleteCache();
@@ -183,6 +199,8 @@ public class PlayerMolangCompileBenchmark {
                     Files.delete(path);
             }
         }
+
+        private AtomicSharedCache ownedCache;
     }
 
     static ModelDataProto select(ModelDataProto source, String selection) {
@@ -228,10 +246,14 @@ public class PlayerMolangCompileBenchmark {
 
     @Benchmark
     public int coldCompile(Workload state) throws Exception {
-        state.module = state.modelInput != null ? state.modelInput.compile(state.factory)
-            : state.factory.createSet(() -> false, state.containerId, "player", ExpressionSet.MAIN,
-                state.host.expressionBinding(), state.definition, state.strings, state.settings, state.config, false);
-        return state.module.programs().size();
+        state.store = state.modelInput != null ? state.modelInput.compile(state.factory)
+            : state.factory.createStore(() -> false, state.containerId, "player", ExpressionSet.MAIN,
+                state.subjectType == null ? state.host.expressionBinding()
+                    : state.host.expressionBinding(state.subjectType),
+                state.definition, state.strings, state.settings, state.config, false,
+                com.elfmcys.ysm.model.resource.client.ModelResourcePurpose.FULL,
+                new dev.semaweave.compilation.CompilerOptions(state.divZeroFallback));
+        return state.store.diagnostics().programLocations().size();
     }
 
     public static void main(String[] args) throws Exception {
@@ -244,23 +266,31 @@ public class PlayerMolangCompileBenchmark {
             if (args[0].equals("--probe")) {
                 state.coldCache();
                 new PlayerMolangCompileBenchmark().coldCompile(state);
-                var report = state.module.compilationReport();
+                var report = state.store.diagnostics().compilationReport();
                 state.storage.awaitIdle();
-                Path artifactPath;
-                try (var files = Files.walk(state.cache)) {
-                    artifactPath = files
-                        .filter(path -> path.getFileName().toString()
-                            .equals(state.module.identity().lookupKey()
-                                + com.elfmcys.ysm.model.resource.client.render.BakedAnimationCache.CACHE_SUFFIX))
+                final Path artifactPath;
+                try (var token = com.elfmcys.ysm.natives.NativeCancellation.create();
+                    var index = com.elfmcys.ysm.natives.storage.NativeBakeIndex
+                        .openReadOnly(state.cache.resolve("f"), token).orElseThrow()) {
+                    var object = index.pageObjects(java.util.OptionalLong.empty(), token).rows().stream()
+                        .filter(row -> row.key().exact().equals(state.store.diagnostics().identity().lookupKey()))
                         .findFirst().orElseThrow();
+                    artifactPath = state.cache.resolve("f/b").resolve(com.elfmcys.ysm.natives.storage.CacheStorageTypes
+                        .formatFileId(object.file().location().fileId()));
                 }
                 dev.semaweave.compilation.CompiledArtifact artifact;
                 try (var channel = Files.newByteChannel(artifactPath)) {
-                    var view = new com.elfmcys.ysm.format.schema.baked.asset.BakedAssetView(channel);
-                    var bytes = view.readExpression(channel, dev.semaweave.compilation.ArtifactCodecs.v1()
-                        .maximumEncodedBytes(state.module.identity().expected()));
-                    artifact = dev.semaweave.compilation.ArtifactCodecs.v1().decodeAndVerify(
-                        dev.semaweave.program.ReadOnlyBytes.copyOf(bytes), state.module.identity().expected(),
+                    var identity = state.store.diagnostics().identity();
+                    var lookup = new ExpressionArtifactLookup(identity.lookupFingerprint(), identity.containerId(),
+                        identity.targetId(), identity.set(), identity.expected(), identity.expressionBinding(),
+                        identity.configFingerprint(), identity.eventCatalogFingerprint(),
+                        identity.productionLinkageFingerprint(), identity.purpose());
+                    var read = Class.forName("com.elfmcys.ysm.expression.aot.AotArtifactEnvelope").getDeclaredMethod(
+                        "read", java.nio.channels.SeekableByteChannel.class, ExpressionArtifactLookup.class,
+                        ExpressionArtifactIdentity.class);
+                    read.setAccessible(true);
+                    var bytes = (dev.semaweave.program.ReadOnlyBytes)read.invoke(null, channel, lookup, identity);
+                    artifact = dev.semaweave.compilation.ArtifactCodecs.v1().decodeAndVerify(bytes, identity.expected(),
                         ExpressionIdentityHash.SHA_256);
                 }
                 System.out
@@ -268,8 +298,8 @@ public class PlayerMolangCompileBenchmark {
                         .toJson(Map.of("metrics", state.metrics.snapshot(), "report", report.metrics(),
                             "localRecoveries", report.localRecoveries().stream().map(Object::toString).toList(),
                             "replacements", report.replacements().stream().map(Object::toString).toList(), "programs",
-                            state.module.programs().size(), "classBytes", artifact.classes().values().stream()
-                                .mapToLong(dev.semaweave.program.ReadOnlyBytes::size).sum(),
+                            state.store.diagnostics().programLocations().size(), "classBytes", artifact.classes()
+                                .values().stream().mapToLong(dev.semaweave.program.ReadOnlyBytes::size).sum(),
                             "classCount", artifact.classes().size())));
                 state.verifyCold();
                 return;

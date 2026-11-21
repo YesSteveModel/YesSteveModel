@@ -1,97 +1,25 @@
 package com.elfmcys.ysm.model.storage;
 
-import com.elfmcys.ysm.format.schema.model.ModelFileView;
 import org.jetbrains.annotations.Nullable;
-import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.model.catalog.source.CatalogLocation;
-import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.format.parser.RawCompileResult;
-import com.elfmcys.ysm.format.schema.model.ModelFileIdentityReader;
-
+import com.elfmcys.ysm.natives.storage.CacheStorageTypes.*;
 import java.io.IOException;
-import java.nio.file.FileSystemException;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
 
-/** Exact-path converted-container storage owned by model management. */
+/** Flat converted pool. The caller owns staging through conversion and complete publication. */
 public final class ConvertedObjectStore {
-    /** Suffix of one stored converted container. */
-    static final String CONTAINER_SUFFIX = ".mxc";
-
-    /** Staging directory of the converted store. */
-    static final String TEMPORARY_DIRECTORY = ".tmp";
-
-    private final Path convertedRoot;
     private final AtomicSharedCache cache;
 
-    public ConvertedObjectStore(Path gameCacheRoot) {
-        this(gameCacheRoot, new AtomicSharedCache(gameCacheRoot));
-    }
-
-    ConvertedObjectStore(Path gameCacheRoot, AtomicSharedCache cache) {
-        this.convertedRoot = Objects.requireNonNull(gameCacheRoot, "gameCacheRoot").resolve("converted");
-        this.cache = Objects.requireNonNull(cache, "cache");
-    }
-
-    public ConvertedObjectStore(ConvertedScope scope, AtomicSharedCache cache) {
-        this.convertedRoot = scope.root();
+    public ConvertedObjectStore(AtomicSharedCache cache) {
         this.cache = Objects.requireNonNull(cache);
     }
 
-    public Path temporaryRoot() {
-        return convertedRoot().resolve(TEMPORARY_DIRECTORY);
-    }
-
-    public TemporaryDirectory createTemporaryDirectory(String prefix) throws IOException {
-        var parent = cache.observe(temporaryRoot().resolve(".guard"), true).acquire();
-        try {
-            var name = prefix + java.util.UUID.randomUUID();
-            var directory = parent.createDirectory(name);
-            try {
-                return new TemporaryDirectory(parent, directory, name, directory.identity());
-            } catch (IOException | RuntimeException | Error failure) {
-                try {
-                    directory.close();
-                } catch (IOException cleanup) {
-                    failure.addSuppressed(cleanup);
-                }
-                throw failure;
-            }
-        } catch (IOException | RuntimeException failure) {
-            parent.close();
-            throw failure;
-        }
-    }
-
-    public record TemporaryDirectory(com.elfmcys.ysm.util.DirectoryAccess parent,
-        com.elfmcys.ysm.util.DirectoryAccess directory, String name, Object identity) implements AutoCloseable {
-        public Path path() {
-            return directory.label();
-        }
-
-        @Override
-        public void close() throws IOException {
-            try (parent; directory) {
-                for (var child : directory.names())
-                    directory.delete(child, directory.fileIdentity(child), false);
-                parent.delete(name, identity, true);
-            }
-        }
-    }
-
-    private Path convertedRoot() {
-        return convertedRoot;
-    }
-
-    /** Converted objects of one model, partitioned by model id. */
-    private Path modelRoot(Hash256 modelId) {
-        return convertedRoot().resolve("objects").resolve(modelId.toString());
-    }
-
-    private Path containerPath(Hash256 modelId, Hash256 containerId) {
-        return modelRoot(modelId).resolve(containerId + CONTAINER_SUFFIX);
+    public AtomicSharedCache.Staging stage() throws IOException {
+        return cache.reserve(Pool.CONVERTED);
     }
 
     public Optional<ModelFileIdentity> findIdentity(ConvertedSourceIndex entry) throws IOException {
@@ -100,85 +28,68 @@ public final class ConvertedObjectStore {
 
     public Optional<ModelFileIdentity> findIdentity(ConvertedSourceIndex entry, @Nullable String originVer)
         throws IOException {
-        Objects.requireNonNull(entry, "entry");
-        var expectedModelId = entry.modelId();
-        var expectedContainerId = entry.containerId();
-        var file = containerPath(expectedModelId, expectedContainerId);
-        try {
-            final ModelFileIdentity identity;
-            try (var channel = cache.openRead(file)) {
-                identity = ModelFileIdentityReader.read(channel);
-                if (originVer != null) {
-                    var view = new ModelFileView(channel);
-                    if (!originVer.equals(view.getManifest().info().properties().originVer()))
-                        return Optional.empty();
-                }
-            }
-            if (!identity.modelId().equals(expectedModelId) || !identity.containerId().equals(expectedContainerId)) {
+        cache.coordinator().retain(Pool.CONVERTED, entry.location());
+        try (var representation = ManagedContainer.readConvertedMetadata(entry, cache)) {
+            if (!representation.identity().equals(entry.identity()))
                 return Optional.empty();
-            }
-            return Optional.of(identity);
-        } catch (java.nio.file.NoSuchFileException absent) {
-            return Optional.empty();
-        } catch (AssetLoadException accessOrContent) {
-            if (accessOrContent.reason() == AssetLoadException.Reason.ACCESS) {
-                throw accessOrContent;
-            }
-            return Optional.empty();
-        } catch (FileSystemException | SecurityException infrastructureFailure) {
-            throw infrastructureFailure;
-        } catch (IOException | RuntimeException invalid) {
+            if (originVer != null
+                && !originVer.equals(representation.view().getManifest().info().properties().originVer()))
+                return Optional.empty();
+            return Optional.of(representation.identity());
+        } catch (IOException invalid) {
+            CacheReadFailure.miss(entry.file(), invalid);
             return Optional.empty();
         }
     }
 
-    public ModelFileIdentity commit(RawCompileResult compiled, CatalogLocation location) throws IOException {
-        Objects.requireNonNull(compiled, "compiled");
-        final ModelFileIdentity stagedIdentity;
-        try (var staged = ManagedContainer.verifyCachedFile(compiled.stagedContainer(), cache)) {
-            stagedIdentity = staged.identity();
+    public Stored commit(RawCompileResult compiled, CatalogLocation location, AtomicSharedCache.Staging staging)
+        throws IOException {
+        if (!compiled.stagedContainer().equals(staging.path()))
+            throw new IllegalArgumentException("Compiler did not use caller-owned staging");
+        final ModelFileIdentity identity;
+        final com.elfmcys.ysm.buffer.SharedArrayBuffer metadata;
+        try (var checked = ManagedContainer.verifyCachedFile(staging.file())) {
+            identity = checked.identity();
+            metadata = checked.metadataPrefix().orElseThrow().shareArray();
         }
-        var actualModelId = stagedIdentity.modelId();
-        if (!compiled.modelHash().equals(actualModelId)) {
-            throw new ModelHashMismatchException(location, compiled.modelHash(), actualModelId);
-        }
-        var containerId = stagedIdentity.containerId();
-        var target = containerPath(actualModelId, containerId);
-        cache.materializeReplacing("converted-container", convertedRoot + "/" + identityKey(stagedIdentity), target,
-            path -> fullyMatches(path, stagedIdentity), temporary -> {
-                try (var input = cache.openRead(compiled.stagedContainer())) {
-                    input.transferTo(0, input.size(), temporary);
-                }
-                try (var verified = ManagedContainer.verifyCachedFile(temporary)) {
-                    if (!verified.identity().equals(stagedIdentity)) {
-                        throw new IOException("Converted container identity changed before commit");
-                    }
-                }
-            });
-        return stagedIdentity;
+        if (!compiled.modelHash().equals(identity.modelId()))
+            throw new ModelHashMismatchException(location, compiled.modelHash(), identity.modelId());
+        // The same exclusively owned channel has not changed since complete verification.
+        var target = staging.publish(file -> true, AtomicSharedCache.AtomicReplacement::run);
+        return new Stored(staging.location(), identity, target, metadata);
     }
 
-    public Path objectPath(Hash256 modelId, Hash256 containerId) {
-        return containerPath(modelId, containerId);
-    }
-
-    private boolean fullyMatches(CacheFile file, ModelFileIdentity expected) throws IOException {
-        try (var verified = ManagedContainer.verifyCachedFile(file)) {
-            return verified.identity().equals(expected);
-        } catch (AssetLoadException failure) {
-            if (failure.reason() == AssetLoadException.Reason.ACCESS) {
-                throw failure;
+    /** Requires the cleanup owner's continuous exclusive window through revocation and physical deletion. */
+    public boolean delete(Converted object) throws IOException {
+        return cache.coordinator().acquire(() -> {
+            cache.coordinator().requireCleanup();
+            if (cache.coordinator().retained(Pool.CONVERTED, object.location()))
+                return false;
+            var revoked = cache.catalog().execute((db, token) -> db.revokeConverted(object.location(), token));
+            if (revoked.outcome() == com.elfmcys.ysm.natives.storage.StorageResult.Outcome.REJECTED
+                && revoked.failure() == com.elfmcys.ysm.natives.storage.StorageResult.Failure.NONE)
+                return false;
+            StorageIndex.require(revoked);
+            if (!revoked.committed())
+                return false;
+            try {
+                var observation = cache.observe(cache.path(Pool.CONVERTED, object.location().fileId()), false);
+                observation.deleteIfExists(observation.fileIdentity());
+            } catch (java.nio.file.NoSuchFileException missing) {
+                // The original instance already has no physical backing.
             }
-            return false;
-        } catch (FileSystemException | SecurityException failure) {
-            throw failure;
-        } catch (IOException | RuntimeException invalid) {
-            return false;
+            var forgotten = StorageIndex
+                .require(cache.catalog().execute((db, token) -> db.forgetConverted(object.location(), token)));
+            if (!forgotten.committed())
+                throw new IOException("Converted ownership changed during reclamation");
+            return true;
+        });
+    }
+
+    public record Stored(Location location, ModelFileIdentity identity, Path file,
+        com.elfmcys.ysm.buffer.SharedArrayBuffer metadata) {
+        public java.util.UUID instance() {
+            return location.instance();
         }
     }
-
-    private static String identityKey(ModelFileIdentity identity) {
-        return identity.modelId() + ":" + identity.containerId();
-    }
-
 }

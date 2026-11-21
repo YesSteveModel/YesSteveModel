@@ -1,6 +1,7 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
 import com.elfmcys.ysm.buffer.SharedBuffer;
+
 import static com.elfmcys.ysm.testutil.DerivedStorageTestScope.track;
 
 import com.elfmcys.ysm.model.storage.ModelStorageInfra;
@@ -29,6 +30,7 @@ import com.elfmcys.ysm.model.resource.client.work.ClientResourceScheduler;
 import com.elfmcys.ysm.model.resource.client.work.WorkPriority;
 import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -39,6 +41,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+
 import net.minecraft.client.player.AbstractClientPlayer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -58,12 +61,62 @@ class ModelRenderTargetLoaderAdmissionTest {
     @Test
     void rejectedPreparationCompletesWithTransientFailure(@TempDir Path root) throws Exception {
         var content = content();
+        var inputs = new AtomicReference<ModelContent.PreparationInputs>();
         try (var representation = content.representation(); var loader = loader(root)) {
             scheduler.shutdown();
-            var failed = assertInstanceOf(ModelRenderTargetLoader.LoadResult.Failed.class,
-                loader.loadAsync(() -> false, scheduler.dispatch(WorkPriority.LOCAL_PLAYER), content, key(loader), true,
-                    ModelResourceFailures.none()).get(10, TimeUnit.SECONDS));
+            var failed =
+                assertInstanceOf(ModelRenderTargetLoader.LoadResult.Failed.class,
+                    loader
+                        .loadAsync(() -> false, scheduler.dispatch(WorkPriority.LOCAL_PLAYER),
+                            retained(content, inputs), key(loader), true, ModelResourceFailures.none())
+                        .get(10, TimeUnit.SECONDS));
             assertRejected(failed);
+            assertNull(inputs.get().content());
+        }
+    }
+
+    @Test
+    void cancellationKeepsClaimedConsumerInputsUntilItsActualExit(@TempDir Path root) throws Exception {
+        var content = content();
+        var inputs = new AtomicReference<ModelContent.PreparationInputs>();
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var read = new CompletableFuture<Integer>();
+        try (var representation = content.representation(); var loader = loader(root)) {
+            var consumerType = Class.forName(ModelRenderTargetLoader.class.getName() + "$ConsumerStage");
+            var consumer = java.lang.reflect.Proxy.newProxyInstance(consumerType.getClassLoader(),
+                new Class<?>[] {consumerType}, (proxy, method, args) -> {
+                    var request = (ModelRenderTargetLoader.LoadRequest)args[1];
+                    entered.countDown();
+                    await(release);
+                    try {
+                        assertTrue(request.content().representation().metadataPrefix().isPresent());
+                        var definition = request.target().readDefinition(() -> false, request.content().chunks());
+                        read.complete(definition.getSerializedSize());
+                    } catch (Throwable failure) {
+                        read.completeExceptionally(failure);
+                        throw failure;
+                    }
+                    throw new java.util.concurrent.CancellationException("Claimed consumer exited after reading");
+                });
+            var field = ModelRenderTargetLoader.class.getDeclaredField("consumerStage");
+            field.setAccessible(true);
+            field.set(loader, consumer);
+            var result = loader.loadAsync(() -> false, scheduler.dispatch(WorkPriority.BACKGROUND),
+                retained(content, inputs), key(loader), true, ModelResourceFailures.none());
+            try {
+                assertTrue(entered.await(30, TimeUnit.SECONDS));
+                representation.close();
+                assertTrue(result.cancel(false));
+                assertNotNull(inputs.get().content());
+                release.countDown();
+                assertTrue(read.get(10, TimeUnit.SECONDS) > 0);
+                CompletableFuture.runAsync(() -> {
+                }, scheduler.backgroundExecutor()).get(10, TimeUnit.SECONDS);
+                assertNull(inputs.get().content());
+            } finally {
+                release.countDown();
+            }
         }
     }
 
@@ -155,7 +208,7 @@ class ModelRenderTargetLoaderAdmissionTest {
             java.util.Map.of("YSM_HOME", root.resolve("global").toString()),
             com.elfmcys.ysm.AssetDirectoryPlatform.Kind.WINDOWS, null);
         assertTrue(paths.globalEnabled(), paths.diagnostics().toString());
-        try (var storage = ModelStorageInfra.open(paths, "fixture")) {
+        try (var storage = ModelStorageInfra.open(paths)) {
             var original = content();
             var oldContent = original.withStorageBinding(ContentStorageBinding.builtin(storage.local()));
             var newContent = original.withStorageBinding(ContentStorageBinding.remote(storage.remote()));
@@ -168,8 +221,9 @@ class ModelRenderTargetLoaderAdmissionTest {
                     null),
                 "player/first-person", new DefaultAnimationRuntime.Source(original.representation().containerId(),
                     "player", arm, empty, null)));
-            var modules = new RenderTargetExpressionModuleFactory(storage.local().expressions(),
-                ExpressionHost.create(HostAvailability.none()), new ExpressionEngineMetrics());
+            var modules =
+                new RenderTargetExpressionModuleFactory(storage.local().expressions(), storage.local().animations(),
+                    ExpressionHost.create(HostAvailability.none()), new ExpressionEngineMetrics());
             var chunks = new ObservedChunks(original.chunks(), true);
             try (var representation = original.representation();
                 var loader = new ModelRenderTargetLoader(storage, modules, scheduler, defaults)) {
@@ -185,16 +239,20 @@ class ModelRenderTargetLoaderAdmissionTest {
                     try (var ready =
                         assertInstanceOf(ModelRenderTargetLoader.LoadResult.Ready.class, newResult).candidate()) {
                         storage.remote().expressions().awaitPersistence();
-                        assertTrue(artifacts(storage.remote().root(), ".anim.ysm-cache") > 0);
-                        assertEquals(0, artifacts(storage.local().root(), ".anim.ysm-cache"));
-                        assertEquals(0, artifacts(storage.local().root(), ".geo.ysm-cache"));
+                        assertTrue(artifacts(storage.remote().root(),
+                            com.elfmcys.ysm.natives.storage.CacheStorageTypes.BakeKind.ANIMATION) > 0);
+                        assertEquals(0, artifacts(storage.local().root(),
+                            com.elfmcys.ysm.natives.storage.CacheStorageTypes.BakeKind.ANIMATION));
+                        assertEquals(0, artifacts(storage.local().root(),
+                            com.elfmcys.ysm.natives.storage.CacheStorageTypes.BakeKind.GEOMETRY));
                         assertFalse(oldWork.isDone());
                     }
                     chunks.release.countDown();
                     try (var ready = assertInstanceOf(ModelRenderTargetLoader.LoadResult.Ready.class,
                         oldWork.get(30, TimeUnit.SECONDS)).candidate()) {
                         storage.local().expressions().awaitPersistence();
-                        assertTrue(artifacts(storage.local().root(), ".anim.ysm-cache") > 0);
+                        assertTrue(artifacts(storage.local().root(),
+                            com.elfmcys.ysm.natives.storage.CacheStorageTypes.BakeKind.ANIMATION) > 0);
                         System.out.println(
                             "source switch animation artifacts: global and local verified; old preparation retained local region");
                     }
@@ -205,12 +263,9 @@ class ModelRenderTargetLoaderAdmissionTest {
         }
     }
 
-    private static long artifacts(Path root, String suffix) throws IOException {
-        if (!java.nio.file.Files.exists(root))
-            return 0;
-        try (var files = java.nio.file.Files.walk(root)) {
-            return files.filter(path -> path.toString().endsWith(suffix)).count();
-        }
+    private static long artifacts(Path root, com.elfmcys.ysm.natives.storage.CacheStorageTypes.BakeKind kind)
+        throws IOException {
+        return com.elfmcys.ysm.model.storage.TestCacheFiles.bakeCount(root, kind);
     }
 
     private static void assertRejected(ModelRenderTargetLoader.LoadResult.Failed failed) {
@@ -235,7 +290,8 @@ class ModelRenderTargetLoaderAdmissionTest {
     private ModelRenderTargetLoader loader(Path root) {
         var cache = track(new AtomicSharedCache(root));
         var modules = new RenderTargetExpressionModuleFactory(track(new ExpressionArtifactStore(root, cache)),
-            ExpressionHost.create(HostAvailability.none()), new ExpressionEngineMetrics());
+            new AnimationInputStore(root, cache), ExpressionHost.create(HostAvailability.none()),
+            new ExpressionEngineMetrics());
         return new ModelRenderTargetLoader(new BakedModelCache(root, cache), modules, scheduler,
             new DefaultAnimationRuntime());
     }
@@ -260,6 +316,27 @@ class ModelRenderTargetLoaderAdmissionTest {
             @Override
             public ChunkDataSource chunks() {
                 return chunks;
+            }
+        };
+    }
+
+    private static ModelContent retained(ModelContent content, AtomicReference<ModelContent.PreparationInputs> inputs) {
+        return new ModelContent() {
+            @Override
+            public ModelRepresentation representation() {
+                return content.representation();
+            }
+
+            @Override
+            public ChunkDataSource chunks() {
+                return content.chunks();
+            }
+
+            @Override
+            public PreparationInputs retainPreparationInputs() throws IOException {
+                var retained = ModelContent.super.retainPreparationInputs();
+                inputs.set(retained);
+                return retained;
             }
         };
     }

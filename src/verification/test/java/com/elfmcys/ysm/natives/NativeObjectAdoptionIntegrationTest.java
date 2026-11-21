@@ -63,8 +63,8 @@ class NativeObjectAdoptionIntegrationTest {
         try (var decoder = prefixDecoder()) {
             var capture = OpusDecoder.class.getDeclaredMethod("nCaptureCheckpoint", long.class);
             capture.setAccessible(true);
-            var ownerType = Class.forName(OpusDecoder.class.getName() + "$CheckpointOwner")
-                .asSubclass(NativeObject.class);
+            var ownerType =
+                Class.forName(OpusDecoder.class.getName() + "$CheckpointOwner").asSubclass(NativeObject.class);
             assertAdoptionRollback(ownerType, () -> (long)capture.invoke(null, decoder.get()));
 
             var checkpoint = decoder.checkpoint();
@@ -128,8 +128,8 @@ class NativeObjectAdoptionIntegrationTest {
 
     private static OpusDecoder prefixDecoder() throws Exception {
         byte[] encoded;
-        try (var resource = NativeObjectAdoptionIntegrationTest.class
-            .getResourceAsStream("/audio-fixtures/opus-long.ogg")) {
+        try (var resource =
+            NativeObjectAdoptionIntegrationTest.class.getResourceAsStream("/audio-fixtures/opus-long.ogg")) {
             encoded = resource.readAllBytes();
         }
         int end = 0;

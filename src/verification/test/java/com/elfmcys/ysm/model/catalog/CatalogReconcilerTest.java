@@ -60,7 +60,7 @@ class CatalogReconcilerTest {
             var parsed = ModelParser.parse(vfs, Files.createDirectories(fixtureTemp.resolve("candidate")),
                 DefaultAnimationFilter.keepAll());
             candidateWithoutPreviewFixture = parsed;
-            var location = new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("candidate"));
+            var location = new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("candidate"));
             var source = ManagedContainer.openDirect(parsed, location);
             try {
                 candidateFixture = ModelExporter.export(source, TestPreviews.blank(),
@@ -81,7 +81,7 @@ class CatalogReconcilerTest {
         var modelId = identity(candidateFixture).modelId();
 
         assertEquals(1, candidate.index().entries().size());
-        assertEquals(2, candidate.snapshot().byModelId().size());
+        assertEquals(1, candidate.snapshot().byModelId().size());
         assertTrue(
             Set.of("a.mxc", "b.mxc").contains(candidate.snapshot().byModelId().get(modelId).location().path().value()));
         assertEquals(1, candidate.snapshot().report().errorCount());
@@ -92,7 +92,9 @@ class CatalogReconcilerTest {
         var root = Files.createDirectories(temp.resolve("fallback"));
         var broken = Files.copy(candidateFixture, root.resolve("a.mxc"));
         var bytes = Files.readAllBytes(broken);
-        bytes[bytes.length - 1] ^= 1;
+        var preamble = com.elfmcys.ysm.format.container.AssetContainerReader.readPreamble(bytes);
+        bytes[preamble.getChunkInfo(com.elfmcys.ysm.format.schema.model.ModelFileConstant.MANIFEST_CHUNK_NAME)
+            .offset()] ^= 1;
         Files.write(broken, bytes);
         Files.copy(candidateFixture, root.resolve("b.mxc"));
 
@@ -105,6 +107,29 @@ class CatalogReconcilerTest {
     }
 
     @Test
+    void corruptEmbeddedPreviewIsRejectedOnlyWhenConsumed() throws Exception {
+        var root = Files.createDirectories(temp.resolve("preview-later"));
+        var broken = Files.copy(candidateFixture, root.resolve("a.mxc"));
+        var bytes = Files.readAllBytes(broken);
+        var preamble = com.elfmcys.ysm.format.container.AssetContainerReader.readPreamble(bytes);
+        var preview =
+            preamble.getChunkInfo(com.elfmcys.ysm.format.schema.model.ModelFileConstant.THUMB_BUTTON_CHUNK_NAME);
+        bytes[preview.offset()] ^= 1;
+        Files.write(broken, bytes);
+
+        var candidate = scan(root);
+        var expected = identity(candidateFixture);
+        assertEquals(1, candidate.index().findCandidates(expected).size());
+        assertEquals(0, candidate.snapshot().report().errorCount());
+        var content = ManagedContainer.openIndexed(candidate.index().findCandidates(expected).get(0));
+        try (var representation = content.representation()) {
+            org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class,
+                () -> content.chunks().readStoredVerified(preview, com.elfmcys.ysm.buffer.BufferType.ARRAY));
+            assertEquals(expected, representation.identity());
+        }
+    }
+
+    @Test
     void invalidModelIsOmittedWithoutDiscardingTheCandidate() throws Exception {
         var root = Files.createDirectories(temp.resolve("invalid"));
         Files.write(root.resolve("broken.mxc"), AssetContainerConstant.HEAD);
@@ -112,7 +137,7 @@ class CatalogReconcilerTest {
         var candidate = scan(root);
 
         assertTrue(candidate.index().entries().isEmpty());
-        assertEquals(1, candidate.snapshot().byModelId().size());
+        assertEquals(0, candidate.snapshot().byModelId().size());
         assertEquals(1, candidate.snapshot().report().errorCount());
     }
 
@@ -178,7 +203,7 @@ class CatalogReconcilerTest {
         var candidate = scan(root);
 
         assertTrue(candidate.index().entries().isEmpty());
-        assertEquals(1, candidate.snapshot().byModelId().size());
+        assertEquals(0, candidate.snapshot().byModelId().size());
         assertEquals(1, candidate.snapshot().report().errorCount());
     }
 
@@ -205,17 +230,23 @@ class CatalogReconcilerTest {
                 Thread.sleep(2);
             }
             assertTrue(!catalog.busy(), "Timed out awaiting catalog publication");
-            return catalog.currentCandidate();
+            var result = catalog.currentCandidate();
+            assertEquals(identity(defaultFixture).modelId(),
+                result.snapshot().intrinsicDefault().binding().content().modelId());
+            return result;
         }
     }
 
     private CatalogReconciler reconciler(Path root) throws Exception {
         var cacheRoot = temp.resolve("cache");
+        var cache = com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(cacheRoot));
+        var scope = com.elfmcys.ysm.model.storage.ConvertedScope.of(temp, "test-version");
         var resolver = new ModelSourceResolver(new RawModelImporter(DefaultAnimationFilter.keepAll()),
-            new ConvertedSourceIndexStore(cacheRoot, "test-version"), new ConvertedObjectStore(cacheRoot));
+            new ConvertedSourceIndexStore(scope, cache), new ConvertedObjectStore(cache));
         var intrinsicDefault =
             openIndexed(defaultFixture, new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default")));
-        return new CatalogReconciler(List.of(new ModelCatalogSource(CatalogRootKind.CUSTOM, root, false)), resolver,
+        return new CatalogReconciler(List.of(new ModelCatalogSource(CatalogRootKind.MODELS, root, false)), resolver,
             Set.of(intrinsicDefault.modelId()), intrinsicDefault, CatalogIndexSnapshot.empty());
     }
 

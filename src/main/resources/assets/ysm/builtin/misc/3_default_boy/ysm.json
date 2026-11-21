@@ -30,6 +30,7 @@
     }
   },
   "properties": {
+    "origin_ver": "2.6.5",
     "default_texture": "blue",
     "free": true
   },

@@ -13,6 +13,13 @@ import com.elfmcys.ysm.model.storage.ModelHashing;
 import com.elfmcys.ysm.proto.baked.asset.BakedAnimationEntryProto;
 import com.elfmcys.ysm.proto.baked.asset.BakedAnimationProto;
 import com.elfmcys.ysm.proto.baked.asset.BakedAssetManifestProto;
+import com.elfmcys.ysm.proto.baked.asset.BakedProgramInputProto;
+import com.elfmcys.ysm.proto.mixel.common.ProgramProto;
+import com.elfmcys.ysm.expression.inventory.ExpressionSet;
+import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
+import com.elfmcys.ysm.expression.inventory.ProgramRole;
+import dev.semaweave.ProgramKey;
+import dev.semaweave.program.ReadOnlyBytes;
 import com.elfmcys.ysm.util.ProtoBytes;
 import com.elfmcys.ysm.util.ProtoUtil;
 import com.elfmcys.ysm.util.ResourceDiagnostics;
@@ -31,15 +38,16 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
 import org.jetbrains.annotations.Nullable;
 
-/** Metadata view for a baked render target. Animation payloads remain unopened. */
+/** Metadata view for independent animation input. Animation and program payloads remain unopened. */
 public final class BakedAssetView {
     private final AssetContainerView assetView;
     private final BakedAssetManifestProto manifest;
     private final Map<String, BakedAnimationEntryProto> animations;
+    private final Map<Integer, BakedProgramInputProto> programs;
+    private final List<ProgramInputDescriptor> descriptors;
     private final long fileSize;
 
     public BakedAssetView(SeekableByteChannel file) throws IOException {
@@ -49,8 +57,9 @@ public final class BakedAssetView {
         if (!BakedAssetConstant.SCHEMA_ID.equals(assetView.getSchema())) {
             throw new IOException("Schema ID mismatch: " + assetView.getSchema());
         }
-        var version = Objects.requireNonNull(assetView.getSchemaProperty(BakedAssetConstant.PROP_VERSION),
-            "Version property not found");
+        var version = assetView.getSchemaProperty(BakedAssetConstant.PROP_VERSION);
+        if (version == null)
+            throw new IOException("Version property not found");
         if (!VersionCompatibility.isCompatible(BakedAssetConstant.CURRENT_VERSION.toString(), version, (current,
             candidate) -> new DefaultArtifactVersion(current).equals(new DefaultArtifactVersion(candidate)))) {
             throw new UnsupportedEncodingException("Unsupported baked asset version: \"" + version + "\"");
@@ -80,11 +89,6 @@ public final class BakedAssetView {
         var expectedChunks = new HashSet<String>();
         expectedChunks.add(AssetContainerConstant.VERIFICATION_CHUNK_TYPE);
         expectedChunks.add(BakedAssetConstant.MANIFEST_CHUNK_NAME);
-        expectedChunks.add(BakedAssetConstant.EXPRESSION_CHUNK_NAME);
-        var expression = assetView.getChunkInfo(BakedAssetConstant.EXPRESSION_CHUNK_NAME);
-        if (expression == null || !ChunkDecoding.isZstd(expression) || expression.decodeSize() <= 0
-            || expression.size() == 0)
-            throw new IOException("Baked asset contains no expression artifact");
         var animationIndex = 0;
         for (var entry : manifest.animations()) {
             validateHash(entry.sourceHash(), "animation source hash");
@@ -97,11 +101,41 @@ public final class BakedAssetView {
                 throw new IOException("Invalid baked animation index entry: " + entry.name());
             }
         }
+        var inputIndex = new LinkedHashMap<Integer, BakedProgramInputProto>();
+        var inputDescriptors = new ArrayList<ProgramInputDescriptor>();
+        var inputLocations = new HashSet<ModelProgramInventory.SemanticLocation>();
+        var inputKeys = new HashSet<ProgramKey>();
+        for (var entry : manifest.programs()) {
+            validateHash(entry.contentHash(), "program content hash");
+            var expectedChunkName = BakedAssetConstant.PROGRAM_CHUNK_PREFIX + "%06d".formatted(inputDescriptors.size());
+            var chunk = assetView.getChunkInfo(entry.chunkName());
+            if (entry.id() != inputDescriptors.size() || entry.byteLength() < 0
+                || !entry.targetId().equals(manifest.renderTargetId()) || !entry.chunkName().equals(expectedChunkName)
+                || chunk == null || !ChunkDecoding.isZstd(chunk) || chunk.size() <= 0
+                || chunk.decodeSize() != entry.byteLength() || !expectedChunks.add(entry.chunkName()))
+                throw new IOException("Invalid program input index entry: " + entry.id());
+            try {
+                var location = new ModelProgramInventory.SemanticLocation(entry.targetId(),
+                    ExpressionSet.valueOf(entry.expressionSet()), entry.location(), ProgramRole.valueOf(entry.role()),
+                    entry.discriminator());
+                var key = new ProgramKey(ReadOnlyBytes.copyOf(ProtoBytes.copy(entry.programKey())));
+                var descriptor = new ProgramInputDescriptor(entry.id(), location, key,
+                    new Hash256(ProtoBytes.copy(entry.contentHash())), entry.byteLength());
+                if (!inputLocations.add(location) || !inputKeys.add(key))
+                    throw new IOException("Duplicate program input identity: " + entry.id());
+                inputDescriptors.add(descriptor);
+                inputIndex.put(entry.id(), entry);
+            } catch (IllegalArgumentException invalid) {
+                throw new IOException("Invalid program input descriptor: " + entry.id(), invalid);
+            }
+        }
         if (assetView.getChunkTable().size() != expectedChunks.size()
             || !assetView.getChunkTable().keySet().containsAll(expectedChunks)) {
             throw new IOException("Baked asset chunk table does not match its animation index");
         }
         animations = Map.copyOf(index);
+        programs = Map.copyOf(inputIndex);
+        descriptors = List.copyOf(inputDescriptors);
     }
 
     public boolean matches(Hash256 containerId, String targetId, Hash256 inputHash) {
@@ -142,12 +176,16 @@ public final class BakedAssetView {
         }
     }
 
-    public byte[] readExpression(SeekableByteChannel file, long maximumBytes) throws IOException {
-        var chunk = assetView.getChunkInfo(BakedAssetConstant.EXPRESSION_CHUNK_NAME);
-        if (chunk.decodeSize() > maximumBytes)
-            throw new IOException("Expression artifact exceeds its bounded chunk");
+    public ProgramProto readProgram(SeekableByteChannel file, int id) throws IOException {
+        var entry = programs.get(id);
+        if (entry == null)
+            throw new IOException("Program input is missing: " + id);
+        var chunk = assetView.getChunkInfo(entry.chunkName());
         try (var data = InlineChunkReader.readPayload(file, chunk, BufferType.ARRAY)) {
-            return ProtoBytes.copy(data.nio());
+            if (!(data instanceof ArrayBuffer arrayBuffer) || data.size() != entry.byteLength()
+                || !ProtoBytes.equals(ModelHashing.blake3(data), entry.contentHash()))
+                throw new IOException("Program input payload does not match its descriptor: " + id);
+            return ProgramProto.parseFrom(ProtoUtil.source(arrayBuffer));
         }
     }
 
@@ -161,11 +199,18 @@ public final class BakedAssetView {
             files.computeIfAbsent(entry.sourceFile(), ignored -> new ArrayList<>()).add(entry.name());
         }
         files.replaceAll((file, names) -> List.copyOf(names));
-        return new BakedAnimationSet(files, new BakedAnimationSet.Source() {
+        return new BakedAnimationSet(files, descriptors, new BakedAnimationSet.Source() {
             @Override
             public BakedAnimationProto load(String sourceFile, String name) throws IOException {
                 try (var phase = openReadPhase()) {
                     return phase.load(sourceFile, name);
+                }
+            }
+
+            @Override
+            public ProgramProto loadProgram(int id) throws IOException {
+                try (var phase = openReadPhase()) {
+                    return phase.loadProgram(id);
                 }
             }
 
@@ -179,6 +224,11 @@ public final class BakedAssetView {
                     @Override
                     public BakedAnimationProto load(String sourceFile, String name) throws IOException {
                         return channel().read(channel -> readAnimation(channel, sourceFile, name));
+                    }
+
+                    @Override
+                    public ProgramProto loadProgram(int id) throws IOException {
+                        return channel().read(channel -> readProgram(channel, id));
                     }
 
                     private ChannelReadPhase channel() throws IOException {

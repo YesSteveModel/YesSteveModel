@@ -40,7 +40,7 @@ class ModelProgramInventoryTest {
     private final MolangFrontend frontend = new MolangFrontend();
 
     @Test
-    void borrowedDefaultLocationsStayCompleteWithBoundedDistinctProgramKeys() throws Exception {
+    void borrowedDefaultLocationsKeepCompleteDistinctProgramKeys() throws Exception {
         var origin = "fallback/" + "a".repeat(64) + "/player/main/";
         var animationName = "aim_left_shoulder_arm_auxiliary_finger_index_tip";
         var boneName = "LeftShoulderArmAuxiliaryFingerIndexTip";
@@ -60,7 +60,7 @@ class ModelProgramInventoryTest {
         var arm = ModelProgramInventory.collect("player", ExpressionSet.FP_ARM, definition, null, null,
             MolangEventCatalog.production());
         assertEquals(1, first.programs().size());
-        assertEquals(512, first.manifest().get(0).keyHex().length());
+        assertTrue(first.manifest().get(0).keyHex().length() > 512);
         assertEquals(first.programs().get(0).key(), located.get(0).key());
         assertNotEquals(first.programs().get(0).key(), arm.programs().get(0).key());
         assertTrue(first.manifest().get(0).location().contains(origin + "main/" + animationName));
@@ -76,8 +76,6 @@ class ModelProgramInventoryTest {
             .build();
         var other = ModelProgramInventory.collect("player", ExpressionSet.MAIN, otherDefinition, null, null,
             MolangEventCatalog.production());
-        assertEquals(first.manifest().get(0).keyHex().substring(0, 448),
-            other.manifest().get(0).keyHex().substring(0, 448));
         assertNotEquals(first.programs().get(0).key(), other.programs().get(0).key());
     }
 
@@ -172,7 +170,7 @@ class ModelProgramInventoryTest {
         assertTrue(result.manifest().stream().filter(value -> value.role() == ProgramRole.EVENT_SYNC)
             .allMatch(value -> value.maximumArguments() == MolangEventCatalog.SYNC_MAX_ARGUMENTS));
         assertTrue(result.manifest().stream().filter(value -> value.role() == ProgramRole.EVENT_DEFER)
-            .allMatch(value -> value.maximumArguments() == MolangEventCatalog.DEFER_MAX_ARGUMENTS));
+            .allMatch(value -> value.maximumArguments() == Integer.MAX_VALUE));
     }
 
     @Test

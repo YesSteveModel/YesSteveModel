@@ -23,8 +23,7 @@ public class DebugCommand {
         new SimpleCommandExceptionType(Component.translatable("argument.entity.notfound.entity"));
 
     public static LiteralArgumentBuilder<CommandSourceStack> get() {
-        return Commands.literal(DEBUG_NAME)
-            .executes(ctx -> enableDebugging("@s"))
+        return Commands.literal(DEBUG_NAME).executes(ctx -> enableDebugging("@s"))
             .then(Commands.argument(TARGET_NAME, StringArgumentType.greedyString())
                 .suggests((ctx, builder) -> SharedSuggestionProvider.suggest(targets(), builder))
                 .executes(ctx -> enableDebugging(StringArgumentType.getString(ctx, TARGET_NAME))));
@@ -47,7 +46,8 @@ public class DebugCommand {
         if (selected == null) {
             try {
                 selected = minecraft.level.getEntity(Integer.parseInt(target));
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+            }
         }
         if (selected == null)
             throw ENTITY_NOT_FOUND.create();

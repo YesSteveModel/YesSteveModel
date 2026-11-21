@@ -12,6 +12,7 @@ import com.elfmcys.ysm.format.schema.model.ModelFileConstant;
 import com.elfmcys.ysm.format.schema.model.views.SoundMedia;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
+
 import java.io.IOException;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -25,7 +26,9 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-/** Verified remote metadata with cache-first, on-demand chunk access. */
+/**
+ * Verified remote metadata with cache-first, on-demand chunk access.
+ */
 public final class RemoteModelContent implements ModelContent {
     private final ModelRepresentation representation;
     private final ChunkDataSource chunks;
@@ -57,6 +60,10 @@ public final class RemoteModelContent implements ModelContent {
         return chunks;
     }
 
+    /**
+     * Runs load with retained inputs borrowed for that callback. A product that keeps reading those inputs must
+     * establish its own retention before the callback returns.
+     */
     public <T> CompletableFuture<T> loadRenderTarget(BooleanSupplier cancelled, String targetId, String textureName,
         RemoteChunkFetcher fetcher, Executor workers, Function<ModelContent, T> load) {
         return store.loadRenderTarget(this, targetId, textureName, cancelled, fetcher, workers, load);
@@ -80,7 +87,9 @@ public final class RemoteModelContent implements ModelContent {
         store.publishChunk(representation.modelId(), chunk, bytes);
     }
 
-    /** Opens this exact representation only when every lazy chunk is cached and verified. */
+    /**
+     * Opens this exact representation only when every lazy chunk is cached and verified.
+     */
     public Optional<ModelContent> openCached(BooleanSupplier cancelled) {
         Objects.requireNonNull(cancelled, "cancelled");
         var asset = representation.view().getFileView().getAssetView();
@@ -105,7 +114,9 @@ public final class RemoteModelContent implements ModelContent {
         }
     }
 
-    /** A target probe must not require unrelated chunks or acquire network access. */
+    /**
+     * A target probe must not require unrelated chunks or acquire network access.
+     */
     public ModelContent cachedOnlyView() {
         return new CachedModelContent(representation, cachedChunks, storageBinding());
     }
@@ -121,16 +132,17 @@ public final class RemoteModelContent implements ModelContent {
         }
     }
 
-    /** Retains preparation bytes independently of the requesting consumer. */
-    public RemoteModelContent retainPreparationInputs() {
-        if (chunks instanceof ReceivedChunkDataSource received) {
-            return new RemoteModelContent(representation, received.retain(), cachedChunks, store);
+    @Override
+    public PreparationInputs retainPreparationInputs() throws IOException {
+        var retainedRepresentation = representation.acquire();
+        try {
+            var retainedChunks = chunks instanceof ReceivedChunkDataSource received ? received.retain() : chunks;
+            var retained = new RemoteModelContent(retainedRepresentation, retainedChunks, cachedChunks, store);
+            return PreparationInputs.adopt(retained);
+        } catch (Throwable failure) {
+            retainedRepresentation.close();
+            throw failure;
         }
-        return new RemoteModelContent(representation, chunks, cachedChunks, store);
-    }
-
-    public void closePreparationInputs() {
-        closeReceived();
     }
 
     public <T> CompletableFuture<T> loadRenderTargetAsync(BooleanSupplier cancelled, String targetId,
@@ -140,13 +152,18 @@ public final class RemoteModelContent implements ModelContent {
         var result = new CompletableFuture<T>();
         var active = new java.util.concurrent.atomic.AtomicReference<CompletableFuture<T>>();
         var outer = loadRenderTarget(cancelled, targetId, textureName, fetcher, workers, prepared -> {
-            var retained = ((RemoteModelContent)prepared).retainPreparationInputs();
+            final PreparationInputs retained;
             try {
-                var loading = Objects.requireNonNull(load.apply(retained), "asynchronous load");
+                retained = prepared.retainPreparationInputs();
+            } catch (IOException failure) {
+                throw new java.util.concurrent.CompletionException(failure);
+            }
+            try {
+                var loading = Objects.requireNonNull(load.apply(retained.content()), "asynchronous load");
                 active.set(loading);
                 loading.whenComplete((value, failure) -> {
                     try {
-                        retained.closePreparationInputs();
+                        retained.close();
                     } finally {
                         // Cancellation can win before an already completed inner load is registered.
                         if (failure != null)
@@ -159,7 +176,7 @@ public final class RemoteModelContent implements ModelContent {
                     loading.cancel(false);
                 return loading;
             } catch (Throwable failure) {
-                retained.closePreparationInputs();
+                retained.close();
                 throw failure;
             }
         });
@@ -180,28 +197,47 @@ public final class RemoteModelContent implements ModelContent {
 
     private static final class ReceivedChunkDataSource implements ChunkDataSource, AutoCloseable {
         private final ChunkDataSource fallback;
-        private Map<String, SharedBuffer> received;
+        private SharedReceivedChunks inputs;
 
         private ReceivedChunkDataSource(ChunkDataSource fallback, Map<String, ? extends UniBuffer> received) {
             this.fallback = Objects.requireNonNull(fallback, "fallback");
             var retained = new LinkedHashMap<String, SharedBuffer>();
             received.forEach((type, bytes) -> retained.put(type, bytes.share()));
-            this.received = Map.copyOf(retained);
+            inputs = new SharedReceivedChunks(fallback, Map.copyOf(retained));
         }
 
-        private synchronized ReceivedChunkDataSource retain() {
-            return new ReceivedChunkDataSource(fallback, received);
+        private synchronized SharedReceivedChunks retain() {
+            return inputs;
         }
 
         @Override
         public Map<String, SharedBuffer> readPayloads(BooleanSupplier cancelled,
             java.util.Collection<AssetContainerView.ChunkInfo> chunks, BufferType bufferType) throws IOException {
-            try (var retained = retain()) {
-                return ChunkDataSource.collectPayloads(cancelled, chunks,
-                    chunk -> retained.readPayload(cancelled, chunk, bufferType));
-            }
+            return retain().readPayloads(cancelled, chunks, bufferType);
         }
 
+        @Override
+        public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
+            return retain().readPayload(chunk, bufferType);
+        }
+
+        @Override
+        public SharedBuffer readStoredVerified(AssetContainerView.ChunkInfo chunk, BufferType bufferType)
+            throws IOException {
+            return retain().readStoredVerified(chunk, bufferType);
+        }
+
+        @Override
+        public synchronized void close() {
+            inputs = new SharedReceivedChunks(fallback, Map.of());
+        }
+    }
+
+    /**
+     * Products keep immutable shared input bytes without acquiring the source request's close authority.
+     */
+    private record SharedReceivedChunks(ChunkDataSource fallback,
+        Map<String, SharedBuffer> received) implements ChunkDataSource {
         @Override
         public SharedBuffer readPayload(AssetContainerView.ChunkInfo chunk, BufferType bufferType) throws IOException {
             var bytes = receivedChunk(chunk);
@@ -225,20 +261,13 @@ public final class RemoteModelContent implements ModelContent {
         }
 
         private SharedBuffer receivedChunk(AssetContainerView.ChunkInfo chunk) throws IOException {
-            final SharedBuffer bytes;
-            synchronized (this) {
-                bytes = received.get(chunk.type());
-            }
+            var bytes = received.get(chunk.type());
             if (bytes != null) {
                 ChunkDecoding.validateStored(bytes, chunk);
             }
             return bytes;
         }
 
-        @Override
-        public synchronized void close() {
-            received = Map.of();
-        }
     }
 
     private record CachedModelContent(ModelRepresentation representation, ChunkDataSource chunks,

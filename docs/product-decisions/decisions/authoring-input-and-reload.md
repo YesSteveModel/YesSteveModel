@@ -20,7 +20,7 @@
 
 ### BC.supported-bedrock-content-is-authorable
 
-- Claim: 创作者能够把 Blockbench 等工具制作的受支持 geometry、动画、控制器和纹理组织成模型；采用基岩版体系不自动承诺其全部特性。
+- Claim: 创作者能够把 Blockbench 等工具制作的受支持几何体、动画、控制器和纹理组织成模型；采用基岩版体系不自动承诺支持其全部特性。
 
 ## DD.custom-content-hot-load
 
@@ -29,22 +29,22 @@
 
 ### BC.model-edit-can-reload-in-game
 
-- Claim: 已完成验证的新增或更新模型可以通过显式 reload 或既有生命周期触发进入当前可用模型列表与后续使用；文件变化本身不触发扫描。无效内容不破坏已有游戏状态。
+- Claim: 新增或更新的模型在通过验证后，可以通过显式 reload 或既有生命周期触发进入当前可用模型列表并供后续使用；文件变动本身不会自动触发扫描。无效内容不得破坏已有的游戏状态。
 
 ### BC.catalog-links-preserve-logical-location
 
-- Claim: 用户可用符号链接或 Windows directory junction 组织 custom/auth 来源。目录、来源索引、pack hierarchy 与发布路径应沿配置根的逻辑层级命名；链接目标可在根外。全局与实例的 custom/auth 同时参与发现。完整公开位置区分来源根，保留文件入口后缀；物理目标和内容身份都不能替代该位置。来源类别取决于逻辑入口，模型身份仍取决于已验证内容。
-- Rationale: 创作者可在独立作品目录保存原件，并用链接安排游戏中的层级。raw 入口已能挂载整个作品目录；禁止 raw 内部链接限制输入捕获的复杂度。
+- Claim: 用户可以使用符号链接或 Windows directory junction 组织 models 来源。目录结构、来源索引、pack 层级（pack hierarchy）与发布路径都沿配置根下的逻辑层级命名，链接目标可以位于根目录之外。全局与实例两处的 models 目录同时参与发现。完整的公开位置需要区分来源根并保留文件入口后缀，既不能用物理目标路径替代，也不能用内容身份替代。来源类别由逻辑入口决定，模型身份仍由已验证的内容决定。
+- Rationale: 创作者可以在独立的作品目录中保存原件，并用链接安排游戏中的目录层级。raw 入口已经能够挂载整个作品目录；禁止 raw 内部链接可限制输入捕获的复杂度。
 
 | 入口 | 符号链接 | Directory junction |
 |---|---|---|
-| custom/auth 根、目录分组、raw 入口目录 | 允许 | 允许 |
-| 已支持的 zip/legacy/container 文件 | 允许 | 不适用，入口应为文件 |
-| 分组中的 pack manifest/cover 文件 | 允许 | 不适用，入口应为文件 |
+| models 根、目录分组、raw 入口目录 | 允许 | 允许 |
+| 已支持的 zip、legacy 或 container 文件 | 允许 | 不适用，入口应为文件 |
+| 分组中的 pack manifest 或 cover 文件 | 允许 | 不适用，入口应为文件 |
 | raw 内部文件、子目录与 manifest | 禁止 | 禁止 |
 
-全局目录只允许在启动探测期间创建正常缺席的根和自有探针，见[来源保护例外](artifact-storage.md#bclocal-catalog-input-is-never-mutated)。已有链接和 junction 保留；断链不视为缺席，不创建断链目标。实例 custom 自动创建、实例 auth 仅在 dedicated server 自动创建的边界不变。
+全局目录只允许在启动探测期间创建正常缺失的根目录和自有探针，详见[来源保护例外](artifact-storage.md#bclocal-catalog-input-is-never-mutated)。已有的符号链接和 junction 保持不变；断链不视为缺失，也不为其创建目标。实例 models 目录在客户端与服务端均可创建；旧版 custom 与 auth 目录既不参与发现，也不自动迁移。
 
-文件格式按逻辑入口名识别。链接不放宽内容验证、来源权限或缓存写入边界，也不扩展压缩包内部链接语义。多个逻辑入口均可参与候选；同相对位置的不同内容可并存，同内容冲突由 [Catalog 设计](../../architecture/model-management/catalog/overview.md#seam-contract)裁决，不承诺固定赢家或多别名展示。
+文件格式按逻辑入口名识别。使用链接不会放宽内容验证、来源权限或缓存写入边界，也不会扩展压缩包内部的链接语义。多个逻辑入口均可进入候选集合：同一相对位置下的不同内容允许并存，而相同内容的冲突处理规则由 [Catalog 设计](../../architecture/model-management/catalog/overview.md#seam-contract)定义，不承诺固定胜出方，也不保证多别名同时展示。
 
-断链、访问失败、祖先环或 raw 内部链接只拒绝受影响分支或模型；同根健康项继续参与验证与发布。不完整观察不能证明旧项删除，见[目录发布](catalog-publication.md#bccatalog-defines-current-content)。修复输入本身不触发重载。
+遇到断链、访问失败、祖先环或 raw 内部链接时，只拒绝受影响的分支或模型，同一根目录下的其他健康项继续参与验证与发布。目录观察不完整时，不能据此判定旧项已被删除，详见[目录发布](catalog-publication.md#bccatalog-defines-current-content)。修复本地输入本身不会触发重载。

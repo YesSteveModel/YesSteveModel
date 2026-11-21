@@ -8,6 +8,7 @@ import com.elfmcys.ysm.proto.network.PreviewUploadAdmissionProto;
 import com.elfmcys.ysm.proto.network.PreviewUploadFragmentProto;
 import com.elfmcys.ysm.proto.network.PreviewRepairResultProto;
 import com.elfmcys.ysm.network.NetworkPayload;
+import com.elfmcys.ysm.proto.network.*;
 import com.elfmcys.ysm.network.forge.ControlHandler;
 import com.elfmcys.ysm.network.forge.MinecraftStateHandler;
 import com.elfmcys.ysm.network.forge.PlayerStateHandler;
@@ -15,32 +16,23 @@ import com.elfmcys.ysm.network.forge.SessionProtocolHandler;
 import com.elfmcys.ysm.network.frame.FrameCodec;
 import com.elfmcys.ysm.proto.network.ChunkFragmentProto;
 import com.elfmcys.ysm.proto.network.ConfigActionEventProto;
-import com.elfmcys.ysm.proto.network.EmitMolangSyncProto;
 import com.elfmcys.ysm.proto.network.IconFragmentProto;
 import com.elfmcys.ysm.proto.network.MetadataPrefixFragmentProto;
 import com.elfmcys.ysm.proto.network.MetadataPrefixRequestProto;
 import com.elfmcys.ysm.proto.network.ModelChunkRequestProto;
-import com.elfmcys.ysm.proto.network.MolangSyncEventProto;
 import com.elfmcys.ysm.proto.network.PackCoverFragmentProto;
-import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
-import com.elfmcys.ysm.proto.network.PlayerStateUpdateProto;
 import com.elfmcys.ysm.proto.network.PresentationPageRequestProto;
 import com.elfmcys.ysm.proto.network.PreviewFragmentProto;
 import com.elfmcys.ysm.proto.network.PreviewAvailableProto;
-import com.elfmcys.ysm.proto.network.PrivilegedTransientEventProto;
 import com.elfmcys.ysm.proto.network.ProjectileModelStateProto;
 import com.elfmcys.ysm.proto.network.ResourceTransferCancelProto;
 import com.elfmcys.ysm.proto.network.ResourceTransferFailureProto;
-import com.elfmcys.ysm.proto.network.SelectModelRequestProto;
-import com.elfmcys.ysm.proto.network.SelectModelResultProto;
 import com.elfmcys.ysm.proto.network.ServerHelloProto;
 import com.elfmcys.ysm.proto.network.SessionDeltaFragmentProto;
 import com.elfmcys.ysm.proto.network.SessionFullFragmentProto;
 import com.elfmcys.ysm.proto.network.SessionResponseProto;
-import com.elfmcys.ysm.proto.network.StarredModelsSnapshotProto;
 import com.elfmcys.ysm.proto.network.SubmitConfigActionRequestProto;
 import com.elfmcys.ysm.proto.network.SwingHandRequestProto;
-import com.elfmcys.ysm.proto.network.UpdateStarredModelRequestProto;
 import com.elfmcys.ysm.proto.network.VehicleModelStateProto;
 import net.minecraftforge.network.NetworkEvent;
 import us.hebi.quickbuf.ProtoMessage;
@@ -50,6 +42,14 @@ import java.util.function.Supplier;
 
 /** Stable ids and the only parser/handler registry for the current wire. */
 public final class ProtocolMessages {
+    public static final int SELECTION_CHANGE_ID = 9;
+    public static final int SELECTION_STATE_SYNC_ID = 10;
+    public static final int ENTITY_STATE_SYNC_ID = 16;
+    public static final int ENTITY_TRACK_ID = 17;
+    public static final int PLAYER_FLAGS_ID = 18;
+    public static final int SERVER_FLAGS_ID = 37;
+    public static final int SELECTION_DIRECTIVE_ID = 19;
+    public static final int SELECTION_INVALIDATED_ID = 20;
     public static final int SERVER_HELLO_ID = 0;
     public static final int SESSION_RESPONSE_ID = 1;
     public static final int SESSION_FULL_FRAGMENT_ID = 2;
@@ -59,22 +59,13 @@ public final class ProtocolMessages {
     public static final int PRESENTATION_PAGE_REQUEST_ID = 6;
     public static final int RESOURCE_TRANSFER_CANCEL_ID = 7;
     public static final int RESOURCE_TRANSFER_FAILURE_ID = 8;
-    public static final int SELECT_MODEL_REQUEST_ID = 9;
-    public static final int SELECT_MODEL_RESULT_ID = 10;
     public static final int METADATA_PREFIX_FRAGMENT_ID = 11;
     public static final int CHUNK_FRAGMENT_ID = 12;
     public static final int PREVIEW_FRAGMENT_ID = 13;
     public static final int ICON_FRAGMENT_ID = 14;
     public static final int PACK_COVER_FRAGMENT_ID = 15;
 
-    public static final int PLAYER_STATE_REPORT_ID = 16;
-    public static final int PLAYER_STATE_UPDATE_ID = 17;
-    public static final int STARRED_MODELS_SNAPSHOT_ID = 18;
-    public static final int UPDATE_STARRED_MODEL_REQUEST_ID = 19;
-    public static final int PRIVILEGED_TRANSIENT_EVENT_ID = 21;
     public static final int SUBMIT_CONFIG_ACTION_REQUEST_ID = 22;
-    public static final int EMIT_MOLANG_SYNC_ID = 23;
-    public static final int MOLANG_SYNC_EVENT_ID = 24;
     public static final int SWING_HAND_REQUEST_ID = 25;
     public static final int PROJECTILE_MODEL_STATE_ID = 26;
     public static final int VEHICLE_MODEL_STATE_ID = 27;
@@ -164,14 +155,6 @@ public final class ProtocolMessages {
             ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN, ResourceTransferFailureProto.class,
             ResourceTransferFailureProto::parseFrom,
             (payload, context) -> SessionProtocolHandler.handleResourceTransferFailure(payload, context)))
-        .add(spec(SELECT_MODEL_REQUEST_ID, MessageDirection.CLIENT_TO_SERVER,
-            ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN, SelectModelRequestProto.class,
-            SelectModelRequestProto::parseFrom,
-            (payload, context) -> SessionProtocolHandler.handleSelectModelRequest(payload, context)))
-        .add(spec(SELECT_MODEL_RESULT_ID, MessageDirection.SERVER_TO_CLIENT,
-            ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN, SelectModelResultProto.class,
-            SelectModelResultProto::parseFrom,
-            (payload, context) -> SessionProtocolHandler.handleSelectModelResult(payload, context)))
         .add(spec(METADATA_PREFIX_FRAGMENT_ID, MessageDirection.SERVER_TO_CLIENT,
             ProtocolMessageSpec.AttachmentPolicy.FORBIDDEN, MetadataPrefixFragmentProto.class,
             MetadataPrefixFragmentProto::parseFrom,
@@ -190,33 +173,32 @@ public final class ProtocolMessages {
             ProtocolMessageSpec.AttachmentPolicy.CONDITIONAL, PackCoverFragmentProto.class,
             PackCoverFragmentProto::parseFrom,
             (payload, context) -> SessionProtocolHandler.handlePackCoverFragment(payload, context)))
-        .add(proto(PLAYER_STATE_REPORT_ID, MessageDirection.CLIENT_TO_SERVER, PlayerStateReportProto.class,
-            ProtocolLimits.MAX_PLAYER_STATE_BYTES, PlayerStateReportProto::parseFrom,
-            (message, context) -> PlayerStateHandler.handleReport(message, context)))
-        .add(proto(PLAYER_STATE_UPDATE_ID, MessageDirection.SERVER_TO_CLIENT, PlayerStateUpdateProto.class,
-            ProtocolLimits.MAX_PLAYER_STATE_BYTES, PlayerStateUpdateProto::parseFrom,
-            (message, context) -> PlayerStateHandler.handleUpdate(message, context)))
-        .add(proto(STARRED_MODELS_SNAPSHOT_ID, MessageDirection.SERVER_TO_CLIENT, StarredModelsSnapshotProto.class,
-            ProtocolLimits.MAX_MODEL_SET_BYTES, StarredModelsSnapshotProto::parseFrom,
-            (message, context) -> ControlHandler.handleStarredModels(message, context)))
-        .add(proto(UPDATE_STARRED_MODEL_REQUEST_ID, MessageDirection.CLIENT_TO_SERVER,
-            UpdateStarredModelRequestProto.class, ProtocolLimits.MAX_STAR_UPDATE_BYTES,
-            UpdateStarredModelRequestProto::parseFrom,
-            (message, context) -> ControlHandler.handleUpdateStar(message, context)))
-        .add(
-            proto(PRIVILEGED_TRANSIENT_EVENT_ID, MessageDirection.SERVER_TO_CLIENT, PrivilegedTransientEventProto.class,
-                ProtocolLimits.MAX_TRANSIENT_EVENT_BYTES, PrivilegedTransientEventProto::parseFrom,
-                (message, context) -> ControlHandler.handlePrivilegedTransient(message, context)))
+        .add(proto(SELECTION_CHANGE_ID, MessageDirection.BOTH, SelectionChangeProto.class,
+            ProtocolLimits.MAX_PLAYER_STATE_BYTES, SelectionChangeProto::parseFrom,
+            (message, context) -> PlayerStateHandler.handleSelectionChange(message, context)))
+        .add(proto(SELECTION_STATE_SYNC_ID, MessageDirection.BOTH, SelectionStateSyncProto.class,
+            ProtocolLimits.MAX_PLAYER_STATE_BYTES, SelectionStateSyncProto::parseFrom,
+            (message, context) -> PlayerStateHandler.handleSelectionState(message, context)))
+        .add(proto(ENTITY_STATE_SYNC_ID, MessageDirection.BOTH, EntityStateSyncProto.class,
+            ProtocolLimits.MAX_PLAYER_STATE_BYTES, EntityStateSyncProto::parseFrom,
+            (message, context) -> PlayerStateHandler.handleEntityState(message, context)))
+        .add(proto(ENTITY_TRACK_ID, MessageDirection.SERVER_TO_CLIENT, EntityTrackProto.class,
+            ProtocolLimits.MAX_PLAYER_STATE_BYTES, EntityTrackProto::parseFrom,
+            (message, context) -> PlayerStateHandler.handleTrack(message, context)))
+        .add(proto(PLAYER_FLAGS_ID, MessageDirection.SERVER_TO_CLIENT, PlayerFlagsProto.class, 64,
+            PlayerFlagsProto::parseFrom, (message, context) -> PlayerStateHandler.handleFlags(message, context)))
+        .add(proto(SERVER_FLAGS_ID, MessageDirection.SERVER_TO_CLIENT, ServerFlagsProto.class, 64,
+            ServerFlagsProto::parseFrom, (message, context) -> PlayerStateHandler.handleServerFlags(message, context)))
+        .add(proto(SELECTION_DIRECTIVE_ID, MessageDirection.SERVER_TO_CLIENT, SelectionDirectiveProto.class, 512,
+            SelectionDirectiveProto::parseFrom,
+            (message, context) -> PlayerStateHandler.handleDirective(message, context)))
+        .add(proto(SELECTION_INVALIDATED_ID, MessageDirection.SERVER_TO_CLIENT, SelectionInvalidatedProto.class, 16,
+            SelectionInvalidatedProto::parseFrom,
+            (message, context) -> PlayerStateHandler.handleInvalidated(message, context)))
         .add(proto(SUBMIT_CONFIG_ACTION_REQUEST_ID, MessageDirection.CLIENT_TO_SERVER,
             SubmitConfigActionRequestProto.class, ProtocolLimits.MAX_ENTITY_ACTION_BYTES,
             SubmitConfigActionRequestProto::parseFrom,
             (message, context) -> ControlHandler.handleSubmitConfigAction(message, context)))
-        .add(proto(EMIT_MOLANG_SYNC_ID, MessageDirection.CLIENT_TO_SERVER, EmitMolangSyncProto.class,
-            ProtocolLimits.MAX_STAR_UPDATE_BYTES, EmitMolangSyncProto::parseFrom,
-            (message, context) -> ControlHandler.handleEmitMolangSync(message, context)))
-        .add(proto(MOLANG_SYNC_EVENT_ID, MessageDirection.SERVER_TO_CLIENT, MolangSyncEventProto.class,
-            ProtocolLimits.MAX_MOLANG_SYNC_BYTES, MolangSyncEventProto::parseFrom,
-            (message, context) -> ControlHandler.handleMolangSync(message, context)))
         .add(proto(SWING_HAND_REQUEST_ID, MessageDirection.CLIENT_TO_SERVER, SwingHandRequestProto.class,
             ProtocolLimits.MAX_SWING_HAND_BYTES, SwingHandRequestProto::parseFrom,
             (message, context) -> ControlHandler.handleSwingHand(message, context)))

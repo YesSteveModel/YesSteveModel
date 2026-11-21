@@ -22,6 +22,11 @@ public final class ResponsiveExecutor {
         THREAD_POOL.execute(runnable);
     }
 
+    /** Transfers execution only while this exact task is still held by the queue. */
+    public static boolean tryTakeQueued(Runnable task) {
+        return THREAD_POOL.remove(task);
+    }
+
     public static Future<?> submit(Runnable runnable) {
         return THREAD_POOL.submit(runnable);
     }

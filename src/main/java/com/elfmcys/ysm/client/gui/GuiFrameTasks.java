@@ -10,12 +10,16 @@ public final class GuiFrameTasks {
 
     public interface Job extends Runnable {
         void join();
+
         void reject();
+
         void publish();
+
         void finish();
     }
 
-    public record Admission(boolean[] admitted, int nextCursor) {}
+    public record Admission(boolean[] admitted, int nextCursor) {
+    }
 
     public static Admission admit(boolean[] pending, int cursor, int maximumPoolSize) {
         var admitted = new boolean[pending.length];
@@ -48,22 +52,50 @@ public final class GuiFrameTasks {
                     accepted.add(job);
                 } catch (Throwable error) {
                     failure = append(failure, error);
-                    try { job.reject(); } catch (Throwable cleanup) { failure = append(failure, cleanup); }
+                    try {
+                        job.reject();
+                    } catch (Throwable cleanup) {
+                        failure = append(failure, cleanup);
+                    }
                 }
             }
             var first = jobs.get(0);
-            try { first.run(); } catch (Throwable error) { failure = append(failure, error); }
-            try { first.join(); } catch (Throwable error) { failure = append(failure, error); }
-            try { first.publish(); } catch (Throwable error) { failure = append(failure, error); }
+            try {
+                first.run();
+            } catch (Throwable error) {
+                failure = append(failure, error);
+            }
+            try {
+                first.join();
+            } catch (Throwable error) {
+                failure = append(failure, error);
+            }
+            try {
+                first.publish();
+            } catch (Throwable error) {
+                failure = append(failure, error);
+            }
         } finally {
             for (var job : accepted) {
-                try { job.join(); } catch (Throwable error) { failure = append(failure, error); }
+                try {
+                    job.join();
+                } catch (Throwable error) {
+                    failure = append(failure, error);
+                }
             }
             for (var job : accepted) {
-                try { job.publish(); } catch (Throwable error) { failure = append(failure, error); }
+                try {
+                    job.publish();
+                } catch (Throwable error) {
+                    failure = append(failure, error);
+                }
             }
             for (var job : jobs) {
-                try { job.finish(); } catch (Throwable error) { failure = append(failure, error); }
+                try {
+                    job.finish();
+                } catch (Throwable error) {
+                    failure = append(failure, error);
+                }
             }
         }
         return failure;

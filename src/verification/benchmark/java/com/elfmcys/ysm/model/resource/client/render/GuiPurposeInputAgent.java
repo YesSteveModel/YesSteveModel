@@ -5,12 +5,13 @@ import java.lang.instrument.Instrumentation;
 import java.security.ProtectionDomain;
 import org.objectweb.asm.*;
 
-/** Records the actual selected createSet input without changing the loader result. */
+/** Records the actual selected store input without changing the loader result. */
 public final class GuiPurposeInputAgent {
     public static void premain(String arguments, Instrumentation instrumentation) {
         instrumentation.addTransformer(new ClassFileTransformer() {
             @Override
-            public byte[] transform(ClassLoader loader, String name, Class<?> type, ProtectionDomain domain, byte[] bytes) {
+            public byte[] transform(ClassLoader loader, String name, Class<?> type, ProtectionDomain domain,
+                byte[] bytes) {
                 if (!name.equals("com/elfmcys/ysm/expression/aot/RenderTargetExpressionModuleFactory"))
                     return null;
                 var writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
@@ -19,7 +20,7 @@ public final class GuiPurposeInputAgent {
                     public MethodVisitor visitMethod(int access, String method, String descriptor, String signature,
                         String[] exceptions) {
                         var delegate = super.visitMethod(access, method, descriptor, signature, exceptions);
-                        if (!method.equals("createSet") || Type.getArgumentTypes(descriptor).length != 11)
+                        if (!method.equals("createStore") || Type.getArgumentTypes(descriptor).length != 12)
                             return delegate;
                         return new MethodVisitor(Opcodes.ASM9, delegate) {
                             @Override
@@ -29,7 +30,8 @@ public final class GuiPurposeInputAgent {
                                     super.visitVarInsn(Opcodes.ALOAD, index);
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC,
                                     "com/elfmcys/ysm/model/resource/client/render/GuiPurposeCacheProbe", "input",
-                                    "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V", false);
+                                    "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V",
+                                    false);
                             }
                         };
                     }

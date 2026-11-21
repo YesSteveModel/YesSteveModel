@@ -30,12 +30,12 @@ public final class AnimationProtoMapper {
         var instructions = new java.util.HashMap<Integer, VoidProgram>();
         var baked = BakedAnimationMapper.bake(source, domain, location -> {
             var program = binder.bindFloat(location, ProgramRole.ANIMATION_SAMPLE, "");
-            samples.put(program.reference().sourceId(), program);
-            return program.reference().sourceId();
+            samples.put(program.binding().programId(), program);
+            return program.binding().programId();
         }, location -> {
             var program = binder.bindVoid(location, ProgramRole.ANIMATION_INSTRUCTION, "");
-            instructions.put(program.reference().sourceId(), program);
-            return program.reference().sourceId();
+            instructions.put(program.binding().programId(), program);
+            return program.binding().programId();
         });
         var animation = BakedAnimationMapper.animation(baked, samples::get, instructions::get);
         ResourceDiagnostics.track(ResourceDiagnostics.Kind.ANIM, animation, domain + '/' + source.name() + " bones="

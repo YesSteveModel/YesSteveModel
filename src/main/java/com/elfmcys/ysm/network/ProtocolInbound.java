@@ -12,21 +12,25 @@ import java.util.function.Supplier;
 /**
  * Admits a complete frame as a fixed typed message and transfers its payload to the registered handler.
  *
- * <p><b>Ensures:</b> Handler entry follows message-ID matching, encoded-size and attachment-policy
- * checks, and complete protobuf parsing. The handler can trust those structural guarantees; business
- * validation, exact connection identity and protected effects remain its separate responsibilities.
+ * <p>
+ * <b>Ensures:</b> Handler entry follows message-ID matching, encoded-size and attachment-policy checks, and complete
+ * protobuf parsing. The handler can trust those structural guarantees; business validation, exact connection identity
+ * and protected effects remain its separate responsibilities.
  *
- * <p><b>Execution:</b> Dispatch invokes the handler on the caller's networking entry and does not grant
- * main-thread domain access. A handler that defers work must retain the required backing and capture
- * its source connection. A thrown handler failure closes the payload; normal return transfers closure duty.
+ * <p>
+ * <b>Execution:</b> Dispatch invokes the handler on the caller's networking entry and does not grant main-thread domain
+ * access. A handler that defers work must retain the required backing and capture its source connection. A thrown
+ * handler failure closes the payload; normal return transfers closure duty.
  *
- * <p><b>Seam:</b> [frame admission versus domain authority](docs/architecture/network/overview.md#接收准入与执行权限).
+ * <p>
+ * <b>Seam:</b> [frame admission versus domain authority](docs/architecture/network/overview.md#接收准入与执行权限).
  */
 final class ProtocolInbound {
     private ProtocolInbound() {}
 
     static boolean accepts(int messageId, MessageDirection direction) {
-        return ProtocolMessages.REGISTRY.find(messageId).filter(spec -> spec.direction() == direction).isPresent();
+        return ProtocolMessages.REGISTRY.find(messageId).filter(spec -> spec.direction().accepts(direction))
+            .isPresent();
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -47,6 +51,11 @@ final class ProtocolInbound {
         }
         spec.attachmentPolicy().validate(attachment.size());
         var message = ProtocolBuffer.parse(protobuf, spec.parser());
+        if (NetworkDiagnostics.isEnabled())
+            NetworkDiagnostics.message("received",
+                context.get().getDirection() == net.minecraftforge.network.NetworkDirection.PLAY_TO_SERVER
+                    ? MessageDirection.CLIENT_TO_SERVER : MessageDirection.SERVER_TO_CLIENT,
+                message, "decoded");
         NetworkPayload<T> payload = attachment.size() == 0 ? NetworkPayload.protobuf(message)
             : NetworkPayload.withRaw(message, attachment.share());
         try {

@@ -8,7 +8,13 @@ import dev.semaweave.compilation.ResourceGenerationToken;
 public sealed interface EventProgram permits FloatExpression.Program, VoidProgram {
     ModelProgramInventory.SemanticLocation location();
 
-    ProgramRef reference();
+    ProgramBinding binding();
 
-    ResourceGenerationToken generation();
+    default ProgramRef reference() {
+        return binding().aotReference();
+    }
+
+    default ResourceGenerationToken generation() {
+        return binding().aotGeneration();
+    }
 }

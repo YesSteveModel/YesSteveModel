@@ -13,6 +13,8 @@ ysm.fast_run=false
 ysm.fast_run_whitelist=
 # Enable resource diagnostics for Forge development runs.
 ysm.resource_debug=false
+# Enable network diagnostics for Forge development runs.
+ysm.network_debug=false
 '''
     try {
         java.nio.file.Files.writeString(

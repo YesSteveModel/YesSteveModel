@@ -41,7 +41,7 @@ class ModelFailureRegistryTest {
                 DefaultAnimationFilter.keepAll());
         }
         content = ManagedContainer.openDirect(fixture,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("failure-registry-fixture")));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("failure-registry-fixture")));
     }
 
     @Test

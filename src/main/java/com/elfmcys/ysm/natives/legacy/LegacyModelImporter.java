@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.natives.legacy;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.BufferType;
 import com.elfmcys.ysm.format.container.AssetContainerConstant;
 import com.elfmcys.ysm.format.container.InlineChunkReader;
@@ -23,7 +24,6 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.lang.ref.Reference;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,18 +32,40 @@ import java.util.UUID;
 
 /** Owns native result validation and the mandatory staged legacy representation. */
 public final class LegacyModelImporter {
+    /** Explicit output directory for import/export tools; cache callers supply their own staging capability. */
     public RawCompileResult stage(Path source, Path outputDirectory) {
         try (var directory = com.elfmcys.ysm.util.DirectoryAccess
             .open(com.elfmcys.ysm.util.DirectoryAccess.ensureDirectory(outputDirectory))) {
-            return stage(source, directory);
+            var name = UUID.randomUUID() + ".mxc";
+            Object identity = null;
+            try {
+                try (var channel = directory.file(name, true, true, true)) {
+                    identity = directory.fileIdentity(name);
+                    var result = stage(source, com.elfmcys.ysm.model.storage.CacheFile.borrow(channel),
+                        directory.label().resolve(name));
+                    channel.force(true);
+                    return result;
+                }
+            } catch (IOException | RuntimeException | Error failure) {
+                if (identity != null) {
+                    try {
+                        directory.delete(name, identity, false);
+                    } catch (IOException cleanup) {
+                        failure.addSuppressed(cleanup);
+                    }
+                }
+                throw failure;
+            }
         } catch (IOException failure) {
-            throw LegacyModelImportException.publicationFailure("Failed to open legacy staging directory", failure);
+            throw LegacyModelImportException.publicationFailure("Failed to open legacy output", failure);
         }
     }
 
-    public RawCompileResult stage(Path source, com.elfmcys.ysm.util.DirectoryAccess directory) {
-        Objects.requireNonNull(source, "source");
-        Objects.requireNonNull(directory, "directory");
+    public RawCompileResult stage(Path source, com.elfmcys.ysm.model.storage.AtomicSharedCache.Staging output) {
+        return stage(source, output.file(), output.path());
+    }
+
+    private RawCompileResult stage(Path source, com.elfmcys.ysm.model.storage.CacheFile output, Path label) {
         final NativeLegacyProtocol.Response response;
         try {
             response = NativeLegacyImporter.invoke(source);
@@ -51,19 +73,14 @@ public final class LegacyModelImporter {
             throw new LegacyModelImportException(NativeLegacyStatus.RESULT_PROTOCOL, failure.getMessage(), failure);
         }
         try (response) {
-            if (response instanceof NativeLegacyProtocol.Failure failure) {
+            if (response instanceof NativeLegacyProtocol.Failure failure)
                 throw new LegacyModelImportException(failure.status(), failure.diagnostic());
-            }
-            return stageSuccess((NativeLegacyProtocol.Success)response, directory);
+            return stageSuccess((NativeLegacyProtocol.Success)response, output, label);
         }
     }
 
     private static RawCompileResult stageSuccess(NativeLegacyProtocol.Success success,
-        com.elfmcys.ysm.util.DirectoryAccess directory) {
-        Path output = null;
-        String staging = null;
-        Object stagingIdentity = null;
-        FileChannel stagedChannel = null;
+        com.elfmcys.ysm.model.storage.CacheFile stagedChannel, Path output) {
         try {
             var descriptor = success.descriptor();
             var records = descriptor.records();
@@ -72,13 +89,9 @@ public final class LegacyModelImporter {
             var manifest = mapper.manifest(parseManifest(payloads.get(0)));
             var translatedPayloads = new byte[records.size()][];
             var sounds = new ArrayList<LegacySound>();
-            var modelId = new Hash256(descriptor.modelId());
+            var modelId = ModelId.fromHash(new Hash256(descriptor.modelId()));
             validateManifestIdentity(manifest, modelId);
 
-            output = directory.label().resolve(modelId + ".mxc");
-            staging = output.getFileName() + ".tmp-" + UUID.randomUUID();
-            stagedChannel = directory.file(staging, true, true, true);
-            stagingIdentity = directory.fileIdentity(staging);
             try (var writer = new ModelFileWriter()) {
                 for (var index = 1; index < records.size(); index++) {
                     var record = records.get(index);
@@ -126,29 +139,14 @@ public final class LegacyModelImporter {
             }
             stagedChannel.position(0);
             reopen(stagedChannel, modelId, success, translatedPayloads);
-            stagedChannel.force(true);
-            directory.move(staging, stagingIdentity, directory, output.getFileName().toString());
-            staging = null;
             return new RawCompileResult(modelId, output);
         } catch (LegacyModelImportException failure) {
-            deleteStaged(directory, staging, stagingIdentity, failure);
             throw failure;
         } catch (NativeLegacyProtocol.ProtocolException failure) {
-            var wrapped =
-                new LegacyModelImportException(NativeLegacyStatus.RESULT_PROTOCOL, failure.getMessage(), failure);
-            deleteStaged(directory, staging, stagingIdentity, wrapped);
-            throw wrapped;
+            throw new LegacyModelImportException(NativeLegacyStatus.RESULT_PROTOCOL, failure.getMessage(), failure);
         } catch (IOException | RuntimeException failure) {
-            var wrapped = new LegacyModelImportException(NativeLegacyStatus.PUBLICATION_FAILED,
-                "Failed to stage legacy model", failure);
-            deleteStaged(directory, staging, stagingIdentity, wrapped);
-            throw wrapped;
-        } finally {
-            if (stagedChannel != null)
-                try {
-                    stagedChannel.close();
-                } catch (IOException ignored) {
-                }
+            throw new LegacyModelImportException(NativeLegacyStatus.PUBLICATION_FAILED, "Failed to stage legacy model",
+                failure);
         }
     }
 
@@ -182,10 +180,9 @@ public final class LegacyModelImporter {
         }
     }
 
-    private static void validateManifestIdentity(ManifestProto manifest, Hash256 modelId) {
+    private static void validateManifestIdentity(ManifestProto manifest, ModelId modelId) {
         var properties = manifest.info().properties();
-        if (properties.modelId().remaining() != Hash256.SIZE
-            || !com.elfmcys.ysm.util.ProtoBytes.equals(modelId, properties.modelId())) {
+        if (!modelId.toString().equals(properties.modelId())) {
             throw new NativeLegacyProtocol.ProtocolException("Legacy manifest identity does not match the descriptor");
         }
     }
@@ -230,7 +227,7 @@ public final class LegacyModelImporter {
     }
 
     private static ManifestProto installSounds(ModelFileWriter writer, ManifestProto sourceManifest,
-        List<LegacySound> sources, Hash256 modelId) throws IOException {
+        List<LegacySound> sources, ModelId modelId) throws IOException {
         var baseCommon = CommonProto.newBuilder(sourceManifest.commonAssets());
         if (!baseCommon.build().sounds().isEmpty()) {
             throw new NativeLegacyProtocol.ProtocolException("Legacy source projection contains current sound media");
@@ -238,7 +235,7 @@ public final class LegacyModelImporter {
         var selected = new ArrayList<SoundProto>();
         var manifestBase = ManifestProto.newBuilder(sourceManifest);
         for (var source : sources) {
-            int serial = ByteBuffer.wrap(modelId.bytes()).getInt() ^ source.record().logicalId();
+            int serial = modelId.hashCode() ^ source.record().logicalId();
             try (var generated = SoundMediaGeneration.normalize(source.payload(), serial, candidate -> {
                 int firstChunkId = writer.nextBlobId();
                 var candidateSounds = new ArrayList<>(selected);
@@ -271,8 +268,8 @@ public final class LegacyModelImporter {
         }
     }
 
-    private static void reopen(FileChannel channel, Hash256 modelId, NativeLegacyProtocol.Success success,
-        byte[][] translatedPayloads) throws IOException {
+    private static void reopen(com.elfmcys.ysm.model.storage.CacheFile channel, ModelId modelId,
+        NativeLegacyProtocol.Success success, byte[][] translatedPayloads) throws IOException {
         {
             var view = new ModelFileView(channel);
             if (!view.getModelHash().equals(modelId)) {
@@ -280,7 +277,7 @@ public final class LegacyModelImporter {
             }
             view.getCommon().validateSoundContent(() -> false,
                 new com.elfmcys.ysm.format.schema.file.FileChunkDataSource(Path.of("legacy-staging"), channel.size(),
-                    () -> com.elfmcys.ysm.model.storage.CacheFile.borrow(channel)));
+                    () -> channel));
             var asset = view.getFileView().getAssetView();
             var records = success.descriptor().records();
             var payloads = success.payloads();
@@ -335,18 +332,6 @@ public final class LegacyModelImporter {
 
     private static int packedImageSize(NativeLegacyProtocol.PayloadRecord record) {
         return (record.meta0() << 16) | (record.meta1() & 0xffff);
-    }
-
-    private static void deleteStaged(com.elfmcys.ysm.util.DirectoryAccess directory, String name, Object identity,
-        Throwable failure) {
-        if (name == null || identity == null) {
-            return;
-        }
-        try {
-            directory.delete(name, identity, false);
-        } catch (IOException cleanupFailure) {
-            failure.addSuppressed(cleanupFailure);
-        }
     }
 
     private record LegacySound(NativeLegacyProtocol.PayloadRecord record, LegacyPayloadBuffer payload) {

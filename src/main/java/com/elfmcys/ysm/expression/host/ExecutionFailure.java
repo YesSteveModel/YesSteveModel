@@ -7,9 +7,7 @@ public final class ExecutionFailure extends RuntimeException {
     private static final long serialVersionUID = 1L;
 
     public enum Reason {
-        FRAME_STATE, LOOP_BUDGET, PROVIDER_BUDGET, CONTROL_TRANSFER_BUDGET, USER_FUNCTION_DEPTH,
-        ARGUMENT_SCRATCH_BUDGET, CANCELLATION, STALE_GENERATION, EFFECT_NOT_AUTHORIZED, EFFECT_BATCH_LIMIT,
-        EFFECT_BATCH_STATE, NON_NULL_RETURN
+        USER_FUNCTION_DEPTH, STALE_GENERATION, INSTANCE_EXECUTION
     }
 
     private final Reason reason;
@@ -36,9 +34,17 @@ public final class ExecutionFailure extends RuntimeException {
         this.provenance = Objects.requireNonNull(provenance, "provenance");
     }
 
-    public java.util.OptionalLong maximum() { return maximum; }
+    public java.util.OptionalLong maximum() {
+        return maximum;
+    }
 
-    public String phase() { return "EXECUTION"; }
+    public String phase() {
+        return "EXECUTION";
+    }
+
+    public boolean isUserFunctionDepthExceeded() {
+        return reason == Reason.USER_FUNCTION_DEPTH;
+    }
 
     public Reason reason() {
         return reason;
@@ -47,4 +53,5 @@ public final class ExecutionFailure extends RuntimeException {
     public InvocationProvenance provenance() {
         return provenance;
     }
+
 }

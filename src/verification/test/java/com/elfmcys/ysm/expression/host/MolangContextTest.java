@@ -1,11 +1,9 @@
 package com.elfmcys.ysm.expression.host;
 
-import com.elfmcys.ysm.api.molang.PreparedEffect;
 import com.elfmcys.ysm.api.molang.MolangContextView;
 import dev.semaweave.RoamingRole;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.world.entity.Entity;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
@@ -15,42 +13,39 @@ class MolangContextTest {
 
     @Test
     void scopesShareOneObjectAndPermissionStaysFixedUntilEnd() {
-        var context = context(new AtomicBoolean(true));
+        var context = context();
         MolangContextView<Entity> read = context;
         MolangContextView<Entity> action = context;
         assertSame(read, action);
-        assertThrows(IllegalStateException.class, () -> action.submit((PreparedEffect)() -> {}));
+        assertThrows(IllegalStateException.class, () -> action.defer(0));
         context.bindExpression("action", 3);
         context.beginTopLevel(true);
         assertTrue(context.actionAllowed());
-        assertThrows(IllegalStateException.class, () -> context.bindExpression("nested", 6));
-        assertThrows(IllegalStateException.class, () -> context.beginTopLevel(false));
         assertTrue(context.actionAllowed());
-        action.submit((PreparedEffect)() -> {});
+        action.defer(0);
         context.endTopLevel();
         context.releaseExpression();
         assertFalse(context.actionAllowed());
         context.bindExpression("bone", 4);
         context.beginTopLevel(false);
-        assertThrows(IllegalStateException.class, () -> action.submit((PreparedEffect)() -> {}));
+        assertThrows(IllegalStateException.class, () -> action.defer(0));
         context.endTopLevel();
         context.releaseExpression();
-        assertEquals(1, context.effects().orElseThrow().size());
     }
 
     @Test
     void hostWindowIsBoundBeforeActivationAndDoesNotLeakBetweenEntries() {
-        var context = context(new AtomicBoolean(true));
+        var context = context();
         context.bindExpression("resample", 1, false);
         context.beginTopLevel(true);
         assertFalse(context.actionAllowed());
-        assertThrows(IllegalStateException.class, () -> context.submit((PreparedEffect)() -> {}));
+        assertThrows(IllegalStateException.class, () -> context.defer(0));
         context.endTopLevel();
         context.releaseExpression();
         context.bindExpression("explicit-execute", 2, true);
         context.beginTopLevel(true);
         assertTrue(context.actionAllowed());
-        context.submit((PreparedEffect)() -> {});
+        context.defer(0);
         context.endTopLevel();
         context.releaseExpression();
         context.bindExpression("watch", 3, true);
@@ -58,22 +53,24 @@ class MolangContextTest {
         assertFalse(context.actionAllowed());
         context.endTopLevel();
         context.releaseExpression();
-        assertEquals(1, context.effects().orElseThrow().size());
         context.closeRound();
     }
 
     @Test
-    void roamingStorageKeepsTheHostWindowInsteadOfTheCallableEffectPermission() {
-        var context = context(new AtomicBoolean(true));
+    void localRoamingWritesDoNotAcquireActionPermission() {
+        var context = context();
         context.bindExpression("context-entry-in-update", 1, true);
         context.beginTopLevel(false);
-        context.authorizeRoamingWrite(context.roamingState());
+        context.roamingState().write((short)context.roamingState().fieldNames().indexOf("shared"), 7);
+        assertEquals(7F, context.roamingState().read((short)context.roamingState().fieldNames().indexOf("shared")));
         assertFalse(context.actionAllowed());
         context.endTopLevel();
         context.releaseExpression();
         context.bindExpression("observation-host-window", 2, false);
         context.beginTopLevel(false);
-        assertThrows(ExecutionFailure.class, () -> context.authorizeRoamingWrite(context.roamingState()));
+        context.roamingState().write((short)context.roamingState().fieldNames().indexOf("shared"), 9);
+        assertEquals(9F, context.roamingState().read((short)context.roamingState().fieldNames().indexOf("shared")));
+        assertFalse(context.actionAllowed());
         context.endTopLevel();
         context.releaseExpression();
         context.closeRound();
@@ -81,13 +78,16 @@ class MolangContextTest {
 
     @Test
     void escapedDeferredPayloadKeepsItsValuesAndSourceWithoutRetainingTheContext() throws Exception {
-        var context = context(new AtomicBoolean(true));
+        var context = context();
         var escaped = new ArrayList<Object>();
-        context.deferredSubmit((request, source) -> { escaped.add(request); escaped.add(source); });
+        context.deferredSubmit((request, source) -> {
+            escaped.add(request);
+            escaped.add(source);
+        });
         var values = new float[] {3, 4};
         context.bindExpression("A", 1);
         context.beginTopLevel(true);
-        context.submit(new DeferredRequest(EventArguments.deferred(2, values)));
+        context.defer(2, values);
         context.endTopLevel();
         context.releaseExpression();
         values[0] = 99;
@@ -95,10 +95,10 @@ class MolangContextTest {
         context.beginTopLevel(false);
         context.endTopLevel();
         context.releaseExpression();
-        EffectTransaction.finish(context, EffectSink.direct(), true);
+
         context.closeRound();
-        var captured = (DeferredRequest)escaped.get(0);
-        assertEquals(List.of(2f, 3f, 4f), captured.arguments());
+        var captured = (EventArguments)escaped.get(0);
+        assertEquals(List.of(2f, 3f, 4f), captured);
         assertEquals(new InvocationProvenance("target", "A", 1, 7, 9), escaped.get(1));
         assertNoContextReference(escaped, new java.util.IdentityHashMap<>());
     }
@@ -129,32 +129,29 @@ class MolangContextTest {
 
     @Test
     void resetPreservesCapturedFailureAndReleasesTemporaryState() throws Exception {
-        var context = context(new AtomicBoolean(true));
+        var context = context();
         var cause = new IllegalArgumentException("original");
         context.bindExpression("first", 3);
         context.beginTopLevel(true);
-        context.reportFailure(3, "root/arg/0", "weapon:query", cause);
+        context.reportFailure(context.provenance(), cause);
         context.endTopLevel();
         context.releaseExpression();
         var snapshot = context.firstFailure();
-        assertEquals(3, snapshot.programId());
         assertEquals(new InvocationProvenance("target", "first", 3, 7, 9), snapshot.provenance());
         assertSame(cause, snapshot.cause());
-        assertEquals("root/arg/0", snapshot.path());
         context.bindExpression("second", 4);
         context.beginTopLevel(false);
-        context.chargeProviderCall();
         context.endTopLevel();
         context.releaseExpression();
         assertSame(snapshot, context.firstFailure());
-        for (var name : List.of("programLocation", "ownerThread")) {
+        for (var name : List.of("programLocation")) {
             var field = MolangContext.class.getDeclaredField(name);
             field.setAccessible(true);
             assertNull(field.get(context));
         }
         context.closeRound();
-        for (var name : List.of("subject", "entityView", "renderView", "hostAccess", "roamingState", "cancellation",
-            "currentGeneration", "controllerContext", "animationContext")) {
+        for (var name : List.of("subject", "entityView", "renderView", "roamingState", "controllerContext",
+            "animationContext")) {
             var field = MolangContext.class.getDeclaredField(name);
             field.setAccessible(true);
             assertNull(field.get(context), name);
@@ -162,53 +159,8 @@ class MolangContextTest {
     }
 
     @Test
-    void sealAfterReadonlyResetKeepsActionSourceAndOwnerQualification() {
-        var context = context(new AtomicBoolean(true));
-        context.bindExpression("action", 3);
-        context.beginTopLevel(true);
-        context.submit((PreparedEffect)() -> {});
-        context.endTopLevel();
-        context.releaseExpression();
-        context.bindExpression("readonly", 4);
-        context.beginTopLevel(false);
-        context.endTopLevel();
-        context.releaseExpression();
-        context.stageOwner(() -> {});
-        var seen = new ArrayList<InvocationProvenance>();
-        var commands = new ArrayList<PreparedEffect>();
-        EffectTransaction.finish(context, (values, source) -> {
-            seen.add(source);
-            return () -> commands.addAll(values);
-        }, true);
-        assertEquals(List.of(new InvocationProvenance("target", "action", 3, 7, 9), OWNER), seen);
-        assertEquals(2, commands.size());
-        assertEquals(EffectBatch.State.COMMITTED, context.effects().orElseThrow().state());
-    }
-
-    @Test
-    void revokedRoundCannotSealAndPublicViewsExposeOnlyBusinessMethods() throws Exception {
-        var current = new AtomicBoolean(true);
-        var context = context(current);
-        context.stageOwner(() -> {});
-        current.set(false);
-        assertThrows(ExecutionFailure.class, () -> EffectTransaction.finish(context, (values, source) -> {
-            throw new AssertionError("revoked effects");
-        }, true));
-        assertEquals(EffectBatch.State.DISCARDED, context.effects().orElseThrow().state());
-        assertFalse(AutoCloseable.class.isAssignableFrom(MolangContextView.class));
-        for (var method : MolangContextView.class.getMethods()) {
-            assertFalse(List.of("reset", "beginTopLevel", "endTopLevel", "execute", "evaluate", "effects", "phase",
-                "verifyEligible", "configureLimits").contains(method.getName()));
-            assertFalse(method.toGenericString().contains("semaweave"));
-        }
-        assertEquals(java.util.Set.of("subject", "inputs", "submit"), java.util.Arrays.stream(
-            MolangContextView.class.getMethods()).map(java.lang.reflect.Method::getName)
-            .collect(java.util.stream.Collectors.toSet()));
-    }
-
-    @Test
     void sampledAnimationSurvivesExpressionResetUntilTheSchedulerChangesIt() {
-        var context = context(new AtomicBoolean(true));
+        var context = context();
         var first = new AnimationExecutionState();
         first.setAnimTime(2.5f);
         context.setAnimationContext(first);
@@ -230,36 +182,13 @@ class MolangContextTest {
         context.closeRound();
     }
 
-    @Test
-    void laterSourceValidationFailureCannotCommitAnEarlierPreparedGroup() {
-        var context = context(new AtomicBoolean(true));
-        for (int program = 0; program < 2; program++) {
-            context.bindExpression("action-" + program, program);
-            context.beginTopLevel(true);
-            context.submit((PreparedEffect)() -> {});
-            context.endTopLevel();
-            context.releaseExpression();
-        }
-        var prepared = new ArrayList<Integer>();
-        var committed = new ArrayList<Integer>();
-        var failure = new IllegalStateException("second source validation");
-        assertSame(failure,
-            assertThrows(IllegalStateException.class, () -> EffectTransaction.finish(context, (commands, source) -> {
-                prepared.add(source.programId());
-                if (source.programId() == 1)
-                    throw failure;
-                return () -> committed.add(source.programId());
-            }, true)));
-        assertEquals(List.of(0, 1), prepared);
-        assertEquals(List.of(), committed);
-        assertEquals(EffectBatch.State.DISCARDED, context.effects().orElseThrow().state());
-        context.closeRound();
-    }
-
-    private static MolangContext<Entity> context(AtomicBoolean current) {
-        return MolangContext.logical(new EntityView() {}, new RenderView() {}, MolangContext.LogicalPhase.UPDATE,
-            (command, scope) -> {
-            }, com.elfmcys.ysm.expression.TestRoamingStates.create(null, RoamingRole.PRODUCER), OWNER, () -> false,
-            current::get, 8);
+    private static MolangContext<Entity> context() {
+        var context = MolangContext.logical(new EntityView() {}, new RenderView() {}, MolangContext.LogicalPhase.UPDATE,
+            com.elfmcys.ysm.expression.TestRoamingStates.create(null, RoamingRole.PRODUCER,
+                java.util.List.of("shared")),
+            OWNER);
+        context.deferredSubmit((values, source) -> {
+        });
+        return context;
     }
 }

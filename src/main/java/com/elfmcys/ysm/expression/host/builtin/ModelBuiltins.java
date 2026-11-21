@@ -1,175 +1,120 @@
 package com.elfmcys.ysm.expression.host.builtin;
 
-import com.elfmcys.ysm.expression.host.EntityComponent;
+import com.elfmcys.ysm.api.annotation.MolangNullable;
 import com.elfmcys.ysm.api.molang.MolangContextView;
-import com.elfmcys.ysm.expression.host.*;
-import com.elfmcys.ysm.api.molang.PreparedEffect;
-import com.elfmcys.ysm.client.sound.instance.SoundInstanceManager;
+import com.elfmcys.ysm.client.entity.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.CustomFirstPersonArmEntity;
+import com.elfmcys.ysm.expression.annotation.BuiltinComponent;
+import com.elfmcys.ysm.expression.annotation.BuiltinFunction;
+import com.elfmcys.ysm.expression.host.EntityComponent;
+import com.elfmcys.ysm.expression.host.MolangVector;
 import com.elfmcys.ysm.geckolib3.core.event.predicate.AnimationEvent;
-import com.elfmcys.ysm.geckolib3.model.AnimatedGeoBone;
+import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
 import com.elfmcys.ysm.util.StringPool;
-import net.minecraft.util.Mth;
-import org.apache.commons.lang3.StringUtils;
-import org.joml.Vector3d;
+import it.unimi.dsi.fastutil.ints.Int2ReferenceOpenHashMap;
 import net.minecraft.world.entity.Entity;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
 
-/** Core bone, physics, sound, particle, synchronization and input built-ins. */
-@BuiltinComponent(value = "ysm")
+@BuiltinComponent("ysm")
 public final class ModelBuiltins implements EntityComponent<Entity> {
-    private final com.elfmcys.ysm.client.entity.AnimatableEntity<?> owner;
-    public ModelBuiltins(com.elfmcys.ysm.client.entity.AnimatableEntity<Entity> owner) { this.owner = owner; }
+    private static final MolangVector ZERO = new MolangVector(0, 0, 0);
+
+    private final AnimatableEntity<?> owner;
+    private final Int2ReferenceOpenHashMap<MolangVector> absPivotCache = new Int2ReferenceOpenHashMap<>(0);
+
+    public ModelBuiltins(AnimatableEntity<Entity> owner) {
+        this.owner = owner;
+    }
 
     private AnimationEvent<?> event;
-    @Override public void beginEval(AnimationEvent<?> event) { this.event = event; }
-    @Override public void endEval() { event = null; }
 
-    @BuiltinFunction(value = "bone_rot", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 1,
-        maxArgs = 1)
+    @Override
+    public void beginEval(AnimationEvent<?> event) {
+        this.event = event;
+    }
+
+    @Override
+    public void update(float previousTime, float currentTime, float partialTicks) {
+        absPivotCache.clear();
+    }
+
+    @Override
+    public void setRenderTarget(ModelRenderTarget target) {
+        absPivotCache.clear();
+    }
+
+    @Override
+    public void endEval() {
+        event = null;
+    }
+
+    @BuiltinFunction(value = "bone_pos", alwaysOrigin = true)
+    @MolangNullable
+    public MolangVector position(MolangContextView<Entity> context, String name) {
+        var bone = owner.getBone(StringPool.computeIfAbsent(name));
+        return bone == null ? null : new MolangVector(bone.getPositionX(), bone.getPositionY(), bone.getPositionZ());
+    }
+
+    @BuiltinFunction(value = "bone_scale", alwaysOrigin = true)
+    @MolangNullable
+    public MolangVector scale(MolangContextView<Entity> context, String name) {
+        var bone = owner.getBone(StringPool.computeIfAbsent(name));
+        return bone == null ? null : new MolangVector(bone.getScaleX(), bone.getScaleY(), bone.getScaleZ());
+    }
+
+    @BuiltinFunction(value = "bone_rot", alwaysOrigin = true)
     public MolangVector boneRotation(MolangContextView<Entity> context, String name) {
         var bone = owner.getBone(StringPool.computeIfAbsent(name));
         return bone == null ? new MolangVector(0, 0, 0) : new MolangVector(-(float)Math.toDegrees(bone.getRotationX()),
             -(float)Math.toDegrees(bone.getRotationY()), (float)Math.toDegrees(bone.getRotationZ()));
     }
 
-    @BuiltinFunction(value = "bone_pivot_abs", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 1,
-        maxArgs = 1)
+    @BuiltinFunction(value = "bone_pivot_abs", alwaysOrigin = true)
+    @MolangNullable
     public MolangVector bonePivotAbsolute(MolangContextView<Entity> context, String name) {
-        return new MolangVector(0, 0, 0);
+        if (owner instanceof CustomFirstPersonArmEntity || event != null && event.getRenderContext().firstPersonMod()) {
+            return null;
+        }
+        if (event == null) {
+            return ZERO;
+        }
+
+        var model = owner.getLoadedGeoModel();
+        var state = owner.getModelState();
+        if (model == null || state == null) {
+            return ZERO;
+        }
+
+        var boneName = StringPool.computeIfAbsent(name);
+        var bone = model.getBoneMap().get(boneName);
+        if (bone == null) {
+            return ZERO;
+        }
+
+        return absPivotCache.computeIfAbsent(boneName, n -> {
+            var pivot = new Vector3f(bone.getPivot()).mul(1f / 16f);
+            state.getNativeState().getBonePoses().getPose(bone.getBoneIndex(), new Matrix4f()).transformPosition(pivot);
+            if (pivot.isFinite()) {
+                return new MolangVector(-pivot.x * 16f, pivot.y * 16f, pivot.z * 16f);
+            } else {
+                return ZERO;
+            }
+        });
     }
 
-    @BuiltinFunction(value = "bone_glow", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 2,
-        maxArgs = 2)
-    public void boneGlow(MolangContextView<Entity> context, String name, float glow) {
-        var bone = owner.getBone(StringPool.computeIfAbsent(name));
-        var value = Mth.clamp(Math.round(glow), -1, 15);
-        context.submit((PreparedEffect)() -> { if (bone instanceof AnimatedGeoBone target) target.setGlow(value); });
-    }
-
-    @BuiltinFunction(value = "bone_transparency", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 2,
-        maxArgs = 2)
-    public void boneTransparency(MolangContextView<Entity> context, String name, float alpha) {
-        var bone = owner.getBone(StringPool.computeIfAbsent(name));
-        var value = Mth.clamp(Math.round(alpha), 0, 255);
-        context.submit((PreparedEffect)() -> { if (bone instanceof AnimatedGeoBone target) target.setTransparency(value); });
-    }
-
-    @BuiltinFunction(value = "bone_color", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 4,
-        maxArgs = 4)
-    public void boneColor(MolangContextView<Entity> context, String name, float red, float green, float blue) {
-        var bone = owner.getBone(StringPool.computeIfAbsent(name));
-        var r = Mth.clamp(Math.round(red), 0, 255);
-        var g = Mth.clamp(Math.round(green), 0, 255);
-        var b = Mth.clamp(Math.round(blue), 0, 255);
-        context.submit((PreparedEffect)() -> { if (bone instanceof AnimatedGeoBone target) target.setColor(r, g, b); });
-    }
-
-    @BuiltinFunction(value = "first_order", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 2,
-        maxArgs = 255)
+    @BuiltinFunction(value = "first_order", alwaysOrigin = true)
+    @com.elfmcys.ysm.api.annotation.MolangNullable
     public float firstOrder(MolangContextView<Entity> context, int argc, String name, float input,
         float... coefficients) {
         return physics(name, input, true, coefficients);
     }
 
-    @BuiltinFunction(value = "second_order", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 2,
-        maxArgs = 255)
+    @BuiltinFunction(value = "second_order", alwaysOrigin = true)
+    @com.elfmcys.ysm.api.annotation.MolangNullable
     public float secondOrder(MolangContextView<Entity> context, int argc, String name, float input,
         float... coefficients) {
         return physics(name, input, false, coefficients);
-    }
-
-    @BuiltinFunction(value = "play_sound", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 2,
-        maxArgs = 5)
-    public void playSound(MolangContextView<Entity> context, int argc, int id, String name,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("0") float mode,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("1") float volume,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("1") float pitch) {
-        playSound(context, ModelSoundId.numeric(id), name, (int)mode, volume, pitch);
-    }
-
-    @BuiltinFunction(value = "play_sound", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 2,
-        maxArgs = 5)
-    public void playSound(MolangContextView<Entity> context, int argc, String id, String name,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("0") float mode,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("1") float volume,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("1") float pitch) {
-        playSound(context, ModelSoundId.string(id), name, (int)mode, volume, pitch);
-    }
-
-    @BuiltinFunction(value = "stop_sound", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 1,
-        maxArgs = 2)
-    public void stopSound(MolangContextView<Entity> context, int argc, int id,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("false") boolean global) {
-        stopSound(context, ModelSoundId.numeric(id), global);
-    }
-
-    @BuiltinFunction(value = "stop_sound", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 1,
-        maxArgs = 2)
-    public void stopSound(MolangContextView<Entity> context, int argc, String id,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("false") boolean global) {
-        stopSound(context, ModelSoundId.string(id), global);
-    }
-
-    @BuiltinFunction(value = "stop_all_sounds", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 0,
-        maxArgs = 1)
-    public void stopAllSounds(MolangContextView<Entity> context, int argc,
-        @com.elfmcys.ysm.api.annotation.DefaultValue("false") boolean global) {
-        var manager = soundManager(context, global);
-        context.submit((PreparedEffect)manager::stopAllPlayingSounds);
-    }
-
-    @BuiltinFunction(value = "particle", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 1,
-        maxArgs = 255)
-    public void particle(MolangContextView<Entity> context, int argc, String name, float... values) {
-        particle(context, name, values, false);
-    }
-
-    @BuiltinFunction(value = "abs_particle", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 1,
-        maxArgs = 255)
-    public void absoluteParticle(MolangContextView<Entity> context, int argc, String name, float... values) {
-        particle(context, name, values, true);
-    }
-
-    @BuiltinFunction(value = "sync", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 0, maxArgs = 16)
-    public void sync(MolangContextView<Entity> context, int argc, float... values) {
-        var packed = EventArguments.sync(values);
-        var target = owner;
-        PreparedEffect effect = () -> {};
-        if (owner instanceof com.elfmcys.ysm.capability.PlayerAnimatableCapability
-            && com.elfmcys.ysm.network.NetworkHandler.isRemoteChannelPresent()) {
-            if (owner.getEntity() instanceof net.minecraft.client.player.LocalPlayer)
-                effect = () -> com.elfmcys.ysm.network.forge.ClientProtocolGateway.emitMolangSync(target, packed);
-        } else if (owner instanceof com.elfmcys.ysm.client.entity.CustomPlayerEntity player) {
-            var processor = player.getAnimationProcessor();
-            effect = () -> processor.dispatchSync(packed);
-        }
-        context.submit(effect);
-    }
-
-    @BuiltinFunction(value = "defer", effect = com.elfmcys.ysm.api.molang.MolangEffect.ACTION, minArgs = 1,
-        maxArgs = 255)
-    public void defer(MolangContextView<Entity> context, int argc, float delay, float... values) {
-        context.submit(new DeferredRequest(EventArguments.deferred(delay, values)));
-    }
-
-    @BuiltinFunction(value = "keyboard", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 1,
-        maxArgs = 255)
-    public boolean keyboard(MolangContextView<Entity> context, int argc, float... keys) {
-        if (!com.elfmcys.ysm.util.InputCheckUtil.isInGame()) return false;
-        for (float key : keys) {
-            int index = (int)key;
-            if (org.lwjgl.glfw.GLFW.GLFW_KEY_SPACE <= index && index <= org.lwjgl.glfw.GLFW.GLFW_KEY_LAST
-                && com.elfmcys.ysm.client.event.ModInputEvent.KEY_STATES[index]) return true;
-        }
-        return false;
-    }
-
-    @BuiltinFunction(value = "mod_version", effect = com.elfmcys.ysm.api.molang.MolangEffect.CONTEXT, minArgs = 1,
-        maxArgs = 1)
-    public String modVersion(MolangContextView<Entity> context, String modId) {
-        var mods = net.minecraftforge.fml.ModList.get();
-        var container = mods == null ? null : mods.getModContainerById(modId).orElse(null);
-        return container == null ? "" : net.minecraftforge.common.util.MavenVersionStringHelper
-            .artifactVersionToString(container.getModInfo().getVersion());
     }
 
     private float physics(String name, float value, boolean first, float[] args) {
@@ -187,60 +132,5 @@ public final class ModelBuiltins implements EntityComponent<Entity> {
         }
         current.setArgs(value, a, b, c);
         return current.getValue();
-    }
-    private SoundInstanceManager soundManager(MolangContextView<Entity> context, boolean global) {
-        var inputs = context.inputs();
-        if (!global) {
-            var animation = AnimationExecutionState.resolve(inputs.animation());
-            if (animation != null) return animation.soundManager();
-            var controller = ControllerExecutionState.resolve(inputs.controller());
-            if (controller != null) {
-                var manager = controller.soundManager();
-                if (manager != null) return manager;
-            }
-        }
-        return owner.getAnimationProcessor().globalSoundManager();
-    }
-
-    private void playSound(MolangContextView<Entity> context, ModelSoundId id, String name, int mode, float volume, float pitch) {
-        var manager = soundManager(context, (mode & 2) != 0);
-        var target = owner;
-        var fake = owner.isFakePlayer();
-        var valid = id.playable() && !StringUtils.isBlank(name) && mode >= 0 && mode <= 7;
-        context.submit((PreparedEffect)() -> {
-            if (valid) manager.playSound(target, id, name, (mode & 1) != 0, instance -> {
-                if (instance != null) {
-                    instance.setLooping((mode & 4) != 0);
-                    instance.setConfiguredVolume(Mth.clamp(volume, 0.001f, 1000f));
-                    instance.setPitch(Mth.clamp(pitch, 0.001f, 1000f));
-                    if (fake) instance.setAsUI();
-                }
-            });
-        });
-    }
-
-    private void stopSound(MolangContextView<Entity> context, ModelSoundId id, boolean global) {
-        var manager = soundManager(context, global);
-        context.submit((PreparedEffect)() -> { if (id.playable()) manager.stopPlayingSound(id); });
-    }
-
-    private void particle(MolangContextView<Entity> context, String id, float[] values, boolean absolute) {
-        if (values.length > 254) throw new IllegalArgumentException("particle accepts at most 254 values");
-        for (float value : values) if (!Float.isFinite(value)) throw new IllegalArgumentException("non-finite particle argument");
-        Runnable prepared = () -> {};
-        if (!owner.isFakePlayer()) {
-            var pos = new Vector3d(argument(values, 0, 0), argument(values, 1, 0), argument(values, 2, 0));
-            var delta = new Vector3d(argument(values, 3, 0), argument(values, 4, 0), argument(values, 5, 0));
-            try {
-                prepared = com.elfmcys.ysm.client.particle.ParticleSpawner.prepareSpawnParticle(owner.getEntity(), id,
-                    pos, delta, argument(values, 6, 0), Math.max((int)argument(values, 7, 0), 0),
-                    Math.max((int)argument(values, 8, 20), 1), absolute, owner.getAnimationProcessor().randomSource());
-            } catch (Exception failure) { throw new IllegalArgumentException("invalid particle effect " + id, failure); }
-        }
-        context.submit((PreparedEffect)prepared::run);
-    }
-
-    private static float argument(float[] values, int index, float fallback) {
-        return index < values.length ? values[index] : fallback;
     }
 }

@@ -50,7 +50,7 @@ class ModelSourceDiscoveryTest {
         Files.writeString(temp.resolve("unknown.ysm"), "unknown header");
 
         var state = assertInstanceOf(RootInventoryState.Complete.class,
-            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.CUSTOM, temp, false)));
+            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.MODELS, temp, false)));
         Map<String, ModelSourceKind> kinds = state.sources().values().stream()
             .collect(Collectors.toMap(value -> value.key().relativePath().value(), value -> value.key().sourceKind()));
 
@@ -75,13 +75,13 @@ class ModelSourceDiscoveryTest {
         Files.createSymbolicLink(target.resolve("back"), target.getParent());
 
         var state = assertInstanceOf(RootInventoryState.Incomplete.class,
-            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.CUSTOM, root, false)));
+            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.MODELS, root, false)));
 
         assertEquals(List.of("other/nested/hero.mxc", "team/nested/hero.mxc"),
             state.sources().keySet().stream().map(key -> key.relativePath().value()).toList());
         assertEquals(2, state.errors().size());
         assertTrue(state.errors().stream().allMatch(error -> error.message().equals("Source is inaccessible")
-            && error.source().startsWith("local:custom/") && error.detail().contains("cycle")));
+            && error.source().startsWith("local:") && error.detail().contains("cycle")));
         assertTrue(state.sources().values().stream()
             .allMatch(value -> value.absolutePath().equals(target.resolve("hero.mxc"))));
         assertEquals(root, state.root().configuredAbsoluteRoot());
@@ -94,22 +94,22 @@ class ModelSourceDiscoveryTest {
         for (var create : new boolean[] {false, true}) {
             var root = Files.createSymbolicLink(temp.resolve("linked-" + create), target);
             var state = assertInstanceOf(RootInventoryState.Complete.class,
-                ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.AUTH, root, create)));
+                ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.MODELS, root, create)));
             assertEquals("actual.zip", state.sources().keySet().iterator().next().relativePath().value());
             assertEquals(root, state.root().configuredAbsoluteRoot());
             var missing = temp.resolve("absent-target-" + create);
             var broken = Files.createSymbolicLink(temp.resolve("broken-" + create), missing);
             assertInstanceOf(RootInventoryState.Incomplete.class,
-                ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.AUTH, broken, create)));
+                ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.MODELS, broken, create)));
             assertTrue(Files.isSymbolicLink(broken));
             assertFalse(Files.exists(missing));
         }
         var absent = temp.resolve("absent-auth");
         assertInstanceOf(RootInventoryState.Complete.class,
-            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.AUTH, absent, false)));
+            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.MODELS, absent, false)));
         assertFalse(Files.exists(absent));
         assertInstanceOf(RootInventoryState.Complete.class,
-            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.AUTH, absent, true)));
+            ModelSourceDiscovery.inventory(new ModelCatalogSource(CatalogRootKind.MODELS, absent, true)));
         assertTrue(Files.isDirectory(absent));
     }
 
@@ -119,7 +119,7 @@ class ModelSourceDiscoveryTest {
         var first = Files.writeString(temp.resolve("first.data"), "first");
         var second = Files.writeString(temp.resolve("second.data"), "second");
         var link = Files.createSymbolicLink(root.resolve("alias.mxc"), first);
-        var source = new ModelCatalogSource(CatalogRootKind.CUSTOM, root, false);
+        var source = new ModelCatalogSource(CatalogRootKind.MODELS, root, false);
         var before = ModelSourceDiscovery.inventory(source).sources().values().iterator().next();
         assertEquals(ModelSourceKind.DIRECT_CONTAINER, before.key().sourceKind());
         assertEquals("alias.mxc", before.key().relativePath().value());

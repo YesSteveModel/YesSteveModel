@@ -11,7 +11,9 @@ import com.elfmcys.ysm.model.catalog.source.ModelCatalogSource;
 import com.elfmcys.ysm.model.catalog.source.ModelSourceResolver;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.domain.ModelPath;
+import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.model.storage.ConvertedObjectStore;
+import com.elfmcys.ysm.model.storage.ConvertedScope;
 import com.elfmcys.ysm.model.storage.ConvertedSourceIndexStore;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import java.nio.channels.FileChannel;
@@ -27,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 /** Test-only composition of the process catalog and its owner tick. */
 public final class ClientCatalogScenarioHarness implements AutoCloseable {
     private final Path sourceRoot;
+    private final AtomicSharedCache cache;
     private final ReloadableModelCatalog catalog;
     private final ClientCatalogManager manager;
 
@@ -44,26 +47,36 @@ public final class ClientCatalogScenarioHarness implements AutoCloseable {
         }
 
         var cacheRoot = root.resolve("cache");
-        var resolver = new ModelSourceResolver(new RawModelImporter(DefaultAnimationFilter.keepAll()),
-            new ConvertedSourceIndexStore(cacheRoot, "remote-publication-scenario"),
-            new ConvertedObjectStore(cacheRoot));
-        var defaultIdentity = identity(intrinsicDefaultFile);
-        var defaultLocation = new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default"));
-        var intrinsicDefault =
-            ManagedContainer.openIndexed(new CatalogIndexEntry(defaultIdentity, defaultLocation, intrinsicDefaultFile));
-        var reconciler =
-            new CatalogReconciler(List.of(new ModelCatalogSource(CatalogRootKind.CUSTOM, sourceRoot, false)), resolver,
-                Set.of(defaultIdentity.modelId()), intrinsicDefault, CatalogIndexSnapshot.empty());
-        catalog = new ReloadableModelCatalog(reconciler, reconciler.materializeBuiltins());
-        manager = new ClientCatalogManager(catalog);
-        catalog.activate();
-        var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-        while (catalog.busy() && System.nanoTime() < deadline) {
-            catalog.tick();
-            Thread.sleep(1);
-        }
-        if (catalog.busy()) {
-            throw new IllegalStateException("Catalog activation did not finish");
+        cache = new AtomicSharedCache(cacheRoot);
+        ReloadableModelCatalog openedCatalog = null;
+        ClientCatalogManager openedManager = null;
+        try {
+            var scope = ConvertedScope.of(root, "remote-publication-scenario");
+            var resolver = new ModelSourceResolver(new RawModelImporter(DefaultAnimationFilter.keepAll()),
+                new ConvertedSourceIndexStore(scope, cache), new ConvertedObjectStore(cache));
+            var defaultIdentity = identity(intrinsicDefaultFile);
+            var defaultLocation = new CatalogLocation(CatalogRootKind.BUILTIN, new ModelPath("default"));
+            var intrinsicDefault = ManagedContainer
+                .openIndexed(new CatalogIndexEntry(defaultIdentity, defaultLocation, intrinsicDefaultFile));
+            var reconciler =
+                new CatalogReconciler(List.of(new ModelCatalogSource(CatalogRootKind.MODELS, sourceRoot, false)),
+                    resolver, Set.of(defaultIdentity.modelId()), intrinsicDefault, CatalogIndexSnapshot.empty());
+            catalog = new ReloadableModelCatalog(reconciler, reconciler.materializeBuiltins());
+            openedCatalog = catalog;
+            manager = new ClientCatalogManager(catalog);
+            openedManager = manager;
+            catalog.activate();
+            var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            while (catalog.busy() && System.nanoTime() < deadline) {
+                catalog.tick();
+                Thread.sleep(1);
+            }
+            if (catalog.busy())
+                throw new IllegalStateException("Catalog activation did not finish");
+        } catch (Exception | Error failure) {
+            try (cache; var failedCatalog = openedCatalog; var failedManager = openedManager) {
+                throw failure;
+            }
         }
     }
 
@@ -98,6 +111,14 @@ public final class ClientCatalogScenarioHarness implements AutoCloseable {
 
     @Override
     public void close() {
-        manager.close();
+        try {
+            manager.close();
+        } finally {
+            try {
+                catalog.close();
+            } finally {
+                cache.close();
+            }
+        }
     }
 }

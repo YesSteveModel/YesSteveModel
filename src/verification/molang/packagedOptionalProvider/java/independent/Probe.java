@@ -6,7 +6,7 @@ import net.minecraft.world.entity.Entity;
 
 @YsmEntityComponent("matrix_mod")
 public final class Probe {
-    @MolangFunction(effect = MolangEffect.CONTEXT)
+    @MolangFunction
     public static float probe(MolangContextView<Entity> context) {
         System.setProperty("probe.calls", Integer.toString(Integer.getInteger("probe.calls", 0) + 1));
         if (Boolean.getBoolean("matrix.throwProbe"))

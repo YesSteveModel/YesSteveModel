@@ -4,23 +4,28 @@ import com.elfmcys.ysm.util.ThreadScheduling;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Objects;
+import java.util.concurrent.ThreadFactory;
 
 /**
  * Owns bounded optional persistence work through the end of its last input borrow.
  *
- * <p><b>Invariant:</b> Job cancellation is a logical terminal state. A running job retains its inputs
- * and capacity until its Work returns. Persistence failure does not undo an already usable resource.
+ * <p>
+ * <b>Invariant:</b> Job cancellation is a logical terminal state. A running job retains its inputs and capacity until
+ * its Work returns. Persistence failure does not undo an already usable resource.
  *
- * <p><b>Execution:</b> One worker runs accepted Work. Close seals admission, interrupts active work
- * and waits for that worker; Work must not call close on its own owner or wait for owner-thread progress.
+ * <p>
+ * <b>Execution:</b> One worker runs accepted Work. Close seals admission, interrupts active work and waits for that
+ * worker; Work must not call close on its own owner or wait for owner-thread progress.
  *
- * <p><b>Seam:</b> [optional persistence ownership](docs/architecture/model-management/storage/overview.md#精确缓存与持久工作).
+ * <p>
+ * <b>Seam:</b> [optional persistence ownership](docs/architecture/model-management/storage/overview.md#精确缓存与持久工作).
  */
 public final class DerivedStorageWork implements AutoCloseable {
     public static final int DEFAULT_MAXIMUM_JOBS = 16;
 
     private final int maximumJobs;
-    private final ArrayDeque<Job> pending = new ArrayDeque<>();
+    private final ThreadFactory threadFactory;
+    private final ArrayDeque<Job> pending;
     private Thread worker;
     private Job running;
     private boolean closed;
@@ -35,13 +40,25 @@ public final class DerivedStorageWork implements AutoCloseable {
     }
 
     public DerivedStorageWork(int maximumJobs) {
+        this(maximumJobs, runnable -> new Thread(runnable, "ysm-derived-storage"));
+    }
+
+    /** The factory creates a NEW thread; starting and admission remain this owner's responsibility. */
+    DerivedStorageWork(int maximumJobs, ThreadFactory threadFactory) {
         if (maximumJobs <= 0)
             throw new IllegalArgumentException("Derived storage job limit must be positive");
         this.maximumJobs = maximumJobs;
+        this.threadFactory = Objects.requireNonNull(threadFactory);
+        // Reserve the bounded queue before any submission can transfer input responsibility.
+        this.pending = new ArrayDeque<>(maximumJobs);
     }
 
     /**
      * Offers optional persistence without waiting for its I/O.
+     *
+     * <p>
+     * Failure: thread creation or startup failure propagates without accepting the work or retaining its inputs. A
+     * later independent submission may start a worker again.
      *
      * @param work the non-null operation, which retains its inputs until its run method returns
      * @return the accepted Job, or null when closed or full; null leaves all input responsibility with the caller
@@ -50,14 +67,27 @@ public final class DerivedStorageWork implements AutoCloseable {
         Objects.requireNonNull(work, "work");
         if (closed || jobs == maximumJobs)
             return null;
+        Thread starting = null;
+        if (worker == null) {
+            starting = threadFactory.newThread(ThreadScheduling.entry(ThreadScheduling.ThreadRole.DERIVED_STORAGE,
+                ThreadScheduling.ThreadPolicy.BELOW_NORMAL, this::run));
+            starting.setDaemon(true);
+        }
         var job = new Job(work);
         pending.addLast(job);
         jobs++;
-        if (worker == null) {
-            worker = new Thread(ThreadScheduling.entry(ThreadScheduling.ThreadRole.DERIVED_STORAGE,
-                ThreadScheduling.ThreadPolicy.BELOW_NORMAL, this::run), "ysm-derived-storage");
-            worker.setDaemon(true);
-            worker.start();
+        if (starting != null) {
+            worker = starting;
+            try {
+                starting.start();
+            } catch (RuntimeException | Error failure) {
+                // A started worker must acquire this monitor before it can consume the admission.
+                worker = null;
+                pending.removeLast();
+                job.work = null;
+                release(job);
+                throw failure;
+            }
         }
         return job;
     }
@@ -178,15 +208,14 @@ public final class DerivedStorageWork implements AutoCloseable {
         SUCCEEDED, FAILED, CANCELLED, SHUTDOWN
     }
 
-    public record Snapshot(int jobs, long succeeded, long failed, long cancelled, long shutdown,
-        boolean closed) {
+    public record Snapshot(int jobs, long succeeded, long failed, long cancelled, long shutdown, boolean closed) {
     }
 
     /**
-     * Prepares and validates the output before invoking the supplied commit gate.
-     * Only the final prepared atomic replacement belongs inside the gate. I/O failures remain storage failures;
-     * the worker records IOException and RuntimeException as FAILED. Interruption requests cancellation but
-     * does not permit another thread to close data still borrowed by this operation.
+     * Prepares and validates the output before invoking the supplied commit gate. Only the final prepared atomic
+     * replacement belongs inside the gate. I/O failures remain storage failures; the worker records IOException and
+     * RuntimeException as FAILED. Interruption requests cancellation but does not permit another thread to close data
+     * still borrowed by this operation.
      */
     @FunctionalInterface
     public interface Work {

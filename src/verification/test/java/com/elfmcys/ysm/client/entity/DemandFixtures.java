@@ -1,5 +1,8 @@
 package com.elfmcys.ysm.client.entity;
 
+import com.elfmcys.ysm.client.entity.EntityModelDemand;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.client.demand.ClientDemandCoordinator;
 import com.elfmcys.ysm.client.demand.ModelResourceDemand;
 import com.elfmcys.ysm.model.resource.client.*;
@@ -11,8 +14,13 @@ import java.util.function.LongSupplier;
 final class DemandFixtures {
     interface ModelAccess extends EntityModelBinding.ModelAccess, ClientDemandCoordinator.Resources {
         @Override
-        default ResourceRequest resourceRequest(com.elfmcys.ysm.model.domain.Hash256 modelId, String target,
-            String texture, ModelResourcePurpose purpose, Class<?> subject) {
+        default com.elfmcys.ysm.model.catalog.content.ModelContent content(PublishedModelId modelId) {
+            return EntityModelBinding.ModelAccess.super.content(modelId);
+        }
+
+        @Override
+        default ResourceRequest resourceRequest(ModelId modelId, String target, String texture,
+            ModelResourcePurpose purpose, Class<?> subject) {
             return EntityModelBinding.ModelAccess.super.resourceRequest(modelId, target, texture, purpose, subject);
         }
 
@@ -30,22 +38,33 @@ final class DemandFixtures {
             private final Object owner = new Object();
 
             public ClientDemandCoordinator.SelectionContext context() {
-                return new ClientDemandCoordinator.SelectionContext(owner, false, true);
+                return new ClientDemandCoordinator.SelectionContext(owner, new java.util.UUID(0, 1), owner, false,
+                    true);
             }
 
             public ClientDemandCoordinator.Target authority() {
                 return new ClientDemandCoordinator.Target(null, "");
             }
 
-            public boolean installed(ClientDemandCoordinator.Target target) {
+            public boolean installed(ClientDemandCoordinator.Target target, Object application) {
                 return true;
             }
 
-            public void send(ClientDemandCoordinator.Target target, long id) {
+            public ClientDemandCoordinator.InitialRoaming retainedInitial(
+                ClientDemandCoordinator.SelectionContext context, ClientDemandCoordinator.Target target) {
+                return null;
+            }
+
+            public void send(ClientDemandCoordinator.SelectionContext context, ClientDemandCoordinator.Target target,
+                long id, com.elfmcys.ysm.model.storage.NamedRoamingSnapshot initial, boolean reinitialize) {
                 throw new AssertionError();
             }
 
             public void reportFailure(Throwable failure) {
+                throw new AssertionError(failure);
+            }
+
+            public void reportPreferenceReadFailure(Throwable failure) {
                 throw new AssertionError(failure);
             }
         });
@@ -95,7 +114,7 @@ final class DemandFixtures {
 
     private static final class Receiver implements ClientDemandCoordinator.Installation {
         private final EntityModelBinding binding;
-        private final ClientDemandCoordinator.EntityScope scope;
+        private final EntityModelDemand scope;
         private String target;
         private String texture;
         private String fallback;

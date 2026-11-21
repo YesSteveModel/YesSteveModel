@@ -23,6 +23,7 @@
     }
   },
   "properties": {
+    "origin_ver": "2.6.5",
     "preview_animation": "gui",
     "free": true,
     "disable_preview_rotation": true

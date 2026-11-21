@@ -24,6 +24,7 @@ public class CustomVehicleRenderer extends GeoEntityRenderer<Entity, CustomVehic
             return;
         }
         entity.getCapability(VehicleAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+            cap.waitForRenderUpdate();
             cap.checkModelUpdate();
             render(cap, yaw, partialTick, poseStack, bufferSource, packedLight);
         });

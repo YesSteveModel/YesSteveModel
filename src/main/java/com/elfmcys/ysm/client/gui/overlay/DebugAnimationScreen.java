@@ -4,7 +4,7 @@ import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
 import com.elfmcys.ysm.capability.ProjectileAnimatableCapabilityProvider;
 import com.elfmcys.ysm.capability.VehicleAnimatableCapabilityProvider;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
-import com.elfmcys.ysm.expression.aot.RenderTargetExpressionModule;
+import com.elfmcys.ysm.model.resource.client.AnimationStore;
 import com.elfmcys.ysm.expression.inventory.ModelProgramInventory;
 import com.elfmcys.ysm.geckolib3.core.controller.IAnimationController;
 import com.elfmcys.ysm.geckolib3.core.processor.DebugInfo;
@@ -168,18 +168,23 @@ public class DebugAnimationScreen {
             REPLACEMENT_NOTICES.awaitResource();
             return;
         }
-        var module = renderTarget.expressions();
-        REPLACEMENT_NOTICES.observe(module.generation(), module.compilationReport().replacements(),
-            module.programLocations(), notice -> sendReplacementNotice(target, module, notice));
+        var module = renderTarget.animationStore();
+        if (module.interpreted()) {
+            REPLACEMENT_NOTICES.awaitResource();
+            return;
+        }
+        REPLACEMENT_NOTICES.observe(module.metadata().executionGeneration(),
+            module.diagnostics().compilationReport().replacements(), module.diagnostics().programLocations(),
+            notice -> sendReplacementNotice(target, module, notice));
     }
 
-    private static boolean sendReplacementNotice(AnimatableEntity<?> target, RenderTargetExpressionModule module,
+    private static boolean sendReplacementNotice(AnimatableEntity<?> target, AnimationStore module,
         ReplacementNotice notice) {
         var selected = TARGET;
         var renderTarget = target.getModelRenderTarget();
         var minecraft = Minecraft.getInstance();
         if (selected == null || selected.get() != target || !target.isActive() || renderTarget == null
-            || renderTarget.expressions() != module || minecraft.player == null) {
+            || renderTarget.animationStore() != module || minecraft.player == null) {
             return false;
         }
         var replacement = notice.replacement();

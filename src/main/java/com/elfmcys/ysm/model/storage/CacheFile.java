@@ -32,9 +32,13 @@ public final class CacheFile implements SeekableByteChannel {
         return new CacheFile(channel);
     }
 
-    String name() { return name; }
+    String name() {
+        return name;
+    }
 
-    Object identity() { return identity; }
+    Object identity() {
+        return identity;
+    }
 
     FileChannel ownedChannel() throws IOException {
         if (released)

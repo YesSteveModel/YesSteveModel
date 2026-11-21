@@ -109,6 +109,7 @@ public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T 
                 if (animatableEntity.getEntity().getVehicle() != null) {
                     animatableEntity.getEntity().getVehicle().getCapability(VehicleAnimatableCapabilityProvider.CAP)
                         .ifPresent(cap -> {
+                            cap.waitForRenderUpdate();
                             var rot = cap.getRotation();
                             if (rot != null) {
                                 poseStack.mulPose(new Quaternionf().rotateZYX(rot.z, 0, rot.x).invert());
@@ -131,7 +132,7 @@ public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T 
                     if (bufferSource instanceof com.elfmcys.ysm.client.gui.GuiModelFraming framing
                         && !framing.apply(data.installation, data.modelState, poseStack))
                         return;
-                    if (animatableEntity.canConsume(data, data.ctx) && renderLayersFirst && !entity.isSpectator()) {
+                    if (renderLayersFirst && !entity.isSpectator() && animatableEntity.canConsume(data, data.ctx)) {
                         renderLayer(poseStack, bufferSource, animatableEntity, data, packedLight, packedOverlay);
                     }
 
@@ -144,7 +145,7 @@ public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T 
                         }
                     }
 
-                    if (animatableEntity.canConsume(data, data.ctx) && !renderLayersFirst && !entity.isSpectator()) {
+                    if (!renderLayersFirst && !entity.isSpectator() && animatableEntity.canConsume(data, data.ctx)) {
                         renderLayer(poseStack, bufferSource, animatableEntity, data, packedLight, packedOverlay);
                     }
                     if (animatableEntity.canConsume(data, data.ctx))
@@ -168,7 +169,7 @@ public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T 
     protected void renderLayer(PoseStack poseStack, MultiBufferSource buffer, T animatable, GeoRenderData renderData,
         int packedLight, int overlay) {
         var event = new RenderLayerEvent(animatable.getEntity(), renderData, poseStack, buffer, packedLight, overlay);
-        if (!YesSteveModel.postEvent(event) && animatable.canConsume(renderData, renderData.ctx)) {
+        if (!YesSteveModel.postEvent(event)) {
             for (GeoLayerRenderer<T> layerRenderer : this.layerRenderers) {
                 if (!animatable.canConsume(renderData, renderData.ctx))
                     break;

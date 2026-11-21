@@ -42,11 +42,18 @@ public final class Zstd {
             Reference.reachabilityFence(source);
         }
         if (result == null) {
-            throw new IllegalStateException("Native zstd decompression returned no result");
+            throw new InvalidDataException();
         }
         return BufferArgument.unpackOutput(result);
     }
 
     private static native Object nZstd(Object source, long sourceFlags, byte @Nullable [] hashResult, int outputParam,
         int outputType, int op);
+
+    /** The native decoder rejected the stored bytes, decoded length, or content hash. */
+    public static final class InvalidDataException extends RuntimeException {
+        private InvalidDataException() {
+            super("Native zstd decompression rejected its input");
+        }
+    }
 }

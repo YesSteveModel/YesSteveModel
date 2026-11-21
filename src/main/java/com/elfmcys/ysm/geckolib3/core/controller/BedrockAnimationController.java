@@ -314,8 +314,8 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
 
         // 扩容动画播放器列表
         for (var i = this.animationPlayers.size(); i < animationSize; i++) {
-            this.animationPlayers.add(new AnimationPlayerHolder(this.animatableEntity, this.initTransitionLengthTicks,
-                this.animationCache));
+            this.animationPlayers.add(
+                new AnimationPlayerHolder(this.animatableEntity, this.initTransitionLengthTicks, this.animationCache));
         }
         // 停用多余的动画播放器
         for (var i = animationSize; i < this.activeAnimationPlayerSize; i++) {
@@ -368,6 +368,7 @@ public class BedrockAnimationController<T extends AnimatableEntity<?>> implement
             this.subController.clear();
         this.subController = null;
         for (var holder : this.animationPlayers) {
+            holder.conditionHolder.setApplyCondition(null);
             holder.animationPlayer.clear();
         }
         this.animationPlayers.clear();

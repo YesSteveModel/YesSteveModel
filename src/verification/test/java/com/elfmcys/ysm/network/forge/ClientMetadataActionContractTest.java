@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.network.forge;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.proto.network.MetadataPrefixFragmentProto;
@@ -80,7 +81,7 @@ class ClientMetadataActionContractTest {
             var container = new byte[Hash256.SIZE];
             random.nextBytes(model);
             random.nextBytes(container);
-            identities.add(new ModelFileIdentity(new Hash256(model), new Hash256(container)));
+            identities.add(new ModelFileIdentity(ModelId.fromHash(new Hash256(model)), new Hash256(container)));
         }
         var delivered = new ArrayList<Hash256>();
         var result = transfers.fetchMetadata(identities, (identity, bytes) -> delivered.add(identity.containerId()));
@@ -148,7 +149,7 @@ class ClientMetadataActionContractTest {
         var container = new byte[Hash256.SIZE];
         Arrays.fill(model, (byte)(value + 40));
         Arrays.fill(container, (byte)value);
-        return new ModelFileIdentity(new Hash256(model), new Hash256(container));
+        return new ModelFileIdentity(ModelId.fromHash(new Hash256(model)), new Hash256(container));
     }
 
     private static Hash256 hash(ByteBuffer bytes) {

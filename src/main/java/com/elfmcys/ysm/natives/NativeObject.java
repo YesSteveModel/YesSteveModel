@@ -10,14 +10,16 @@ import java.util.function.Function;
 /**
  * Owns one typed native handle released by explicit close or Cleaner.
  *
- * <p>Execution: the owner must exclude close from every handle borrow.
- * The atomic cleanup state prevents duplicate destruction; it does not make get-then-use atomic.
- * JNI callers retain this wrapper through their synchronous call.
+ * <p>
+ * Execution: the owner must exclude close from every handle borrow. The atomic cleanup state prevents duplicate
+ * destruction; it does not make get-then-use atomic. JNI callers retain this wrapper through their synchronous call.
  *
- * <p>Ownership: raw handles and derived views do not acquire release authority or retain this wrapper.
+ * <p>
+ * Ownership: raw handles and derived views do not acquire release authority or retain this wrapper.
  *
- * <p>Seam: implements opaque-handle lifetime in the
- * [JNI ownership contract](docs/architecture/native-runtime/overview.md#jni-能力与结果交付).
+ * <p>
+ * Seam: implements opaque-handle lifetime in the [JNI ownership
+ * contract](docs/architecture/native-runtime/overview.md#jni-能力与结果交付).
  */
 public class NativeObject implements Closeable {
     private final State state;
@@ -38,11 +40,13 @@ public class NativeObject implements Closeable {
     /**
      * Adopts an owning native result with construction rollback.
      *
-     * <p>Requires: ptr has one release obligation. The factory uses the supplied state and exposes
-     * its wrapper only after construction succeeds.
+     * <p>
+     * Requires: ptr has one release obligation. The factory uses the supplied state and exposes its wrapper only after
+     * construction succeeds.
      *
-     * <p>Failure: wrapper or Cleaner registration failure destroys the handle through the same
-     * cleanup state. The caller must not release ptr after this method takes ownership.
+     * <p>
+     * Failure: wrapper or Cleaner registration failure destroys the handle through the same cleanup state. The caller
+     * must not release ptr after this method takes ownership.
      *
      * @return the complete owner; ownership transfers on entry, including exceptional exit
      */
@@ -75,8 +79,9 @@ public class NativeObject implements Closeable {
     /**
      * Releases this handle once; repeated calls do not destroy it again.
      *
-     * <p>Requires: all handle and derived-view borrows have ended.
-     * This method does not wait for native work or for another thread that already called get().
+     * <p>
+     * Requires: all handle and derived-view borrows have ended. This method does not wait for native work or for
+     * another thread that already called get().
      */
     @Override
     public void close() {

@@ -23,7 +23,7 @@ import com.elfmcys.ysm.model.catalog.source.ResolvedContent;
 import com.elfmcys.ysm.model.catalog.source.PackObservation;
 import com.elfmcys.ysm.model.catalog.source.RootInventoryState;
 import com.elfmcys.ysm.model.catalog.source.SourceObservation;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.domain.ModelScanError;
 import com.elfmcys.ysm.model.domain.ModelScanReport;
@@ -50,13 +50,13 @@ public final class CatalogReconciler {
     private final List<ModelCatalogSource> roots;
     private final ModelSourceResolver resolver;
     private final ModelPackScanner packScanner = new ModelPackScanner();
-    private final Set<Hash256> builtinReservedIds;
-    private final Map<Hash256, CatalogRecord> fixedRecords;
+    private final Set<ModelId> builtinReservedIds;
+    private final CatalogRecord intrinsicDefault;
     private final CatalogIndexSnapshot builtinIndex;
     private final BuiltinModelIndex builtinContract;
 
     public CatalogReconciler(List<ModelCatalogSource> roots, ModelSourceResolver resolver,
-        Set<Hash256> builtinReservedIds, ManagedContainer intrinsicDefault, CatalogIndexSnapshot builtinIndex) {
+        Set<ModelId> builtinReservedIds, ManagedContainer intrinsicDefault, CatalogIndexSnapshot builtinIndex) {
         this(roots, resolver, builtinReservedIds, intrinsicDefault, builtinIndex, null);
     }
 
@@ -67,7 +67,7 @@ public final class CatalogReconciler {
     }
 
     private CatalogReconciler(List<ModelCatalogSource> roots, ModelSourceResolver resolver,
-        Set<Hash256> builtinReservedIds, ManagedContainer intrinsicDefault, CatalogIndexSnapshot builtinIndex,
+        Set<ModelId> builtinReservedIds, ManagedContainer intrinsicDefault, CatalogIndexSnapshot builtinIndex,
         BuiltinModelIndex builtinContract) {
         this.roots = List.copyOf(roots);
         this.resolver = Objects.requireNonNull(resolver, "resolver");
@@ -75,8 +75,8 @@ public final class CatalogReconciler {
         Objects.requireNonNull(intrinsicDefault, "intrinsicDefault");
         this.builtinIndex = Objects.requireNonNull(builtinIndex, "builtinIndex");
         this.builtinContract = builtinContract;
-        fixedRecords = Map.of(intrinsicDefault.modelId(), new CatalogRecord(intrinsicDefault.location(),
-            new CatalogContentBinding(intrinsicDefault.modelId(), intrinsicDefault)));
+        this.intrinsicDefault = new CatalogRecord(intrinsicDefault.location(),
+            new CatalogContentBinding(intrinsicDefault.modelId(), intrinsicDefault));
     }
 
     ScanDiscovery discoverIncremental() {
@@ -103,14 +103,12 @@ public final class CatalogReconciler {
             }
         }
         var observations = inventories.stream().flatMap(root -> root.sources().values().stream())
-            .filter(source -> !(source.key().root().rootKind() == CatalogRootKind.BUILTIN
-                && source.key().relativePath().value().equals("default")))
             .sorted(Comparator
                 .comparing((SourceObservation source) -> source.key().root().location(source.key().relativePath())))
             .toList();
         var packs = inventories.stream().flatMap(root -> root.packs().values().stream())
             .sorted(Comparator.comparing((PackObservation pack) -> pack.key().location())).toList();
-        return new ScanDiscovery(startedAt, complete, observations, packs, errors, complete.size() == roots.size());
+        return new ScanDiscovery(startedAt, complete, observations, packs, errors);
     }
 
     ResolvedSource resolveIncremental(SourceObservation observation, ManagedContainer reusable) {
@@ -155,14 +153,18 @@ public final class CatalogReconciler {
         }
     }
 
-    void verifyDiscovery(ScanDiscovery discovery) throws CatalogInfrastructureException {
-        if (!discovery.allRootsComplete()) {
-            throw new CatalogInfrastructureException("Catalog inventory is incomplete");
-        }
+    List<CatalogRootIdentity> sourceRoots() {
+        return roots.stream().map(ModelCatalogSource::identity).toList();
+    }
+
+    void verifyDiscovery(ScanDiscovery discovery, Collection<CatalogRootIdentity> selected)
+        throws CatalogInfrastructureException {
         for (var root : roots) {
+            if (!selected.contains(root.identity()))
+                continue;
             var expected = discovery.completeRoots().get(root.publicRoot());
             if (expected == null) {
-                continue;
+                throw new CatalogInfrastructureException("Catalog inventory is incomplete: " + root.path());
             }
             if (!expected.equals(ModelSourceDiscovery.inventory(root))) {
                 throw new CatalogInfrastructureException("Model root changed while scanning: " + root.path());
@@ -176,8 +178,8 @@ public final class CatalogReconciler {
         resolver.replaceIndex(rootNamespaces, entries, retained);
     }
 
-    Map<Hash256, CatalogRecord> fixedRecords() {
-        return fixedRecords;
+    CatalogRecord intrinsicDefault() {
+        return intrinsicDefault;
     }
 
     boolean conflictsWithBuiltin(CatalogIndexEntry entry) {
@@ -188,8 +190,7 @@ public final class CatalogReconciler {
     }
 
     record ScanDiscovery(Instant startedAt, Map<CatalogRoot, RootInventoryState.Complete> completeRoots,
-        List<SourceObservation> sources, List<PackObservation> packs, List<ModelScanError> errors,
-        boolean allRootsComplete) {
+        List<SourceObservation> sources, List<PackObservation> packs, List<ModelScanError> errors) {
         ScanDiscovery {
             completeRoots = Map.copyOf(completeRoots);
             sources = List.copyOf(sources);
@@ -248,7 +249,7 @@ public final class CatalogReconciler {
         var records = selectFirstValid(content, errors);
         var report = new ModelScanReport(startedAt, Instant.now(), errors, warnings);
         var index = new CatalogIndexSnapshot(entries, packs, report);
-        var snapshot = new CatalogSnapshot(records, packs, report);
+        var snapshot = new CatalogSnapshot(records, intrinsicDefault, packs, report);
         return new CatalogCandidate(index, snapshot);
     }
 
@@ -270,9 +271,9 @@ public final class CatalogReconciler {
         return List.copyOf(warnings);
     }
 
-    private Map<Hash256, CatalogRecord> selectFirstValid(List<ManagedContainer> candidates,
+    private Map<ModelId, CatalogRecord> selectFirstValid(List<ManagedContainer> candidates,
         List<ModelScanError> errors) {
-        var result = new LinkedHashMap<>(fixedRecords);
+        var result = new LinkedHashMap<ModelId, CatalogRecord>();
         for (var candidate : candidates) {
             if (candidate.location().rootKind() != CatalogRootKind.BUILTIN
                 && builtinReservedIds.contains(candidate.modelId())) {

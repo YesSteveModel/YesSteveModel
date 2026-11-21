@@ -13,6 +13,7 @@
     "client.BufferBuilderMixin",
     "client.BufferSourceMixin",
     "client.EntityRenderDispatcherMixin",
+    "client.EntitySubjectSampleMixin",
     "client.FishingHookAccessor",
     "client.GameRendererMixin",
     "client.InventoryScreenMixin",
@@ -20,14 +21,17 @@
     "client.LivingRendererMixin",
     "client.NativeImageAccessor",
     "client.PauseScreenMixin",
+    "client.PlayerQueryProjectionMixin",
     "client.ThrowableItemProjectileAccessor",
     "client.LevelRendererMixin",
     "client.embeddium.SodiumBufferBuilderMixin"
   ],
   "mixins": [
     "AbstractArrowEntityMixin",
+    "ChunkMapAccessor",
     "ConnectionMixin",
     "ProjectileEntityMixin",
-    "ServerPlayerMixin"
+    "ServerPlayerMixin",
+    "TrackedEntityAccessor"
   ]
 }

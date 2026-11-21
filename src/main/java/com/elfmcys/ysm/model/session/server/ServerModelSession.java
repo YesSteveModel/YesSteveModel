@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.session.server;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.catalog.content.AssetRef;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogRecord;
@@ -10,9 +11,6 @@ import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.storage.AtomicSharedCache;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.session.server.state.Selection;
-import com.elfmcys.ysm.network.protocol.PlayerStateReportPolicy;
-import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
-import com.elfmcys.ysm.proto.network.StateWriteMode;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -25,26 +23,29 @@ import java.util.stream.Collectors;
 /**
  * Owns negotiation, committed catalog authority, grants and selection for one adapter-owned connection.
  *
- * <p><b>Invariant:</b> Negotiation ACTIVE does not imply a committed catalog. A committed authority
- * is a complete value; notification failure cannot undo that value. Resource permission applies
- * at request admission, while an accepted effect follows its exact member incarnation.
+ * <p>
+ * <b>Invariant:</b> Negotiation ACTIVE does not imply a committed catalog. A committed authority is a complete value;
+ * notification failure cannot undo that value. Resource permission applies at request admission, while an accepted
+ * effect follows its exact member incarnation.
  *
- * <p><b>Execution:</b> Methods synchronize this object's state. The server adapter still owns
- * exact-connection checks and main-thread capability writes. A returned authority is a snapshot,
- * not a reservation against later policy or catalog changes.
+ * <p>
+ * <b>Execution:</b> Methods synchronize this object's state. The server adapter still owns exact-connection checks and
+ * main-thread capability writes. A returned authority is a snapshot, not a reservation against later policy or catalog
+ * changes.
  *
- * <p><b>Seam:</b> [session authority commit](docs/architecture/model-management/sessions/overview.md#权威提交与通知).
+ * <p>
+ * <b>Seam:</b> [session authority commit](docs/architecture/model-management/sessions/overview.md#权威提交与通知).
  */
 public final class ServerModelSession {
     private final Supplier<CatalogSnapshot> offeredCatalog;
     private final boolean syncRoaming;
-    private final PlayerStateReportPolicy playerStateReportPolicy;
     private AuthoritySnapshot authority;
     private NegotiationState state = NegotiationState.PENDING;
     private long nextPublicationId;
     private boolean publicationIdExhausted;
     private boolean publicationCommitted;
-    private boolean playerStateFullAccepted;
+    private Supplier<Selection> committedSelection = Selection.IntrinsicDefault::new;
+    private long latestSelectionRequest;
     private Map<ModelFileIdentity, Object> memberIncarnations = Map.of();
 
     public ServerModelSession(Supplier<CatalogSnapshot> offeredCatalog, boolean syncRoaming) {
@@ -54,7 +55,6 @@ public final class ServerModelSession {
     ServerModelSession(Supplier<CatalogSnapshot> offeredCatalog, boolean syncRoaming, long firstPublicationId) {
         this.offeredCatalog = Objects.requireNonNull(offeredCatalog, "offeredCatalog");
         this.syncRoaming = syncRoaming;
-        playerStateReportPolicy = PlayerStateReportPolicy.gameServer(syncRoaming);
         if (firstPublicationId == 0) {
             throw new IllegalArgumentException("Publication ID must be unsigned-positive");
         }
@@ -66,7 +66,7 @@ public final class ServerModelSession {
             return false;
         }
         authority = buildAuthority(Objects.requireNonNull(offeredCatalog.get(), "offered catalog"), Set.of(),
-            new Selection.IntrinsicDefault(), false, false);
+            new Selection.IntrinsicDefault(), false);
         state = NegotiationState.ACTIVE;
         return true;
     }
@@ -91,31 +91,16 @@ public final class ServerModelSession {
         return syncRoaming;
     }
 
-    public synchronized PlayerStateReportPolicy playerStateReportPolicy() {
-        return playerStateReportPolicy;
+    public synchronized void bindSelection(Supplier<Selection> projection) {
+        committedSelection = Objects.requireNonNull(projection);
     }
 
-    public synchronized boolean acceptsPlayerStateReport(PlayerStateReportProto report) {
-        var full = report.mode() == StateWriteMode.FULL;
-        return active() && playerStateReportPolicy.acceptsProjection(report) && (full || playerStateFullAccepted);
-    }
-
-    /**
-     * Records the baseline frontier after the domain owner applies the report's requested facts.
-     * Validation or receipt alone must not call this method. Later best-effort notification does not roll it back.
-     *
-     * <p><b>Seam:</b> [real report baseline](docs/architecture/network/player-state.md#表现报告与真实基线).
-     *
-     * @param full whether the successfully applied report establishes a FULL baseline
-     * @throws IllegalStateException if the session is inactive or a DELTA has no accepted FULL baseline
-     */
-    public synchronized void commitPlayerStateReport(boolean full) {
-        if (!active() || !full && !playerStateFullAccepted) {
-            throw new IllegalStateException("Player-state report has no FULL baseline");
-        }
-        if (full) {
-            playerStateFullAccepted = true;
-        }
+    /** Advances request order after whole-wire validation, even if business admission rejects it. */
+    public synchronized boolean observeSelectionRequest(long intentId) {
+        if (!active() || intentId <= latestSelectionRequest || intentId <= 0)
+            return false;
+        latestSelectionRequest = intentId;
+        return true;
     }
 
     public synchronized long allocatePublicationId() {
@@ -131,105 +116,59 @@ public final class ServerModelSession {
         return result;
     }
 
-    public synchronized Set<Hash256> grants() {
+    public synchronized Set<ModelId> grants() {
         return authority == null ? Set.of() : authority.grants();
     }
 
     public synchronized Selection selection() {
-        return authority == null ? new Selection.IntrinsicDefault() : authority.selection();
+        return committedSelection.get();
     }
 
     public synchronized AuthoritySnapshot authority() {
         if (authority == null) {
             throw new IllegalStateException("Session authority is not active");
         }
-        return authority;
+        return new AuthoritySnapshot(authority.catalog(), authority.byContainer(), authority.grants(), selection(),
+            authority.restrictedAuth());
     }
 
-    public synchronized void setGrants(Set<Hash256> next) {
+    public synchronized void setGrants(Set<ModelId> next) {
         Objects.requireNonNull(next, "next");
         var current = authority();
         if (!current.catalog().byModelId().keySet().containsAll(next)) {
             throw new IllegalArgumentException("Grant references a missing model");
         }
-        var nextSelection = current.selection();
-        var nextIgnoreGrants = current.ignoreGrants();
-        if (nextSelection instanceof Selection.Model model && !canSelect(model.modelId(), current.catalog(), next)
-            && !ignoresGrantsFor(model.modelId(), current)) {
-            nextSelection = new Selection.IntrinsicDefault();
-            nextIgnoreGrants = false;
-        }
-        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), next, nextSelection,
-            nextIgnoreGrants, current.restrictedAuth()));
+        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), next, selection(),
+            current.restrictedAuth()));
     }
 
-    public synchronized SelectionResult select(Selection requested) {
+    public synchronized SelectionResult validateSelection(Selection requested) {
         Objects.requireNonNull(requested, "requested");
-        if (!active()) {
+        if (!active())
             return SelectionResult.INVALID_REQUEST;
-        }
-        var current = authority();
-        if (requested instanceof Selection.IntrinsicDefault) {
-            selectIntrinsicDefault(current);
+        if (requested instanceof Selection.IntrinsicDefault)
             return SelectionResult.ACCEPTED;
-        }
         var selected = (Selection.Model)requested;
-        var record = current.catalog().byModelId().get(selected.modelId());
-        if (record == null) {
-            selectIntrinsicDefault(current);
-            return SelectionResult.NOT_FOUND;
-        }
-        if (!canSelect(selected.modelId(), current.catalog(), current.grants())
-            && !ignoresGrantsFor(selected.modelId(), current)) {
-            selectIntrinsicDefault(current);
-            return SelectionResult.UNAUTHORIZED;
-        }
-        if (!hasTexture(record, selected.textureId())) {
-            selectIntrinsicDefault(current);
-            return SelectionResult.INVALID_REQUEST;
-        }
-        var nextIgnoreGrants = current.ignoreGrants();
-        if (current.selection() instanceof Selection.Model previous && !previous.modelId().equals(selected.modelId())) {
-            nextIgnoreGrants = false;
-        }
-        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), current.grants(), requested,
-            nextIgnoreGrants, current.restrictedAuth()));
-        return SelectionResult.ACCEPTED;
-    }
-
-    public synchronized SelectionResult selectForced(Selection.Model requested, boolean ignoreGrants) {
-        Objects.requireNonNull(requested, "requested");
-        if (!active()) {
-            return SelectionResult.INVALID_REQUEST;
-        }
         var current = authority();
-        var record = current.catalog().byModelId().get(requested.modelId());
-        if (record == null) {
+        var record = current.catalog().byModelId().get(selected.modelId());
+        if (record == null)
             return SelectionResult.NOT_FOUND;
-        }
-        if (!ignoreGrants && !canSelect(requested.modelId(), current.catalog(), current.grants())) {
+        if (!canSelect(selected.modelId(), current.catalog(), current.grants()))
             return SelectionResult.UNAUTHORIZED;
-        }
-        if (!hasTexture(record, requested.textureId())) {
-            return SelectionResult.INVALID_REQUEST;
-        }
-        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), current.grants(), requested,
-            ignoreGrants, current.restrictedAuth()));
         return SelectionResult.ACCEPTED;
     }
 
     /**
-     * Tests current admission policy for a new request against the committed authority.
-     * Callers must apply this gate before acquiring protected sources; a cache hit grants no permission.
-     * Forced selection can admit private runtime chunks without a grant under restricted authorization.
-     * The architecture leaves that exception's policy precedence unresolved.
+     * Tests current admission policy for a new request against the committed authority. Callers must apply this gate
+     * before acquiring protected sources; a cache hit grants no permission. Forced selection requires the same ordinary
+     * grant as player selection.
      *
      * @param modelId the requested model identity
      * @param kind the requested resource category
      * @param restrictedAuth whether the current server policy restricts private runtime content
      * @return false when the session, publication, member or access policy rejects new use
      */
-    public synchronized boolean canRequest(Hash256 modelId, AssetRef.Kind kind, boolean restrictedAuth) {
+    public synchronized boolean canRequest(ModelId modelId, AssetRef.Kind kind, boolean restrictedAuth) {
         if (!active() || !publicationCommitted) {
             return false;
         }
@@ -241,8 +180,7 @@ public final class ServerModelSession {
         if (record.entry().access() == CatalogAccess.PUBLIC || current.grants().contains(modelId) || !restrictedAuth) {
             return true;
         }
-        return kind == AssetRef.Kind.PREVIEW || kind == AssetRef.Kind.ICON
-            || kind == AssetRef.Kind.CHUNK && runtimeContentAllowed(modelId, current, restrictedAuth);
+        return kind == AssetRef.Kind.PREVIEW || kind == AssetRef.Kind.ICON;
     }
 
     public synchronized boolean updateContentPolicy(boolean restrictedAuth) {
@@ -250,23 +188,23 @@ public final class ServerModelSession {
         if (current.restrictedAuth() == restrictedAuth)
             return false;
         replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), current.grants(),
-            current.selection(), current.ignoreGrants(), restrictedAuth));
+            current.selection(), restrictedAuth));
         return true;
     }
 
-    private static boolean runtimeContentAllowed(Hash256 modelId, AuthoritySnapshot current, boolean restrictedAuth) {
+    private static boolean runtimeContentAllowed(ModelId modelId, AuthoritySnapshot current, boolean restrictedAuth) {
         var record = current.catalog().byModelId().get(modelId);
         return record != null && (record.entry().access() == CatalogAccess.PUBLIC || current.grants().contains(modelId)
-            || !restrictedAuth || ignoresGrantsFor(modelId, current));
+            || !restrictedAuth);
     }
 
     /** Used while the initial authority is being assembled as well as after publication. */
-    public synchronized boolean containsModel(Hash256 modelId) {
+    public synchronized boolean containsModel(ModelId modelId) {
         return authorityCatalog().byModelId().containsKey(modelId);
     }
 
     /** Asset lookup never falls back to the live global catalog. */
-    public synchronized Optional<CatalogRecord> findModel(Hash256 modelId) {
+    public synchronized Optional<CatalogRecord> findModel(ModelId modelId) {
         return !publicationCommitted ? Optional.empty()
             : Optional.ofNullable(authority().catalog().byModelId().get(modelId));
     }
@@ -290,14 +228,13 @@ public final class ServerModelSession {
     }
 
     /** Atomically commits server authority before any matching notification is attempted. */
-    public synchronized CatalogTransition commitCatalog(CatalogSnapshot catalog, Set<Hash256> requestedGrants) {
+    public synchronized CatalogTransition commitCatalog(CatalogSnapshot catalog, Set<ModelId> requestedGrants) {
         Objects.requireNonNull(catalog, "catalog");
         Objects.requireNonNull(requestedGrants, "requestedGrants");
         var previous = authority();
         var nextGrants =
             requestedGrants.stream().filter(catalog.byModelId()::containsKey).collect(Collectors.toUnmodifiableSet());
-        var next = buildAuthority(catalog, nextGrants, previous.selection(), previous.ignoreGrants(),
-            previous.restrictedAuth());
+        var next = buildAuthority(catalog, nextGrants, previous.selection(), previous.restrictedAuth());
         var incarnations = new LinkedHashMap<ModelFileIdentity, Object>();
         next.catalog().byModelId().values().forEach(record -> {
             var representation = record.binding().content().representation();
@@ -319,14 +256,13 @@ public final class ServerModelSession {
     public synchronized void close() {
         state = NegotiationState.CLOSED;
         publicationCommitted = false;
-        playerStateFullAccepted = false;
         authority = null;
         memberIncarnations = Map.of();
     }
 
     /**
-     * Captures one commit gate for an admitted request's exact published member.
-     * This method does not replace the request's access check.
+     * Captures one commit gate for an admitted request's exact published member. This method does not replace the
+     * request's access check.
      *
      * @param identity the exact metadata identity admitted by the request owner
      * @return empty if no active committed member exists; otherwise an independent, one-commit gate
@@ -340,12 +276,14 @@ public final class ServerModelSession {
     /**
      * One request's commit right for an exact session member, independent of later grant changes.
      *
-     * <p><b>Execution:</b> Commit and retirement share the session monitor. The replacement must execute
-     * only the prepared atomic replacement; it must not wait for work that needs this session monitor.
-     * Cancellation or member replacement rejects a later commit with {@link StaleEffectException}.
-     * An I/O failure from the replacement remains an I/O failure and does not set the committed flag.
+     * <p>
+     * <b>Execution:</b> Commit and retirement share the session monitor. The replacement must execute only the prepared
+     * atomic replacement; it must not wait for work that needs this session monitor. Cancellation or member replacement
+     * rejects a later commit with {@link StaleEffectException}. An I/O failure from the replacement remains an I/O
+     * failure and does not set the committed flag.
      *
-     * <p><b>Seam:</b> [request effect lifetime](docs/architecture/model-management/sessions/overview.md#成员观察与管理提交).
+     * <p>
+     * <b>Seam:</b> [request effect lifetime](docs/architecture/model-management/sessions/overview.md#成员观察与管理提交).
      */
     public final class Effect implements AtomicSharedCache.CommitGate {
         private final ModelFileIdentity identity;
@@ -393,8 +331,8 @@ public final class ServerModelSession {
             : authority.catalog();
     }
 
-    private static AuthoritySnapshot buildAuthority(CatalogSnapshot catalog, Set<Hash256> grants, Selection selection,
-        boolean ignoreGrants, boolean restrictedAuth) {
+    private static AuthoritySnapshot buildAuthority(CatalogSnapshot catalog, Set<ModelId> grants, Selection selection,
+        boolean restrictedAuth) {
         var byContainer = new LinkedHashMap<Hash256, CatalogRecord>();
         catalog.byModelId().values().forEach(record -> {
             var representation = record.binding().content().representation();
@@ -406,61 +344,22 @@ public final class ServerModelSession {
                 throw new IllegalArgumentException("Published catalog reuses a container identity");
             }
         });
-        var nextSelection = selection;
-        var nextIgnoreGrants = ignoreGrants;
-        if (nextSelection instanceof Selection.Model selected) {
-            var record = catalog.byModelId().get(selected.modelId());
-            if (record == null || !canSelect(selected.modelId(), catalog, grants) && !nextIgnoreGrants
-                || !hasTexture(record, selected.textureId())) {
-                nextSelection = new Selection.IntrinsicDefault();
-                nextIgnoreGrants = false;
-            }
-        }
-        return new AuthoritySnapshot(catalog, byContainer, grants, nextSelection, nextIgnoreGrants, restrictedAuth);
+        return new AuthoritySnapshot(catalog, byContainer, grants, selection, restrictedAuth);
     }
 
-    private static boolean canSelect(Hash256 modelId, CatalogSnapshot catalog, Set<Hash256> grants) {
+    private static boolean canSelect(ModelId modelId, CatalogSnapshot catalog, Set<ModelId> grants) {
         var record = catalog.byModelId().get(modelId);
         return record != null && (record.entry().access() == CatalogAccess.PUBLIC || grants.contains(modelId));
     }
 
-    private static boolean hasTexture(CatalogRecord record, String textureId) {
-        if (record == null || record.binding().content().modelFile() == null) {
-            return true;
-        }
-        return record.binding().content().modelFile().getPlayer().getTextureNames().contains(textureId);
-    }
-
-    private static boolean ignoresGrantsFor(Hash256 modelId, AuthoritySnapshot authority) {
-        return authority.ignoreGrants() && authority.selection() instanceof Selection.Model selected
-            && selected.modelId().equals(modelId);
-    }
-
-    private void selectIntrinsicDefault(AuthoritySnapshot current) {
-        replaceAuthority(new AuthoritySnapshot(current.catalog(), current.byContainer(), current.grants(),
-            new Selection.IntrinsicDefault(), false, current.restrictedAuth()));
-    }
-
     private void replaceAuthority(AuthoritySnapshot next) {
-        if (authority != null && !Objects.equals(reportModelId(authority), reportModelId(next))) {
-            playerStateFullAccepted = false;
-        }
-        authority = next;
-    }
-
-    private static Hash256 reportModelId(AuthoritySnapshot snapshot) {
-        if (snapshot.selection() instanceof Selection.Model selected) {
-            return selected.modelId();
-        }
-        return snapshot.catalog().byModelId().values().stream()
-            .filter(record -> record.location().rootKind() == CatalogRootKind.BUILTIN)
-            .filter(record -> record.location().path().value().equals("default"))
-            .map(record -> record.entry().modelId()).findFirst().orElse(null);
+        authority = new AuthoritySnapshot(next.catalog(), next.byContainer(), next.grants(),
+            new Selection.IntrinsicDefault(), next.restrictedAuth());
     }
 
     public record AuthoritySnapshot(CatalogSnapshot catalog, Map<Hash256, CatalogRecord> byContainer,
-        Set<Hash256> grants, Selection selection, boolean ignoreGrants, boolean restrictedAuth) {
-        public boolean runtimeContentAllowed(Hash256 modelId) {
+        Set<ModelId> grants, Selection selection, boolean restrictedAuth) {
+        public boolean runtimeContentAllowed(ModelId modelId) {
             return ServerModelSession.runtimeContentAllowed(modelId, this, restrictedAuth);
         }
 
@@ -472,15 +371,7 @@ public final class ServerModelSession {
             if (!catalog.byModelId().keySet().containsAll(grants)) {
                 throw new IllegalArgumentException("Grant references a missing publication entry");
             }
-            if (selection instanceof Selection.Model selected) {
-                var record = catalog.byModelId().get(selected.modelId());
-                if (record == null || record.entry().access() == CatalogAccess.AUTHORIZED
-                    && !grants.contains(selected.modelId()) && !ignoreGrants) {
-                    throw new IllegalArgumentException("Selection is not eligible in server authority");
-                }
-            } else if (ignoreGrants) {
-                throw new IllegalArgumentException("Intrinsic default cannot ignore grants");
-            }
+
         }
     }
 

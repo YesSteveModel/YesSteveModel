@@ -44,7 +44,7 @@ final class BuiltinCallContractOracleTest {
         var outcome = OracleSemanticProbe.compile(HOST, programs, false);
         assertEquals(List.of(), outcome.fallbackPrograms(), "supported programs must not need a semantic fallback");
         assertEquals(List.of(), outcome.localRecoveryPrograms(), "Contract 3 does not publish arity-zero programs");
-        assertEquals("FAIL_EXECUTION", outcome.nonFinitePolicy());
+        assertEquals("ZERO_NAN_ARITHMETIC", outcome.nonFinitePolicy());
         for (var name : accepted) {
             assertFalse(outcome.typedZeroPrograms().get(name), name);
         }

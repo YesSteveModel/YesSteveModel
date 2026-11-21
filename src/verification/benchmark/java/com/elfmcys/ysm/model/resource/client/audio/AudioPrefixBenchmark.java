@@ -68,12 +68,15 @@ public class AudioPrefixBenchmark {
             var published = new AtomicReference<CachedAudio>();
             var capacity = new AudioRuntimeCapacity();
             var actual = new ByteArrayOutputStream();
-            try (var priming = new PlaybackAudioStream(fixture.media, fixture.access(Runnable::run), false,
-                Runnable::run, capacity, new AudioRetentionCache.Receipt(System.nanoTime(), 1), () -> true,
-                (audio, receipt) -> {
-                    published.set(audio);
-                    return true;
-                }, () -> {}, failure -> { throw new IllegalStateException("Audio cache priming failed", failure); })) {
+            try (var priming =
+                new PlaybackAudioStream(fixture.media, fixture.access(Runnable::run), false, Runnable::run, capacity,
+                    new AudioRetentionCache.Receipt(System.nanoTime(), 1), () -> true, (audio, receipt) -> {
+                        published.set(audio);
+                        return true;
+                    }, () -> {
+                    }, failure -> {
+                        throw new IllegalStateException("Audio cache priming failed", failure);
+                    })) {
                 for (;;) {
                     var pcm = priming.read(8192);
                     if (!pcm.hasRemaining()) {
@@ -93,11 +96,10 @@ public class AudioPrefixBenchmark {
             if (requestedBytes <= 0 || (requestedBytes & 1) != 0 || requestedBytes > cached.pcm().size()) {
                 throw new IllegalArgumentException("requestedBytes must fit the cached PCM and contain whole frames");
             }
-            System.out.println("AUDIO_INPUT media=" + media + " phase=" + phase + " requestedBytes="
-                + requestedBytes + " frames=" + fixture.media.frames() + " prefixFrames="
-                + cached.pcm().size() / Short.BYTES + " checkpointBytes="
-                + (cached.retainedBytes() - cached.pcm().size()) + " retainedBytes=" + cached.retainedBytes()
-                + " sourceChannels=" + fixture.media.channels());
+            System.out.println("AUDIO_INPUT media=" + media + " phase=" + phase + " requestedBytes=" + requestedBytes
+                + " frames=" + fixture.media.frames() + " prefixFrames=" + cached.pcm().size() / Short.BYTES
+                + " checkpointBytes=" + (cached.retainedBytes() - cached.pcm().size()) + " retainedBytes="
+                + cached.retainedBytes() + " sourceChannels=" + fixture.media.channels());
         }
 
         @TearDown(Level.Trial)
@@ -150,8 +152,8 @@ public class AudioPrefixBenchmark {
         boolean coldCycle = input.phase.equals("coldCycle");
         boolean cold = input.phase.equals("coldPrepared") || coldCycle;
         var cyclePublication = coldCycle ? new AtomicReference<CachedAudio>() : null;
-        PlaybackAudioStream.PcmPublisher publisher = cyclePublication == null ? (audio, receipt) -> true
-            : (audio, receipt) -> {
+        PlaybackAudioStream.PcmPublisher publisher =
+            cyclePublication == null ? (audio, receipt) -> true : (audio, receipt) -> {
                 cyclePublication.set(audio);
                 return true;
             };
@@ -160,8 +162,10 @@ public class AudioPrefixBenchmark {
         long startCpu = cpu.getCurrentThreadCpuTime();
         var stream = new PlaybackAudioStream(input.fixture.media, input.fixture.access(Runnable::run),
             cold ? null : input.cached, input.phase.equals("loop"), workers, capacity,
-            new AudioRetentionCache.Receipt(startWall, 1), () -> true, publisher, () -> {},
-            failure -> { throw new IllegalStateException("Audio benchmark playback failed", failure); });
+            new AudioRetentionCache.Receipt(startWall, 1), () -> true, publisher, () -> {
+            }, failure -> {
+                throw new IllegalStateException("Audio benchmark playback failed", failure);
+            });
         try (stream) {
             // These snapshots can miss reservations inside a consume call.
             var observedDecoded = new long[] {capacity.snapshot().decodedBytes()};
@@ -186,8 +190,7 @@ public class AudioPrefixBenchmark {
                     }
                     supplied += batch;
                 }
-                if (supplied != input.cycleBytes || !stream.isClosed()
-                    || coldCycle && cyclePublication.get() == null) {
+                if (supplied != input.cycleBytes || !stream.isClosed() || coldCycle && cyclePublication.get() == null) {
                     throw new IllegalStateException("Cycle did not reach a verified EOF with complete PCM");
                 }
                 counters.stageWallNs += System.nanoTime() - startWall;

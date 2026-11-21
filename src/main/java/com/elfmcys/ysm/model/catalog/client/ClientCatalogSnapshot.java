@@ -7,7 +7,8 @@ import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
 
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogSnapshot;
 import com.elfmcys.ysm.model.catalog.content.ModelContent;
-import com.elfmcys.ysm.model.domain.Hash256;
+import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.PublishedModelId;
 import com.elfmcys.ysm.model.domain.ModelPackDescriptor;
 import com.elfmcys.ysm.model.resource.client.remote.RemoteModelContent;
 import com.elfmcys.ysm.model.session.client.state.RemotePublicationSnapshot;
@@ -39,7 +40,7 @@ public final class ClientCatalogSnapshot {
         this.publication = publication;
     }
 
-    public boolean permitsRuntimeContent(Hash256 modelId) {
+    public boolean permitsRuntimeContent(ModelId modelId) {
         var record = catalog.byModelId().get(modelId);
         if (record == null)
             return false;
@@ -48,16 +49,20 @@ public final class ClientCatalogSnapshot {
         var entry = publication.entries().get(modelId);
         if (entry != null)
             return entry.runtimeContentAllowed();
-        return record.location().rootKind() == CatalogRootKind.BUILTIN
-            && record.location().path().value().equals("default");
+        return false;
+    }
+
+    public boolean permitsRuntimeContent(PublishedModelId modelId) {
+        return modelId instanceof PublishedModelId.Model model ? permitsRuntimeContent(model.hash())
+            : catalog.intrinsicDefault() != null;
     }
 
     public static ClientCatalogSnapshot empty() {
         return new ClientCatalogSnapshot(CatalogSnapshot.empty());
     }
 
-    public Map<Hash256, ClientCatalogEntry> models() {
-        var result = new LinkedHashMap<Hash256, ClientCatalogEntry>();
+    public Map<ModelId, ClientCatalogEntry> models() {
+        var result = new LinkedHashMap<ModelId, ClientCatalogEntry>();
         catalog.byModelId().forEach((modelId, record) -> {
             var content = record.binding().content();
             result.put(modelId, new ClientCatalogEntry(record.entry(), content, origin(record, content)));
@@ -73,10 +78,18 @@ public final class ClientCatalogSnapshot {
         return failed;
     }
 
-    public Optional<ClientCatalogEntry> find(Hash256 modelId) {
+    public Optional<ClientCatalogEntry> find(ModelId modelId) {
         var record = catalog.byModelId().get(modelId);
         return record == null ? Optional.empty() : Optional.of(new ClientCatalogEntry(record.entry(),
             record.binding().content(), origin(record, record.binding().content())));
+    }
+
+    public Optional<ClientCatalogEntry> find(PublishedModelId modelId) {
+        if (modelId instanceof PublishedModelId.Model model)
+            return find(model.hash());
+        var record = catalog.intrinsicDefault();
+        return record == null ? Optional.empty() : Optional
+            .of(new ClientCatalogEntry(record.entry(), record.binding().content(), ClientCatalogEntry.Origin.BUILTIN));
     }
 
     public CatalogSnapshot catalog() {
@@ -102,8 +115,7 @@ public final class ClientCatalogSnapshot {
     private static ClientCatalogEntry.Origin localOrigin(CatalogRootKind kind) {
         return switch (kind) {
             case BUILTIN -> ClientCatalogEntry.Origin.BUILTIN;
-            case CUSTOM -> ClientCatalogEntry.Origin.CUSTOM;
-            case AUTH -> ClientCatalogEntry.Origin.AUTH;
+            case MODELS -> ClientCatalogEntry.Origin.MODELS;
         };
     }
 }

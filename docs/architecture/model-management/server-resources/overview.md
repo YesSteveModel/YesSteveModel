@@ -4,112 +4,117 @@
 
 ## 职责与边界
 
-本级为发送者提供 encoded chunk 或独立图片快照及独立 bytes lease。
+本级负责为服务端网络发送准备编码后的模型 chunk 或独立预览图快照。调用方发起申请后，本级立即返回一份独立的 `BytesLease`；未命中缓存时由后台共享读取并校验，发送封包前再从 Ready `BytesLease` 派生出发送保留，确保发送期间的底层字节不受缓存淘汰或会话退出影响。
 
 ## Seam Contract
 
-- 发送者取得的 bytes 保证什么：[发送字节取得与交付](#发送字节取得与交付)。
-- 替换或 reload 如何影响旧 waiter 和新请求：[图片替换与旧读取](#图片替换与旧读取)。
+- 发送者拿到的字节与 `BytesLease` 具备哪些保证：[发送字节取得与交付](#发送字节取得与交付)。
+- 图片替换或目录 reload 发生时，旧等待者与新请求如何隔离：[图片替换与旧读取](#图片替换与旧读取)。
 
 ### 共同规则
 
-适用范围：“发送字节取得与交付”和“图片替换与旧读取”继承本节的职责、进程与 session 所有权、保留预算、失败处置和依赖。
+适用范围：“发送字节取得与交付”和“图片替换与旧读取”继承本节的职责、进程与会话所有权、保留预算、失败处理和依赖。
 
-本子系统细化[模型管理的数据交接](../overview.md#新使用接纳与独立保留)，为发送者提供验证后的 encoded chunk 或独立图片快照及独立 bytes lease。它不拥有领域授权、持久存储或传输终态。
+本子系统细化[模型管理的数据交接](../overview.md#新使用接纳与独立保留)，专门向发送者提供校验后的编码 chunk、有界独立图片快照以及独立的 `BytesLease`。它不负责领域权限校验、磁盘持久化或网络传输收尾。
 
 #### 数据流与交接
 
 ```mermaid
 flowchart LR
-    Auth["Sessions：请求授权"] --> Acquire["取得 exact chunk / 区域图片"]
-    Acquire --> Flight["可加入的当前 flight"]
+    Auth["Sessions：请求授权"] --> Acquire["申请对应 chunk / 区域图片"]
+    Acquire -->|立即持有| Lease["每请求独立 BytesLease"]
+    Acquire -->|缓存未命中| Flight["可加入的当前 flight"]
     Storage["Storage：固定来源读取"] --> Flight
-    Flight --> Lease["每请求独立 BytesLease"]
-    Flight --> Ready["可复用 encoded bytes"]
-    Ready --> Lease
-    Lease --> Dispatch["Network dispatch：发送终态后释放本 lease"]
-    Replace["同区域图片持久替换 / 成功 reload"] -- "撤旧加入与发布资格" --> Flight
-    Replace -- "撤旧缓存引用" --> Ready
+    Flight -->|发布 Ready| Lease
+    Flight --> Ready["可复用的编码字节"]
+    Ready -->|立即 Ready| Lease
+    Lease -->|packet 建立独立保留| Dispatch["Network dispatch：发送结束后释放"]
+    Replace["同区域图片持久替换 / 成功 reload"] -- "撤销旧加入与发布资格" --> Flight
+    Replace -- "撤销旧缓存引用" --> Ready
 ```
 
 #### 运行作用域与所有权
 
-进程 `ModelSystem` 拥有字节 runtime 的 tick 与关闭，可跨多次 game server 实例存续。Session 只取得自己的 lease；global dispatch 接纳 packet 后拥有该请求发送与终结。缓存淘汰只撤保留引用，不能关闭活动发送的 backing。
+服务端字节运行时归进程级的 `ModelSystem` 所有，由它统一驱动 tick 与关闭，因此缓存可跨越多次 game server 实例存续。单个玩家会话从申请起持有自己的 `BytesLease`；全局 dispatch 接纳 packet 后，独占该 packet 对应保留的发送与释放责任。缓存淘汰只撤销缓存自身的引用，绝不能关闭正在发送的底层字节。
 
-Session 退出只结束自己的请求与 lease，进程 cache 及其他消费者不随之退休。
+某个玩家会话退出时，只关闭它自己的请求与 `BytesLease`，进程级缓存和其他消费者不受影响。
 
-保留预算不包括全部 in-flight、发送 lease 与对象开销，不承诺进程内存硬上限。
+容量与清理边界如下：
 
-Chunk 与独立图片共用 encoded 缓存保留预算。超大结果可交付但不进入保留；缓存淘汰不限制全部活动 backing 的瞬时分配。
+- Chunk 与独立图片共用编码缓存保留预算。该预算不包含全部 in-flight 读取、正在发送的 `BytesLease` 以及对象头开销，因此不承诺进程内存硬上限。超大结果可以直接交付给调用方，但不写入缓存保留；缓存淘汰也不限制活动底层内存的瞬时分配。
+- 缺失和失败结果不进入 Ready 缓存。关闭某次使用只撤销本请求的 interest；最后一个 interest 退出时，撤销该 flight 的加入与发布资格。但已经启动的旧读取仍继续占用工作容量直到实际读完退出，迟到的结果也不会复活已经结束的使用。
+- 运行时关闭时会封口所有 Pending 请求、清理仍在活动的 flight 并等待后台 worker 退出；已经建立好的 Ready `BytesLease` 继续独立存活到其所有者释放。
 
-缺失和失败不进入 Ready。取消只撤本请求 interest；交付输给取消时交付方释放新 lease。关闭应处置全部尚未物理结束的 flight，包括已退出可加入索引的旧读取。迟到 bytes 不能发布，仍有唯一释放方。
-
-请求依赖[sessions 的当前使用资格](../sessions/overview.md#新使用资格)，图片持久成功依赖[图片提交](../storage/overview.md#独立图片与提交资格)，发送终态依赖[dispatch 所有权](../../network/overview.md#传输接管与发送终态)。当前证据范围见[模型管理问题](../../../status/known-issues/model-management.md)。
+授权检查依赖[sessions 的当前使用资格](../sessions/overview.md#新使用资格)，图片持久成功通知依赖[图片提交](../storage/overview.md#独立图片与提交资格)，发送收尾依赖[dispatch 所有权](../../network/overview.md#传输接管与发送终态)。当前已知证据范围见[模型管理问题](../../../status/known-issues/model-management.md)。
 
 ### 发送字节取得与交付
 
 **边界与权威**
 
-本契约继承[共同规则](#共同规则)的职责与进程所有权。
+本契约继承[共同规则](#共同规则)的职责与进程级所有权。
 
 **前置条件与输入**
 
-资源授权在每次请求重新检查，cache 命中不能代替授权。
+每次请求前都必须重新检查资源授权，命中缓存不能跳过授权检查。
 
 **结果与保证**
 
-Chunk 按目标 descriptor 验证。普通独立图片只保证固定来源、有界完整快照，不在服务端解码；长度合法的坏媒体仍可能被传输。客户端解码与管理上传验证由各自接收者完成。
+申请调用立即返回一份调用方可关闭的独立 `BytesLease`。其可观察状态分为 `Pending`、`Ready`、`Missing`、`Failed` 和 `Ended`：重复观察不增加保留计数，`Pending` 变为 `Ready` 也不另发新 `lease`。如果缓存中已有合法数据，申请当场即可返回 `Ready`。其中 `Missing` 仅用于表示独立图片不存在；容量满导致的拒收以及读取错误都会携带原始原因进入 `Failed`。
+
+不同字节数据的校验深度明确区分：Chunk 严格按目标 descriptor 校验完整性；普通独立图片只保证来自固定来源且为有界的完整字节快照，不在服务端做媒体解码，因此长度合法但内容损坏的图片仍可能被发送。客户端展示解码与管理上传校验由各自的接收方负责。
 
 **所有权与时序**
 
-Session、lease、dispatch 和 cache 的保留窗口继承[共同规则](#共同规则)；图片替换的额外条件见[图片替换与旧读取](#图片替换与旧读取)。
+消费者在原 owner tick 中观察 `BytesLease` 状态，退出时直接关闭即可，无需为了等迟到结果继续轮询。构造网络 packet 时，先从 Ready `BytesLease` 建立一份独立的发送保留，再关闭原先申请用的 `BytesLease`。Packet 交给 dispatch 接纳前由调用方负责关闭，接纳后只由 dispatch 负责关闭。
+
+管理端请求可以向资源方交入一份独立的读取保留。当请求被拒收、尚未启动就被取消或后台读取实际结束时，该保留随之结束；取消上层使用不会提前结束已经移交给 flight 的读取保留。保留的释放动作只归还预算，不得阻塞、抛错、重入资源运行时或直接驱动网络采用。
+
+会话、`lease`、dispatch 与缓存的保留窗口继承[共同规则](#共同规则)；图片替换场景的额外约束见[图片替换与旧读取](#图片替换与旧读取)。
 
 **失败与拒收**
 
-本契约继承[共同规则](#共同规则)的缺失、取消、交付拒收与关闭处置。
+请求被拒收时直接返回 `Failed` 状态的 `BytesLease`，不在后台留下隐藏工作。处于 `Pending` 的 `lease` 被关闭后，资源方独立清理请求和迟到结果，调用方无需自己处理“取消与结果交付并发”的竞态。其余失败与关闭规则继承[共同规则](#共同规则)。
 
 **证据与依赖**
 
-本契约继承[共同规则](#共同规则)的授权、持久提交与发送终态依赖。
+本契约继承[共同规则](#共同规则)的授权、持久提交与发送收尾依赖。
 
 ### 图片替换与旧读取
 
 **边界与权威**
 
-本契约继承[共同规则](#共同规则)的职责、进程所有权与预算。
+本契约继承[共同规则](#共同规则)的职责、进程级所有权与缓存预算规则。
 
 **前置条件与输入**
 
 #### 图片失效与旧请求
 
-Chunk 与图片共享字节保留、flight 和工作容量。图片 key 区分实际 store 与 `ContainerId`，不同区域互不失效。进程 writer 持久替换成功后只撤对应区域 key 的保留；成功显式 reload 撤全部独立图保留，不新增 watcher 或逐次 stat。
+Chunk 与独立图片共享字节保留缓存、flight 登记与工作容量。图片缓存键同时区分实际存储区域与 `ContainerId`，不同区域之间互不失效。进程内 writer 成功持久替换图片后，只撤销对应区域和键的缓存保留；显式 reload 成功后则撤销全部独立图片保留，不额外引入文件系统 watcher 或逐次 stat 检查。
 
 **结果与保证**
 
-失效撤旧 flight 的加入、发布资格，但旧 waiter 仍可取得完整旧快照，活动 lease 仍有效。旧 worker 直到真实终态才归还容量；迟到终态只能移除自身，不能回填旧图或删除 replacement。Reload 不证明新图可读，不强制刷新客户端有效图片；未 reload 的热门旧图可持续命中。
+图片失效只会撤销旧 flight 的加入资格与发布资格：已经在等待该 flight 的旧消费者仍可拿到完整的旧快照，已经发出的活动 `lease` 也继续有效。旧读取 worker 直到实际结束才归还工作容量；迟到的旧读取结束时只能移出自身，既不能把旧图回填进缓存，也不能误删已经建立的新读取。目录 reload 不保证新图片一定可读，也不强制推送刷新客户端已有图片；在未触发 reload 前，热门旧图可以持续命中缓存。
 
 **所有权与时序**
 
-可加入索引只保存当前可加入 flight；全部未终结工作按对象 identity 独立登记。发布资格检查与 Ready 发布原子完成。`BytesLease` 保留共享 backing；packet terminal 只释放本请求 lease。
+运行时把“当前可加入的 flight 索引”和“全部尚未结束的活动 flight 集合”分开维护（后者按对象身份独立登记）。发布资格检查与写入 Ready 缓存必须在同一把锁内原子完成。`BytesLease` 保活共享底层字节，packet 发送结束只释放它自己的那份 `lease`。
 
-`PreviewStore` 在持久成功后通知 runtime 内存失效，runtime 不持锁回调 storage/session；关闭后观察为 no-op。存储事务见[图片提交](../storage/overview.md#独立图片与提交资格)，发送责任见[资产传输](../../network/implementation/asset-transfer.md)。
+`PreviewStore` 在持久化成功后负责通知字节运行时执行内存失效，运行时绝不在持有自身锁期间回调 storage 或 session；运行时关闭后的失效通知为无操作（no-op）。存储事务见[图片提交](../storage/overview.md#独立图片与提交资格)，发送责任见[资产传输](../../network/implementation/asset-transfer.md)。
 
 **失败与拒收**
 
-本契约继承[共同规则](#共同规则)的取消、迟到结果与全部活动 flight 的关闭处置。
+本契约继承[共同规则](#共同规则)的取消、迟到结果以及全部活动 flight 的关闭规则。
 
 **证据与依赖**
 
-本契约继承[共同规则](#共同规则)的持久成功通知、发送终态与证据限制。
+本契约继承[共同规则](#共同规则)的持久成功通知、发送收尾与证据限制。
 
 ## 设计取舍
 
-Chunk 与图片共享保留预算，会互相挤出。
-
-分开可加入索引与真实活动集合，避免失效提前归还容量；代价是旧读取与新读取可短时并存。
+Chunk 与独立图片共用同一份保留预算，实现简单但两者会互相挤出。把“可加入索引”与“实际活动集合”拆开，可以避免图片失效时提前归还仍在占用的工作容量，代价是旧读取与新读取可能短时并存。
 
 ## 实现与验证入口
 
-`ServerResourceRuntime` 连接进程字节保留、flight 与工作容量；可加入索引和全部活动集合分别由 `pending` 与 `activeFlights` 落实。`BytesLease` 是发送请求持有 backing 的接缝，`PreviewStore` 提供持久成功后的失效通知。
+`ServerResourceRuntime` 统筹进程级字节保留、flight 调度与工作容量，其中可加入索引和全部活动集合分别由 `pending` 和 `activeFlights` 维护。`BytesLease` 从申请时起代表一次发送请求的使用，调用 `retain` 可为网络 packet 派生出独立的 Ready 保留。`PreviewStore` 负责在持久提交成功后发出失效通知。
 
-Encoded 缓存保留预算为 64 MiB，tick 淘汰缓存引用。发布资格检查和 Ready 插入在同一 runtime 锁内。
+编码缓存的默认保留预算为 64 MiB，由 tick 按需淘汰缓存引用；发布资格复核与插入 Ready 缓存都在同一把运行时锁内完成。

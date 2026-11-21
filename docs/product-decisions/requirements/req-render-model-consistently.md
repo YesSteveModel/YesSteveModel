@@ -1,6 +1,6 @@
 # REQ.render-model-consistently
 
-- Claim: 替换后的模型必须按受支持的 geometry、纹理与动画语义呈现，并保留玩家理解游戏状态所需的原版视觉内容。
+- Claim: 替换后的模型必须按受支持的几何体、纹理与动画语义呈现，并保留玩家理解游戏状态所需的原版视觉内容。
 - Decision-status: Complete
 - Motivation: [PG.model-replacement](../shared.md#pgmodel-replacement); [SCN.replacement-breaks-dependent-content](../shared.md#scnreplacement-breaks-dependent-content)
 - Constraints: [CON.normal-use-isolation](../shared.md#connormal-use-isolation); [CON.visual-only-scope](../shared.md#convisual-only-scope)

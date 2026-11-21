@@ -1,7 +1,7 @@
 package com.elfmcys.ysm.model.service;
 
 import com.elfmcys.ysm.model.catalog.source.CatalogRootKind;
-import com.elfmcys.ysm.model.catalog.source.CatalogAddressResolver;
+import com.elfmcys.ysm.model.catalog.source.ModelSelector;
 import com.elfmcys.ysm.model.storage.ManagedContainer;
 import com.elfmcys.ysm.model.storage.ModelExporter;
 import com.elfmcys.ysm.model.storage.PreviewStore;
@@ -63,10 +63,10 @@ class ModelExportServiceTest {
             for (var kind : List.of("custom", "auth"))
                 assertEquals(root.resolve(scope + "/" + kind + "/pack/model.mxc"),
                     ModelExportService.outputPath(root, scope + ":" + kind + "/pack/model"));
-        assertThrows(java.io.IOException.class, () -> ModelExportService.outputPath(root, "default"));
+        assertThrows(IllegalArgumentException.class, () -> ModelExportService.outputPath(root, "default"));
+        assertThrows(java.io.IOException.class, () -> ModelExportService.outputPath(root, "builtin:default"));
         assertThrows(java.io.IOException.class, () -> ModelExportService.outputPath(root, "builtin:other"));
-        assertThrows(IllegalArgumentException.class,
-            () -> ModelExportService.outputPath(root, "local:custom/../outside"));
+        assertThrows(IllegalArgumentException.class, () -> ModelExportService.outputPath(root, "local:../outside"));
     }
 
     @Test
@@ -89,9 +89,9 @@ class ModelExportServiceTest {
 
     @Test
     void fixedSelectionDoesNotFollowAdditionRemovalOrReplacementAndRejectsBusy() throws Exception {
-        var a = model("pack/a.mxc", 1, PreviewSource.RAW, CatalogRootKind.CUSTOM);
-        var b = model("pack/sub/b.mxc", 2, PreviewSource.GENERATED, CatalogRootKind.AUTH);
-        var c = model("model-😀.mxc", 3, PreviewSource.UNSPECIFIED, CatalogRootKind.CUSTOM);
+        var a = model("pack/a.mxc", 1, PreviewSource.RAW, CatalogRootKind.MODELS);
+        var b = model("pack/sub/b.mxc", 2, PreviewSource.GENERATED, CatalogRootKind.MODELS);
+        var c = model("model-😀.mxc", 3, PreviewSource.UNSPECIFIED, CatalogRootKind.MODELS);
         var builtin = model("builtin", 4, PreviewSource.RAW, CatalogRootKind.BUILTIN);
         var current = new AtomicReference<>(ExportTestFixture.catalog(List.of(a, b, c, builtin)));
         var requests = new ArrayList<ModelExportService.Request>();
@@ -111,13 +111,13 @@ class ModelExportServiceTest {
             var started = current.get().findPath(requests.get(0).path()).orElseThrow();
             var replaced = List.of(a, b, c).stream().filter(value -> value != started).findFirst().orElseThrow();
             var replacement = model(replaced.location().path().value(), replaced == a ? 1 : replaced == b ? 2 : 3,
-                PreviewSource.RAW, CatalogRootKind.CUSTOM);
+                PreviewSource.RAW, CatalogRootKind.MODELS);
             // Ensure different bytes even when the original also had an author image.
             if (replacement.representation().identity().equals(replaced.representation().identity())) {
                 replacement = model(replaced.location().path().value(), replaced == a ? 1 : replaced == b ? 2 : 3,
-                    PreviewSource.GENERATED, CatalogRootKind.CUSTOM);
+                    PreviewSource.GENERATED, CatalogRootKind.MODELS);
             }
-            var added = model("added.mxc", 5, PreviewSource.RAW, CatalogRootKind.CUSTOM);
+            var added = model("added.mxc", 5, PreviewSource.RAW, CatalogRootKind.MODELS);
             current.set(ExportTestFixture.catalog(List.of(started, replacement, added, builtin)));
             outcomes.get(0).complete(temp.resolve("first.mxc"));
             for (int i = 0; i < 5; i++)
@@ -129,14 +129,14 @@ class ModelExportServiceTest {
             assertEquals(2, summary.skipped());
             assertEquals(0, summary.unprocessed());
             assertFalse(summary.stopped());
-            assertEquals(Set.of("local:custom/pack/a.mxc", "local:auth/pack/sub/b.mxc", "local:custom/model-😀.mxc"),
+            assertEquals(Set.of("local:pack/a.mxc", "local:pack/sub/b.mxc", "local:model-😀.mxc"),
                 summary.items().stream().map(ModelWorkSummary.Item::path).collect(java.util.stream.Collectors.toSet()));
         }
     }
 
     @Test
     void emptyPatternDoesNotBecomeAllAndBuiltinSingleIsRejected() throws Exception {
-        var a = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.CUSTOM);
+        var a = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.MODELS);
         var builtin = model("builtin", 2, PreviewSource.RAW, CatalogRootKind.BUILTIN);
         var summaries = new ArrayList<ModelWorkSummary>();
         try (var environment = new ModelExportService.Environment(this, () -> true,
@@ -157,19 +157,17 @@ class ModelExportServiceTest {
             "model-ab.mxc", "a/b", "a.b", "[a]");
         var published = new ArrayList<ManagedContainer>();
         for (int i = 0; i < paths.size(); i++)
-            published.add(model(paths.get(i), i + 1, PreviewSource.RAW, CatalogRootKind.CUSTOM));
+            published.add(model(paths.get(i), i + 1, PreviewSource.RAW, CatalogRootKind.MODELS));
         published.add(model("pack/builtin.mxc", 30, PreviewSource.RAW, CatalogRootKind.BUILTIN));
-        model("pack/unadmitted.mxc", 31, PreviewSource.UNSPECIFIED, CatalogRootKind.CUSTOM);
-        var patterns = new String[] {null, "local:custom/pack/*", "local:custom/model-?.mxc", "local:custom/a?b",
-            "local:custom/a.b", "local:custom/[a]", "", "no-match", "local:custom/pack/**", "local:custom/Pack/*",
-            "local:custom/model-😀.mxc"};
-        var expected =
-            List.of(paths.stream().map(path -> "local:custom/" + path).collect(java.util.stream.Collectors.toSet()),
-                Set.of("local:custom/pack/a.mxc", "local:custom/pack/sub/b.mxc"),
-                Set.of("local:custom/model-a.mxc", "local:custom/model-猫.mxc", "local:custom/model-😀.mxc"),
-                Set.of("local:custom/a/b", "local:custom/a.b"), Set.of("local:custom/a.b"), Set.of("local:custom/[a]"),
-                Set.<String>of(), Set.<String>of(), Set.of("local:custom/pack/a.mxc", "local:custom/pack/sub/b.mxc"),
-                Set.of("local:custom/Pack/a.mxc"), Set.of("local:custom/model-😀.mxc"));
+        model("pack/unadmitted.mxc", 31, PreviewSource.UNSPECIFIED, CatalogRootKind.MODELS);
+        var patterns = new String[] {null, "local:pack/*", "local:model-?.mxc", "local:a?b", "local:a.b", "local:[a]",
+            "", "no-match", "local:pack/**", "local:Pack/*", "local:model-😀.mxc"};
+        var expected = List.of(paths.stream().map(path -> "local:" + path).collect(java.util.stream.Collectors.toSet()),
+            Set.of("local:pack/a.mxc", "local:pack/sub/b.mxc"),
+            Set.of("local:model-a.mxc", "local:model-猫.mxc", "local:model-😀.mxc"), Set.of("local:a/b", "local:a.b"),
+            Set.of("local:a.b"), Set.of("local:[a]"), Set.<String>of(), Set.<String>of(),
+            Set.of("local:pack/a.mxc", "local:pack/sub/b.mxc"), Set.of("local:Pack/a.mxc"),
+            Set.of("local:model-😀.mxc"));
         var catalog = ExportTestFixture.catalog(published);
         for (int index = 0; index < patterns.length; index++) {
             var directory = temp.resolve("selected/" + index);
@@ -177,7 +175,10 @@ class ModelExportServiceTest {
             try (var environment = new ModelExportService.Environment(this, () -> true, () -> catalog, request -> {
                 ModelExportService.PreparedExport prepared = null;
                 try {
-                    prepared = ModelExportService.prepare(request, new PreviewStore(temp.resolve("glob-cache")),
+                    prepared = ModelExportService.prepare(request,
+                        new PreviewStore(temp.resolve("glob-cache"),
+                            com.elfmcys.ysm.testutil.DerivedStorageTestScope.track(
+                                new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("glob-cache")))),
                         directory.resolve("artifact-"
                             + paths.indexOf(
                                 com.elfmcys.ysm.model.catalog.source.CatalogLocation.parse(request.path()).entry())
@@ -205,8 +206,7 @@ class ModelExportServiceTest {
                     try (var outputs = Files.walk(directory)) {
                         assertEquals(
                             expected.get(index).stream()
-                                .map(path -> "artifact-" + paths.indexOf(path.substring("local:custom/".length()))
-                                    + ".mxc")
+                                .map(path -> "artifact-" + paths.indexOf(path.substring("local:".length())) + ".mxc")
                                 .collect(java.util.stream.Collectors.toSet()),
                             outputs.filter(Files::isRegularFile).map(directory::relativize).map(Path::toString)
                                 .map(value -> value.replace('\\', '/')).collect(java.util.stream.Collectors.toSet()));
@@ -217,12 +217,13 @@ class ModelExportServiceTest {
 
     @Test
     void mixedRealArtifactsContinueAfterUnreadableSourceAndReopenIndependently() throws Exception {
-        var author = model("author", 1, PreviewSource.RAW, CatalogRootKind.CUSTOM);
-        var cached = model("cached", 2, PreviewSource.UNSPECIFIED, CatalogRootKind.CUSTOM);
-        var cold = model("cold", 3, PreviewSource.UNSPECIFIED, CatalogRootKind.AUTH);
-        var broken = model("broken", 4, PreviewSource.UNSPECIFIED, CatalogRootKind.CUSTOM);
+        var author = model("author", 1, PreviewSource.RAW, CatalogRootKind.MODELS);
+        var cached = model("cached", 2, PreviewSource.UNSPECIFIED, CatalogRootKind.MODELS);
+        var cold = model("cold", 3, PreviewSource.UNSPECIFIED, CatalogRootKind.MODELS);
+        var broken = model("broken", 4, PreviewSource.UNSPECIFIED, CatalogRootKind.MODELS);
         var catalog = ExportTestFixture.catalog(List.of(author, cached, cold, broken));
-        var previews = new PreviewStore(temp.resolve("cache"));
+        var previews = new PreviewStore(temp.resolve("cache"), com.elfmcys.ysm.testutil.DerivedStorageTestScope
+            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("cache"))));
         try (var image = TestPreviews.blank()) {
             previews.accept(cached.representation().containerId(), image.bytes()).close();
         }
@@ -283,8 +284,8 @@ class ModelExportServiceTest {
 
     @Test
     void unpublishedDirectIsRejectedBeforeExportWorkWithOrWithoutPreview() throws Exception {
-        var hidden = model("hidden", 1, PreviewSource.UNSPECIFIED, CatalogRootKind.CUSTOM);
-        var complete = model("complete", 2, PreviewSource.RAW, CatalogRootKind.CUSTOM);
+        var hidden = model("hidden", 1, PreviewSource.UNSPECIFIED, CatalogRootKind.MODELS);
+        var complete = model("complete", 2, PreviewSource.RAW, CatalogRootKind.MODELS);
         var root = temp.resolve("direct");
         Files.createDirectories(root);
         Files.copy(hidden.file(), root.resolve("hidden.mxc"));
@@ -301,11 +302,11 @@ class ModelExportServiceTest {
             assertEquals(0, summaries.get(0).total());
             for (var name : List.of("hidden.mxc", "complete.mxc")) {
                 var bytes = Files.readAllBytes(root.resolve(name));
-                for (var prefix : List.of("", "local:custom/", "local:auth/", "global:custom/", "global:auth/")) {
+                for (var prefix : List.of("", "local:", "local:", "global:", "global:")) {
                     var failure = assertThrows(java.util.concurrent.CompletionException.class,
                         () -> environment.export(prefix + name, null).join());
-                    assertEquals(CatalogAddressResolver.Status.NOT_FOUND,
-                        assertInstanceOf(CatalogAddressResolver.Failure.class, failure.getCause()).status());
+                    assertEquals(ModelSelector.Status.NOT_FOUND,
+                        assertInstanceOf(ModelSelector.Failure.class, failure.getCause()).status());
                 }
                 assertArrayEquals(bytes, Files.readAllBytes(root.resolve(name)));
             }
@@ -316,8 +317,8 @@ class ModelExportServiceTest {
 
     @Test
     void admittedExactItemDoesNotReopenCurrentSamePathRepresentation() throws Exception {
-        var original = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.CUSTOM);
-        var replacement = model("fixture", 1, PreviewSource.GENERATED, CatalogRootKind.CUSTOM);
+        var original = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.MODELS);
+        var replacement = model("fixture", 1, PreviewSource.GENERATED, CatalogRootKind.MODELS);
         var current = new AtomicReference<>(ExportTestFixture.catalog(List.of(original)));
         var captured = new AtomicReference<ModelExportService.Request>();
         var running = new CompletableFuture<Path>();
@@ -327,7 +328,10 @@ class ModelExportServiceTest {
         })) {
             var result = environment.export("fixture", "exact");
             current.set(ExportTestFixture.catalog(List.of(replacement)));
-            var prepared = ModelExportService.prepare(captured.get(), new PreviewStore(temp.resolve("cache")),
+            var prepared = ModelExportService.prepare(captured.get(),
+                new PreviewStore(temp.resolve("cache"),
+                    com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                        .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("cache")))),
                 temp.resolve("exact.mxc"));
             try {
                 running.complete(prepared.completed());
@@ -345,8 +349,8 @@ class ModelExportServiceTest {
 
     @Test
     void admittedSourceFileChangeFailsRatherThanSubstitutingCatalogInput() throws Exception {
-        var original = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.CUSTOM);
-        var replacement = model("fixture", 1, PreviewSource.GENERATED, CatalogRootKind.CUSTOM);
+        var original = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.MODELS);
+        var replacement = model("fixture", 1, PreviewSource.GENERATED, CatalogRootKind.MODELS);
         var current = new AtomicReference<>(ExportTestFixture.catalog(List.of(original)));
         var captured = new AtomicReference<ModelExportService.Request>();
         var running = new CompletableFuture<Path>();
@@ -357,17 +361,21 @@ class ModelExportServiceTest {
             environment.export("fixture", null);
             current.set(ExportTestFixture.catalog(List.of(replacement)));
             Files.copy(replacement.file(), original.file(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            assertThrows(java.io.IOException.class, () -> ModelExportService.prepare(captured.get(),
-                new PreviewStore(temp.resolve("cache")), temp.resolve("must-not-exist.mxc")));
+            assertThrows(java.io.IOException.class,
+                () -> ModelExportService.prepare(captured.get(),
+                    new PreviewStore(temp.resolve("cache"),
+                        com.elfmcys.ysm.testutil.DerivedStorageTestScope
+                            .track(new com.elfmcys.ysm.model.storage.AtomicSharedCache(temp.resolve("cache")))),
+                    temp.resolve("must-not-exist.mxc")));
             assertFalse(Files.exists(temp.resolve("must-not-exist.mxc")));
         }
     }
 
     @Test
     void environmentStopAccountsCurrentCancellationAndRemainingItemsWithoutContinuation() throws Exception {
-        var models = List.of(model("a", 1, PreviewSource.RAW, CatalogRootKind.CUSTOM),
-            model("b", 2, PreviewSource.RAW, CatalogRootKind.CUSTOM),
-            model("c", 3, PreviewSource.RAW, CatalogRootKind.CUSTOM));
+        var models = List.of(model("a", 1, PreviewSource.RAW, CatalogRootKind.MODELS),
+            model("b", 2, PreviewSource.RAW, CatalogRootKind.MODELS),
+            model("c", 3, PreviewSource.RAW, CatalogRootKind.MODELS));
         var running = new CompletableFuture<Path>();
         var starts = new java.util.concurrent.atomic.AtomicInteger();
         var summaries = new ArrayList<ModelWorkSummary>();
@@ -395,7 +403,7 @@ class ModelExportServiceTest {
 
     @Test
     void closeAfterStagingSealsActualMoveWaitsOwnedWorkerAndPreservesPriorOutput() throws Exception {
-        var source = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.CUSTOM);
+        var source = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.MODELS);
         var output = temp.resolve("output.mxc");
         try (var image = TestPreviews.blank()) {
             ModelExporter.export(source, image, output, "old");
@@ -453,7 +461,7 @@ class ModelExportServiceTest {
 
     @Test
     void committedOutputSurvivesFeedbackFailureAndEnvironmentStop() throws Exception {
-        var source = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.CUSTOM);
+        var source = model("fixture", 1, PreviewSource.RAW, CatalogRootKind.MODELS);
         var output = temp.resolve("output.mxc");
         var late = new CompletableFuture<Path>();
         var environment = new ModelExportService.Environment(this, () -> true,

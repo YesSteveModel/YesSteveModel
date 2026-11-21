@@ -10,7 +10,7 @@ public final class AOnly {
         throw new AssertionError("static declaration constructed");
     }
 
-    @MolangFunction(value = "a_value", effect = MolangEffect.CONTEXT)
+    @MolangFunction("a_value")
     public static int aValue(MolangContextView<Subject> context) {
         return 4;
     }

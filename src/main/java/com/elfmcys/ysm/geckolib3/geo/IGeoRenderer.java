@@ -12,16 +12,18 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Adapts one prepared entity result to the current host draw.
  *
- * <p>Requires: data belongs to animatable's active consumption window for data.ctx.
- * The caller retains that owner and its resources through all hooks and vertex consumption.
- * Hooks must not retain the prepared data beyond that window.
+ * <p>
+ * Requires: data belongs to animatable's active consumption window for data.ctx. The caller retains that owner and its
+ * resources through all hooks and vertex consumption. Hooks must not retain the prepared data beyond that window.
  *
- * <p>Execution: callers invoke hooks and output synchronously on the host render thread.
- * Callers isolate pose-stack changes and obey NativeRenderer's global serial, non-reentrant contract.
+ * <p>
+ * Execution: callers invoke hooks and output synchronously on the host render thread. Callers isolate pose-stack
+ * changes and obey NativeRenderer's global serial, non-reentrant contract.
  *
- * <p>Seam: implements the Java adapter in the
- * [host consumption contract](docs/architecture/rendering/overview.md#顶点输出与宿主接管).
- * RenderType selects host state; native context and vertex layout have separate authorities.
+ * <p>
+ * Seam: implements the Java adapter in the [host consumption
+ * contract](docs/architecture/rendering/overview.md#顶点输出与宿主接管). RenderType selects host state; native context and
+ * vertex layout have separate authorities.
  */
 public interface IGeoRenderer<T extends AnimatableEntity<?>> {
     /** The default hook scales the current pose; the caller owns restoration of that pose-stack frame. */
@@ -31,9 +33,10 @@ public interface IGeoRenderer<T extends AnimatableEntity<?>> {
     }
 
     /**
-     * <p>Failure: false means this call did not commit vertices. Owner revocation can reject data
-     * after getBuffer() returns. NativeRenderer defines output rejection and publication damage.
-     * Consumer exceptions propagate unchanged, including exceptions after a partially accepted fallback prefix.
+     * <p>
+     * Failure: false means this call did not commit vertices. Owner revocation can reject data after getBuffer()
+     * returns. NativeRenderer defines output rejection and publication damage. Consumer exceptions propagate unchanged,
+     * including exceptions after a partially accepted fallback prefix.
      *
      * @return true only after the native output handoff succeeds, including a valid empty result
      */
@@ -43,8 +46,8 @@ public interface IGeoRenderer<T extends AnimatableEntity<?>> {
         if (!animatable.canConsume(data, data.ctx))
             return false;
         var modelState = data.modelState;
-        return NativeRenderer.render(buffer, poseStack.last(), modelState.getNativeState(), modelState.getVertexCount(),
-            packedLight, packedOverlay, color.getColor(), data.ctx.nativeType());
+        return NativeRenderer.render(buffer, poseStack.last(), modelState.getNativeState(), packedLight, packedOverlay,
+            color.getColor(), data.ctx.nativeType());
     }
 
     /** Records the render observation; this hook does not certify successful vertex consumption. */

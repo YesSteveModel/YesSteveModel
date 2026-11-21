@@ -75,7 +75,7 @@ class NativeRuntimeIntegrationTest {
         try {
             assertTrue(library.getGlobalVariableAddress(NativeRuntime.nativeSymbol(AbiVersion.NATIVE)) != null);
             for (var candidate : new String[] {AbiVersion.NATIVE.replace("unstable", "UNSTABLE"),
-                AbiVersion.NATIVE.replace("-unstable", ""), "0.1.1-unstable"}) {
+                AbiVersion.NATIVE.replace("-unstable", ""), "1" + AbiVersion.NATIVE}) {
                 org.junit.jupiter.api.Assertions.assertThrows(UnsatisfiedLinkError.class,
                     () -> library.getGlobalVariableAddress(NativeRuntime.nativeSymbol(candidate)));
             }

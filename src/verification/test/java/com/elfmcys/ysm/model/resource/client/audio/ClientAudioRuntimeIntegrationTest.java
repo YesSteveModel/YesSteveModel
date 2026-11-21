@@ -35,6 +35,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayDeque;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -43,6 +44,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.elfmcys.ysm.model.resource.client.audio.AudioPlaybackFixture.nativeCall;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -621,6 +623,494 @@ class ClientAudioRuntimeIntegrationTest {
     }
 
     @Test
+    void externalCancellationKeepsDeliveredChunksAliveUntilTheBorrowerClosesThem() throws Exception {
+        for (var reason : new AudioBackend.CancelReason[] {AudioBackend.CancelReason.AUTHOR_STOP,
+            AudioBackend.CancelReason.FORCE_REPLACED, AudioBackend.CancelReason.RUNTIME_CLOSED}) {
+            try (var fixture =
+                AudioPlaybackFixture.create(temp.resolve(reason.name()), "/audio-playback/stereo-over-five.ogg")) {
+                var backend = new FakeBackend();
+                backend.completeOnCancel = false;
+                var borrowed = new CountDownLatch(1);
+                var resume = new CountDownLatch(1);
+                var closedAtCancel = new AtomicInteger();
+                var worker = Executors.newSingleThreadExecutor();
+                var work = new AtomicReference<java.util.concurrent.Future<AudioBackend.Chunk>>();
+                backend.onPlay = request -> work.set(worker.submit(() -> {
+                    try (var first = request.chunks().request(0).toCompletableFuture().join()) {
+                        assertEquals(0, first.index());
+                    }
+                    var chunk = request.chunks().request(1).toCompletableFuture().join();
+                    try (chunk) {
+                        var bytes = chunk.data();
+                        borrowed.countDown();
+                        assertTrue(resume.await(5, TimeUnit.SECONDS));
+                        assertArrayEquals(fixture.payloads.get(1), bytes(bytes));
+                        assertArrayEquals(fixture.payloads.get(1), bytes(chunk.data()));
+                    }
+                    backend.terminal.complete(AudioBackend.Terminal.cancelled(reason));
+                    return chunk;
+                }));
+                backend.onCancel = request -> {
+                    assertClosedAccess(request.chunks());
+                    closedAtCancel.incrementAndGet();
+                };
+                var capacity = new AudioRuntimeCapacity();
+                var host = new FakeHost();
+                try (var runtime = new ClientAudioRuntime(Runnable::run, source -> fixture.access(Runnable::run), host,
+                    backend, new AudioRetentionCache(), capacity)) {
+                    var playback = play(runtime, fixture.source, false);
+                    assertTrue(borrowed.await(5, TimeUnit.SECONDS));
+                    if (reason == AudioBackend.CancelReason.RUNTIME_CLOSED) {
+                        runtime.close();
+                    } else {
+                        playback.setStopped(reason);
+                    }
+                    assertEquals(1, closedAtCancel.get());
+                    assertEquals(reason, backend.cancelReason);
+                    assertTrue(playback.isPlaybackStopped());
+                    assertFalse(backend.terminal.isDone());
+                    assertIdle(capacity);
+                    assertNull(host.pollStream());
+                    resume.countDown();
+                    var chunk = work.get().get(5, TimeUnit.SECONDS);
+                    assertThrows(IllegalStateException.class, chunk::data);
+                    assertEquals(1, backend.cancels.get());
+                    assertIdle(capacity);
+                } finally {
+                    resume.countDown();
+                    worker.shutdownNow();
+                    assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS));
+                }
+            }
+        }
+    }
+
+    @Test
+    void externalChunkCallbacksDoNotMakeCancellationWaitForTheBorrower() throws Exception {
+        try (var fixture = AudioPlaybackFixture.create(temp, "/audio-playback/stereo-over-five.ogg")) {
+            var owner = new ManualExecutor();
+            var backend = new FakeBackend();
+            backend.completeOnCancel = false;
+            var borrowed = new CountDownLatch(1);
+            var resume = new CountDownLatch(1);
+            var deliveries = Executors.newSingleThreadExecutor();
+            var stopper = Executors.newSingleThreadExecutor();
+            var capacity = new AudioRuntimeCapacity();
+            try (var runtime = new ClientAudioRuntime(Runnable::run,
+                source -> VerifiedChunkAccess.create(source, fixture.content, null, Runnable::run, owner),
+                new FakeHost(), backend, new AudioRetentionCache(), capacity)) {
+                var playback = play(runtime, fixture.source, false);
+                var chunks = backend.request.chunks();
+                var first = chunks.request(0).toCompletableFuture();
+                owner.runAll();
+                first.join().close();
+                var callback = chunks.request(1).thenAccept(chunk -> {
+                    try (chunk) {
+                        var data = chunk.data();
+                        borrowed.countDown();
+                        try {
+                            assertTrue(resume.await(10, TimeUnit.SECONDS));
+                        } catch (InterruptedException failure) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError(failure);
+                        }
+                        assertArrayEquals(fixture.payloads.get(1), bytes(data));
+                    }
+                    backend.terminal.complete(AudioBackend.Terminal.cancelled(AudioBackend.CancelReason.AUTHOR_STOP));
+                });
+                var delivery = deliveries.submit(owner::runAll);
+                assertTrue(borrowed.await(5, TimeUnit.SECONDS));
+                stopper.submit((Runnable)playback::setStopped).get(5, TimeUnit.SECONDS);
+                assertTrue(playback.isPlaybackStopped());
+                assertEquals(1, backend.cancels.get());
+                assertClosedAccess(chunks);
+                assertFalse(delivery.isDone());
+                assertFalse(backend.terminal.isDone());
+                assertIdle(capacity);
+                resume.countDown();
+                delivery.get(5, TimeUnit.SECONDS);
+                callback.toCompletableFuture().join();
+                assertTrue(backend.terminal.isDone());
+                assertIdle(capacity);
+            } finally {
+                resume.countDown();
+                deliveries.shutdownNow();
+                stopper.shutdownNow();
+                assertTrue(deliveries.awaitTermination(5, TimeUnit.SECONDS));
+                assertTrue(stopper.awaitTermination(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
+    void runtimeCancellationSignalsBackendBeforeFailingPendingReads() throws Exception {
+        for (var reason : new AudioBackend.CancelReason[] {AudioBackend.CancelReason.AUTHOR_STOP,
+            AudioBackend.CancelReason.RUNTIME_CLOSED}) {
+            for (boolean throwsOnCancel : new boolean[] {false, true}) {
+                assertPendingFailureObservesBackendCancellation(reason, false, throwsOnCancel);
+            }
+        }
+    }
+
+    @Test
+    void externalAcceptanceAfterRuntimeClosureSignalsBackendBeforeFailingPendingReads() throws Exception {
+        for (boolean throwsOnCancel : new boolean[] {false, true}) {
+            assertPendingFailureObservesBackendCancellation(AudioBackend.CancelReason.RUNTIME_CLOSED, true,
+                throwsOnCancel);
+        }
+    }
+
+    private void assertPendingFailureObservesBackendCancellation(AudioBackend.CancelReason reason,
+        boolean closeDuringPlay, boolean throwsOnCancel) throws Exception {
+        try (var fixture = AudioPlaybackFixture.create(
+            temp.resolve("cancel-pending-" + reason + "-" + closeDuringPlay + "-" + throwsOnCancel),
+            "/audio-playback/single-exact.ogg")) {
+            var owner = new ManualExecutor();
+            var backend = new FakeBackend();
+            backend.completeOnCancel = false;
+            backend.throwsOnCancel = throwsOnCancel;
+            var callbackEntered = new CountDownLatch(1);
+            var cancelSignal = new CountDownLatch(1);
+            var callbackCompleted = new CompletableFuture<Void>();
+            var pending = new AtomicReference<CompletableFuture<AudioBackend.Chunk>>();
+            var runtimeRef = new AtomicReference<ClientAudioRuntime>();
+            backend.onPlay = request -> {
+                var result = request.chunks().request(0).toCompletableFuture();
+                pending.set(result);
+                result.whenComplete((chunk, failure) -> {
+                    callbackEntered.countDown();
+                    try {
+                        assertNull(chunk);
+                        assertInstanceOf(java.util.concurrent.CancellationException.class, failure);
+                        assertTrue(cancelSignal.await(5, TimeUnit.SECONDS),
+                            "A pending failure callback must be able to await the backend cancellation signal");
+                        assertEquals(reason, backend.cancelReason);
+                        backend.terminal.complete(AudioBackend.Terminal.cancelled(reason));
+                        callbackCompleted.complete(null);
+                    } catch (Throwable callbackFailure) {
+                        callbackCompleted.completeExceptionally(callbackFailure);
+                    }
+                });
+                if (closeDuringPlay) {
+                    runtimeRef.get().close();
+                }
+            };
+            backend.onCancel = request -> {
+                assertClosedAccess(request.chunks());
+                assertFalse(pending.get().isDone(), "Backend cancellation must precede pending failure notification");
+                cancelSignal.countDown();
+            };
+            var stopper = Executors.newSingleThreadExecutor();
+            var capacity = new AudioRuntimeCapacity();
+            var host = new FakeHost();
+            var runtime = new ClientAudioRuntime(Runnable::run,
+                source -> VerifiedChunkAccess.create(source, fixture.content, null, Runnable::run, owner), host,
+                backend, new AudioRetentionCache(), capacity);
+            runtimeRef.set(runtime);
+            try {
+                var playback = new AtomicReference<ICanStopSound>();
+                final Runnable operation;
+                if (closeDuringPlay) {
+                    operation = () -> playback.set(play(runtime, fixture.source, false));
+                } else {
+                    playback.set(play(runtime, fixture.source, false));
+                    operation = reason == AudioBackend.CancelReason.RUNTIME_CLOSED ? runtime::close
+                        : () -> playback.get().setStopped(reason);
+                }
+                var cancelled = stopper.submit(operation);
+                assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
+                cancelled.get(1, TimeUnit.SECONDS);
+                callbackCompleted.get(1, TimeUnit.SECONDS);
+                assertTrue(playback.get().isPlaybackStopped());
+                assertEquals(1, backend.cancels.get());
+                assertTrue(pending.get().isCancelled());
+                assertTrue(backend.terminal.isDone());
+                assertClosedAccess(backend.request.chunks());
+                owner.runAll();
+                assertTrue(fixture.reads.isEmpty());
+                assertIdle(capacity);
+                assertNull(host.pollStream());
+            } finally {
+                cancelSignal.countDown();
+                stopper.shutdownNow();
+                assertTrue(stopper.awaitTermination(5, TimeUnit.SECONDS));
+                runtime.close();
+                owner.runAll();
+            }
+        }
+    }
+
+    @Test
+    void lateExternalTerminalAndThrowingCancellationLeaveTheNewPlaybackActive() throws Exception {
+        for (boolean throwsOnCancel : new boolean[] {false, true}) {
+            try (var fixture = AudioPlaybackFixture.create(temp.resolve("late-" + throwsOnCancel),
+                "/audio-playback/single-exact.ogg")) {
+                var first = new FakeBackend();
+                first.completeOnCancel = false;
+                first.throwsOnCancel = throwsOnCancel;
+                var closedAtCancel = new AtomicInteger();
+                first.onCancel = request -> {
+                    assertClosedAccess(request.chunks());
+                    closedAtCancel.incrementAndGet();
+                };
+                var second = new FakeBackend();
+                var attempts = new AtomicInteger();
+                AudioBackend backend = request -> (attempts.getAndIncrement() == 0 ? first : second).play(request);
+                var capacity = new AudioRuntimeCapacity();
+                var host = new FakeHost();
+                try (var runtime = new ClientAudioRuntime(Runnable::run, source -> fixture.access(Runnable::run), host,
+                    backend, new AudioRetentionCache(), capacity)) {
+                    var oldPlayback = play(runtime, fixture.source, false);
+                    try (var oldChunk = first.request.chunks().request(0).toCompletableFuture().join()) {
+                        oldPlayback.setStopped(AudioBackend.CancelReason.FORCE_REPLACED);
+                        assertEquals(1, closedAtCancel.get());
+                        assertTrue(oldChunk.data().hasRemaining());
+                        assertIdle(capacity);
+                        var current = play(runtime, fixture.source, false);
+                        assertEquals(1, capacity.snapshot().active());
+                        oldChunk.close();
+                        assertTrue(first.terminal.complete(AudioBackend.Terminal.cancelled(first.cancelReason)));
+                        assertFalse(first.terminal.complete(AudioBackend.Terminal.completed()));
+                        oldPlayback.setStopped();
+                        assertFalse(current.isPlaybackStopped());
+                        assertEquals(1, capacity.snapshot().active());
+                        assertEquals(1, first.cancels.get());
+                        assertEquals(0, second.cancels.get());
+                        try (var currentChunk = second.request.chunks().request(0).toCompletableFuture().join()) {
+                            assertTrue(currentChunk.data().hasRemaining());
+                        }
+                        current.setStopped();
+                        assertIdle(capacity);
+                        assertNull(host.pollStream());
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void cancellingOrClosingExternalChunkRequestsCancelsPendingInterests() throws Exception {
+        for (boolean closeAccess : new boolean[] {false, true}) {
+            try (var fixture = AudioPlaybackFixture.create(temp.resolve("pending-" + closeAccess),
+                "/audio-playback/single-exact.ogg")) {
+                var owner = new ManualExecutor();
+                var backend = new FakeBackend();
+                try (var runtime = new ClientAudioRuntime(Runnable::run,
+                    source -> VerifiedChunkAccess.create(source, fixture.content, null, Runnable::run, owner),
+                    new FakeHost(), backend)) {
+                    play(runtime, fixture.source, false);
+                    var chunks = backend.request.chunks();
+                    var result = chunks.request(0).toCompletableFuture();
+                    assertFalse(result.isDone());
+                    if (closeAccess) {
+                        chunks.close();
+                        assertClosedAccess(chunks);
+                    } else {
+                        assertTrue(result.cancel(false));
+                    }
+                    owner.runAll();
+                    assertTrue(result.isCancelled());
+                    assertThrows(IllegalStateException.class, chunks::restart);
+                    assertThrows(IllegalStateException.class, () -> chunks.request(1));
+                    assertTrue(fixture.reads.isEmpty());
+                }
+            }
+        }
+    }
+
+    @Test
+    void undeliveredExternalChunksAreClosedWhenCancellationOrSealingWinsDelivery() throws Exception {
+        for (boolean cancelFuture : new boolean[] {false, true}) {
+            try (var fixture = AudioPlaybackFixture.create(temp.resolve("delivery-" + cancelFuture),
+                "/audio-playback/single-exact.ogg")) {
+                assertEquals(1, fixture.media.chunkInfos().size());
+                var owner = new ManualExecutor();
+                var rawAccess = new AtomicReference<VerifiedChunkAccess>();
+                var backend = new FakeBackend();
+                var deliveries = Executors.newSingleThreadExecutor();
+                try (var runtime = new ClientAudioRuntime(Runnable::run, source -> {
+                    var access = VerifiedChunkAccess.create(source, fixture.content, null, Runnable::run, owner);
+                    rawAccess.set(access);
+                    return access;
+                }, new FakeHost(), backend)) {
+                    play(runtime, fixture.source, false);
+                    var chunks = backend.request.chunks();
+                    var result = chunks.request(0).toCompletableFuture();
+                    // Observe provider completion without adding a production test hook.
+                    var acquisition = pendingInterest(rawAccess.get()).result();
+                    final VerifiedChunkAccess.Chunk undelivered;
+                    final java.util.concurrent.Future<?> delivery;
+                    synchronized (chunks) {
+                        delivery = deliveries.submit(owner::runAll);
+                        undelivered = acquisition.get(5, TimeUnit.SECONDS);
+                        if (cancelFuture) {
+                            assertTrue(result.cancel(false));
+                        } else {
+                            chunks.close();
+                        }
+                    }
+                    delivery.get(5, TimeUnit.SECONDS);
+                    assertTrue(result.isCancelled());
+                    assertThrows(CancellationException.class, result::join);
+                    assertThrows(IllegalStateException.class, undelivered::borrowBuffer);
+                    if (cancelFuture) {
+                        assertSame(chunks, chunks.restart());
+                    } else {
+                        assertClosedAccess(chunks);
+                    }
+                } finally {
+                    deliveries.shutdownNow();
+                    assertTrue(deliveries.awaitTermination(5, TimeUnit.SECONDS));
+                }
+            }
+        }
+    }
+
+    @Test
+    void completedExternalDeliverySurvivesReentrantAccessClosure() throws Exception {
+        for (boolean queued : new boolean[] {false, true}) {
+            try (var fixture =
+                AudioPlaybackFixture.create(temp.resolve("reentrant-" + queued), "/audio-playback/single-exact.ogg")) {
+                var owner = new ManualExecutor();
+                var backend = new FakeBackend();
+                Executor deliveryOwner = queued ? owner : Runnable::run;
+                try (var runtime = new ClientAudioRuntime(Runnable::run,
+                    source -> VerifiedChunkAccess.create(source, fixture.content, null, Runnable::run, deliveryOwner),
+                    new FakeHost(), backend)) {
+                    play(runtime, fixture.source, false);
+                    var chunks = backend.request.chunks();
+                    var result = chunks.request(0).toCompletableFuture();
+                    var delivered = result.thenAccept(chunk -> {
+                        chunks.close();
+                        assertTrue(chunk.data().hasRemaining());
+                    });
+                    owner.runAll();
+                    delivered.join();
+                    assertFalse(result.cancel(false));
+                    var chunk = result.join();
+                    assertArrayEquals(fixture.payloads.get(0), bytes(chunk.data()));
+                    assertClosedAccess(chunks);
+                    chunk.close();
+                    chunk.close();
+                    assertThrows(IllegalStateException.class, chunk::data);
+                }
+            }
+        }
+    }
+
+    @Test
+    void externalRestartUsesTheExistingCursorOwnershipCheckAndNaturalTerminal() throws Exception {
+        try (var fixture = AudioPlaybackFixture.create(temp, "/audio-playback/stereo-over-five.ogg")) {
+            var backend = new FakeBackend();
+            var capacity = new AudioRuntimeCapacity();
+            try (var runtime = new ClientAudioRuntime(Runnable::run, source -> fixture.access(Runnable::run),
+                new FakeHost(), backend, new AudioRetentionCache(), capacity)) {
+                var playback = play(runtime, fixture.source, true);
+                var chunks = backend.request.chunks();
+                for (int cycle = 0; cycle < 2; cycle++) {
+                    assertThrows(IllegalStateException.class, chunks::restart);
+                    for (int index = 0; index < chunks.chunkCount(); index++) {
+                        try (var chunk = chunks.request(index).toCompletableFuture().join()) {
+                            assertArrayEquals(fixture.payloads.get(index), bytes(chunk.data()));
+                            assertThrows(IllegalStateException.class, chunks::restart);
+                        }
+                    }
+                    if (cycle == 0) {
+                        assertSame(chunks, chunks.restart());
+                    }
+                }
+                assertTrue(backend.terminal.complete(AudioBackend.Terminal.completed()));
+                assertTrue(playback.isPlaybackStopped());
+                assertEquals(0, backend.cancels.get());
+                assertClosedAccess(chunks);
+                assertIdle(capacity);
+            }
+        }
+    }
+
+    @Test
+    void externalAcceptanceAfterRuntimeClosureSealsAccessBeforeCancellingTheBackend() throws Exception {
+        try (var fixture = AudioPlaybackFixture.create(temp, "/audio-playback/single-exact.ogg")) {
+            var backend = new FakeBackend();
+            backend.completeOnCancel = false;
+            var runtimeRef = new AtomicReference<ClientAudioRuntime>();
+            var ownedChunk = new AtomicReference<AudioBackend.Chunk>();
+            var closedAtCancel = new AtomicInteger();
+            backend.onPlay = request -> {
+                ownedChunk.set(request.chunks().request(0).toCompletableFuture().join());
+                runtimeRef.get().close();
+            };
+            backend.onCancel = request -> {
+                assertClosedAccess(request.chunks());
+                closedAtCancel.incrementAndGet();
+            };
+            var capacity = new AudioRuntimeCapacity();
+            var host = new FakeHost();
+            try (var runtime = new ClientAudioRuntime(Runnable::run, source -> fixture.access(Runnable::run), host,
+                backend, new AudioRetentionCache(), capacity)) {
+                runtimeRef.set(runtime);
+                assertTrue(play(runtime, fixture.source, false).isPlaybackStopped());
+                try (var chunk = ownedChunk.get()) {
+                    assertEquals(1, closedAtCancel.get());
+                    assertEquals(AudioBackend.CancelReason.RUNTIME_CLOSED, backend.cancelReason);
+                    assertTrue(chunk.data().hasRemaining());
+                    assertIdle(capacity);
+                    assertNull(host.pollStream());
+                }
+                backend.terminal.complete(AudioBackend.Terminal.cancelled(backend.cancelReason));
+                assertEquals(1, backend.cancels.get());
+            }
+        }
+    }
+
+    @Test
+    void externalRejectionAndThrowingPlayCloseTheCapabilityWithoutDefaultFallback() throws Exception {
+        for (boolean throwsOnPlay : new boolean[] {false, true}) {
+            try (var fixture = AudioPlaybackFixture.create(temp.resolve("rejected-" + throwsOnPlay),
+                "/audio-playback/single-exact.ogg")) {
+                var requestRef = new AtomicReference<AudioBackend.PlaybackRequest>();
+                var ownedChunk = new AtomicReference<AudioBackend.Chunk>();
+                var receivedBytes = new AtomicInteger();
+                AudioBackend backend = request -> {
+                    requestRef.set(request);
+                    try (var chunk = request.chunks().request(0).toCompletableFuture().join()) {
+                        ownedChunk.set(chunk);
+                        receivedBytes.set(chunk.data().remaining());
+                    }
+                    if (throwsOnPlay) {
+                        throw new IllegalStateException("fixture play failure");
+                    }
+                    return new AudioBackend.Rejected("fixture rejection");
+                };
+                var capacity = new AudioRuntimeCapacity();
+                var host = new FakeHost();
+                try (var runtime = new ClientAudioRuntime(Runnable::run, source -> fixture.access(Runnable::run), host,
+                    backend, new AudioRetentionCache(), capacity)) {
+                    assertTrue(play(runtime, fixture.source, false).isPlaybackStopped());
+                    assertClosedAccess(requestRef.get().chunks());
+                    assertEquals(fixture.payloads.get(0).length, receivedBytes.get());
+                    assertThrows(IllegalStateException.class, ownedChunk.get()::data);
+                    assertIdle(capacity);
+                    assertNull(host.pollStream());
+                    assertEquals(0, host.submits.get());
+                }
+            }
+        }
+    }
+
+    private static void assertClosedAccess(AudioBackend.ChunkAccess chunks) {
+        assertThrows(IllegalStateException.class, chunks::chunkCount);
+        assertThrows(IllegalStateException.class, () -> chunks.request(0));
+        assertThrows(IllegalStateException.class, chunks::restart);
+    }
+
+    private static VerifiedChunkAccess.Interest pendingInterest(VerifiedChunkAccess access) throws Exception {
+        var field = VerifiedChunkAccess.class.getDeclaredField("active");
+        field.setAccessible(true);
+        return Objects.requireNonNull((VerifiedChunkAccess.Interest)field.get(access));
+    }
+
+    @Test
     void backendAndHostRejectionReleaseEveryAcceptedResource() throws Exception {
         var content = createContent(builtInAudio("/assets/ysm/builtin/wine_fox/14_momo/sounds/fly_on.ogg"));
         var sourceContent = new AtomicInteger();
@@ -695,7 +1185,7 @@ class ClientAudioRuntimeIntegrationTest {
             container = importer.convert(captured, Files.createDirectories(temp.resolve("output"))).stagedContainer();
         }
         return ManagedContainer.openDirect(container,
-            new CatalogLocation(CatalogRootKind.CUSTOM, new ModelPath("audio-u4")));
+            new CatalogLocation(CatalogRootKind.MODELS, new ModelPath("audio-u4")));
     }
 
     private static TargetSoundResources readySounds(ModelContent content, ChunkDataSource chunks) throws IOException {
@@ -916,18 +1406,26 @@ class ClientAudioRuntimeIntegrationTest {
 
     private static final class FakeBackend implements AudioBackend {
         private final AtomicInteger plays = new AtomicInteger();
+        private final AtomicInteger cancels = new AtomicInteger();
         private final AtomicBoolean inPlay = new AtomicBoolean();
         private final AtomicBoolean terminalRequestedInsidePlay = new AtomicBoolean();
         private final CompletableFuture<Terminal> terminal = new CompletableFuture<>();
         private PlaybackRequest request;
         private Control lastControl;
         private CancelReason cancelReason;
+        private boolean completeOnCancel = true;
+        private boolean throwsOnCancel;
+        private java.util.function.Consumer<PlaybackRequest> onPlay = ignored -> {
+        };
+        private java.util.function.Consumer<PlaybackRequest> onCancel = ignored -> {
+        };
 
         @Override
         public PlayResult play(PlaybackRequest candidate) {
             inPlay.set(true);
             plays.incrementAndGet();
             request = candidate;
+            onPlay.accept(candidate);
             var result = new Accepted(new Playback() {
                 @Override
                 public void control(Control control) {
@@ -937,7 +1435,14 @@ class ClientAudioRuntimeIntegrationTest {
                 @Override
                 public void cancel(CancelReason reason) {
                     cancelReason = reason;
-                    terminal.complete(Terminal.cancelled(reason));
+                    cancels.incrementAndGet();
+                    onCancel.accept(candidate);
+                    if (throwsOnCancel) {
+                        throw new IllegalStateException("fixture cancel failure");
+                    }
+                    if (completeOnCancel) {
+                        terminal.complete(Terminal.cancelled(reason));
+                    }
                 }
 
                 @Override

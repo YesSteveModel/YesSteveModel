@@ -13,15 +13,30 @@ public final class DeclarationLinkage {
         if (environment == null || !Modifier.isPublic(method.getModifiers()) || method.getTypeParameters().length != 0
             || Modifier.isStatic(method.getModifiers()) != member.isStatic())
             throw new IllegalArgumentException("original member does not match declaration");
+        if (!schema.builtin()) {
+            Class<?> annotation =
+                Class.forName("com.elfmcys.ysm.api.annotation.MolangFunction", false, context.getClassLoader());
+            var actual = Arrays.stream(method.getAnnotations()).filter(a -> a.annotationType() == annotation)
+                .findFirst().orElseThrow(() -> new IllegalArgumentException("missing MolangFunction"));
+            boolean alwaysOrigin = (Boolean)annotation.getMethod("alwaysOrigin").invoke(actual);
+            if (alwaysOrigin != member.scope().equals("ORIGIN"))
+                throw new IllegalArgumentException("exact invocation scope mismatch");
+        }
         Type[] parameters = method.getGenericParameterTypes();
-        if (parameters.length == 0)
-            throw new IllegalArgumentException("missing context view");
-        Type first = resolve(parameters[0], environment);
         Class<?> subject = Class.forName(member.subject(), false, owner.getClassLoader());
-        Class<?> view = context;
-        if (!(first instanceof ParameterizedType p) || p.getRawType() != view || p.getActualTypeArguments().length != 1
-            || p.getActualTypeArguments()[0] != subject || !entity.isAssignableFrom(subject))
+        if (!entity.isAssignableFrom(subject))
             throw new IllegalArgumentException("exact resolved context/subject mismatch");
+        int contextCount = member.injectContext() ? 1 : 0;
+        if (member.injectContext()) {
+            if (parameters.length == 0)
+                throw new IllegalArgumentException("missing context view");
+            Type first = resolve(parameters[0], environment);
+            if (!(first instanceof ParameterizedType p) || p.getRawType() != context
+                || p.getActualTypeArguments().length != 1 || p.getActualTypeArguments()[0] != subject)
+                throw new IllegalArgumentException("exact resolved context/subject mismatch");
+        } else if (member.isStatic() && subject != entity) {
+            throw new IllegalArgumentException("static declaration without context must accept every entity");
+        }
         if (!member.isStatic()) {
             Class<?> component =
                 Class.forName("com.elfmcys.ysm.expression.host.EntityComponent", false, owner.getClassLoader());
@@ -30,9 +45,9 @@ public final class DeclarationLinkage {
                 || resolve(component.getTypeParameters()[0], componentEnvironment) != subject)
                 throw new IllegalArgumentException("exact resolved component/context mismatch");
         }
-        int offset = member.shape().equals("FIXED") ? 1 : 2;
+        int offset = contextCount + (member.shape().equals("FIXED") ? 0 : 1);
         if (parameters.length != offset + member.fixed().size() + (member.tail() == null ? 0 : 1)
-            || offset == 2 && resolve(parameters[1], environment) != int.class
+            || !member.shape().equals("FIXED") && resolve(parameters[contextCount], environment) != int.class
             || method.isVarArgs() != (member.tail() != null))
             throw new IllegalArgumentException("original call shape mismatch");
         for (int i = 0; i < member.fixed().size(); i++)
@@ -47,7 +62,7 @@ public final class DeclarationLinkage {
         Class<?> nullable =
             Class.forName("com.elfmcys.ysm.api.annotation.MolangNullable", false, context.getClassLoader());
         boolean actualNullable = Arrays.stream(method.getAnnotations()).anyMatch(a -> a.annotationType() == nullable);
-        if (actualNullable != member.nullableRecord())
+        if (actualNullable != member.nullableReturn())
             throw new IllegalArgumentException("exact return nullability mismatch");
     }
 

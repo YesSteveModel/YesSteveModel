@@ -8,5 +8,8 @@ public interface MolangContextView<E extends Entity> {
 
     MolangInputs inputs();
 
-    void submit(EffectRequest request);
+    SubjectSampleView subjectSample();
+
+    /** Copies finite arguments for a handler at the end of the current animation context. */
+    void defer(float delay, float... values);
 }

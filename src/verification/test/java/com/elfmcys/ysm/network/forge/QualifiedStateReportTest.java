@@ -5,7 +5,7 @@ import com.elfmcys.ysm.expression.aot.TestExpressionModules;
 import com.elfmcys.ysm.network.frame.FrameCodec;
 import com.elfmcys.ysm.network.protocol.PlayerStateReportPlanner;
 import com.elfmcys.ysm.network.protocol.PlayerStateReportPolicy;
-import com.elfmcys.ysm.proto.network.PlayerStateReportProto;
+import com.elfmcys.ysm.proto.network.SelectionStateSyncProto;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -20,21 +20,21 @@ final class QualifiedStateReportTest {
     void retiredSampleCannotAdvancePlannerOrEncodeAndIdenticalModuleReplacementIsFresh() {
         try (var module = TestExpressionModules.create(Set.of("a")); var runtime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(runtime, module, Map.of());
-            runtime.roamingState().orElseThrow().write("a", 7);
+            var state = runtime.roamingState().orElseThrow();
+            state.write((short)state.fieldNames().indexOf("a"), 7);
             var original = runtime.snapshot().orElseThrow();
             var planner = planner();
             var sent = new AtomicInteger();
             TestExpressionModules.replace(runtime, module, Map.of());
-            LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_000L, 42,
-                new PlayerStateReportPlanner.RoamingSample(11, original.payload().values()), original.installation(),
-                report -> sent.incrementAndGet());
+            LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_000L, 42, original.payload(),
+                original.installation(), report -> sent.incrementAndGet());
             assertEquals(0, sent.get());
+            state = runtime.roamingState().orElseThrow();
+            state.write((short)state.fieldNames().indexOf("a"), 8);
             var fresh = runtime.snapshot().orElseThrow();
-            LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_000L, 43,
-                new PlayerStateReportPlanner.RoamingSample(12, fresh.payload().values()), fresh.installation(),
-                report -> {
-                    assertEquals(com.elfmcys.ysm.proto.network.StateWriteMode.FULL, report.mode());
-                    assertEquals(12, report.roamingUnsafe().modelKey());
+            LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_000L, 43, fresh.payload(),
+                fresh.installation(), report -> {
+                    assertEquals(1, report.intentId());
                     try (var frame = FrameCodec.encode(1, report.toByteArray(), null)) {
                         assertTrue(frame.size() > 1);
                         sent.incrementAndGet();
@@ -48,12 +48,12 @@ final class QualifiedStateReportTest {
     void mainThreadQualifiedEncodingPrecedesReplacementAndRejectsTheOldSample() throws Exception {
         try (var module = TestExpressionModules.create(Set.of("a")); var runtime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(runtime, module, Map.of());
-            runtime.roamingState().orElseThrow().write("a", 7);
+            var state = runtime.roamingState().orElseThrow();
+            state.write((short)state.fieldNames().indexOf("a"), 7);
             var snapshot = runtime.snapshot().orElseThrow();
             var sent = new AtomicInteger();
             var encoded = new AtomicReference<byte[]>();
-            LocalPlayerStateReporter.submitOpportunity(planner(),
-                1_000_000_000L, 42, new PlayerStateReportPlanner.RoamingSample(11, snapshot.payload().values()),
+            LocalPlayerStateReporter.submitOpportunity(planner(), 1_000_000_000L, 42, snapshot.payload(),
                 snapshot.installation(), report -> {
                     try (var frame = FrameCodec.encode(1, report.toByteArray(), null)) {
                         encoded.set(frame.bytes());
@@ -63,10 +63,10 @@ final class QualifiedStateReportTest {
             TestExpressionModules.replace(runtime, module, Map.of());
             assertEquals(1, sent.get());
             var payload = java.util.Arrays.copyOfRange(encoded.get(), 1, encoded.get().length);
-            var report = PlayerStateReportProto.parseFrom(payload);
-            assertEquals(42, report.subject().entityId());
-            assertEquals(11, report.roamingUnsafe().modelKey());
-            assertEquals(7F, report.roamingUnsafe().variables().get(0).value_());
+            var report = SelectionStateSyncProto.parseFrom(payload);
+            assertEquals(42, report.entityId());
+            assertEquals(1, report.intentId());
+            assertEquals(7F, report.state().roamingUnsafe().values_().getFloat(0));
             assertFalse(snapshot.installation().commit(() -> fail("retired sample reused")));
         }
     }
@@ -75,10 +75,11 @@ final class QualifiedStateReportTest {
     void failedHostKeepsPlannerBaselineAndDoesNotConsumeProducerDelta() {
         try (var module = TestExpressionModules.create(Set.of("a")); var runtime = new EntityExpressionRuntime()) {
             TestExpressionModules.replace(runtime, module, Map.of());
-            runtime.roamingState().orElseThrow().write("a", 7);
+            var state = runtime.roamingState().orElseThrow();
+            state.write((short)state.fieldNames().indexOf("a"), 7);
             var planner = planner();
             var sample = runtime.snapshot().orElseThrow();
-            var values = new PlayerStateReportPlanner.RoamingSample(11, sample.payload().values());
+            var values = sample.payload();
             var attempts = new AtomicInteger();
             LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_000L, 42, values, sample.installation(),
                 report -> {
@@ -92,28 +93,11 @@ final class QualifiedStateReportTest {
         }
     }
 
-    @Test
-    void unknownStorageCannotSendOrConsumeTheFirstFull() {
-        var planner = planner();
-        planner.acceptAuthority(TestExpressionModules.consumerId(), 11);
-        var sent = new AtomicReference<PlayerStateReportProto>();
-
-        LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_000L, 42,
-            PlayerStateReportPlanner.RoamingSample.unavailable(11), null, sent::set);
-        assertNull(sent.get());
-
-        LocalPlayerStateReporter.submitOpportunity(planner, 1_000_000_001L, 42,
-            new PlayerStateReportPlanner.RoamingSample(11, Map.of("a", 1F)), null, sent::set);
-        assertNotNull(sent.get());
-        assertEquals(com.elfmcys.ysm.proto.network.StateWriteMode.FULL, sent.get().mode());
-        assertEquals(1F, sent.get().roamingUnsafe().variables().get(0).value_());
-    }
-
     private static PlayerStateReportPlanner planner() {
         var planner = new PlayerStateReportPlanner();
         planner.beginSession(PlayerStateReportPolicy.gameServer(true));
-        planner.acceptAuthority(TestExpressionModules.consumerId(), null);
+        planner.selectionCommitted(1, new com.elfmcys.ysm.network.protocol.RoamingDictionary(new String[] {"a"}),
+            new dev.semaweave.RoamingPayload(new short[0], new float[0]));
         return planner;
     }
-
 }

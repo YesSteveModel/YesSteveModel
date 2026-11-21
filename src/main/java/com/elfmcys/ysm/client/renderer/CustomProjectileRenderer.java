@@ -24,6 +24,7 @@ public class CustomProjectileRenderer extends GeoProjectilesRenderer<Projectile,
             return;
         }
         entity.getCapability(ProjectileAnimatableCapabilityProvider.CAP).ifPresent(cap -> {
+            cap.waitForRenderUpdate();
             cap.checkModelUpdate();
             render(cap, yaw, partialTick, poseStack, bufferSource, packedLight);
         });

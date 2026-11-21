@@ -31,31 +31,34 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.IntSupplier;
 
 /**
  * Shares exact preparation Flights and retains host-published Ready targets.
  *
- * <p><b>Invariant:</b> A Ready result follows complete candidate adoption by the texture publisher.
- * A completed loader future alone is not Ready. Each acquisition has a separate lease, including
- * consumers that share one Flight. Cache eviction drops cache references, not live consumer interests.
+ * <p>
+ * <b>Invariant:</b> A Ready result follows complete candidate adoption by the texture publisher. A completed loader
+ * future alone is not Ready. Each acquisition has a separate lease, including consumers that share one Flight. Cache
+ * eviction drops cache references, not live consumer interests.
  *
- * <p><b>Execution:</b> Internal maps use the cache monitor. The host owner drives tick and publication;
- * loaders return asynchronous outcomes without waiting for that owner. CurrentLookup can run under
- * the cache monitor. Lease users must serialize each handle's queries with its close.
+ * <p>
+ * <b>Execution:</b> Internal maps use the cache monitor. The host owner drives tick and publication; loaders return
+ * asynchronous outcomes without waiting for that owner. CurrentLookup can run under the cache monitor. Lease users must
+ * serialize each handle's queries with its close.
  *
- * <p><b>Ownership:</b> The cache disposes each accepted candidate once: publish it or reject it through
- * the supplied closer. Stale and cancelled work cannot publish into a replacement Flight.
+ * <p>
+ * <b>Ownership:</b> The cache disposes each accepted candidate once: publish it or reject it through the supplied
+ * closer. Stale and cancelled work cannot publish into a replacement Flight.
  *
- * <p><b>Seam:</b> [Ready publication and resource ownership](docs/architecture/model-management/client-resources/overview.md#seam-contract).
+ * <p>
+ * <b>Seam:</b> [Ready publication and resource
+ * ownership](docs/architecture/model-management/client-resources/overview.md#seam-contract).
  */
 public final class ModelRenderTargetCache implements AutoCloseable {
     static final int MAX_IN_FLIGHT = 256;
@@ -85,21 +88,10 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         this(scheduler, ModelRenderTarget::close, ModelRenderTargetCache::reportContractViolation);
     }
 
-    public ModelRenderTargetCache(ClientResourceScheduler scheduler, Consumer<ModelRenderTarget> rejectedTargetCloser) {
-        this(scheduler, rejectedTargetCloser, ModelRenderTargetCache::reportContractViolation);
-    }
-
     ModelRenderTargetCache(ClientResourceScheduler scheduler, Consumer<ModelRenderTarget> rejectedTargetCloser,
         Consumer<Throwable> contractViolationReporter) {
         this(scheduler, rejectedTargetCloser, contractViolationReporter, HostTexturePublisher.production(),
             () -> YesSteveModel.isMobilePlatform() ? 2 : 4, () -> ClientConfig.MODEL_RETENTION_COUNT.get());
-    }
-
-    ModelRenderTargetCache(ClientResourceScheduler scheduler, Consumer<ModelRenderTarget> rejectedTargetCloser,
-        Consumer<Throwable> contractViolationReporter, HostTexturePublisher texturePublisher,
-        IntSupplier dispositionLimit) {
-        this(scheduler, rejectedTargetCloser, contractViolationReporter, texturePublisher, dispositionLimit,
-            () -> ClientConfig.MODEL_RETENTION_COUNT.get());
     }
 
     ModelRenderTargetCache(ClientResourceScheduler scheduler, Consumer<ModelRenderTarget> rejectedTargetCloser,
@@ -115,7 +107,8 @@ public final class ModelRenderTargetCache implements AutoCloseable {
 
     public ResourceLease getOrStart(ResourceRequest request, ModelContent content, RenderTargetKey key, Loader loader,
         CurrentLookup currentLookup, Object workOwner, WorkPriority priority) {
-        return acquire(request, content, key, loader, currentLookup, false, false, false, null, workOwner, priority);
+        return acquire(request, content, key, loader, currentLookup, false, false, false, null, workOwner, priority,
+            false);
     }
 
     public Optional<ResourceLease> findReady(ResourceRequest request, ModelContent content, RenderTargetKey key,
@@ -124,11 +117,14 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         Objects.requireNonNull(content, "content");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(currentLookup, "currentLookup");
-        if (!request.modelId().equals(content.modelId())) {
+        if (request.modelId().role() != key.role())
+            throw new IllegalArgumentException("Resource request and target roles differ");
+        if (request.modelId() instanceof com.elfmcys.ysm.model.domain.PublishedModelId.Model model
+            && !model.hash().equals(content.modelId())) {
             throw new IllegalArgumentException("Resource request and content identity differ");
         }
         var resourceKey = new ResourceKey(content.representation().identity(), key,
-            content.storageBinding() == null ? null : content.storageBinding().region());
+            content.storageBinding() == null ? null : content.storageBinding().region(), null);
         synchronized (lock) {
             requireOpen();
             var cached = ready.get(resourceKey);
@@ -141,98 +137,59 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         }
     }
 
-    public ResourceLease getOrStartRequired(ResourceRequest request, ModelContent content, RenderTargetKey key,
-        Function<BooleanSupplier, ModelRenderTargetLoader.LoadResult> loader, CurrentLookup currentLookup,
-        Object workOwner, Executor terminalOwner) {
-        Objects.requireNonNull(loader, "loader");
-        Objects.requireNonNull(terminalOwner, "terminalOwner");
-        return acquire(request, content, key,
-            (cancelled, dispatch) -> CompletableFuture.completedFuture(loader.apply(cancelled)),
-            currentLookup, false, false, true, terminalOwner, workOwner, WorkPriority.LOCAL_PLAYER);
-    }
-
     public ResourceLease getOrStartRequiredAsync(ResourceRequest request, ModelContent content, RenderTargetKey key,
         Loader loader, CurrentLookup currentLookup, Object workOwner, Executor terminalOwner) {
         return acquire(request, content, key, loader, currentLookup, false, false, true,
-            Objects.requireNonNull(terminalOwner), workOwner, WorkPriority.LOCAL_PLAYER);
+            Objects.requireNonNull(terminalOwner), workOwner, WorkPriority.LOCAL_PLAYER, false);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartOffline(ResourceRequest request, ModelContent content,
-        RenderTargetKey key, Loader loader, CurrentLookup currentLookup, Object workOwner, WorkPriority priority) {
-        var lease = acquire(request, content, key, loader, currentLookup, true, false, false, null, workOwner, priority);
-        return offlineResult(lease, request);
+    public ResourceLease getOrStartOffline(ResourceRequest request, ModelContent content, RenderTargetKey key,
+        Loader loader, CurrentLookup currentLookup, Object workOwner, WorkPriority priority) {
+        return acquire(request, content, key, loader, currentLookup, true, false, false, null, workOwner, priority,
+            false);
     }
 
-    public CompletableFuture<Optional<ResourceLease>> getOrStartCached(ResourceRequest request, ModelContent content,
-        RenderTargetKey key, Loader loader, CurrentLookup currentLookup, Object workOwner, WorkPriority priority) {
-        final ResourceLease lease;
+    public ResourceLease getOrStartCached(ResourceRequest request, ModelContent content, RenderTargetKey key,
+        Loader loader, CurrentLookup currentLookup, Object workOwner, WorkPriority priority) {
         synchronized (lock) {
             var resourceKey = new ResourceKey(content.representation().identity(), key,
-                content.storageBinding() == null ? null : content.storageBinding().region());
+                content.storageBinding() == null ? null : content.storageBinding().region(), null);
             var cached = ready.get(resourceKey);
             var readyIsCurrent = cached != null && currentLookup.isCurrent(resourceKey.identity, key, request);
-            if (!readyIsCurrent && pending.containsKey(resourceKey)) {
-                return CompletableFuture.completedFuture(Optional.empty());
-            }
-            lease = acquire(request, content, key, loader, currentLookup, true, true, false, null, workOwner, priority);
+            if (!readyIsCurrent && pending.containsKey(resourceKey))
+                return ResourceLease.missing(request);
+            return acquire(request, content, key, loader, currentLookup, true, true, false, null, workOwner, priority,
+                false);
         }
-        return offlineResult(lease, request);
     }
 
-    private CompletableFuture<Optional<ResourceLease>> offlineResult(ResourceLease lease, ResourceRequest request) {
-        var result = new CompletableFuture<Optional<ResourceLease>>();
-        result.whenComplete((ignored, error) -> {
-            if (result.isCancelled()) {
-                lease.cancelPending();
-            }
-        });
-        terminal(lease).whenComplete((outcome, error) -> {
-            if (error != null) {
-                lease.close();
-                result.completeExceptionally(error);
-                return;
-            }
-            if (outcome instanceof AcquireResult.Ready && !result.isDone() && lease.isCurrent(request)) {
-                if (!result.complete(Optional.of(lease))) {
-                    lease.close();
-                }
-            } else if (outcome instanceof AcquireResult.Failed failed) {
-                lease.close();
-                var failure = failed.failure();
-                var terminalFailure = failure.kind() == ResourceFailure.Kind.DETERMINISTIC;
-                // Compiler wrappers preserve the allocation failure as a cause, not as the outer exception.
-                for (var cause = failure.cause(); cause != null && !terminalFailure; cause = cause.getCause()) {
-                    terminalFailure = cause instanceof OutOfMemoryError;
-                }
-                if (terminalFailure) {
-                    result.completeExceptionally(failure.cause());
-                } else {
-                    result.complete(Optional.empty());
-                }
-            } else {
-                lease.close();
-                result.complete(Optional.empty());
-            }
-        });
-        return result;
+    /** Fixed content stays outside Catalog publication and never enters unused retention. */
+    public ResourceLease getOrStartDetached(ResourceRequest request, ModelContent content, RenderTargetKey key,
+        Loader loader, Object workOwner, WorkPriority priority) {
+        return acquire(request, content, key, loader, (identity, target, candidate) -> request.equals(candidate), false,
+            false, false, null, workOwner, priority, true);
     }
 
     private ResourceLease acquire(ResourceRequest request, ModelContent content, RenderTargetKey key, Loader loader,
         CurrentLookup currentLookup, boolean offline, boolean cacheOnly, boolean requiredBootstrap,
-        Executor terminalOwner, Object workOwner, WorkPriority priority) {
+        Executor terminalOwner, Object workOwner, WorkPriority priority, boolean detached) {
         Objects.requireNonNull(request, "request");
+        if (request.modelId().role() != key.role())
+            throw new IllegalArgumentException("Resource request and target roles differ");
         Objects.requireNonNull(content, "content");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(loader, "loader");
         Objects.requireNonNull(currentLookup, "currentLookup");
         Objects.requireNonNull(workOwner, "workOwner");
         Objects.requireNonNull(priority, "priority");
-        if (!request.modelId().equals(content.modelId())) {
+        if (request.modelId() instanceof com.elfmcys.ysm.model.domain.PublishedModelId.Model model
+            && !model.hash().equals(content.modelId())) {
             throw new IllegalArgumentException("Resource request and content identity differ");
         }
 
         var resourceKey = new ResourceKey(content.representation().identity(), key,
-            content.storageBinding() == null ? null : content.storageBinding().region());
+            content.storageBinding() == null ? null : content.storageBinding().region(),
+            detached ? new Object() : null);
         Flight replaced = null;
         Flight overflow = null;
         final Flight flight;
@@ -363,22 +320,10 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         }
     }
 
-    int readyCount() {
-        synchronized (lock) {
-            return ready.size();
-        }
-    }
-
-    int unusedCount() {
-        synchronized (lock) {
-            return unused.size();
-        }
-    }
-
     /**
-     * Observes terminal preparation for a lease created by this cache.
-     * Completion does not transfer or create a lease; the caller must keep its original lease open.
-     * The caller must only observe this future, without completing or obtruding its shared result.
+     * Observes terminal preparation for a lease created by this cache. Completion does not transfer or create a lease;
+     * the caller must keep its original lease open. The caller must only observe this future, without completing or
+     * obtruding its shared result.
      *
      * @param lease an open lease from this cache
      * @return a non-null future whose result the caller borrows under the original lease
@@ -469,9 +414,12 @@ public final class ModelRenderTargetCache implements AutoCloseable {
                 } else if (entry != null && entry.consumers > 0) {
                     entry.consumers--;
                     if (entry.consumers == 0 && ready.get(entry.key) == entry) {
-                        unused.put(entry.key, entry);
-                        ResourceDiagnostics.log("render target unused: {} unused={} ready={}", entry.key,
-                            unused.size(), ready.size());
+                        if (entry.key.detached != null)
+                            ready.remove(entry.key, entry);
+                        else
+                            unused.put(entry.key, entry);
+                        ResourceDiagnostics.log("render target unused: {} unused={} ready={}", entry.key, unused.size(),
+                            ready.size());
                     }
                 }
                 state.detach();
@@ -507,7 +455,12 @@ public final class ModelRenderTargetCache implements AutoCloseable {
     }
 
     private void enqueueRelease(LeaseState state) {
-        releases.add(state);
+        synchronized (lock) {
+            if (closed)
+                state.detach();
+            else
+                releases.add(state);
+        }
     }
 
     private void start(Flight flight, Loader loader, boolean requiredBootstrap, Executor terminalOwner) {
@@ -627,7 +580,10 @@ public final class ModelRenderTargetCache implements AutoCloseable {
                             }
                             flight.interests.clear();
                             if (entry.consumers == 0) {
-                                unused.put(flight.key, entry);
+                                if (entry.key.detached != null)
+                                    ready.remove(entry.key, entry);
+                                else
+                                    unused.put(flight.key, entry);
                             }
                             removeFlight(flight);
                             accepted = entry;
@@ -653,13 +609,14 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         rejectCandidate(candidate);
         var resourceFailure = publicationFailure instanceof OutOfMemoryError ? publicationFailure
             : lookupFailure instanceof OutOfMemoryError ? lookupFailure : null;
-        var cause = resourceFailure != null ? resourceFailure : publicationFailure != null
-            ? new IllegalStateException("Model texture publication failed", publicationFailure)
-            : lookupFailure == null ? new CancellationException("Resource flight was no longer current")
-                : new IllegalStateException("Resource current lookup failed", lookupFailure);
-        flight.finish(new AcquireResult.Failed(new ResourceFailure(
-            resourceFailure != null || lookupFailure == null && publicationFailure == null
-            ? ResourceFailure.Kind.TRANSIENT : ResourceFailure.Kind.DETERMINISTIC, cause)));
+        var cause = resourceFailure != null ? resourceFailure
+            : publicationFailure != null
+                ? new IllegalStateException("Model texture publication failed", publicationFailure)
+                : lookupFailure == null ? new CancellationException("Resource flight was no longer current")
+                    : new IllegalStateException("Resource current lookup failed", lookupFailure);
+        flight.finish(new AcquireResult.Failed(
+            new ResourceFailure(resourceFailure != null || lookupFailure == null && publicationFailure == null
+                ? ResourceFailure.Kind.TRANSIENT : ResourceFailure.Kind.DETERMINISTIC, cause)));
         if (lookupFailure != null && resourceFailure == null) {
             contractViolationReporter.accept(cause);
         }
@@ -675,13 +632,11 @@ public final class ModelRenderTargetCache implements AutoCloseable {
     }
 
     private void finishFailure(Flight flight, ResourceFailure failure) {
-        if (flight.offline && failure.kind() != ResourceFailure.Kind.TRANSIENT) {
-            failure = new ResourceFailure(ResourceFailure.Kind.TRANSIENT, failure.cause());
-        }
         synchronized (lock) {
             removeFlight(flight);
         }
-        flight.finish(new AcquireResult.Failed(failure));
+        flight.finish(flight.offline && !failure.isMemoryFailure() ? new AcquireResult.Missing()
+            : new AcquireResult.Failed(failure));
     }
 
     private void finishContractViolation(Flight flight, Throwable cause) {
@@ -704,9 +659,9 @@ public final class ModelRenderTargetCache implements AutoCloseable {
     }
 
     /**
-     * Produces one asynchronous candidate or classified failure for an admitted Flight.
-     * The returned future and its terminal outcome must be non-null. Cancellation is cooperative;
-     * a late candidate still transfers to the cache for rejection. The loader must not publish the candidate.
+     * Produces one asynchronous candidate or classified failure for an admitted Flight. The returned future and its
+     * terminal outcome must be non-null. Cancellation is cooperative; a late candidate still transfers to the cache for
+     * rejection. The loader must not publish the candidate.
      */
     @FunctionalInterface
     public interface Loader {
@@ -715,9 +670,9 @@ public final class ModelRenderTargetCache implements AutoCloseable {
     }
 
     /**
-     * Answers the current qualification of a new acquisition or publication.
-     * The callback can run under the cache monitor and must not wait for work that needs that monitor.
-     * It observes changing membership and policy; established immutable content guarantees remain trusted.
+     * Answers the current qualification of a new acquisition or publication. The callback can run under the cache
+     * monitor and must not wait for work that needs that monitor. It observes changing membership and policy;
+     * established immutable content guarantees remain trusted.
      */
     @FunctionalInterface
     public interface CurrentLookup {
@@ -728,8 +683,8 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         private final ModelRenderTargetCache cache;
         private final LeaseState state;
         private final Cleaner.Cleanable cleanable;
-        private volatile ResourceRequest originalRequest;
-        private volatile CurrentLookup currentLookup;
+        private ResourceRequest originalRequest;
+        private CurrentLookup currentLookup;
 
         private ResourceLeaseImpl(ModelRenderTargetCache cache, Flight flight, Interest interest,
             ResourceRequest originalRequest, CurrentLookup currentLookup) {
@@ -759,8 +714,7 @@ public final class ModelRenderTargetCache implements AutoCloseable {
 
         @Override
         public AcquireResult poll() {
-            requireOpen();
-            return readyResult();
+            return state.released.get() ? new AcquireResult.Ended() : readyResult();
         }
 
         private AcquireResult readyResult() {
@@ -770,10 +724,11 @@ public final class ModelRenderTargetCache implements AutoCloseable {
 
         @Override
         public boolean isCurrent(ResourceRequest request) {
-            requireOpen();
+            if (state.released.get())
+                return false;
             var key = state.ready == null ? state.flight.key : state.ready.key;
             return originalRequest.bakeProfile().equals(request.bakeProfile())
-                && originalRequest.purpose() == request.purpose()
+                && originalRequest.modelId().equals(request.modelId()) && originalRequest.purpose() == request.purpose()
                 && originalRequest.expressionBinding().equals(request.expressionBinding())
                 && currentLookup.isCurrent(key.identity, key.key, request);
         }
@@ -815,22 +770,24 @@ public final class ModelRenderTargetCache implements AutoCloseable {
             this.ready = ready;
         }
 
-        private void attachReady(ReadyEntry entry) {
+        private synchronized void attachReady(ReadyEntry entry) {
             ready = entry;
             flight = null;
             interest = null;
         }
 
         private void release() {
-            if (released.compareAndSet(false, true)) {
-                var owner = cache;
-                if (owner != null) {
-                    owner.enqueueRelease(this);
-                }
+            final ModelRenderTargetCache owner;
+            synchronized (this) {
+                if (!released.compareAndSet(false, true))
+                    return;
+                owner = cache;
             }
+            if (owner != null)
+                owner.enqueueRelease(this);
         }
 
-        private void detach() {
+        private synchronized void detach() {
             cache = null;
             flight = null;
             interest = null;
@@ -847,7 +804,8 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         private final Object workOwner;
         private final ClientResourceScheduler.Dispatch dispatch;
         private Completion completion;
-        private final Set<Interest> interests = ConcurrentHashMap.newKeySet();
+        // The cache monitor serializes every interest access, including Ready publication.
+        private final Set<Interest> interests = Collections.newSetFromMap(new IdentityHashMap<>());
         private final Set<AutoCloseable> cancellationActions = Collections.newSetFromMap(new IdentityHashMap<>());
         private final CompletableFuture<AcquireResult> terminal = new CompletableFuture<>();
         private volatile AcquireResult result = PENDING;
@@ -972,7 +930,7 @@ public final class ModelRenderTargetCache implements AutoCloseable {
         }
     }
 
-    private record ResourceKey(ModelFileIdentity identity, RenderTargetKey key, CacheRegion region) {
+    private record ResourceKey(ModelFileIdentity identity, RenderTargetKey key, CacheRegion region, Object detached) {
         private ResourceKey {
             Objects.requireNonNull(identity, "identity");
             Objects.requireNonNull(key, "key");

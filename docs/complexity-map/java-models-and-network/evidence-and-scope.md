@@ -1,20 +1,20 @@
 # 证据、覆盖与根依据
 
-分类、Fact/Inference/Hypothesis、节点与计数口径统一见[建模、证据与计数口径](../governance/modeling-and-evidence.md)。本页限定 MN 子系统的模型、资源与网络覆盖。
+分类、Fact/Inference/Hypothesis 证据等级、节点与计数口径见[建模、证据与计数口径](../governance/modeling-and-evidence.md)。本页说明 MN 子系统在模型、资源与网络方面的覆盖范围与未验证缺口。
 
 ## 覆盖
 
-| 区域 | 已建图内容 | 未闭合 / 未检查 |
+| 区域 | 已建图内容 | 未覆盖与未验证 |
 |---|---|---|
-| 模型/资源 | 增量目录、激活、精确读取、Ready lease/LRU、Pending interest、纹理发布/admission、default、fallback、失败记忆、converted consumer/prune、声音首块准入/渐进取得与 PCM/checkpoint 保留、表达式本地 specialization 身份；MN-01–03、05–08、10、17–20、22–25、27 | 大目录驻留、GC/host/audio backing 回收、真实 remote 音频、OpenAL 提交与终态、全部 shutdown 时序、其他平台真实共享 FS 与最坏 host admission 成本未验；MN-27 已观察无 optional provider 的 default 专用服启动，optional-present 与真实 client classloader 仍未验；共享 writer 收益见 Q-10 |
-| 网络/状态 | Session、typed request/assembly、dispatch、forced selection、player projection、表达式 shared semantics；MN-11–16、26 | 真实 Forge 双端、全部跨消息时序、持续拥塞与重连未验 |
+| 模型与资源 | 增量目录、目录激活、精确读取、Ready lease 与 LRU、Pending interest、纹理发布与入队限流、默认模型、fallback、失败记忆、converted 消费者登记与清理、声音首块校验与渐进获取、PCM 与 checkpoint 保留、表达式本地特化身份及启动一次性预热（MN-01–03、05–08、10、17–20、22、24–25、27–30、32） | 大目录内存驻留、GC 以及宿主与音频底层资源的回收、真实远端音频、OpenAL 提交与结束状态、全部关闭时序、其他平台的真实共享文件系统以及最坏情况下的宿主纹理上传耗时尚未验证。MN-27 已在无可选 provider 的默认专用服启动路径上观察过，但可选 provider 存在时的路径和真实客户端 classloader 仍未验证；MN-32 的分层验证边界见[启动预热验证](../../verification/model-management.md#启动模型一次性预热)，帧时间与跨平台行为仍有缺口。 |
+| 网络与状态 | 会话管理、按类型区分的请求与组装、分发调度、当前选择聚合与原操作资格、玩家状态同步及表达式跨端共享语义（MN-11–14、16、26、29–31） | 真实 Forge 双端联调、全部跨消息到达时序、持续网络拥塞与断线重连尚未验证。 |
 
-Windows 双 JVM 已局部验证同 key 完整容器提交、类别 index 合并、活跃／崩溃登记与 scope prune。注入来源验证区域隔离与迟到工作；公开地址及全局发现仍需联合验收。
+在 Windows 双 JVM 环境下，已局部验证同 key 完整容器提交、独立 WAL 索引更新、活跃与崩溃进程登记以及按范围清理。注入来源测试已覆盖区域隔离与迟到任务处理；更完整的系统组合边界见当前支持状态文档。
 
 ## 证据入口
 
-[机制正文](mechanisms.md)逐项维护当前行为、直接删除失败与源码/测试入口；[因果图](causal-graph.md)唯一维护 MN 内部边，跨域边进入[跨子系统关系](../governance/cross-subsystem-relations.md)。
+[机制正文](mechanisms.md)逐项记录当前行为、直接删除导致的失败以及源码和测试入口；[因果图](causal-graph.md)维护 MN 内部边，跨域边统一维护在[跨子系统关系](../governance/cross-subsystem-relations.md)。
 
 ## 根依据
 
-本主题使用的根键定义与权威链接只在[根依据总表](../governance/root-register.md)维护。
+本主题引用的根键定义与权威链接统一维护在[根依据总表](../governance/root-register.md)。

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.session.client.state;
 
+import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.catalog.snapshot.CatalogAccess;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.domain.HierarchyPath;
@@ -16,7 +17,7 @@ public record PublicationEntry(ModelFileIdentity identity, HierarchyPath path, C
         Objects.requireNonNull(access, "access");
     }
 
-    public Hash256 modelId() {
+    public ModelId modelId() {
         return identity.modelId();
     }
 

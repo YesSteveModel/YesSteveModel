@@ -39,13 +39,6 @@ public final class NetworkHandler {
 
     private NetworkHandler() {}
 
-    /** Disabled by default; enables temporary wire-cost observations without changing packet flow. */
-    public static void traceNetwork(String event, Object... arguments) {
-        if (Boolean.getBoolean("ysm.trace_network_cost")) {
-            YesSteveModel.LOGGER.info("YSM_NETWORK_TRACE event={} {}", event, java.util.Arrays.toString(arguments));
-        }
-    }
-
     public static void init() {
         CHANNEL.addListener(
             (NetworkEvent.ServerCustomPayloadEvent event) -> receive(event, MessageDirection.SERVER_TO_CLIENT));
@@ -74,10 +67,9 @@ public final class NetworkHandler {
             var raw = payload.raw().<UniBuffer>map(value -> value).orElse(empty);
             spec.attachmentPolicy().validate(raw.size());
             try (var frame = FrameCodec.encode(spec.id(), protobuf, raw)) {
-                traceNetwork("outbound", "direction=" + NetworkDirection.PLAY_TO_SERVER,
-                    "message=" + payload.protobuf().getClass().getSimpleName(), "protocolId=" + spec.id(),
-                    "protobufBytes=" + protobuf.size(), "attachmentBytes=" + raw.size(), "frameBytes=" + frame.size());
-                sendFrame(NetworkDirection.PLAY_TO_SERVER, connection::send, frame);
+                NetworkDiagnostics.message("send-attempt", MessageDirection.CLIENT_TO_SERVER, payload.protobuf(),
+                    "ordinary");
+                sendFrame(NetworkDirection.PLAY_TO_SERVER, connection::send, frame, "ordinary");
                 return frame.size();
             }
         }
@@ -93,6 +85,8 @@ public final class NetworkHandler {
 
     public static void sendToServer(NetworkPayload<?> payload) {
         if (!isRemoteChannelPresent()) {
+            NetworkDiagnostics.message("send-dropped", MessageDirection.CLIENT_TO_SERVER, payload.protobuf(),
+                "channel-unavailable");
             payload.close();
             return;
         }
@@ -107,16 +101,8 @@ public final class NetworkHandler {
         send(PacketDistributor.PLAYER.with(() -> (ServerPlayer)player), payload);
     }
 
-    public static void broadcastToAllPlayers(ProtoMessage<?> message) {
-        send(PacketDistributor.ALL.noArg(), payload(message));
-    }
-
     public static void broadcastToVisiblePlayers(ProtoMessage<?> message, Entity centerEntity) {
         send(PacketDistributor.TRACKING_ENTITY.with(() -> centerEntity), payload(message));
-    }
-
-    public static void broadcastToVisiblePlayersAndSelf(ProtoMessage<?> message, Player self) {
-        send(PacketDistributor.TRACKING_ENTITY_AND_SELF.with(() -> self), payload(message));
     }
 
     public static void broadcastToVisiblePlayersAndSelf(ProtoMessage<?> message, Entity centerEntity) {
@@ -124,11 +110,15 @@ public final class NetworkHandler {
     }
 
     public static void sendFrame(PacketDistributor.PacketTarget target, OutboundFrame frame) {
-        sendFrame(target.getDirection(), target::send, frame);
+        sendFrame(target.getDirection(), target::send, frame, "dispatch");
     }
 
     private static void sendFrame(NetworkDirection direction,
-        java.util.function.Consumer<net.minecraft.network.protocol.Packet<?>> sender, OutboundFrame frame) {
+        java.util.function.Consumer<net.minecraft.network.protocol.Packet<?>> sender, OutboundFrame frame,
+        String path) {
+        var diagnosticDirection = direction == NetworkDirection.PLAY_TO_SERVER ? MessageDirection.CLIENT_TO_SERVER
+            : MessageDirection.SERVER_TO_CLIENT;
+        NetworkDiagnostics.frame("send-attempt", diagnosticDirection, frame, path);
         FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer(frame.size(), frame.size()));
         var submitted = false;
         try {
@@ -136,8 +126,10 @@ public final class NetworkHandler {
             var packet = direction.buildPacket(Pair.of(buffer, 0), CHANNEL_NAME).getThis();
             sender.accept(packet);
             submitted = true;
+            NetworkDiagnostics.frame("send-submitted", diagnosticDirection, frame, path);
         } finally {
             if (!submitted) {
+                NetworkDiagnostics.frame("send-failed", diagnosticDirection, frame, path);
                 buffer.release();
             }
         }
@@ -150,11 +142,10 @@ public final class NetworkHandler {
             var spec = messageSpec(payload.protobuf(), target.getDirection());
             spec.attachmentPolicy().validate(attachment.size());
             try (var frame = FrameCodec.encode(spec.id(), protobuf, attachment)) {
-                traceNetwork("outbound", "direction=" + target.getDirection(),
-                    "message=" + payload.protobuf().getClass().getSimpleName(), "protocolId=" + spec.id(),
-                    "protobufBytes=" + protobuf.size(), "attachmentBytes=" + attachment.size(),
-                    "frameBytes=" + frame.size());
-                sendFrame(target, frame);
+                var direction = target.getDirection() == NetworkDirection.PLAY_TO_SERVER
+                    ? MessageDirection.CLIENT_TO_SERVER : MessageDirection.SERVER_TO_CLIENT;
+                NetworkDiagnostics.message("send-attempt", direction, payload.protobuf(), "ordinary");
+                sendFrame(target.getDirection(), target::send, frame, "ordinary");
             }
         }
     }
@@ -164,7 +155,7 @@ public final class NetworkHandler {
             () -> new IllegalArgumentException("Unregistered protocol message type: " + message.getClass().getName()));
         var expected = direction == NetworkDirection.PLAY_TO_SERVER ? MessageDirection.CLIENT_TO_SERVER
             : MessageDirection.SERVER_TO_CLIENT;
-        if (spec.direction() != expected) {
+        if (!spec.direction().accepts(expected)) {
             throw new IllegalArgumentException("Protocol message has the wrong network direction");
         }
         return spec;
@@ -172,15 +163,18 @@ public final class NetworkHandler {
 
     private static void receive(NetworkEvent event, MessageDirection direction) {
         var context = event.getSource();
-        traceNetwork("inbound", "direction=" + direction, "frameBytes=" + event.getPayload().readableBytes());
+        var frameBytes = event.getPayload().readableBytes();
+        NetworkDiagnostics.frame("received", direction, -1, frameBytes, "forge");
         try {
             var wire = com.elfmcys.ysm.buffer.SharedNativeBuffer
-                .adopt(ForgeUniBufferIO.readNative(event.getPayload(), event.getPayload().readableBytes()));
+                .adopt(ForgeUniBufferIO.readNative(event.getPayload(), frameBytes));
             try (var frame = FrameCodec.decode(wire, id -> ProtocolInbound.accepts(id, direction))) {
                 var spec = ProtocolMessages.REGISTRY.find(frame.messageId()).orElseThrow();
+                NetworkDiagnostics.frame("decoded", direction, frame.messageId(), wire.size(), "forge");
                 ProtocolInbound.dispatch(frame, spec, context);
             }
         } catch (RuntimeException error) {
+            NetworkDiagnostics.frame("dropped", direction, -1, frameBytes, "invalid-frame");
             YesSteveModel.LOGGER.warn("Rejected invalid YSM frame", error);
             if (direction == MessageDirection.SERVER_TO_CLIENT) {
                 var source = context.get();

@@ -1,8 +1,9 @@
 package com.elfmcys.ysm.expression.frontend;
 
+import dev.semaweave.compilation.TaskContext;
 import dev.semaweave.program.ProgramNode;
 
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -12,8 +13,8 @@ import java.util.TreeSet;
 
 final class MolangSourceParser {
     private final MolangFrontend.SourceLocation location;
-    private final MolangFrontend.Limits limits;
     private final Lexer lexer;
+    private final TaskContext task;
     private final TreeSet<MolangFrontend.ReferencedSymbol> references =
         new TreeSet<>(MolangFrontend.ReferencedSymbol.ORDER);
     private final HashSet<String> locals = new HashSet<>();
@@ -24,31 +25,19 @@ final class MolangSourceParser {
     private int depth;
     private int maximumDepth;
 
-    MolangSourceParser(String source, MolangFrontend.SourceLocation location, MolangFrontend.Limits limits)
+    MolangSourceParser(String source, MolangFrontend.SourceLocation location, TaskContext task)
         throws MolangFrontendException {
         this.location = Objects.requireNonNull(location, "location");
-        this.limits = Objects.requireNonNull(limits, "limits");
-        this.lexer = new Lexer(source, location);
+        this.task = task;
+        this.lexer = new Lexer(source, location, task);
         advance();
     }
 
     Result parse(MolangFrontend.SourceMode mode) throws MolangFrontendException {
-        try {
-            return parseBounded(mode);
-        } catch (LimitSignal limit) {
-            throw failure(MolangFrontendException.Kind.SOURCE_LIMIT, current.offset(), limit.getMessage(), limit);
-        }
-    }
-
-    private Result parseBounded(MolangFrontend.SourceMode mode) throws MolangFrontendException {
         var roots = new ArrayList<ProgramNode>();
         while (current.kind() != Kind.EOF) {
             if (accept(Kind.SEMICOLON)) {
                 continue;
-            }
-            if (roots.size() == limits.maxStatements()) {
-                fail(MolangFrontendException.Kind.SOURCE_LIMIT,
-                    "root statement count exceeds " + limits.maxStatements());
             }
             roots.add(parseExpression(0));
             if (current.kind() != Kind.EOF && !accept(Kind.SEMICOLON)) {
@@ -62,183 +51,252 @@ final class MolangSourceParser {
             locals.size());
     }
 
+    private enum ParseKind {
+        EXPRESSION, PREFIX, POSTFIX, ARGUMENTS, BLOCK
+    }
+
+    private static final class ParseFrame {
+        private final ParseKind kind;
+        private final int minimum;
+        private int state;
+        private ProgramNode left;
+        private ProgramNode yes;
+        private Operator operator;
+        private ProgramNode.UnaryOperator unary;
+        private List<String> parts;
+        private final ArrayList<ProgramNode> nodes = new ArrayList<>();
+
+        private ParseFrame(ParseKind kind, int minimum) {
+            this.kind = kind;
+            this.minimum = minimum;
+        }
+    }
+
     private ProgramNode parseExpression(int minimumPrecedence) throws MolangFrontendException {
-        enter();
-        try {
-            var left = parsePrefix();
-            while (true) {
-                if (current.kind() == Kind.QUESTION && PREC_CONDITIONAL >= minimumPrecedence) {
+        var pending = new ArrayDeque<ParseFrame>();
+        pending.push(new ParseFrame(ParseKind.EXPRESSION, minimumPrecedence));
+        ProgramNode value = null;
+        List<ProgramNode> arguments = List.of();
+        while (!pending.isEmpty()) {
+            task.checkCancelled();
+            var frame = pending.peek();
+            switch (frame.kind) {
+                case EXPRESSION -> {
+                    if (frame.state == 0) {
+                        depth++;
+                        maximumDepth = Math.max(maximumDepth, depth);
+                        frame.state = 1;
+                        pending.push(new ParseFrame(ParseKind.PREFIX, 0));
+                        continue;
+                    }
+                    if (frame.state == 1)
+                        frame.left = value;
+                    else if (frame.state == 2) {
+                        frame.yes = value;
+                        if (accept(Kind.COLON)) {
+                            frame.state = 3;
+                            pending.push(new ParseFrame(ParseKind.EXPRESSION, PREC_CONDITIONAL));
+                            continue;
+                        }
+                        frame.left =
+                            node(new ProgramNode.Conditional(frame.left, frame.yes, node(new ProgramNode.Unset())));
+                    } else if (frame.state == 3) {
+                        frame.left = node(new ProgramNode.Conditional(frame.left, frame.yes, value));
+                    } else if (frame.state == 4) {
+                        frame.left = switch (frame.operator.kind()) {
+                            case COALESCE -> node(new ProgramNode.Coalesce(frame.left, value));
+                            case ASSIGN -> assignment(frame.left, value);
+                            case ARROW -> node(new ProgramNode.WithContext(frame.left, value));
+                            default -> node(new ProgramNode.Binary(frame.operator.binary(), frame.left, value));
+                        };
+                    }
+                    if (current.kind() == Kind.QUESTION && PREC_CONDITIONAL >= frame.minimum) {
+                        advance();
+                        frame.state = 2;
+                        pending.push(new ParseFrame(ParseKind.EXPRESSION, PREC_CONDITIONAL));
+                        continue;
+                    }
+                    var operator = binary(current.kind());
+                    if (operator == null || operator.precedence() < frame.minimum) {
+                        value = frame.left;
+                        depth--;
+                        pending.pop();
+                        continue;
+                    }
                     advance();
-                    var ifTrue = parseExpression(0);
-                    var ifFalse =
-                        accept(Kind.COLON) ? parseExpression(PREC_CONDITIONAL) : node(new ProgramNode.Unset());
-                    left = node(new ProgramNode.Conditional(left, ifTrue, ifFalse));
-                    continue;
+                    frame.operator = operator;
+                    frame.state = 4;
+                    pending.push(new ParseFrame(ParseKind.EXPRESSION, operator.precedence() + 1));
                 }
-                var operator = binary(current.kind());
-                if (operator == null || operator.precedence() < minimumPrecedence) {
-                    return left;
+                case PREFIX -> {
+                    if (frame.state != 0) {
+                        if (frame.state == 1)
+                            value = lowerCall(frame.parts, arguments);
+                        if (frame.state == 2) {
+                            require(Kind.RPAREN, "expected ')'");
+                            advance();
+                        }
+                        if (frame.state == 4)
+                            value = node(new ProgramNode.Unary(frame.unary, value));
+                        if (frame.state == 5)
+                            value = node(new ProgramNode.Control(ProgramNode.ControlOperator.RETURN,
+                                java.util.Optional.of(value)));
+                        if (frame.state <= 3) {
+                            frame.state = 6;
+                            var postfix = new ParseFrame(ParseKind.POSTFIX, 0);
+                            postfix.left = value;
+                            pending.push(postfix);
+                            continue;
+                        }
+                        pending.pop();
+                        continue;
+                    }
+                    switch (current.kind()) {
+                        case IDENTIFIER -> {
+                            frame.parts = new ArrayList<>();
+                            frame.parts.add(MolangNames.identifier(current.text()));
+                            advance();
+                            while (accept(Kind.DOT)) {
+                                require(Kind.IDENTIFIER, "expected identifier after '.'");
+                                frame.parts.add(MolangNames.identifier(current.text()));
+                                advance();
+                            }
+                            if (accept(Kind.LPAREN)) {
+                                frame.state = 1;
+                                pending.push(new ParseFrame(ParseKind.ARGUMENTS, 0));
+                            } else {
+                                value = lowerRead(frame.parts);
+                                frame.state = 6;
+                                var postfix = new ParseFrame(ParseKind.POSTFIX, 0);
+                                postfix.left = value;
+                                pending.push(postfix);
+                            }
+                        }
+                        case LPAREN -> {
+                            advance();
+                            frame.state = 2;
+                            pending.push(new ParseFrame(ParseKind.EXPRESSION, 0));
+                        }
+                        case LBRACE -> {
+                            advance();
+                            frame.state = 3;
+                            pending.push(new ParseFrame(ParseKind.BLOCK, 0));
+                        }
+                        case PLUS, MINUS, BANG -> {
+                            frame.unary = current.kind() == Kind.PLUS ? ProgramNode.UnaryOperator.POSITIVE
+                                : current.kind() == Kind.MINUS ? ProgramNode.UnaryOperator.NEGATE
+                                    : ProgramNode.UnaryOperator.LOGICAL_NOT;
+                            advance();
+                            frame.state = 4;
+                            pending.push(new ParseFrame(ParseKind.EXPRESSION, PREC_PREFIX));
+                        }
+                        case RETURN -> {
+                            advance();
+                            if (current.kind() == Kind.SEMICOLON || current.kind() == Kind.RBRACE
+                                || current.kind() == Kind.EOF) {
+                                value = node(new ProgramNode.Control(ProgramNode.ControlOperator.RETURN,
+                                    java.util.Optional.empty()));
+                                pending.pop();
+                            } else {
+                                frame.state = 5;
+                                pending.push(new ParseFrame(ParseKind.EXPRESSION, 0));
+                            }
+                        }
+                        case BREAK, CONTINUE -> {
+                            value = node(
+                                new ProgramNode.Control(current.kind() == Kind.BREAK ? ProgramNode.ControlOperator.BREAK
+                                    : ProgramNode.ControlOperator.CONTINUE, java.util.Optional.empty()));
+                            advance();
+                            pending.pop();
+                        }
+                        case FLOAT -> {
+                            var token = current;
+                            advance();
+                            try {
+                                value = node(ProgramNode.F32.of(Float.parseFloat(token.text())));
+                            } catch (NumberFormatException failure) {
+                                throw failure(MolangFrontendException.Kind.SYNTAX, token.offset(),
+                                    "invalid numeric literal", failure);
+                            }
+                            pending.pop();
+                        }
+                        case STRING -> {
+                            value = node(new ProgramNode.StringLiteral(current.text()));
+                            advance();
+                            pending.pop();
+                        }
+                        case TRUE, FALSE -> {
+                            value = node(new ProgramNode.Bool(current.kind() == Kind.TRUE));
+                            advance();
+                            pending.pop();
+                        }
+                        default -> throw failure(MolangFrontendException.Kind.SYNTAX, current.offset(),
+                            "expected expression", null);
+                    }
                 }
-                advance();
-                var nextMinimum = operator.rightAssociative() ? operator.precedence() : operator.precedence() + 1;
-                var right = parseExpression(nextMinimum);
-                left = switch (operator.kind()) {
-                    case COALESCE -> node(new ProgramNode.Coalesce(left, right));
-                    case ASSIGN -> assignment(left, right);
-                    case ARROW -> node(new ProgramNode.WithContext(left, right));
-                    default -> node(new ProgramNode.Binary(operator.binary(), left, right));
-                };
-            }
-        } finally {
-            depth--;
-        }
-    }
-
-    private ProgramNode parsePrefix() throws MolangFrontendException {
-        return switch (current.kind()) {
-            case FLOAT -> {
-                var token = current;
-                advance();
-                try {
-                    yield node(ProgramNode.F32.of(Float.parseFloat(token.text())));
-                } catch (NumberFormatException failure) {
-                    throw failure(MolangFrontendException.Kind.SYNTAX, token.offset(), "invalid numeric literal",
-                        failure);
+                case POSTFIX -> {
+                    if (frame.state == 1) {
+                        require(Kind.RBRACKET, "expected ']'");
+                        advance();
+                        frame.left = node(new ProgramNode.Index(frame.left, value));
+                        frame.state = 0;
+                    }
+                    if (accept(Kind.DOT)) {
+                        require(Kind.IDENTIFIER, "expected identifier after '.'");
+                        frame.left = node(new ProgramNode.Member(frame.left, MolangNames.identifier(current.text())));
+                        advance();
+                    } else if (accept(Kind.LBRACKET)) {
+                        frame.state = 1;
+                        pending.push(new ParseFrame(ParseKind.EXPRESSION, 0));
+                    } else {
+                        if (current.kind() == Kind.LPAREN)
+                            fail(MolangFrontendException.Kind.UNSUPPORTED, "only named symbols may be invoked");
+                        value = frame.left;
+                        pending.pop();
+                    }
+                }
+                case ARGUMENTS -> {
+                    if (frame.state == 1) {
+                        frame.nodes.add(value);
+                        if (accept(Kind.RPAREN)) {
+                            arguments = List.copyOf(frame.nodes);
+                            pending.pop();
+                            continue;
+                        }
+                        require(Kind.COMMA, "expected ',' between arguments");
+                        advance();
+                        pending.push(new ParseFrame(ParseKind.EXPRESSION, 0));
+                        continue;
+                    }
+                    if (accept(Kind.RPAREN)) {
+                        arguments = List.copyOf(frame.nodes);
+                        pending.pop();
+                    } else {
+                        frame.state = 1;
+                        pending.push(new ParseFrame(ParseKind.EXPRESSION, 0));
+                    }
+                }
+                case BLOCK -> {
+                    if (frame.state == 1) {
+                        frame.nodes.add(value);
+                        if (current.kind() != Kind.RBRACE && !accept(Kind.SEMICOLON))
+                            fail(MolangFrontendException.Kind.SYNTAX, "expected ';' or '}'");
+                    }
+                    while (accept(Kind.SEMICOLON)) {
+                    }
+                    if (current.kind() == Kind.EOF)
+                        fail(MolangFrontendException.Kind.SYNTAX, "unclosed block");
+                    if (accept(Kind.RBRACE)) {
+                        value = node(new ProgramNode.Block(frame.nodes));
+                        pending.pop();
+                    } else {
+                        frame.state = 1;
+                        pending.push(new ParseFrame(ParseKind.EXPRESSION, 0));
+                    }
                 }
             }
-            case STRING -> {
-                var value = current.text();
-                advance();
-                yield node(new ProgramNode.StringLiteral(value));
-            }
-            case TRUE -> {
-                advance();
-                yield node(new ProgramNode.Bool(true));
-            }
-            case FALSE -> {
-                advance();
-                yield node(new ProgramNode.Bool(false));
-            }
-            case IDENTIFIER -> parseIdentifier();
-            case LPAREN -> {
-                advance();
-                var expression = parseExpression(0);
-                require(Kind.RPAREN, "expected ')'");
-                advance();
-                yield parsePostfix(expression);
-            }
-            case LBRACE -> parsePostfix(parseBlock());
-            case PLUS -> unary(ProgramNode.UnaryOperator.POSITIVE);
-            case MINUS -> unary(ProgramNode.UnaryOperator.NEGATE);
-            case BANG -> unary(ProgramNode.UnaryOperator.LOGICAL_NOT);
-            case RETURN -> parseReturn();
-            case BREAK -> {
-                advance();
-                yield node(new ProgramNode.Control(ProgramNode.ControlOperator.BREAK, java.util.Optional.empty()));
-            }
-            case CONTINUE -> {
-                advance();
-                yield node(new ProgramNode.Control(ProgramNode.ControlOperator.CONTINUE, java.util.Optional.empty()));
-            }
-            default ->
-                throw failure(MolangFrontendException.Kind.SYNTAX, current.offset(), "expected expression", null);
-        };
-    }
-
-    private ProgramNode parseIdentifier() throws MolangFrontendException {
-        var parts = new ArrayList<String>();
-        parts.add(MolangNames.identifier(current.text()));
-        advance();
-        while (accept(Kind.DOT)) {
-            require(Kind.IDENTIFIER, "expected identifier after '.'");
-            parts.add(MolangNames.identifier(current.text()));
-            advance();
         }
-        ProgramNode value;
-        if (accept(Kind.LPAREN)) {
-            var arguments = parseArguments();
-            value = lowerCall(parts, arguments);
-        } else {
-            value = lowerRead(parts);
-        }
-        return parsePostfix(value);
-    }
-
-    private ProgramNode parsePostfix(ProgramNode value) throws MolangFrontendException {
-        while (true) {
-            if (accept(Kind.DOT)) {
-                require(Kind.IDENTIFIER, "expected identifier after '.'");
-                var member = MolangNames.identifier(current.text());
-                advance();
-                value = node(new ProgramNode.Member(value, member));
-                continue;
-            }
-            if (accept(Kind.LBRACKET)) {
-                var index = parseExpression(0);
-                require(Kind.RBRACKET, "expected ']'");
-                advance();
-                value = node(new ProgramNode.Index(value, index));
-                continue;
-            }
-            if (current.kind() == Kind.LPAREN) {
-                fail(MolangFrontendException.Kind.UNSUPPORTED, "only named symbols may be invoked");
-            }
-            return value;
-        }
-    }
-
-    private List<ProgramNode> parseArguments() throws MolangFrontendException {
-        var arguments = new ArrayList<ProgramNode>();
-        if (accept(Kind.RPAREN)) {
-            return List.of();
-        }
-        while (true) {
-            if (arguments.size() == limits.maxArguments()) {
-                fail(MolangFrontendException.Kind.SOURCE_LIMIT, "argument count exceeds " + limits.maxArguments());
-            }
-            arguments.add(parseExpression(0));
-            if (accept(Kind.RPAREN)) {
-                return List.copyOf(arguments);
-            }
-            require(Kind.COMMA, "expected ',' between arguments");
-            advance();
-        }
-    }
-
-    private ProgramNode parseBlock() throws MolangFrontendException {
-        require(Kind.LBRACE, "expected '{'");
-        advance();
-        var children = new ArrayList<ProgramNode>();
-        while (current.kind() != Kind.RBRACE) {
-            if (current.kind() == Kind.EOF) {
-                fail(MolangFrontendException.Kind.SYNTAX, "unclosed block");
-            }
-            if (accept(Kind.SEMICOLON)) {
-                continue;
-            }
-            if (children.size() == limits.maxStatements()) {
-                fail(MolangFrontendException.Kind.SOURCE_LIMIT,
-                    "block statement count exceeds " + limits.maxStatements());
-            }
-            children.add(parseExpression(0));
-            if (current.kind() != Kind.RBRACE && !accept(Kind.SEMICOLON)) {
-                fail(MolangFrontendException.Kind.SYNTAX, "expected ';' or '}'");
-            }
-        }
-        advance();
-        return node(new ProgramNode.Block(children));
-    }
-
-    private ProgramNode parseReturn() throws MolangFrontendException {
-        advance();
-        var value = current.kind() == Kind.SEMICOLON || current.kind() == Kind.RBRACE || current.kind() == Kind.EOF
-            ? java.util.Optional.<ProgramNode>empty() : java.util.Optional.of(parseExpression(0));
-        return node(new ProgramNode.Control(ProgramNode.ControlOperator.RETURN, value));
-    }
-
-    private ProgramNode unary(ProgramNode.UnaryOperator operator) throws MolangFrontendException {
-        advance();
-        return node(new ProgramNode.Unary(operator, parseExpression(PREC_PREFIX)));
+        return value;
     }
 
     private ProgramNode lowerRead(List<String> parts) throws MolangFrontendException {
@@ -267,6 +325,9 @@ final class MolangSourceParser {
         if (root.equals("math") && parts.size() == 2 && parts.get(1).equals("pi")) {
             return node(ProgramNode.F32.of((float)java.lang.Math.PI));
         }
+        if (root.equals("math") && parts.size() == 2 && parts.get(1).equals("e")) {
+            return node(ProgramNode.F32.of((float)java.lang.Math.E));
+        }
         if ((root.equals("t") || root.equals("temp")) && parts.size() >= 2) {
             addLocal(parts.get(1));
             var value = symbol(ProgramNode.SymbolDomain.LOCAL, parts.get(1), ProgramNode.AccessForm.READ, List.of());
@@ -293,6 +354,22 @@ final class MolangSourceParser {
 
     private ProgramNode lowerCall(List<String> parts, List<ProgramNode> arguments) throws MolangFrontendException {
         var root = parts.get(0);
+        if (parts.size() == 2 && (root.equals("query") || root.equals("q")) && parts.get(1).equals("debug_output")
+            && !arguments.isEmpty()) {
+            var steps = new ArrayList<ProgramNode>();
+            steps.add(symbol(ProgramNode.SymbolDomain.EXTERNAL, "query:debug_output_begin",
+                ProgramNode.AccessForm.INVOKE, List.of()));
+            for (var argument : arguments)
+                steps.add(symbol(ProgramNode.SymbolDomain.EXTERNAL, "query:debug_output_append",
+                    ProgramNode.AccessForm.INVOKE, List.of(argument)));
+            steps.add(symbol(ProgramNode.SymbolDomain.EXTERNAL, "query:debug_output_end", ProgramNode.AccessForm.INVOKE,
+                List.of()));
+            return node(
+                new ProgramNode.Conditional(
+                    symbol(ProgramNode.SymbolDomain.EXTERNAL, "query:debug_output_enabled",
+                        ProgramNode.AccessForm.INVOKE, List.of()),
+                    node(new ProgramNode.Block(steps)), node(new ProgramNode.Unset())));
+        }
         if (parts.size() == 1 && root.equals("loop")) {
             if (arguments.size() != 2) {
                 fail(MolangFrontendException.Kind.SYNTAX, "loop requires two arguments");
@@ -365,38 +442,18 @@ final class MolangSourceParser {
         throw new AssertionError();
     }
 
-    private void addLocal(String name) throws MolangFrontendException {
+    private void addLocal(String name) {
         locals.add(name);
-        if (locals.size() > limits.maxLocals()) {
-            fail(MolangFrontendException.Kind.SOURCE_LIMIT, "local count exceeds " + limits.maxLocals());
-        }
     }
 
     private <T extends ProgramNode> T node(T value) {
-        if (++nodeCount > limits.maxNodes()) {
-            throw new LimitSignal("node count exceeds " + limits.maxNodes());
-        }
+        nodeCount++;
         return value;
     }
 
-    private void enter() throws MolangFrontendException {
-        depth++;
-        maximumDepth = Math.max(maximumDepth, depth);
-        if (depth > limits.maxDepth()) {
-            fail(MolangFrontendException.Kind.SOURCE_LIMIT, "source nesting exceeds " + limits.maxDepth());
-        }
-    }
-
     private void advance() throws MolangFrontendException {
-        try {
-            current = lexer.next();
-        } catch (LimitSignal limit) {
-            throw failure(MolangFrontendException.Kind.SOURCE_LIMIT, lexer.offset(), limit.getMessage(), limit);
-        }
-        if (++tokenCount > limits.maxTokens()) {
-            throw failure(MolangFrontendException.Kind.TOKEN_LIMIT, current.offset(),
-                "token count exceeds " + limits.maxTokens(), null);
-        }
+        current = lexer.next();
+        tokenCount++;
     }
 
     private boolean accept(Kind kind) throws MolangFrontendException {
@@ -424,9 +481,9 @@ final class MolangSourceParser {
 
     private static Operator binary(Kind kind) {
         return switch (kind) {
-            case EQ -> new Operator(OpKind.ASSIGN, null, 1, true);
-            case ARROW -> new Operator(OpKind.ARROW, null, 2, true);
-            case QUESTION_QUESTION -> new Operator(OpKind.COALESCE, null, 4, true);
+            case EQ -> new Operator(OpKind.ASSIGN, null, 1);
+            case ARROW -> new Operator(OpKind.ARROW, null, 12);
+            case QUESTION_QUESTION -> new Operator(OpKind.COALESCE, null, 2);
             case OR_OR -> operator(ProgramNode.BinaryOperator.OR, 5);
             case AND_AND -> operator(ProgramNode.BinaryOperator.AND, 6);
             case EQ_EQ -> operator(ProgramNode.BinaryOperator.EQ, 7);
@@ -444,17 +501,17 @@ final class MolangSourceParser {
     }
 
     private static Operator operator(ProgramNode.BinaryOperator operator, int precedence) {
-        return new Operator(OpKind.BINARY, operator, precedence, false);
+        return new Operator(OpKind.BINARY, operator, precedence);
     }
 
-    private static final int PREC_CONDITIONAL = 3;
+    private static final int PREC_CONDITIONAL = 4;
     private static final int PREC_PREFIX = 11;
 
     private enum OpKind {
         BINARY, COALESCE, ASSIGN, ARROW
     }
 
-    private record Operator(OpKind kind, ProgramNode.BinaryOperator binary, int precedence, boolean rightAssociative) {
+    private record Operator(OpKind kind, ProgramNode.BinaryOperator binary, int precedence) {
     }
 
     record Result(List<ProgramNode> roots, List<MolangFrontend.ReferencedSymbol> references, int tokenCount,
@@ -475,7 +532,10 @@ final class MolangSourceParser {
         private final MolangFrontend.SourceLocation location;
         private int offset;
 
-        private Lexer(String source, MolangFrontend.SourceLocation location) {
+        private final TaskContext task;
+
+        private Lexer(String source, MolangFrontend.SourceLocation location, TaskContext task) {
+            this.task = task;
             this.source = source;
             this.location = location;
         }
@@ -493,6 +553,8 @@ final class MolangSourceParser {
             var current = source.charAt(offset++);
             if (asciiLetter(current) || current == '_') {
                 while (offset < source.length()) {
+                    if ((offset & 255) == 0)
+                        task.checkCancelled();
                     var value = source.charAt(offset);
                     if (!asciiLetter(value) && !Character.isDigit(value) && value != '_') {
                         break;
@@ -545,6 +607,8 @@ final class MolangSourceParser {
 
         private void skipIgnored() {
             while (offset < source.length()) {
+                if ((offset & 255) == 0)
+                    task.checkCancelled();
                 var current = source.charAt(offset);
                 if (Character.isWhitespace(current)) {
                     offset++;
@@ -564,6 +628,8 @@ final class MolangSourceParser {
         private Token number(int start, char first) throws MolangFrontendException {
             var sawDot = first == '.';
             while (offset < source.length()) {
+                if ((offset & 255) == 0)
+                    task.checkCancelled();
                 var current = source.charAt(offset);
                 if (Character.isDigit(current)) {
                     offset++;
@@ -581,6 +647,8 @@ final class MolangSourceParser {
                 }
                 var exponentStart = offset;
                 while (offset < source.length() && Character.isDigit(source.charAt(offset))) {
+                    if ((offset & 255) == 0)
+                        task.checkCancelled();
                     offset++;
                 }
                 if (exponentStart == offset) {
@@ -594,12 +662,11 @@ final class MolangSourceParser {
         private Token string(int start) throws MolangFrontendException {
             var value = new StringBuilder();
             while (offset < source.length()) {
+                if ((offset & 255) == 0)
+                    task.checkCancelled();
                 var current = source.charAt(offset++);
                 if (current == '\'') {
                     var result = value.toString();
-                    if (result.getBytes(StandardCharsets.UTF_8).length > 65_535) {
-                        throw new LimitSignal("string literal exceeds 65535 UTF-8 bytes");
-                    }
                     return token(Kind.STRING, result, start);
                 }
                 value.append(current);
@@ -633,9 +700,4 @@ final class MolangSourceParser {
         }
     }
 
-    private static final class LimitSignal extends RuntimeException {
-        private LimitSignal(String message) {
-            super(message);
-        }
-    }
 }

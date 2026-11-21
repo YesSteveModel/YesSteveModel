@@ -162,7 +162,8 @@ class GuiFrameTasksTest {
             f.jobs.get(2).finishFailure = lastFinishFailure;
             var failure = GuiFrameTasks.execute(f.jobs, f.executor(Set.of(1)));
             assertInstanceOf(RejectedExecutionException.class, failure);
-            assertArrayEquals(new Throwable[] {rejectFailure, firstFinishFailure, lastFinishFailure}, failure.getSuppressed());
+            assertArrayEquals(new Throwable[] {rejectFailure, firstFinishFailure, lastFinishFailure},
+                failure.getSuppressed());
             f.assertFinished();
         }
     }
@@ -258,9 +259,13 @@ class GuiFrameTasksTest {
 
     private static class EmptyJob implements GuiFrameTasks.Job {
         public void run() {}
+
         public void join() {}
+
         public void reject() {}
+
         public void publish() {}
+
         public void finish() {}
     }
 

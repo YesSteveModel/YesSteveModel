@@ -40,14 +40,37 @@ public final class GuiFrameInput {
         return new GuiFrameInput(subject, partialTick, disableRotation, disableEquipment, hovered, focused, now);
     }
 
-    public RenderContext context() { return CONTEXT; }
-    public float partialTick() { return partialTick; }
-    public boolean disableRotation() { return disableRotation; }
-    public boolean hovered() { return hovered; }
-    public boolean focused() { return focused; }
-    public long now() { return now; }
-    public float bodyYaw() { return disableRotation ? 180 : 200; }
-    public float vehicleRotation() { return vehicleYaw == null ? 0 : vehicleYaw - bodyYaw(); }
+    public RenderContext context() {
+        return CONTEXT;
+    }
+
+    public float partialTick() {
+        return partialTick;
+    }
+
+    public boolean disableRotation() {
+        return disableRotation;
+    }
+
+    public boolean hovered() {
+        return hovered;
+    }
+
+    public boolean focused() {
+        return focused;
+    }
+
+    public long now() {
+        return now;
+    }
+
+    public float bodyYaw() {
+        return disableRotation ? 180 : 200;
+    }
+
+    public float vehicleRotation() {
+        return vehicleYaw == null ? 0 : vehicleYaw - bodyYaw();
+    }
 
     public Applied apply() {
         return new Applied();
@@ -83,7 +106,9 @@ public final class GuiFrameInput {
                 subject.xRotO = 0;
                 subject.yHeadRot = subject.yHeadRotO = vehicleYaw == null ? bodyYaw() : vehicleYaw;
             } catch (RuntimeException | Error failure) {
-                try { close(); } catch (Throwable cleanup) {
+                try {
+                    close();
+                } catch (Throwable cleanup) {
                     var combined = GuiFrameTasks.append(failure, cleanup);
                     if (combined != failure && combined instanceof Error error)
                         throw error;
@@ -109,12 +134,17 @@ public final class GuiFrameInput {
             if (previous != null) {
                 for (int index = 0; index < appliedEquipment; index++) {
                     var slot = SLOTS[index];
-                    try { setEquipment((Player)subject, slot, previous[slot.ordinal()]); }
-                    catch (Throwable error) { failure = GuiFrameTasks.append(failure, error); }
+                    try {
+                        setEquipment((Player)subject, slot, previous[slot.ordinal()]);
+                    } catch (Throwable error) {
+                        failure = GuiFrameTasks.append(failure, error);
+                    }
                 }
             }
-            if (failure instanceof Error error) throw error;
-            if (failure instanceof RuntimeException error) throw error;
+            if (failure instanceof Error error)
+                throw error;
+            if (failure instanceof RuntimeException error)
+                throw error;
         }
     }
 

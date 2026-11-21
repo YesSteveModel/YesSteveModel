@@ -25,7 +25,8 @@ public class CustomTexture extends AbstractTexture {
     private final PreviewStore.EncodedPreview ownedSource;
     private final java.util.function.BiConsumer<CustomTexture, PreviewPixels> preparedUploader;
     private boolean closed;
-    private Runnable invalidated = () -> {};
+    private Runnable invalidated = () -> {
+    };
     private boolean loaded;
 
     public CustomTexture(ImageSource source) {

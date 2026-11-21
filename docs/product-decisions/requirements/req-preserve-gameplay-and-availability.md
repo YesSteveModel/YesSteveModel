@@ -16,7 +16,7 @@
 
 | 任务涉及 | 决策包 |
 |---|---|
-| 普通内容失败、数据保护、startup 与连接隔离 | [failure-isolation](../decisions/failure-isolation.md) |
-| tick/render 阻塞、后台并发、资产分发与 gameplay 消息竞争、MSPT 软指标 | [workload-budget](../decisions/workload-budget.md) |
+| 普通内容失败、数据保护、启动阶段与连接隔离 | [failure-isolation](../decisions/failure-isolation.md) |
+| tick 与 render 阻塞、后台并发、资产分发与 gameplay 消息竞争、MSPT 软指标 | [workload-budget](../decisions/workload-budget.md) |
 | 可选联动失败、侵入范围与人工例外 | [integration-risk](../decisions/integration-risk.md) |
 | 客户端输入校验、可信服务端的能力底线 | [trust-boundaries](../decisions/trust-boundaries.md) |

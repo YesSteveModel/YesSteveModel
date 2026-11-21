@@ -22,6 +22,20 @@ class LegacyContainerHeaderTest {
     }
 
     @Test
+    void rawDigestReadsTheStoredHeaderWithoutValidatingPayload() throws Exception {
+        for (var version : new int[] {1, 2}) {
+            var bytes = ByteBuffer.allocate(4096).put(new byte[] {'Y', 'S', 'G', 'P'}).putInt(version);
+            var digest = java.util.HexFormat.of().parseHex("00112233445566778899aabbccddeeff");
+            bytes.put(digest);
+            var path = Files.write(temp.resolve("digest" + version + ".ysm"), bytes.array());
+            org.junit.jupiter.api.Assertions.assertArrayEquals(digest, LegacyContainerHeader.rawDigest(path));
+            Files.write(path, java.util.Arrays.copyOf(bytes.array(), 23));
+            org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class,
+                () -> LegacyContainerHeader.rawDigest(path));
+        }
+    }
+
+    @Test
     void routesBomPrefixedFilesToNativeWithoutParsingTheirSummary() throws Exception {
         var summary = "unstable fixture".getBytes(StandardCharsets.UTF_8);
         var bytes = ByteBuffer.allocate(7 + summary.length + 1 + Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN)
