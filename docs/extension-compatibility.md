@@ -73,7 +73,6 @@ MolangDeclarations.submit(resource, adapterSourceUrl, compatible, detail);
 - 手动提交票据不会绕过来源归属校验、共同声明校验或 all-of 依赖检查。
 - 同一个类未提交、重复提交、同时走 `AUTO` 与 `MANUAL` 两条路径、提交内容冲突，或在服务冻结后才提交，都会被拒绝，且不会覆盖先到达的记录。
 - 任一接纳步骤失败时，对应的 Molang 符号都不会发布。
-- 完整的 checker 算法与事件处理器契约不会因 Molang 声明统一而改变。
 
 ## 自动注册事件处理器
 

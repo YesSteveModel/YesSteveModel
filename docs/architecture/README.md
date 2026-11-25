@@ -2,7 +2,7 @@
 
 YSM 用基岩版模型替换 Minecraft 中玩家、投射物和载具的视觉呈现。Java 领域层负责来源、权限、发布、实体状态与资源生命周期，native 提供计算能力，Minecraft 与 Forge 提供游戏事实、网络连接与 GPU 提交环境。
 
-产品义务以[产品决策](../product-decisions/README.md)为准，格式和协议以[标准](../standards/README.md)为准。当前格式、协议与运行行为仍处于不稳定阶段，支持范围与已知差异见[当前状态](../status/support-and-verification.md)。
+产品义务以[产品决策](../product-decisions/README.md)为准，格式和协议以[标准](../standards/README.md)为准。当前格式、协议与运行行为仍处于不稳定阶段，支持范围与已知差异见[当前状态](../status/support-and-verification.md)。本目录描述当前实现的模块划分、并发与生命周期前提及设计取舍；除产品决策、已冻结标准及宿主/内存安全硬边界外，各 Seam Contract 记录的是当前实现的协作前提而非不可突破的兼容基线，重构时可连带调整。
 
 ## 主数据流
 
@@ -62,6 +62,7 @@ flowchart TB
 - [资源生命周期场景](views/resource-lifecycle.md)：比较 reload、连接撤销、实体退休及服务关闭的影响。
 - [实体表现状态组合](views/entity-presentation-state.md)：理清指派、Ready、安装、通道许可与当次消费的关系，以及世界、GUI 和第一人称的差异。
 - [客户端帧流程与 Seam](views/client-frame-seams.md)：梳理 tick、主线程任务、世界实体、Iris shadow、手部与 GUI 的调用窗口。
+- [渲染数据流与所有权](views/rendering-data-flow.md)：串联几何烘焙、动画姿态、JNI 借用、顶点输出与宿主提交的数据形态及并发边界。
 
 | 问题 | 权威入口 |
 |---|---|

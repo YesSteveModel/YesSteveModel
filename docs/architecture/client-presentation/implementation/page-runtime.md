@@ -1,88 +1,81 @@
 # 页面 runtime 的落实关系
 
-本页说明[页面作用域](../overview.md#运行作用域与所有权)、[页面结果交接](../overview.md#页面需求与展示消费)和[选择导航](../overview.md#选择与资源需求)在代码中的实现映射。通用的资源获取与用途准备机制见[需求协调](../../model-management/demand/overview.md)。
+本页说明[页面作用域](../overview.md#运行作用域与所有权)、[页面结果交接](../overview.md#页面需求与展示消费)和[选择导航](../overview.md#选择与资源需求)的代码映射。通用资源获取与用途准备见[需求协调](../../model-management/demand/overview.md)。
 
 ## 页面与资源 owner
 
-页面流程的生命周期由 `ModelScreen` 锚定在创建时的世界实例上：它记录世界身份和回收状态，并且只弱引用世界与当前页面。打开或切换界面时，由 `ScreenEvent.Opening` 校验身份——在子页间切换会保留当前流程，离开流程或收到 `LevelEvent.Unload` 则立即终止流程。需要注意的是，卸载事件发生在 Minecraft 替换 `level` 之前，因此不能因为旧 `level` 仍可见就接纳新流程。
+页面流程生命周期由 `ModelScreen` 锚定在创建时的世界实例上：
 
-页面移除时，除了关闭卡片、图片 batch 与私有预览实体，还会显式清除 widgets、focus 与 narration 引用（仅调用 `clearWidgets()` 无法解除后两类引用）。如果导航被取消，则恢复仍在显示的来源页记录。预览用的 `FakePlayer` 始终绑定创建时的世界，不通过 `setLevel` 迁移。这些进程内清理全部由页面流程自身承担，不依赖服务层的全局安装登记；[JVM 退出](../../runtime/overview.md#jvm-进程退出)时也不等待页面完成清理。
+- 记录世界身份与回收状态，仅弱引用世界与当前页面。
+- 打开或切换界面时由 `ScreenEvent.Opening` 校验身份：子页切换保留当前流程，离开流程或收到 `LevelEvent.Unload` 立即终止。因为卸载事件早于 Minecraft 替换 `level`，卸载触发后即使旧 `level` 仍可见也不再接纳新流程。
+- 页面移除时关闭卡片、图片 batch 与私有预览实体，并显式清除 widgets、focus 与 narration 引用（`clearWidgets()` 不解除后两类引用）；导航取消则恢复仍在显示的来源页记录。
+- 预览 `FakePlayer` 始终绑定创建时的世界，不通过 `setLevel` 迁移。清理全由页面流程自身承担，[JVM 退出](../../runtime/overview.md#jvm-进程退出)时不等待页面清理。
 
-页面内各展示与图片组件的职责划分如下：
+展示与图片组件分工如下：
 
-- `CatalogModelCardState`：只保存展示状态、GUI 预览实体、图片视图与展示资格，不持有 future、重试状态或完成回调。
-- `CatalogCardImages`：集中管理预览图策略与装饰图片的展示状态。
-- `PageImages`：管理当前页面的图片 batch、结果 slot 与独立使用权（use）。
-- `ClientAssetRepository` 与 `ResidentImages`：前者签发不透明的 `ImageIdentity`，后者关联驻留内容并集中统计消费者计数。
-- `CustomTextureManager.Registration`：提供精确注册项的存活查询、重新激活与释放；`CustomTextureManager` 负责原有的保留期限与物理释放。模型目标采用的纹理（adopted texture）不进入这套注册表。
+| 组件 | 当前职责 |
+|---|---|
+| `CatalogModelCardState` | 保存展示状态、GUI 预览实体、图片视图与展示资格 |
+| `CatalogCardImages` | 管理预览图策略与装饰图片展示状态 |
+| `PageImages` | 管理当前页面图片 batch、结果 slot 与独立使用权（use） |
+| `ClientAssetRepository` / `ResidentImages` | 前者签发不透明 `ImageIdentity`，后者关联驻留内容并统计消费者计数 |
+| `CustomTextureManager.Registration` | 提供精确注册项的存活查询、再激活与释放；`CustomTextureManager` 负责保留期与物理释放（模型 adopted texture 不入此表） |
 
-此外，客户端还有两类独立于某次模型安装的通用结构：`AnimatableCacheUtil` 是客户端共享的通用展示实体缓存，按访问过期或世界卸载清理，不拥有模型卡的私有预览实体；`EntityLoadEvent` 的客户端等待列表按实体 ID 保存回调，在实体到达、离开、过期或世界卸载时清理。
+客户端另有两类独立于单次模型安装的通用结构：`AnimatableCacheUtil` 按访问过期或世界卸载清理通用展示实体，不拥有模型卡私有预览实体；`EntityLoadEvent` 客户端等待列表按实体 ID 保存回调，在实体到达、离开、过期或世界卸载时清理。
 
 ## 页面主流程
 
 ### 帧计划与卡片调度
 
-在客户端 tick 周期，`ClientModelService.tick()` 通过协调器调度世界实体的 `EntityModelDemand`，由对应实体负责方持有候选并决定安装；模型列表中的 GUI 用途不在 tick 中直接安装。
-
-模型列表的页面身份由分类、搜索词、pack、页码以及有序条目内容共同确定。替换 scope 时先建立新的接收 scope，再关闭旧 scope，确保迟到的关闭操作不会误关新 scope。每次 render 前，页面先推进展示策略并领取独立的 Ready lease；如果未获得名额，原操作会保留 Ready anchor。Ready 旁路允许页面发现两次 tick 之间刚就绪的完整资源，但旁路 miss 不会降级或取消已经接纳的获取任务。页面关闭时先停止新消费，待本帧借用结束后再清理自有输入。
-
-`CatalogPageFrame` 在单次 render 内完成名额分配、任务提交与全部交接：
-
-- 页面通过循环游标每帧最多授予“线程池最大容量 + 1”张卡片的新准备名额（即使某张卡片被拒，游标也会推进）；已经完成安装的卡片动画不受名额限制。
-- 共享同一张图片的卡片在提交前确定唯一负责准备的卡片；该卡片的冷前景、背景以及获准的完整绑定合并在同一个任务中执行。
-- 除首张卡片外，其余卡片先提交到后台执行；主线程同步执行首张卡片并立即注册其有效图片，然后等待（join）所有已接纳任务完成，再统一注册其余有效图片。无论中间是否发生异常，都必须先完成所有任务的交接，绝不在帧间保留在途批次。
-
-在 Eager 模式下，页面不创建 preview batch，也不请求或消费预览图；非 eager 模式则按需建立独立的预览需求。切换配置只影响后续的推进与消费，既不会靠隐藏 slot 维持 eager 工作，也不会强行取消此前已经接纳的补图任务。跳过预览图的状态不会产生缺图记录或错误提示。
+- **Tick 与页面身份**：`ClientModelService.tick()` 通过协调器调度世界实体 `EntityModelDemand`，由实体负责方决定安装；模型列表 GUI 用途不在 tick 中直接安装。模型列表页面身份由分类、搜索词、pack、页码与有序条目内容共同确定。
+- **Scope 切换与 render 门禁**：替换 scope 时先建新 scope 再关旧 scope，避免迟到关闭误关新 scope。每次 render 前先推进展示策略并领独立 Ready lease；未获名额时原操作保留 Ready anchor。Ready 旁路允许发现两次 tick 间刚就绪的完整资源，旁路 miss 不影响已接纳获取任务。页面关闭先停新消费，待本帧借用结束后清理自有输入。
+- **`CatalogPageFrame` 帧内交接**：
+  - 循环游标每帧最多授予“线程池最大容量 + 1”张卡片的新准备名额（被拒卡片同样推进游标）；已安装卡片的动画不受名额限制。
+  - 共享同一图片的卡片在提交前选定唯一准备方；该卡片的冷前景、背景与获准完整绑定合并在同一任务中执行。
+  - 除首张卡片外先提交后台执行；主线程同步执行首张卡片并立即注册有效图片，再 join 全部已接纳任务并注册其余有效图片。即使中途抛错，也在本帧完成全部已接纳任务交接，不跨帧滞留在途批次。
+- **Eager 模式切换**：Eager 模式下不建 preview batch 也不消费预览图；非 eager 模式按需建独立预览需求。切换配置只影响后续推进，不强行取消已接纳补图任务，跳过预览图不记缺图或报错。
 
 ### 页面图片准备与驻留
 
-`PageImages.advanceAcquisition(allowed)` 会先检查是否命中驻留使用权，未命中时才获取输入并在获准联网后提交 batch。对同一个 `ImageIdentity`，`Image.claimPreparation()` 只签发一次 CPU 准备能力：由卡片执行方同步调用 `prepare()`，主线程随后通过 `Image.publish()` 消费结果。如果某张卡片发布失败，失败状态保留在对应 slot 中，后续帧不再重复准备，同时不影响其他 slot 继续交接。非帧调用方则通过 `advance()` 串行调用同一套准备能力。GUI 读取纹理或加载状态本身不会触发后台工作。只有完成宿主注册并可供渲染消费的图片才算 Ready——原始字节、CPU 准备输入和磁盘文件都不是 Ready。
-
-冷前景图、背景图与头像的读取、校验和解码全部发生在准备能力中；远端下载阶段不做解码，缓存文件存在也仅作为准备提示。已有预览生成操作继续交付封闭的已编码内容与 RGBA 像素能力。准备能力独立获取输入：如果提交被拒，由提交方负责关闭输入；一旦被任务接纳，则由任务或 `Prepared` 对象负责关闭。`CustomTexture` 在构造时接管像素并独立保留重载所需内容，首次 load 直接上传准备好的像素，上传结束或失败后立即归还 CPU 能力。此时 batch 只负责关闭自身输入，不再持有已经转移的像素。页面关闭只结束自身持有的使用权，迟到的获取结果仍由原获取负责方收尾。
-
-`ResidentImages` 中的驻留关联不持有页面或会话引用，不强引用 RGBA 像素，也不另设保留计时器。当 `CustomTextureManager` 物理释放纹理，或 `CustomTexture` 触发 reload 与 close 时，仅撤销对应精确注册项的关联；过时的回调只能删除原本的 entry。Reload 后的重新准备属于宿主重建，不算作驻留命中。
+- **单次准备与发布**：`PageImages.advanceAcquisition(allowed)` 先查驻留使用权，未命中再取输入并在获准联网后提交 batch。对同一 `ImageIdentity`，`Image.claimPreparation()` 仅签发一次 CPU 准备能力：卡片执行方同步调 `prepare()`，主线程经 `Image.publish()` 消费。单张卡片发布失败保存在对应 slot，后续帧不再重做且不影响其他 slot；非帧调用方经 `advance()` 串行复用同一准备能力。仅完成宿主注册并可渲染的图片才算 Ready；读取纹理或状态本身不触发后台工作。
+- **解码与所有权转移**：冷前景、背景与头像的读取、校验与解码全在准备能力内完成，远端下载不解码。准备能力独立获取输入：提交被拒由提交方关闭，接纳后由任务或 `Prepared` 对象关闭。`CustomTexture` 构造时接管像素并独立保留重载内容，首次 load 上传后（无论成败）立即归还 CPU 能力，batch 仅关闭自身输入。页面关闭仅结束自身使用权，迟到获取结果由原负责方收尾。
+- **驻留失效**：`ResidentImages` 仅按精确注册项关联，不持页面、会话、RGBA 像素或独立计时器。`CustomTextureManager` 物理释放纹理或 `CustomTexture` 触发 reload/close 时仅撤销对应精确注册项，过时回调只删原 entry；reload 后重准备属宿主重建，不计驻留命中。
 
 ### 预览生成与卡片停用
 
-`ClientPreviewGenerator` 在既有的操作数上限和每 tick 接纳上限内，直接派发解码、宿主渲染与导出任务，不额外等待像素字节额度。`PreviewPixels.Owner` 只负责底层 backing 的回收与串行 reload 门禁，实际使用期由独立引用和同步借用保护；当 owner 关闭时，先拒绝新借用并标记保留 backing 待回收，等执行中的借用全部归还后再释放 backing。
-
-目录卡片、纹理候选卡以及自动补图所用的 `FakePlayer` 都走独立的轻量解释路径：只按需从所属动画集读取输入，不构建 GUI 编译闭包，也不使用 FULL 字节码。中央完整动画预览仍使用 FULL 与 AOT 路径；两条路径共享业务 context 与声明，但各自初始化私有状态。
-
-卡片停用时，`CatalogModelCardState.deactivate()` 先清除展示标志并阻止新消费。如果当前正处于帧借用期间，撤销指派与清除动画引用会推迟到本帧任务交接完成后执行；即使同一帧内重新获得展示资格，也要等到下一次正常页面推进才重新接纳。重新获准后，页面显式建立指派与实体安装 owner，模型列表在当前帧任务中采用独立候选；帧在 join 完成后直接从实体 binding 读取实际使用状态，不反向向页面或需求 scope 回报安装结果。只有在永久关闭时才回收私有预览实体。
-
-当模型使用退出后，清除私有执行态并归还执行借用，而共享动画与程序仍随 [AnimationStore](../../model-management/client-resources/overview.md#动画资源所有权与退休) 保留。再次访问同一个 store 会创建新的私有实例并复用已加载资源，页面图片也保持独立。无论是准备还是消费，都要求当前展示资格与 Matching 同时有效，并在回调 hook 返回后再次复核；预览假实体的 world tick 不会推进资源门禁。
+- **预览生成与 backing 回收**：`ClientPreviewGenerator` 在既有操作数与每 tick 接纳上限内直接派发任务。`PreviewPixels.Owner` 负责 backing 回收与串行 reload 门禁，实际使用期由独立引用与同步借用保护；关闭时先拒新借用并标记待回收，待活动借用归还后释放 backing。
+- **轻量解释路径**：目录卡片、纹理候选卡与自动补图 `FakePlayer` 走轻量解释路径，按需读动画集输入，不构建 GUI 编译闭包也不用 FULL 字节码；中央完整动画预览走 FULL 与 AOT 路径，两条路径共享业务 context 与声明、独立初始化私有状态。
+- **卡片停用与恢复**：`CatalogModelCardState.deactivate()` 先清展示标志并阻断新消费；若处于帧借用期，撤销指派与清除动画引用推迟到本帧任务交接后执行，同帧内重新获准也待下次正常推进再接纳。重新获准后由页面显式建指派与安装 owner，帧在 join 后直接读实体 binding 实际状态；私有预览实体仅在永久关闭时回收。
+- **退出与复核**：模型使用退出后清私有执行态并归还借用，共享动画与程序随 [AnimationStore](../../model-management/client-resources/overview.md#动画资源所有权与退休) 保留。准备与消费均要求当前展示资格与 Matching 同时有效，并在回调 hook 返回后复核；预览假实体 world tick 不推进资源门禁。
 
 ## 选择与显示的分离
 
-用户选择模型时，页面向 `ClientDemandCoordinator` 提交意图，并只消费其返回的结构化反馈。协调器负责远端资源准备、偏好读取、发送资格判断以及有限等待；`ClientProtocolGateway` 则同步发送已经准备好的完整命令。`LOCAL` 模式直接应用本地意图并独立保存，而在业务会话模式下，客户端绝不乐观修改模型、纹理或 Roaming 状态。
+页面提交模型选择意图给 `ClientDemandCoordinator`，仅消费结构化反馈：协调器处理远端准备、偏好读取、发送资格与有限等待，`ClientProtocolGateway` 同步发送已准备命令。`LOCAL` 模式直接应用并保存；业务会话模式下客户端仅等待服务端权威同步，不乐观修改模型、纹理或 Roaming 状态。
 
-如果已有合法初值，FULL 资源准备失败不会阻止仍获准的命令发送；偏好查询失败时则回退使用临时空初值继续发送并等待安装。发送失败、服务端拒绝与实体安装失败各自独立反馈，且关闭页面不会取消已经发起的独立选择。对于本地持久化查询失败，降级策略如下：
+- **部分失败容错**：已有合法初值时 FULL 准备失败不阻断获准命令发送；偏好查询失败回退空初值发送。发送失败、服务端拒绝与实体安装失败分别反馈，关闭页面不取消已发起选择。
+- **本地查询降级**：收藏任一页查询失败则整表按空显示；本地选择记录查询失败回退普通 `builtin:default`。查询失败均记 `DEBUG` 日志，仅 `DebugAnimationScreen.isEnabled()` 开启时向聊天栏提醒。
 
-- 收藏列表任一页查询失败时，整个收藏集合按空显示。
-- 本地选择记录查询失败时，回退到普通 `builtin:default`。
-- 所有查询失败均记录 `DEBUG` 日志，仅在 `DebugAnimationScreen.isEnabled()` 开启时向聊天栏发出提醒；写失败策略保持不变。
+进入纹理子页的 `openTexturePage()` 流程：
 
-点击进入纹理子页时，`openTexturePage()` 先复核世界、等待状态与当前目标，并只查询匹配纹理的 FULL Ready（普通 GUI 资源不足以支撑中央完整动画预览）。点击卡片时解析被点击条目的内容，点击主体按钮时则读取权威状态与当前请求纹理，不拿世界中的 Retained 替代当前内容。
-
-导航过程采用先借后切的顺序：来源页先保住入口 lease，接收页申请独立 lease 并以非阻塞方式安装中央预览，全部接管成功后才真正切换页面。如果遇到系统忙碌、构造失败、门禁变化、取消或导航失败，立即释放本次使用权，后续资源进入 Ready 也不会自动恢复旧导航。中央预览实体使用 FULL 路径及自身私有状态，在内容未变的重新初始化中保持存活，仅在页面移除时回收。纹理候选卡走 `PageScope` 的 GUI 准入，鼠标或键盘切换以及窗口 resize 都保留同一目标的连续交互起点。卡片名称始终不消费选择等待状态，只有左侧玩家名称继续等待真实玩家的 Matching 安装。纹理子页通过父模型页的 Adapter 提交选择，不引入新的权威方。
+- **前置与入口内容**：先复核世界、等待状态与目标，只查匹配纹理的 FULL Ready。点击卡片解析所点条目，点击主体按钮读权威状态与当前请求纹理，不用世界中的 Retained 替代。
+- **先借后切**：来源页保住入口 lease，接收页申领独立 lease 并以非阻塞方式安装中央预览，全部接管后再切换页面。任一环节失败（忙碌、构造失败、门禁变更或取消）即刻释放本次使用权，后续就绪不自动恢复旧导航。
+- **实体与交互状态**：中央预览实体走 FULL 路径与私有状态，内容未变的重初始化中保持存活，页面移除时回收。纹理候选卡走 `PageScope` GUI 准入，键鼠切换与 resize 保持连续交互起点。卡片名称不消费选择等待状态，仅左侧玩家名等待真实玩家 Matching 安装；纹理子页经父页 Adapter 提交选择。
 
 ## 本地目录进度
 
-`LoadingStateScreen` 与 `PlayerModelScreen` 在各自的单次 render 中读取同类型的进度快照，再交由 `CatalogProgressText` 映射为阶段文案或 `n/N` 计数。HUD 保留用户配置的位置，展示标题、带颜色的状态文字以及处理阶段的进度条；模型页的分页控件保持居中，进度文字右边缘对齐右下角。无扫描活动时两处均不绘制进度。两处显示都不读取 `ClientModelService` 的 runtime 数量（runtime 自身的数量诊断仍保留），进度事实与完成状态归 [Catalog](../../model-management/catalog/overview.md#扫描进度投影) 所有。
+`LoadingStateScreen` 与 `PlayerModelScreen` 在单次 render 中读取同类进度快照，经 `CatalogProgressText` 映射为阶段文案或 `n/N` 计数：HUD 保持用户配置位置并展示标题、状态文字与进度条；模型页分页居中、进度文字右对齐右下角。无扫描活动时不绘制。进度事实归 [Catalog](../../model-management/catalog/overview.md#扫描进度投影)，两处不读取 `ClientModelService` 的 runtime 数量。
 
 ## GUI 取景
 
-`CatalogModelButton` 与 `PreviewRenderHost` 共用同一套固定构图映射；自动截图输出透明背景并固定使用 idle 姿态。当模型清单关闭了预览旋转，且指定了非空、非 idle 的自定义 GUI 动画时，自动截图会开启旋转；其余情况以及实时卡片均按清单约定渲染。
-
-`GuiFrameInput` 在渲染前固定本轮的 partial tick、inventory context、朝向、装备以及 hover 或 focus 状态。后台任务在完成绑定前应用这份输入，并在 `finally` 中恢复私有预览实体；装备快照单独拷贝，不借用真实玩家的可变状态引用。主线程绘制时应用同一份输入，只消费已经算好的 `GeoRenderData`，不再重复调用 update 或推进动画 controller。中央 FULL 预览、纹理候选与世界实体则继续沿用各自的同步或预调度入口。
-
-`CatalogTextureButton` 的 `GuiModelFraming` 在预渲染之后、body 与 layer 输出之前，读取当前骨骼几何计算取景。`GuiModelView` 按安装身份记录有效帧的几何包络，更换安装时清空；非法帧不写入包络，无法构造有限绘制矩阵时直接跳过本帧。取景计算不修改 native 属性或法线，buffer delegate 仅在同步绘制期间借用。
+- **构图与旋转**：`CatalogModelButton` 与 `PreviewRenderHost` 共用固定构图映射。自动截图输出透明背景并固定 idle 姿态；清单关闭预览旋转且指定非空非 idle 自定义 GUI 动画时自动截图开启旋转，其余情况与实时卡片按清单约定渲染。
+- **帧输入冻结**：`GuiFrameInput` 在渲染前固定 partial tick、inventory context、朝向、装备快照（独立拷贝）及 hover/focus 状态。后台任务绑定前应用输入并在 `finally` 恢复预览实体；主线程复用同一输入直接消费 `GeoRenderData`，不再重复 update 或推进 controller。中央 FULL 预览、纹理候选与世界实体沿用各自入口。
+- **骨骼取景**：`CatalogTextureButton` 的 `GuiModelFraming` 在预渲染后、body 与 layer 输出前读取骨骼几何计算取景。`GuiModelView` 按安装身份记录有效帧几何包络，更换安装时清空；非法帧不写包络，无法构造有限绘制矩阵则跳过本帧。取景计算不改 native 属性或法线，buffer delegate 仅在同步绘制期间借用。
 
 ## 宿主动作与诊断
 
-`CatalogCardActions` 提供两个快捷操作：
+`CatalogCardActions` 快捷操作：
 
-- `Ctrl+右键`：只复制模型的发布位置，不检查权限，也不触发资源准备。
-- `Ctrl+左键`：仅在集成服务器环境且存在已验证的本地来源绑定时打开逻辑目录；builtin、远端模型或缺少来源证明时不执行打开。如果宿主文件管理器打开失败，不写入模型失败记忆；`void` 返回同样不能代表文件管理器已实际响应。
+- `Ctrl+右键`：复制模型发布位置，不查权限、不触发资源准备。
+- `Ctrl+左键`：仅在集成服务器环境且有已验证本地来源绑定时打开逻辑目录；builtin、远端模型或缺少来源证明时不执行。宿主打开失败不写入模型失败记忆，`void` 返回仅表示调用发出。
 
-卡片错误提示只展示分类摘要，不会因为按住 Shift 而暴露宿主路径或底层异常栈。清单中的作者、许可及缺图指引仍各自正常展示，不会被错误信息覆盖。真实环境下 Ctrl 点击与宿主启动的反馈尚未完成实测验证；其余验证证据见[展示设计的验证入口](../overview.md#实现与验证入口)。
+卡片错误提示仅展示分类摘要，不因按住 Shift 暴露宿主路径或异常栈；作者、许可与缺图指引照常展示。真实环境 Ctrl 点击与宿主启动尚未完成实测，其余验证见[展示设计的验证入口](../overview.md#实现与验证入口)。

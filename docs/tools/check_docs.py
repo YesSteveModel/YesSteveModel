@@ -195,8 +195,11 @@ def contract_sections(text: str, level: int) -> list[tuple[str, str]]:
 def check_contract_fields(path: Path, text: str, level: int, root: Path) -> list[str]:
     sections = contract_sections(text, level)
     errors = []
-    if [title for title, _ in sections] != list(CONTRACT_FIELDS):
-        errors.append(f"{path.relative_to(root)}: contract needs six ordered fields")
+    titles = [title for title, _ in sections]
+    unknown = [title for title in titles if title not in CONTRACT_FIELDS]
+    indices = [CONTRACT_FIELDS.index(title) for title in titles if title in CONTRACT_FIELDS]
+    if not titles or unknown or len(indices) != len(set(indices)) or indices != sorted(indices):
+        errors.append(f"{path.relative_to(root)}: contract needs ordered subset of contract fields")
     for title, body in sections:
         if title in CONTRACT_FIELDS and not HEADING_RE.sub("", body).strip():
             errors.append(f"{path.relative_to(root)}: contract field {title} is empty")

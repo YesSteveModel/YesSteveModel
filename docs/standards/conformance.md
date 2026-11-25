@@ -57,7 +57,12 @@
 - 非法的骨骼层级、cube 数量、数组长度和索引在进入渲染器前即中止并拒绝（fail closed）。
 - 每种媒体格式按解码与编码方向、运行平台以及最终的 RGBA8 像素结果分别验证。
 
-如果实现将不可变的生成消息直接作为发布值，还必须另行验证：已发布的 repeated 和 map 通过直接调用、迭代器、entry 及回调等所有修改路径都不可写；自有字节在输入底层缓冲区被改写、游标移动或输入拥有方关闭后，仍保持内容与重序列化结果稳定；每次 accessor 调用都返回只读、位置归零且游标独立的视图。这类测试用于验证实现内部的发布与所有权隔离，不能替代上面的跨实现 wire fixture。此外，当前严格 profile 还必须覆盖：未标注 `optional` 的普通单值字段缺失时 build 或 parse 失败，以及所有显式 `optional` 字段的三态行为，不得通过 partial message 规避校验。
+若实现将不可变的生成消息直接作为发布值，还需覆盖以下内部所有权与严格校验要求（用于验证内部隔离，不替代上述跨实现 wire fixture）：
+
+- 已发布的 repeated 和 map 通过直接调用、迭代器、entry 及回调等所有修改路径均不可写。
+- 自有字节在输入底层缓冲区被改写、游标移动或输入拥有方关闭后，仍保持内容与重序列化结果稳定。
+- 每次 accessor 调用都返回只读、位置归零且游标独立的视图。
+- 当前严格 profile 必须覆盖未标注 `optional` 的普通单值字段缺失时 build 或 parse 失败，以及所有显式 `optional` 字段的三态行为，不得通过 partial message 规避校验。
 
 当前产品已经具备的能力和尚缺的测试，统一记录在[当前支持与验证](../status/support-and-verification.md)；实现状态不能反向修改本标准。
 
@@ -73,14 +78,42 @@ P1 的 golden 至少要覆盖同一条消息的四种封装形态：simple frame
 
 P2 必须覆盖以下当前契约：
 
-- **Session 与连接身份**：覆盖 Local、无 YSM channel、协商中（negotiating）、活跃（active）、仅内置默认（intrinsic-default-only）和已关闭（closed）路径。待确认的 Hello 重试必须复用同一份 offer；session 活跃后的 ping 不替换 owner；wire 层不携带 connection 或 session ID。Publication 与模型分发各自维护连接内的非零 `uint64` ID 流，按无符号整数单调递增且不复用，需覆盖首次 full 使用 ID 1、达到最大值后耗尽、已终止 ID 不重开，以及连接替换后重置。
-- **Collection publication**：`SessionFullFragment` 与 `SessionDeltaFragment` 只承载 catalog、grants、pack presentation 与 default animation。Full 必须显式覆盖全部四个 collection；delta 只允许合法的 `CLEAR`、`REMOVE`、`ADD`，并遵守规范的 collection、操作与 key 顺序。测试需覆盖分包数、记录数和字节数上限、序号连续覆盖、重复包、冲突包与 final 标记、删除不存在项的空操作（no-op）、仅基线漂移时的整体丢弃，以及协议或领域非法时的 fail closed。Collection 事务既不包含也不等待模型选择；ID 17 的 `PlayerStateUpdate.model` 与 `ModelSelectionState` 仍是唯一的选择同步路径，`SelectModelResult` 只返回处理结果。
-- **强类型模型分发**：`MetadataPrefixRequest`、`ModelChunkRequest` 与 `PresentationPageRequest` 各自用一个 `data_transfer_id` 对应一次独立的接纳、取消和终止状态。只要完整 descriptor 能装入单个物理帧，就只能建立一个 transfer；只有 descriptor 超出单帧上限时，原业务 owner 才按规范顺序拆分为有限个子请求（children）。各子请求独立接纳，允许部分成功、部分被拒；父级只聚合结果，不拥有子请求的底层数据，也不在 wire 层产生父子或成员身份。测试需覆盖 metadata prefix 按容器编号的分包序号，chunk 与 preview、icon、pack-cover 的强类型字节范围和交付类型，各自的成员数、分包数和字节上限，重复、重叠、缺口和 final 标记，必需项、可选项与缓存命中，兄弟任务失败或取消、迟到结果、精确缓存保留，以及所有必需项完成后仅发布一次。Preview fixture 还需验证请求只携带 slot、model 与 container、字段 4..8 为保留字段、结束偏移由唯一 final 动态确定，以及单图 16 MiB 与实收聚合 128 MiB 的限制；icon 与 cover 继续走 descriptor 和 hash 校验路径。
-- **接纳、权威与分发**：服务端在接触数据源、native 调用、大块内存分配或长期保留前，必须先完成全部结构校验，再检查当前 catalog、精确 descriptor、授权（grants）与当前内容策略，不能依据模糊的内存状态或队列快照做接纳判断。业务 transfer owner 必须在获取任何数据源之前建立，单个子请求的完整发包集合只经过一次全局 dispatch 的 `enqueue()` 交接点。构造失败、硬上限拒绝或 `enqueue()` 异常都不转移所有权；一旦接纳，数据源、读取游标、重试和关闭责任全归 dispatch owner。字节缓冲、已校验 chunk lease 和文件区间三种数据源都必须覆盖有界读取、同游标重试、完整重组和唯一终态。服务端对 collection 权威状态的提交必须早于 full 或 delta 的编码与入队；发送失败不回滚当前权威状态，后续 delta 以最新权威状态为基线。
-- **激活与缓存**：覆盖先确立权威再激活、精确元组未变时直接复用、替换场景下拦截过期完成结果，以及活跃实例、本地源、缓存和服务端四种激活路径。本地同 `ModelId` 的非精确复用不得发起网络请求，远端路径则严格要求精确元组；同时验证访问错误来源标记、单文件原子缓存提交和物理根目录边界隔离。本地扫描遇到同身份冲突时，由最先完成校验并被 owner 接纳的一方胜出，不要求固定的完成顺序。Metadata、preview 和 icon 只要求当前 catalog 成员资格；普通 chunk 还受 public、grants 与当前内容策略约束，且接纳后的撤权不追溯修改已接纳任务。Preview 还需验证内嵌图优先、`ContainerId` 缓存次之、缺失时返回相应空结果、服务端不执行烘培（bake）、可解码替换图被接受且坏图不触发删除；这些宽松规则不得外溢到模型本体、icon 或 cover 的校验中。
-- **精确连接的关闭与隔离**：启动新连接与断开连接复用同一条 session 清理路径。旧连接的 collection fragment、资源失败或结果、激活、选择、玩家与实体状态及通知，都不能作用于替换后的新连接，也不能关闭新连接的任务。合法且独立的缓存提交，以及不携带旧权限的完整 Ready 结果可以跨 session 保留；查询表、未命中与失败记录及请求状态必须随 session 释放。Dispatch 的断开调用返回后，不得再发送旧连接的任何数据包；连接关闭不删除持久缓存、本地完整 catalog、强制选择或共享运行时。基线漂移与内置默认无效触发的本地系统消息，仍需覆盖单连接去重、重连重置、拒绝旧 owner、固定 translation key、发送失败不传播不重试不改权威，以及无关失败不消耗通知额度。
+- **Session 与连接身份**
+  - 覆盖 Local、无 YSM channel、协商中（negotiating）、活跃（active）、仅内置默认（intrinsic-default-only）和已关闭（closed）路径。
+  - 待确认的 Hello 重试必须复用同一份 offer；session 活跃后的 ping 不替换 owner；wire 层不携带 connection 或 session ID。
+  - Publication 与模型分发各自维护连接内的非零 `uint64` ID 流，按无符号整数单调递增且不复用，需覆盖首次 full 使用 ID 1、达到最大值后耗尽、已终止 ID 不重开，以及连接替换后重置。
+- **Collection publication**
+  - `SessionFullFragment` 与 `SessionDeltaFragment` 只承载 catalog、grants、pack presentation 与 default animation；full 必须显式覆盖全部四个 collection，delta 只允许合法的 `CLEAR`、`REMOVE`、`ADD` 并遵守规范的 collection、操作与 key 顺序。
+  - 覆盖分包数、记录数和字节数上限、序号连续覆盖、重复包、冲突包与 final 标记、删除不存在项的空操作（no-op）、仅基线漂移时的整体丢弃，以及协议或领域非法时的 fail closed。
+  - Collection 事务既不包含也不等待模型选择；ID 17 的 `PlayerStateUpdate.model` 与 `ModelSelectionState` 仍是唯一的选择同步路径，`SelectModelResult` 只返回处理结果。
+- **强类型模型分发**
+  - `MetadataPrefixRequest`、`ModelChunkRequest` 与 `PresentationPageRequest` 各自用一个 `data_transfer_id` 对应一次独立的接纳、取消和终止状态。
+  - 只要完整 descriptor 能装入单个物理帧，就只能建立一个 transfer；只有 descriptor 超出单帧上限时，原业务 owner 才按规范顺序拆分为有限个子请求（children）。各子请求独立接纳，允许部分成功、部分被拒；父级只聚合结果，不拥有子请求的底层数据，也不在 wire 层产生父子或成员身份。
+  - 覆盖 metadata prefix 按容器编号的分包序号，chunk 与 preview、icon、pack-cover 的强类型字节范围和交付类型，各自的成员数、分包数和字节上限，重复、重叠、缺口和 final 标记，必需项、可选项与缓存命中，兄弟任务失败或取消、迟到结果、精确缓存保留，以及所有必需项完成后仅发布一次。
+  - Preview fixture 还需验证请求只携带 slot、model 与 container、字段 4..8 为保留字段、结束偏移由唯一 final 动态确定，以及单图 16 MiB 与实收聚合 128 MiB 的限制；icon 与 cover 继续走 descriptor 和 hash 校验路径。
+- **接纳、权威与分发**
+  - 服务端在接触数据源、native 调用、大块内存分配或长期保留前，必须先完成全部结构校验，再检查当前 catalog、精确 descriptor、授权（grants）与当前内容策略，不能依据模糊的内存状态或队列快照做接纳判断。
+  - 业务 transfer owner 必须在获取任何数据源之前建立，单个子请求的完整发包集合只经过一次全局 dispatch 的 `enqueue()` 交接点；构造失败、硬上限拒绝或 `enqueue()` 异常都不转移所有权，一旦接纳，数据源、读取游标、重试和关闭责任全归 dispatch owner。
+  - 字节缓冲、已校验 chunk lease 和文件区间三种数据源都必须覆盖有界读取、同游标重试、完整重组和唯一终态。
+  - 服务端对 collection 权威状态的提交必须早于 full 或 delta 的编码与入队；发送失败不回滚当前权威状态，后续 delta 以最新权威状态为基线。
+- **激活与缓存**
+  - 覆盖先确立权威再激活、精确元组未变时直接复用、替换场景下拦截过期完成结果，以及活跃实例、本地源、缓存和服务端四种激活路径。
+  - 本地同 `ModelId` 的非精确复用不得发起网络请求，远端路径则严格要求精确元组；同时验证访问错误来源标记、单文件原子缓存提交和物理根目录边界隔离。本地扫描遇到同身份冲突时，由最先完成校验并被 owner 接纳的一方胜出，不要求固定的完成顺序。
+  - Metadata、preview 和 icon 只要求当前 catalog 成员资格；普通 chunk 还受 public、grants 与当前内容策略约束，且接纳后的撤权不追溯修改已接纳任务。
+  - Preview 还需验证内嵌图优先、`ContainerId` 缓存次之、缺失时返回相应空结果、服务端不执行烘培（bake）、可解码替换图被接受且坏图不触发删除；这些宽松规则不得外溢到模型本体、icon 或 cover 的校验中。
+- **精确连接的关闭与隔离**
+  - 启动新连接与断开连接复用同一条 session 清理路径；旧连接的 collection fragment、资源失败或结果、激活、选择、玩家与实体状态及通知，都不能作用于替换后的新连接，也不能关闭新连接的任务。
+  - 合法且独立的缓存提交，以及不携带旧权限的完整 Ready 结果可以跨 session 保留；查询表、未命中与失败记录及请求状态必须随 session 释放。
+  - Dispatch 的断开调用返回后，不得再发送旧连接的任何数据包；连接关闭不删除持久缓存、本地完整 catalog、强制选择或共享运行时。
+  - 基线漂移与内置默认无效触发的本地系统消息，仍需覆盖单连接去重、重连重置、拒绝旧 owner、固定 translation key、发送失败不传播不重试不改权威，以及无关失败不消耗通知额度。
 
-P3 必须覆盖：在尚未建立真实 FULL 基线前拒绝 `PlayerStateReport` DELTA；FULL 成功应用后建立基线；report、update 与 starred snapshot 的 descriptor 不包含代际字段。针对客户端本地提交失败、服务端接收或处理失败、以及逐观察者广播失败，都要证明本次机会结束后不留存重试队列、待处理项、失败标记、待广播缓冲或恢复状态。同时覆盖协议允许的遗漏、重复、延迟与旧合法内容覆盖、连接替换以及迟到输入。真实 transport 测试必须使用保存好的 Proto 与 frame golden，不能用同一套运行时代码既产出数据又生成预期值。同构建的 full、delta、资源和玩家状态链路、真正的版本不匹配，以及二次登录的单 session 约束，需要分别提供真实 Forge 双端观测证据。
+P3 必须覆盖以下要求：
+
+- 在尚未建立真实 FULL 基线前拒绝 `PlayerStateReport` DELTA；FULL 成功应用后建立基线；report、update 与 starred snapshot 的 descriptor 不包含代际字段。
+- 针对客户端本地提交失败、服务端接收或处理失败、以及逐观察者广播失败，都要证明本次机会结束后不留存重试队列、待处理项、失败标记、待广播缓冲或恢复状态。
+- 覆盖协议允许的遗漏、重复、延迟与旧合法内容覆盖、连接替换以及迟到输入。
+- 真实 transport 测试必须使用保存好的 Proto 与 frame golden，不能用同一套运行时代码既产出数据又生成预期值。
+- 同构建的 full、delta、资源和玩家状态链路、真正的版本不匹配，以及二次登录的单 session 约束，需要分别提供真实 Forge 双端观测证据。
 
 ## 完整身份与 short ASCII 向量
 

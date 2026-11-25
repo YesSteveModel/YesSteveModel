@@ -110,20 +110,25 @@ class ArchitectureChecks(unittest.TestCase):
                         .replace("[B](b/overview.md)", ""), "utf-8")
         self.assertEqual([], self.errors())
         leaf.write_text(leaf.read_text("utf-8").replace("### 失败与拒收", "### Other"), "utf-8")
-        self.assertTrue(any("leaf.md: contract needs six ordered fields" in error for error in self.errors()))
+        self.assertTrue(any("leaf.md: contract needs ordered subset of contract fields" in error for error in self.errors()))
         leaf.write_text(leaf.read_text("utf-8").replace("## Seam Contract", "## Other contract"), "utf-8")
         self.assertTrue(any("leaf.md: subsystem needs one Seam Contract entry" in error for error in self.errors()))
 
-    def test_contract_fields_cannot_be_empty_or_reordered(self):
+    def test_contract_fields_allow_omission_but_reject_empty_duplicate_or_reordered(self):
         path = self.root / "architecture/a/overview.md"
         original = path.read_text("utf-8")
+        path.write_text(original.replace("### 前置条件与输入\n\nLocal obligation.\n\n", "")
+                        .replace("### 证据与依赖\n\nLocal obligation.", ""), "utf-8")
+        self.assertEqual([], self.errors())
         path.write_text(original.replace("### 前置条件与输入\n\nLocal obligation.",
                                          "### 前置条件与输入\n\n#### Empty detail"), "utf-8")
         self.assertTrue(any("contract field 前置条件与输入 is empty" in error for error in self.errors()))
+        path.write_text(original.replace("### 结果与保证", "### 前置条件与输入"), "utf-8")
+        self.assertTrue(any("ordered subset of contract fields" in error for error in self.errors()))
         path.write_text(original.replace("### 前置条件与输入", "### TEMP")
                         .replace("### 结果与保证", "### 前置条件与输入")
                         .replace("### TEMP", "### 结果与保证"), "utf-8")
-        self.assertTrue(any("six ordered fields" in error for error in self.errors()))
+        self.assertTrue(any("ordered subset of contract fields" in error for error in self.errors()))
 
     def test_duplicate_contract_entry_is_rejected(self):
         path = self.root / "architecture/a/overview.md"
@@ -171,7 +176,9 @@ class ArchitectureChecks(unittest.TestCase):
         text = path.read_text("utf-8")
         before, second = text.split("### Publish", 1)
         path.write_text(before + "### Publish" + second.replace("**失败与拒收**", "**Other**"), "utf-8")
-        self.assertTrue(any("six ordered fields" in error for error in self.errors()))
+        self.assertTrue(any("ordered subset of contract fields" in error for error in self.errors()))
+        path.write_text(before + "### Publish" + second.replace("**失败与拒收**\n\nLocal obligation.\n\n", ""), "utf-8")
+        self.assertEqual([], self.errors())
 
     def test_common_rules_need_scope_and_cannot_replace_all_seams(self):
         path = self.named_contracts()
@@ -192,12 +199,14 @@ class ArchitectureChecks(unittest.TestCase):
         self.named_contracts(external=True)
         self.assertEqual([], self.errors())
 
-    def test_external_contract_must_be_complete_and_have_one_owner(self):
+    def test_external_contract_must_have_valid_fields_and_one_owner(self):
         self.named_contracts(external=True)
         topic = self.root / "architecture/a/publication.md"
         original = topic.read_text("utf-8")
         topic.write_text(original.replace("**失败与拒收**\n\nLocal obligation.", ""), "utf-8")
-        self.assertTrue(any("six ordered fields" in error for error in self.errors()))
+        self.assertEqual([], self.errors())
+        topic.write_text(original.replace("**失败与拒收**", "**Other**"), "utf-8")
+        self.assertTrue(any("ordered subset of contract fields" in error for error in self.errors()))
         topic.write_text(original, "utf-8")
         other = self.root / "architecture/a/b/c/overview.md"
         text = other.read_text("utf-8")
@@ -226,11 +235,11 @@ class ArchitectureChecks(unittest.TestCase):
     def test_fenced_labels_do_not_supply_missing_fields(self):
         path = self.named_contracts()
         text = path.read_text("utf-8")
-        before, second = text.split("### Publish", 1)
-        second = second.replace("**失败与拒收**\n\nLocal obligation.",
-                                "```markdown\n**失败与拒收**\nExample.\n```")
-        path.write_text(before + "### Publish" + second, "utf-8")
-        self.assertTrue(any("six ordered fields" in error for error in self.errors()))
+        before, rest = text.split("### Publish", 1)
+        _, after = rest.split("## 设计取舍", 1)
+        fenced_only = "\n\n```markdown\n**失败与拒收**\nExample.\n```\n\n"
+        path.write_text(before + "### Publish" + fenced_only + "## 设计取舍" + after, "utf-8")
+        self.assertTrue(any("Publish" in error or "contract entry needs fields" in error for error in self.errors()))
 
     def test_single_page_parent_is_not_inferred_from_directory(self):
         overview = self.root / "architecture/a/overview.md"

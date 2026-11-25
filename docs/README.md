@@ -2,7 +2,7 @@
 
 - [产品决策](product-decisions/README.md)是其声明范围内产品目标、需求、业务约束、领域决策、理由与行为契约的 Root Authority。
 - [标准](standards/README.md)及随文发布的 Schema 定义公开格式、wire 编码、通信协议与一致性要求。
-- [架构](architecture/README.md)说明模块职责、跨边界契约、设计取舍及理由。[模型兼容与容器语义冻结](architecture/asset-pipeline/model-compatibility.md)属于架构专题；尚未落地的设计差异记录在状态页中。
+- [架构](architecture/README.md)说明当前模块职责、跨边界契约、设计取舍及理由；除受产品决策与已冻结标准约束的边界外，内部架构机制属于可演进现状而非不可突破的兼容基线。[模型兼容与容器语义冻结](architecture/asset-pipeline/model-compatibility.md)属于架构专题；尚未落地的设计差异记录在状态页中。
 - [开发指南](development/README.md)约定开发与维护流程；[构建指南](build.md)、[基建指南](development/infrastructure.md)和[扩展模组兼容性检测](extension-compatibility.md)提供构建方式、现有基础设施的使用契约以及第三方接入要求。
 - [当前 ABI 版本](abi/current.md)列出各全局 ABI 的版本定义与覆盖范围；[ABI 维护规则](abi/maintenance.md)说明版本迭代方式与兼容门禁，用于落实产品兼容性决策。
 - [复杂度地图](complexity-map/README.md)梳理复杂协调机制的因果关系、维护成本与简化机会。

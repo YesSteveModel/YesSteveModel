@@ -40,11 +40,11 @@ flowchart LR
 
 `borrow` 只在进入和退出同步回调时获取门禁锁并增减计数，执行 native 工作期间不持锁。回调结束时在 `finally` 中归还计数并对 wrapper 执行 fence，因此取消请求可以与消费者并发执行，同时 Cleaner 不会释放仍在借用中的对象。调用 `close` 时先封口拒绝新借用，等最后一个回调归还计数后再调用基类释放。继承自基类的 `get()` 仍只提供裸借用，不建立上述保护窗口。
 
-Native 入口在有效借用期间通过 `AcquireOpaquePtr<CancellationState>` 获取共享取消状态。共享保留只能从尚未销毁的 handle 创建；保留成功后，该状态的寿命可以超出原 Java handle。底层的核心状态使用 `release` 写入取消请求、`acquire` 读取状态，不反向调用 Java，也不接管消费者的执行或恢复逻辑。
+Native 侧的 `CancellationState` 内存序与跨窗口共享保留机制归底层能力层维护，详见 C++ native 仓库的 `docs/infrastructure/cancellation.md`。
 
 ## 存储结果交付
 
-三类存储业务 wrapper 的操作与 `close` 均串行执行；`DatabaseWork` 持有懒创建的底层资源，待所有工作排空后再关闭。无 payload 的结果状态以及单个 usage 数值直接通过原始类型数组传回；复杂结果和打开操作则返回独立的强类型结果负责方，payload 不借用底层的 statement、cursor 或数据库连接。Java 侧先接管结果负责方，再按具名业务字段复制字符串和字节数组，最后立即关闭该负责方；复制出的值可在后续操作以及业务对象关闭后继续使用。
+三类存储业务 wrapper 的操作与 `close` 均串行执行；`DatabaseWork` 持有懒创建的底层资源，待所有工作排空后再关闭。Java 侧接管独立结果负责方后，按具名业务字段复制字符串和字节数组并立即关闭该负责方；复制出的值可在后续操作以及业务对象关闭后继续使用。
 
 结果头只携带业务结束状态、稳定失败类别、真实 `committed` 标记和 payload 数量，数据库原始错误码、表结构以及通用的 operation/key/row 协议均不暴露给 Java。如果采用或复制阶段失败，由 `StorageDeliveryException` 保留已知的提交事实；若连结果头都未能读取，则标记提交状态未知，绝不伪造“未提交”结果，也不自动重放写操作。独立结果负责方的 native RAII、Java 采用与关闭共用既有释放协议。
 
@@ -52,7 +52,7 @@ Native 入口在有效借用期间通过 `AcquireOpaquePtr<CancellationState>` �
 
 `GeoModel` 构造成功后会撤销消费者对 `NativeBakedModel` 的显式关闭权。运行期与存储层各自持有强引用，同步 JNI 借用期间继续对原 wrapper 执行 fence。序列化与渲染只读共享同一份底层 backing，结束某个消费者只撤掉它自己的引用。Cleaner 是已共享 wrapper 唯一的物理释放入口，而尚未共享的构造失败仍按构造回滚及时释放。
 
-按类型统计容量时，会汇总固定结构体、各 SIMD vector 的已分配 capacity 以及骨骼元数据。序列化预分配尺寸直接复用 serializer 的推导逻辑，提前预约精确容量。Java 存储域另行统计容器、编解码器以及 staging 验证工作集；逻辑释放不承诺进程 RSS 立即回落。
+Java 存储域负责统计容器、编解码器及 staging 验证工作集，逻辑释放不承诺进程 RSS 立即回落。
 
 ## 音频 checkpoint
 

@@ -1,10 +1,6 @@
 # 基建使用指南
 
-本文是[实现指南](implementation.md)的能力参考手册，说明现有基础设施的选型方式与使用契约。格式、协议、业务生命周期和 native 内部实现分别由对应的标准文档和架构页定义。
-
-基建复用原则见[实现指南](implementation.md#基建复用)。
-
-注意，`com.elfmcys.ysm.util` 是历史演进形成的工具集合，并非里面的所有类型都属于推荐复用的通用基建。新代码只应把本文列出的入口及其链接到的领域门面视为首选能力。
+本页是[实现指南](implementation.md#基建复用)的能力参考手册，列出项目内推荐复用的通用基础设施与使用契约。`com.elfmcys.ysm.util` 包含历史工具类，新代码仅以本文列出的入口及对应领域门面为首选。
 
 ## 主题索引
 
@@ -171,4 +167,4 @@ JNI 边界不暴露 QuickBuffers 的 message、builder、解析游标或 allocat
 
 `SpinLock` 只适用于已证实竞争极短且绝不阻塞的临界区，禁止跨越 I/O、JNI、日志输出、事件派发或用户回调持有自旋锁。
 
-YSM 创建专属 Java 平台线程时，原 thread factory 应使用 `ThreadScheduling.entry(role, policy, body)` 包装整个 worker 循环，替补 worker 也复用同一入口；不要用它包装提交给 Minecraft、Netty、common pool 或其他宿主 executor 的单个任务。该门面只负责应用固定的操作系统线程策略并记录有界诊断日志，不创建 executor、不接管业务生命周期，失败时也不回退到 Java 线程优先级。线程职责映射见[线程策略](../architecture/runtime/implementation/execution.md#线程策略)，平台能力与失败契约见[Native 设计](../architecture/native-runtime/overview.md#调用线程调度)。
+YSM 创建专属 Java 平台线程时，thread factory 使用 `ThreadScheduling.entry(role, policy, body)` 包装整个 worker 循环（替补 worker 复用同一入口）；不要用于包装提交给 Minecraft、Netty 或公共池的单个任务。该门面仅应用固定 OS 线程策略并记录有界诊断日志，失败时不回退到 Java 线程优先级。线程职责映射见[线程策略](../architecture/runtime/implementation/execution.md#线程策略)，平台能力与失败契约见[Native 设计](../architecture/native-runtime/overview.md#调用线程调度)。

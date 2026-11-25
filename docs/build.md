@@ -15,7 +15,7 @@
 
 ## 开发环境运行
 
-1. 按照 native 仓库中的 `docs/build_cn.md` 构建当前平台的 native 库。
+1. 按照 native 仓库中的 `docs/build.md` 构建当前平台的 native 库。
 2. 在 Java 项目根目录编辑 `local.properties`，将 `ysm.native_path` 设置为生成的 native 库的绝对路径。
     - 如果该文件尚不存在，可以先执行一次下一步的 `runClient`；Gradle 会在首次运行时自动生成它，修改后再重新运行。
     - `local.properties` 仅用于保存本机开发配置，已被 Git 忽略，不会进入版本控制。
