@@ -1,0 +1,154 @@
+// SPDX-License-Identifier: CC0-1.0
+syntax = "proto3";
+
+package mixel.asset.model.data;
+
+message PhysicsDefinition {
+  repeated PhysicsNode nodes = 1;
+  repeated PhysicsConstraint constraints = 2;
+  repeated CollectionName collections = 3;
+  // Empty selects world gravity (0, -9.81, 0). Otherwise XYZ in m/s².
+  repeated float gravity = 4 [packed = true];
+}
+
+message CollectionName {
+  uint32 slot = 1;
+  string name = 2;
+}
+
+enum PhysicsNodeKind {
+  PHYSICS_NODE_KIND_UNSPECIFIED = 0;
+  PHYSICS_NODE_KIND_DYNAMIC = 1;
+  PHYSICS_NODE_KIND_PROXY = 2;
+  PHYSICS_NODE_KIND_ANCHOR = 3;
+}
+
+message PhysicsNode {
+  string id = 1;
+  optional string bone = 2;  // Required, including when an explicitly empty name selects the unnamed bone.
+  PhysicsNodeKind kind = 3;
+  repeated CollisionShape shapes = 4;
+  // Omitted selects collection 1. Zero selects the empty set.
+  optional uint32 collection_mask = 5;
+  optional float friction = 6;
+  optional float bounciness = 7;
+  optional float mass = 8;
+  optional float linear_damping = 9;
+  optional float angular_damping = 10;
+  optional float gravity_scale = 11;
+  optional bool disable_when_hidden = 12;
+  optional string preset_tag = 13;
+}
+
+message CollisionShape {
+  oneof shape {
+    SphereShape sphere = 1;
+    CapsuleShape capsule = 2;
+    BoxShape box = 3;
+  }
+}
+
+// Shape positions and full dimensions are relative to the bone pivot, in model pixels.
+message SphereShape {
+  repeated float center = 1 [packed = true];
+  float radius = 2;
+}
+
+message CapsuleShape {
+  repeated float point_a = 1 [packed = true];
+  repeated float point_b = 2 [packed = true];
+  float radius = 3;
+}
+
+message BoxShape {
+  repeated float center = 1 [packed = true];
+  repeated float size = 2 [packed = true];
+  repeated float rotation = 3 [packed = true];  // Unit quaternion, XYZW.
+}
+
+enum PhysicsConstraintKind {
+  PHYSICS_CONSTRAINT_KIND_UNSPECIFIED = 0;
+  PHYSICS_CONSTRAINT_KIND_FIXED = 1;
+  PHYSICS_CONSTRAINT_KIND_POINT = 2;
+  PHYSICS_CONSTRAINT_KIND_HINGE = 3;
+  PHYSICS_CONSTRAINT_KIND_GENERIC = 4;
+}
+
+message PhysicsConstraint {
+  string id = 1;
+  string node_a = 2;
+  string node_b = 3;
+  PhysicsConstraintKind kind = 4;
+  ConstraintFrame frame_a = 5;
+  ConstraintFrame frame_b = 6;
+  // Omitted selects true.
+  optional bool disable_collisions = 7;
+  optional AxisConfig linear_x = 8;
+  optional AxisConfig linear_y = 9;
+  optional AxisConfig linear_z = 10;
+  optional AxisConfig angular_x = 11;
+  optional AxisConfig angular_y = 12;
+  optional AxisConfig angular_z = 13;
+  optional ConeConfig cone = 14;
+  optional string preset_tag = 15;
+}
+
+message ConstraintFrame {
+  repeated float pivot_offset = 1 [packed = true];
+  repeated float axis_x = 2 [packed = true];
+  repeated float axis_y = 3 [packed = true];
+  repeated float axis_z = 4 [packed = true];
+}
+
+enum LimitKind {
+  LIMIT_KIND_UNSPECIFIED = 0;
+  LIMIT_KIND_FREE = 1;
+  LIMIT_KIND_LOCKED = 2;
+  LIMIT_KIND_HARD = 3;
+  LIMIT_KIND_SOFT = 4;
+}
+
+message AxisConfig {
+  // Omitted selects FREE on an axis exposed by the primitive.
+  optional LimitKind limit = 1;
+  // Model pixels on linear axes, radians on angular axes.
+  optional float min = 2;
+  optional float max = 3;
+  optional SpringConfig spring = 4;
+  optional SpringParameters soft_limit_spring = 5;
+}
+
+message ConeConfig {
+  LimitKind limit = 1;
+  optional float half_angle = 2;  // Radians.
+  optional SpringParameters soft_limit_spring = 3;
+}
+
+enum SpringTarget {
+  SPRING_TARGET_UNSPECIFIED = 0;
+  SPRING_TARGET_OFF = 1;
+  SPRING_TARGET_REST_POSE = 2;
+  SPRING_TARGET_ANIMATION = 3;
+}
+
+message SpringConfig {
+  SpringTarget target = 1;
+  optional SpringParameters parameters = 2;
+}
+
+message SpringParameters {
+  oneof mode {
+    FrequencyDamping frequency_damping = 1;
+    StiffnessDamping stiffness_damping = 2;
+  }
+}
+
+message FrequencyDamping {
+  float frequency = 1;
+  optional float damping_ratio = 2;
+}
+
+message StiffnessDamping {
+  optional float stiffness = 1;
+  optional float damping = 2;
+}

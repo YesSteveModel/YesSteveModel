@@ -247,6 +247,12 @@ final class EntityExecutionLifecycle {
         return scoped(Phase.DRAW, operation);
     }
 
+    void assertDrawBorrow() {
+        assertMainThread();
+        if (phase != Phase.DRAW)
+            throw new IllegalStateException("Entity draw access requires its current borrow");
+    }
+
     private <R> R scoped(Phase active, Supplier<R> operation) {
         rejectInternalReentry();
         if (asyncTask != null)

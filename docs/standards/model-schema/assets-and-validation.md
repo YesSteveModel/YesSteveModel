@@ -61,6 +61,66 @@ Blob 图像的格式和尺寸取自 descriptor，其容器 chunk 的 `encoding` 
 
 `GeoProperties` 只描述纹理参考宽高，实际纹理尺寸仍以 Image descriptor 为准。遇到数组长度、索引越界或骨骼层级非法时，读取方必须拒绝，不得自行修补模型。
 
+## Physics
+
+[`ModelData.physics`](proto/asset/model/ModelData.proto) 仅用于 `player` target。节点显式按骨名绑定同一 definition 的 `main` 几何，空名可绑定唯一的空名骨。关节端点引用同一物理定义中的节点。省略整个字段时，definition 仍表示纯动画模型。
+
+- 形状位置、尺寸、关节挂点和平移限位使用模型像素。角度使用弧度，重力矢量使用世界坐标系的 m/s²。矢量按 XYZ 存储，有向盒使用 XYZW 单位四元数。关节两端各自携带局部挂点和右手正交单位基。
+- 动态节点必须绑定唯一的动态骨并声明质量。身体代理和锚点只绑定纯动画骨，其自身与祖先都不能绑定动态节点。身体代理可以在同一骨上声明多个，并支持碰撞集合和接触材质。锚点只提供骨骼动画目标。节点 ID 和关节 ID 各自唯一。
+- 碰撞集合使用掩码的低 20 位。掩码缺省表示集合 1，显式 `0` 表示空集合，显式 `1` 表示集合 1。关节禁碰缺省开启。重力缺省取世界向下的 `(0, -9.81, 0)` m/s²。刚体摩擦和恢复系数分别缺省为 0.5 和 0，动态体的线速度阻尼和角速度阻尼分别缺省为 0.04 和 0.1 s⁻¹，重力缩放缺省为 1，显隐停用缺省关闭。
+- 关节允许闭环，每条关节至少有一端为动态节点。自连接和悬空端点无效。每个动态连通部分必须经有效力学关节到达至少一个锚点或代理。固定关节、球铰和铰链锁定平移，均计入连通性。通用关节在六轴都自由或只有恒零作用时仍可单独禁碰，锚定检查跳过该边。扭转和两个摆动分量的可达角度均位于 `[−π, +π]`，覆盖整段的硬限位和软限位都恒无作用。刚度和阻尼均为零的软限位或回正弹簧也恒无作用。全角限位可与有效的独立回正弹簧并用，此时关节可由回正弹簧提供锚定。
+- 固定关节锁定六轴。球铰锁定平移，可选圆锥限位或逐轴摆动限位，扭转独立配置。铰链只开放局部 Z 轴旋转。通用关节开放六轴。可动轴可以选用装配姿态或动画姿态作为唯一回正目标。已声明的软限位需要有限边界与一组独立的弹簧参数。
+
+### 静态安全边界
+
+每份物理定义最多包含 128 个节点、256 条关节和 512 个碰撞图元。每个动态节点和身体代理包含 1 至 32 个图元。绑定的 `main` 骨树须满足骨名唯一、父骨可解析、无环及有限三分量变换，已绑定节点的合成绑定姿态也须有限。
+
+Raw 展开、导出暂存校验与 M2 定义读取使用相同的成品 `float32` 边界。角度先从度转为弧度。允许为零的字段量化为零后按零处理，集合槽位在整数域检查。
+
+| 字段 | 有效区间 |
+| --- | --- |
+| 动态节点质量 | `[1e−4, 1e6]` kg |
+| 球和胶囊半径、盒各边长 | `[1e−3, 1e4]` 模型像素 |
+| 胶囊中心线长度 | `[0, 1e4]` 模型像素，零长度按球解释 |
+| 图元中心与端点、关节局部挂点、平移限位 | 各分量 `[−1e4, 1e4]` 模型像素 |
+| 世界重力、逐体重力缩放 | 各分量 `[−1e4, 1e4]`，世界重力单位为 m/s² |
+| 摩擦、线速度和角速度阻尼、阻尼比 | `[0, 1e4]`，速度阻尼单位为 s⁻¹ |
+| 恢复系数 | `[0, 1]` |
+| 启用的弹簧频率 | `[1e−3, 1e4]` Hz |
+| 刚度和阻尼系数 | `[0, 1e9]` |
+| 铰链与各角轴限位、圆锥半角 | 轴限位 `[−π, π]`，半角 `[0, π]` |
+
+各范围均含端点，数值必须有限，限位下界不得大于上界。球铰和通用关节的逐轴硬摆动限位须与半径 179° 的闭圆盘相交。取 Y、Z 两轴各自硬区间内最接近零的角度，其他限位类型取零，再用双精度比较两角的平方和与 `rad(179°)²`。
+
+`preset_tag` 保留已展开节点或关节的制作来源，读取方按实际字段解释物理行为。未知形状分支或策略值不能取得物理定义的内容验证资格。
+
+### Raw 物理输入
+
+`ysm.json` 中的 `files.player.physics` 接受包内路径字符串或 `null`。空白路径、文件缺失及无效定义均使本次转换失败。未引用的 `physics.json` 会被忽略。引用文件的原始字节以 `physics` 角色参与未命名模型的来源摘要，显式命名模型沿用已有命名规则。导出物保存已展开定义，可脱离 raw 来源读取。
+
+物理 JSON 使用 UTF-8。顶层可声明 `gravity`（世界 XYZ，单位 m/s²）、`collections`（槽位字符串到显示名的映射，范围 `"1"` 到 `"20"`）、`nodes`、`constraints` 与 `presets` 数组。几何输入采用 YSM 右手模型坐标系，线性量用模型像素，角度用度。欧拉旋转以 XYZ 分量输入，按 `Rz × Ry × Rx` 生成旋转。
+
+| 输入 | 字段 |
+| --- | --- |
+| 节点 | `id`、`bone`、`type`（`dynamic`、`proxy`、`anchor`）。刚体可设置 `collections`（`[]` 表示空集合）、`friction` 和 `bounciness`。动态节点还可设置 `mass`（编译时缺省填入 1 kg）、`linear_damping`、`angular_damping`、`gravity_scale` 与 `disable_when_hidden`。其余缺省值沿用上节制品语义。 |
+| 形状 | `shapes` 的 `type` 选用 `sphere`（`center`、`radius`）、`capsule`（`point_a`、`point_b`、`radius`）或 `box`（`center`、`size` 的三边全长、`rotation_deg`）。形状坐标相对绑定骨 pivot。球心、盒中心和盒旋转缺省均为 `[0, 0, 0]`。 |
+| 关节 | `id`、`node_a`、`node_b`、`type`（`fixed`、`point`、`hinge`、`generic`）和可选 `disable_collisions`。共享 `frame` 的 `pivot_offset` 相对 B 端绑定骨 pivot，以模型轴表示。朝向可用 `rotation_deg` 或成对的非零 `axis_x` 与 `axis_y`。归一化后点积的绝对值须不超过 `1e−3`，编译器将其构造成右手正交单位基。省略朝向时对齐模型轴。分别指定两端时，同时提供 `frame_a` 与 `frame_b`，各端以自身骨的局部坐标表达挂点与朝向。 |
+| 轴与圆锥 | 铰链的 `limit`、`spring` 和 `soft_limit_spring` 配置局部 Z。球铰和通用关节都使用 `angular_x`、`angular_y`、`angular_z`，通用关节另有 `linear_x`、`linear_y`、`linear_z`。球铰可使用 `cone` 配置摆动限位，字段包括 `half_angle_deg`、`limit_kind` 和可选 `soft_limit_spring`。轴对象的 `limit.kind` 选用 `free`、`locked`、`hard` 或 `soft`，有界角轴使用 `min_deg`、`max_deg`，有界平移轴使用 `min`、`max`。 |
+| 弹簧 | `spring.target` 缺省为 `off`，可选 `rest_pose` 或 `animation`。启用的回正和独立的 `soft_limit_spring` 均支持默认的 `"frequency_damping"` 模式，需给出 `frequency`，`damping_ratio` 缺省为 0.5。可选的 `"stiffness_damping"` 模式中，`stiffness`、`damping` 分别缺省为 10、0.5。软限位弹簧无回正目标字段。 |
+
+角轴的全角硬限位或软限位写作 `min_deg: -180` 与 `max_deg: 180`。全角软限位仍需声明 `soft_limit_spring`，该弹簧仅在越界时作用，因此全角区间内始终无力学作用。需要回正时可独立配置 `spring`。
+
+`hair_chain` 和 `skirt_panel` 使用唯一 `id`、有序 `bones` 与 `body`。提供 `anchor_bone` 会生成锚点，提供 `anchor` 会引用已有锚点 ID。可选 `joint` 定义共用关节，`overrides` 按骨名提供 `body` 或 `joint` 局部覆写。共用层和覆写层各自按其关节类型检查可用字段。逐骨换类型时，先移除继承值中该类型不支持的字段，再应用本骨覆写。禁碰与坐标架可跨类型继承，球铰和通用关节互换时也可继承 `angular_x`、`angular_y` 和 `angular_z`。输出节点和关节使用 `<id>/body/<序号>` 与 `<id>/joint/<序号>`，生成锚点使用 `<id>/anchor`，三类预设均保留 `<type>:<id>` 来源标记。
+
+- `hair_chain` 串联各节，缺省采用 `point` 和 35° 硬圆锥，并为整体摆动设置 `linear_damping: 1.5` s⁻¹。X 轴沿当前节指向下一节的绑定姿态 pivot，末节沿用上一节方向。默认以当前节绑定骨的局部 +Z 轴为参考正交化。当 X 与参考轴的点积绝对值达到 0.999 时，改用绑定骨局部 +Y 轴作为 Y 的参考。单节或重合 pivot 需要预设或逐节的 `axis`，也可完整指定关节朝向。
+- 可选 `root_spring` 和 `tip_spring` 使用同一目标与参数模式，插值填入每节 Y、Z 的回正弹簧。单节取根值，缺省梢值与根值相同。逐节可改用 `generic` 或双端局部坐标架。只覆写回正弹簧时保留已有圆锥。逐节显式声明 Y 或 Z 限位时替换圆锥，`limit.kind: "free"` 也适用。改用圆锥会清除继承的 Y、Z 限位及其软限位弹簧。同层同时声明圆锥与非自由 Y、Z 限位会报错。
+- `skirt_panel` 将每片直接挂到同一锚点，缺省为 `hinge`，可用 `generic`。需跟随关键帧时，显式指定回正目标为 `animation`。发束和裙片均默认 `disable_when_hidden: true`，可逐骨关闭。
+- `lateral_link` 通过 `node_a`、`node_b` 连接已有节点，生成 `<id>/joint`。省略坐标架时，共享挂点取两端在绑定姿态下的形状中心中点。复合体使用各图元几何中心的算术平均，锚点使用绑定骨 pivot。缺省允许满足碰撞集合条件的两端接触，并给三条线性轴添加 ±1 模型像素软限位及装配姿态回正，两组弹簧初始为 3 Hz、阻尼比 0.8。可在 `joint` 中逐轴覆写或开启禁碰。
+
+在任一预设中将继承的软限位改为其他类型时，会清除该轴继承的软限位弹簧和失效的边界字段，独立回正弹簧继续有效。
+
+本节固定当前物理创作键名和预设缺省。生产者按上述顺序展开完整预设后校验并写入 `ModelData.physics`，读取方按已展开的数值和约束解释制品。[独立成品与拒绝 fixtures](../conformance.md#物理资产-fixtures)
+
 ## Animation 与 controller
 
 动画与控制器的 wire 定义见 [Animation Proto](proto/asset/model/data/animation.proto) 和 [Controller Proto](proto/asset/model/data/animation_controller.proto)。
@@ -104,6 +164,6 @@ Common 中的 `strings_blob_id` 引用可解析的 [StringData](proto/asset/stri
 3. 检查 `modelHash`、player target、target 唯一性、纹理与命名图像来源声明的不变量，以及 Manifest 中所有 blob 引用的角色相容性。
 4. 建立当前请求所需的 blob、声音块、图像、definition 与字符串引用闭包，拒绝 0 值、缺失项、错序复用或类型冲突。
 5. 校验各 payload 的存储长度、解码长度、逻辑 hash 与媒体格式；音频还须满足本页的 descriptor 与完整 Ogg profile 约束。
-6. 解析 `ModelData`、`StringData`、`GeoModel`、动画与控制器，执行本页的骨骼层级、引用和有限数校验。执行字段保留 `common.Program.source`，字面量分量保留 `ExpressionValue.num`；当前源码 profile 只使用 `format = 0`，不生产也不消费 `Program.bytecode`。M2 不证明源码可执行，源码解析、静态检查与失败归属见[运行时准入](../../architecture/animation/implementation/molang-runtime.md)。
+6. 解析 `ModelData`、`StringData`、`GeoModel`、动画与控制器，执行本页的骨骼层级、引用和有限数校验。若 definition 携带 `physics`，在读取 definition 时校验[物理资产](#physics)。校验失败属于该模型的内容错误，其他模型可以继续加载。执行字段保留 `common.Program.source`，字面量分量保留 `ExpressionValue.num`；当前源码 profile 只使用 `format = 0`，不生产也不消费 `Program.bytecode`。M2 不证明源码可执行，源码解析、静态检查与失败归属见[运行时准入](../../architecture/animation/implementation/molang-runtime.md)。
 
 通过第 3 步后，即可发布明确标记为 M1 的目录 metadata、model offer 或同步对象，但不能宣称模型完整可用。具体选择或加载请求只能在自身引用闭包通过第 4–6 步后使用，渲染还要求该 target 的 definition、纹理与几何全部通过校验。只有整个模型的全部引用都完成验证，才能声明达到 M2。

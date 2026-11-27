@@ -44,7 +44,11 @@ stateDiagram-v2
 
 ## Java 预调度与 context
 
-每次绘制均刷新矩阵、光照、相机与绘制元数据，姿态复用不复用绘制输入；`RenderContext` 决定姿态语义与复用条件，与执行线程解耦：
+每次绘制都从宿主取得当前矩阵、光照与相机。`RenderContext` 决定姿态语义与复用条件，提交 worker 或同步执行由宿主调用路径决定。
+
+### 常规动画输出
+
+未安装骨骼物理的实体沿用以下槽位与执行路径。
 
 | 路径 | 状态与执行 |
 |---|---|
@@ -56,7 +60,46 @@ stateDiagram-v2
 | 独立 hand 负责方 | 沿正常 level immutable 时间线推进；背景不推进动画，三部分分别局部提取 |
 
 - **Canonical 复用**：仅在完整发布后记录复用资格，复用前校验状态有效且模型、context、采样请求一致；进入新帧、触发 mutable 求值或收到不兼容请求时撤销资格。恢复输出不重置动作门禁。
-- **绘制借用复核**：`GeoRenderData` 绑定实体负责方与当前安装，`consumePrepared` 在同一调用窗口完成借用。第三人称取消宿主与实际消费共用同一份结果，hook 返回后重新核验（不通过二次 update 修补）；GUI 额外核对 Matching。回调触发 reset/retire 立即撤销消费资格，物理释放延后至借用退出。
+
+### 骨骼物理的主槽与观察槽
+
+带物理的玩家安装通过 `PhysicsRenderPass.classify` 统一决定输出槽和物理资格。分类按表中顺序匹配，`immutable` 只影响姿态复用。因此本地玩家第一人称视角下的 Iris 世界阴影也可以观察已经接纳的物理样本。
+
+| 优先级 | 条件 | 输出与物理行为 |
+|---|---|---|
+| `PURE_ANIMATION_ONLY` | `level` 为假，或命中 `inventory`、`paperDoll`、`firstPersonMod` | 从 `renderDataPool` 取槽，提取纯动画 |
+| `WORLD_OBSERVER` | 剩余路径中命中 `irisShadow` 或 `offScreen` | 从 `renderDataPool` 取槽，读取有效样本。样本失效时输出纯动画 |
+| `CANONICAL` | 剩余世界路径 | 独占 `mainRenderData`。仅合格主更新可以复位或步进，其余请求可观察有效样本 |
+
+当相同帧和插值参数的正文骨属性可供复用时，不可变观察路径直接读取它们。观察先于正文到达，或需要独立求值时，`AnimationProcessor.observePose` 读取现有 controller 队列，以独立的骨快照和随机数状态计算姿态。`AnimationSession` 保存骨属性数组，在观察退出时恢复。正文独占组件时间推进、动作提交和主槽写入，先到的观察保留同帧正文的主更新资格。`ysm.bone_pivot_abs` 始终读取主槽。
+
+`PlayerPhysicsSession` 单独记录已接纳主样本的帧。`updateAnimationOnly` 先完成主动画时，同帧合格的正文仍可推进一次物理。
+
+### 实体根与载具预采样
+
+载具模型启用时，`AnimationParallelTicker.scheduleAll` 在提交任何 worker 之前为已安装匹配自定义模型的载具采样。它把载具倾角和各骑手的竖直偏移保存为本次世界调用的只读数据。提取、`RenderUtil.adjustPassengerPosition` 与绘制共用这份数据，骑手无需等待载具任务。所有任务汇合后，调度器清空快照。倾角取提交前已完成的载具姿态，因此可落后载具本轮求值一帧。
+
+`EntityRootTransform` 保留双精度实体插值位置供历史位移判定。供模拟使用的根位置另计骑手、床方向、翻转抬升、宿主蹲姿与模型局部偏移。根旋转与替换绘制共享身体朝向、睡姿、爬梯锁朝向、`Dinnerbone` 翻转及匹配载具倾角。提取成功时将本次根随 `GeoRenderData` 发布，缓存命中沿用已发布的根。绘制在宿主已平移的 `PoseStack` 上只应用根的局部变换。
+
+### 物理提交与绘制借用
+
+`nExtractWithPhysics` 在一次 JNI 调用中推进或观察物理并提取骨姿态。复位和步进先短暂借用 Java 骨属性以采集驱动输入，释放借用后运行 Jolt，再借用骨属性完成提取。观察只使用提取阶段的借用。`ModelState::Extract` 在遍历骨层级时合成 `BonePhysicsDelta`，将最终姿态留在原有帧输出中。
+
+- `PHYSICS_ACCEPTED` 与求解结果共同决定 `PlayerPhysicsSession` 提交主样本基线还是进入降级。求解成功即提交基线，即使本次绘制提取失败，同帧后续提取也只观察。
+- `EXTRACT_OK` 表示当前绘制结果通过 native 与 Java 的发布检查。观察、复位和步进都使用这条绘制发布边界。
+- `PlayerPhysicsSession` 在接受主样本或撤销旧样本时递增代际。`GeoRenderData.physicsSampleEpoch` 参与姿态缓存命中和 `canConsume` 检查，防止阴影和正文继续消费传送、换世界或故障前准备的结果。`PURE_ANIMATION_ONLY` 的输出使用独立标记。
+
+`GeoRenderData` 绑定实体负责方与当前安装，`consumePrepared` 在同一调用窗口完成借用。第三人称取消宿主与实际消费共用同一份结果，hook 返回后重新核验。GUI 额外核对 Matching。回调触发 reset 或 retire 时立即撤销消费资格，资源释放延后至借用退出。
+
+### 穿戴物理调试叠加
+
+`/ysmclient physics debug` 为选中的玩家开启调试。命令补全读取当前安装的不可变物理声明，首次步进前和独立成品都可按节点、部件对或约束标识选取。开关在目标实体的异步更新交接后切换该世界的接触监听。世界重建时沿用当前开关，关闭调试的世界保持监听为空。
+
+第三人称正文在 `postRender` 后，通过 `visitPhysicsSample` 在绘制借用内复制已完成的主样本。JNI 将变换还原到模型空间，线框直接沿用当前 `PoseStack`。`IGuiOverlay` 使用同一份 Java 快照，按安装身份和物理样本代际核对有效期。若当前正文未发布调试样本，面板显示静态声明与不可用原因。
+
+接触流形汇总最近一次成功主步的所有碰撞子步。监听从开启后的下一次完整主步开始采样。暂停中开启调试时，面板仍可显示已完成的位姿，并标记上一主步未采样。
+
+字段折行后超出一屏时，面板在页脚显示页码和翻页命令。用 `/ysmclient physics page next`、`prev` 或正整数页码查看，命令补全列出当前可用页。切换调试对象或选取其他节点、部件对或约束时从第一页开始。翻页只改变 HUD 的视图页码。同一屏能显示全部字段时省略页脚。
 
 ## 任务发布与并发边界
 

@@ -31,6 +31,22 @@ public class BoneTopLevelSnapshot extends BoneSnapshot {
         this.bone = bone;
     }
 
+    public void copyForObservation(BoneTopLevelSnapshot source) {
+        copyFrom(source);
+        cachedPointData.set(source.cachedPointData);
+        hasAnimation = source.hasAnimation;
+        isCurrentlyRunningRotationAnimation = source.isCurrentlyRunningRotationAnimation;
+        isCurrentlyRunningPositionAnimation = source.isCurrentlyRunningPositionAnimation;
+        isCurrentlyRunningScaleAnimation = source.isCurrentlyRunningScaleAnimation;
+        lastRotationUpdateTime = source.lastRotationUpdateTime;
+        lastPositionUpdateTime = source.lastPositionUpdateTime;
+        lastScaleUpdateTime = source.lastScaleUpdateTime;
+        // Tail interpolation reads offsets without changing the vectors.
+        rotationOffset = source.rotationOffset;
+        positionOffset = source.positionOffset;
+        scaleOffset = source.scaleOffset;
+    }
+
     public void commit() {
         bone.setHidden(hidden, childrenHidden);
 

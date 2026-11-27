@@ -1,6 +1,8 @@
 package com.elfmcys.ysm.format.parser;
 
+import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.model.domain.ModelId;
+import com.elfmcys.ysm.model.domain.RenderTargetIds;
 import com.elfmcys.ysm.buffer.NativeStorage;
 import com.elfmcys.ysm.format.schema.model.ModelOriginVersion;
 import com.elfmcys.ysm.format.parser.pojo.animation.AnimationFile;
@@ -179,11 +181,22 @@ final class RawModelAssembler implements Closeable {
         if (files == null) {
             throw new IOException("Missing player model files");
         }
-        var main =
-            readGeoModel(Objects.requireNonNull(files.model.get("main"), "Missing main model path"), true).orElse(null);
+        var mainPath = Objects.requireNonNull(files.model.get("main"), "Missing main model path");
+        var main = readGeoModel(mainPath, true).orElse(null);
         var arm =
             readGeoModel(Objects.requireNonNull(files.model.get("arm"), "Missing arm model path"), true).orElse(null);
         var playerData = dryRun ? null : ModelDataProto.newBuilder();
+        if (files.physics != null) {
+            if (files.physics.isBlank()) {
+                throw AssetLoadException.content("files.player.physics must be a nonblank path");
+            }
+            var physics = source.readFile(files.physics, "physics", true).orElseThrow();
+            if (!dryRun) {
+                var context = "Physics '" + files.physics + "' for player/main model '" + mainPath + "'";
+                Objects.requireNonNull(playerData, "playerData").setPhysics(PhysicsJsonCompiler.compile(physics,
+                    Objects.requireNonNull(main, "main").model, RenderTargetIds.PLAYER, context));
+            }
+        }
 
         if (!dryRun) {
             Objects.requireNonNull(playerData, "playerData").putGeoModels("main",
@@ -225,7 +238,7 @@ final class RawModelAssembler implements Closeable {
                     Objects.requireNonNull(controller, "controller"));
             }
         }
-        var player = dryRun ? null : RenderTargetProto.newBuilder().setTargetId("player")
+        var player = dryRun ? null : RenderTargetProto.newBuilder().setTargetId(RenderTargetIds.PLAYER)
             .setKind(com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind.PLAYER);
         for (var texture : files.texture) {
             var textureSet = readTextureSet(texture);

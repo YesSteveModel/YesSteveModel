@@ -70,8 +70,10 @@ public abstract class CustomHumanoidEntity<T extends LivingEntity> extends Anima
                 if (shouldUpdate) {
                     rotX = head.getRotationX();
                     rotY = head.getRotationY();
-                    headRotBak.set(i * 2, rotX);
-                    headRotBak.set(i * 2 + 1, rotY);
+                    if (!isObservingPose()) {
+                        headRotBak.set(i * 2, rotX);
+                        headRotBak.set(i * 2 + 1, rotY);
+                    }
                 } else {
                     rotX = headRotBak.getFloat(i * 2);
                     rotY = headRotBak.getFloat(i * 2 + 1);

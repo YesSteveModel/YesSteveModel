@@ -4,14 +4,14 @@ import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.accessor.ILivingRenderer;
 import com.elfmcys.ysm.api.rendering.event.RenderLayerEvent;
 import com.elfmcys.ysm.api.rendering.event.RenderModelEvent;
-import com.elfmcys.ysm.capability.VehicleAnimatableCapabilityProvider;
 import com.elfmcys.ysm.client.entity.CustomHumanoidEntity;
+import com.elfmcys.ysm.client.entity.EntityRootTransform;
+import com.elfmcys.ysm.client.physics.debug.PhysicsDebugController;
+import com.elfmcys.ysm.client.physics.debug.PhysicsDebugWireframe;
 import com.elfmcys.ysm.geckolib3.core.util.Color;
-import com.elfmcys.ysm.mixin.client.LivingEntityAccessor;
 import com.mojang.blaze3d.vertex.PoseStack;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import java.util.List;
-import java.util.Optional;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.PlayerModel;
 import net.minecraft.client.model.geom.ModelLayers;
@@ -19,18 +19,11 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.Pose;
-import net.minecraft.world.level.block.HorizontalDirectionalBlock;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.client.event.RenderLivingEvent;
 import net.minecraftforge.common.MinecraftForge;
-import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.joml.Quaternionf;
 
 public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T extends CustomHumanoidEntity<TEntity>>
     extends LivingEntityRenderer<TEntity, PlayerModel<TEntity>> implements IGeoRenderer<T> {
@@ -95,29 +88,11 @@ public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T 
             poseStack.pushPose();
             try {
 
-                if (entity.getPose() == Pose.SLEEPING) {
-                    Direction direction = entity.getBedOrientation();
-                    if (direction != null) {
-                        float eyeOffset = entity.getEyeHeight(Pose.STANDING) - 0.1f;
-                        poseStack.translate(-direction.getStepX() * eyeOffset, 0, -direction.getStepZ() * eyeOffset);
-                    }
+                if (data.rootTransform != null) {
+                    data.rootTransform.applyModelPose(poseStack);
+                } else {
+                    EntityRootTransform.applyModelPose(entity, data.animationData.lerpBodyRot, poseStack);
                 }
-
-                setupRotations(entity, poseStack, data.animationData.lerpedAge, data.animationData.lerpBodyRot,
-                    partialTick);
-
-                if (animatableEntity.getEntity().getVehicle() != null) {
-                    animatableEntity.getEntity().getVehicle().getCapability(VehicleAnimatableCapabilityProvider.CAP)
-                        .ifPresent(cap -> {
-                            cap.waitForRenderUpdate();
-                            var rot = cap.getRotation();
-                            if (rot != null) {
-                                poseStack.mulPose(new Quaternionf().rotateZYX(rot.z, 0, rot.x).invert());
-                            }
-                        });
-                }
-
-                poseStack.translate(0, 0.01f, 0);
 
                 var texture = textureOverride == null ? data.texture : textureOverride;
                 var bodyVisible = this.isBodyVisible(entity) && !entity.isInvisibleTo(mc.player);
@@ -151,6 +126,11 @@ public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T 
                     if (animatableEntity.canConsume(data, data.ctx))
                         postRender(data, animatableEntity, poseStack, bufferSource, packedLight, packedOverlay,
                             Color.WHITE);
+                    if (PhysicsDebugController.isTarget(animatableEntity)) {
+                        var debug = PhysicsDebugController.capture(animatableEntity, data);
+                        if (debug != null)
+                            PhysicsDebugWireframe.render(poseStack, bufferSource, debug);
+                    }
                 }
             } finally {
                 poseStack.popPose();
@@ -180,40 +160,6 @@ public abstract class GeoReplacedEntityRenderer<TEntity extends LivingEntity, T 
 
     protected float getOverlayProgress(TEntity entity, float partialTicks) {
         return 0.0F;
-    }
-
-    @Override
-    protected void setupRotations(TEntity pEntityLiving, @NotNull PoseStack poseStack, float pAgeInTicks,
-        float pRotationYaw, float pPartialTicks) {
-        int deathTime = pEntityLiving.deathTime;
-        boolean autoSpineAttach = pEntityLiving.isAutoSpinAttack();
-        if (deathTime > 0) {
-            pEntityLiving.deathTime = 0;
-        }
-        if (autoSpineAttach) {
-            ((LivingEntityAccessor)pEntityLiving).setFlag(4, false);
-        }
-
-        // 爬梯时，禁止旋转
-        if (pEntityLiving.onClimbable()) {
-            Optional<BlockPos> climbablePos = pEntityLiving.getLastClimbablePos();
-            if (climbablePos.isPresent()) {
-                BlockState blockState = pEntityLiving.level().getBlockState(climbablePos.get());
-                Optional<Direction> optionalValue = blockState.getOptionalValue(HorizontalDirectionalBlock.FACING);
-                if (optionalValue.isPresent()) {
-                    pRotationYaw = optionalValue.get().getOpposite().get2DDataValue() * 90;
-                }
-            }
-        }
-
-        super.setupRotations(pEntityLiving, poseStack, pAgeInTicks, pRotationYaw, pPartialTicks);
-
-        if (deathTime > 0) {
-            pEntityLiving.deathTime = deathTime;
-        }
-        if (autoSpineAttach) {
-            ((LivingEntityAccessor)pEntityLiving).setFlag(4, true);
-        }
     }
 
     @Override

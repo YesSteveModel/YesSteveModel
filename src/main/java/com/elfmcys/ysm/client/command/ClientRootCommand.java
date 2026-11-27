@@ -4,6 +4,7 @@ import com.elfmcys.ysm.YesSteveModel;
 import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
 import com.elfmcys.ysm.client.command.sub.DebugCommand;
 import com.elfmcys.ysm.client.command.sub.MolangCommand;
+import com.elfmcys.ysm.client.command.sub.PhysicsCommand;
 import com.elfmcys.ysm.client.command.sub.SimpleWatchCommand;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
 import com.elfmcys.ysm.client.gui.overlay.DebugAnimationScreen;
@@ -39,6 +40,7 @@ public class ClientRootCommand {
         root.then(MolangCommand.get());
         root.then(SimpleWatchCommand.get());
         root.then(DebugCommand.get());
+        root.then(PhysicsCommand.get());
         root.then(com.elfmcys.ysm.client.command.sub.RoamingCommand.get());
         root.then(com.elfmcys.ysm.client.command.sub.ClientCacheCommand.get());
         dispatcher.register(root);

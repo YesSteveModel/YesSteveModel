@@ -1208,6 +1208,10 @@ public final class EntityExpressionRuntime implements AutoCloseable {
             return ownerContext.subjectSample();
         }
 
+        public boolean isObservation() {
+            return phase == MolangContext.LogicalPhase.OBSERVATION;
+        }
+
         public void setControllerContext(@Nullable ControllerExecutionState value) {
             setAnimationContext(null);
             drainDeferred(state, this, null, true);

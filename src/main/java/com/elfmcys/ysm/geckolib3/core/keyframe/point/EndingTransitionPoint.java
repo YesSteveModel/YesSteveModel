@@ -21,11 +21,6 @@ public class EndingTransitionPoint extends AnimationPoint {
 
     @Override
     public Vector3f getLerpPoint(EntityExpressionRuntime.Evaluation evaluation) {
-        if (lastLerpResult == null) {
-            lastLerpResult = new Vector3f(srcPoint);
-        } else {
-            lastLerpResult.set(srcPoint);
-        }
-        return srcPoint;
+        return remember(evaluation, srcPoint);
     }
 }

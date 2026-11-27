@@ -65,7 +65,7 @@ public final class BuiltinModelMaterializer {
         var eventEntryCount = 0;
         var rejectedSuffixCount = 0;
         for (var target : view.getRenderTargets()) {
-            var definition = readDefinition(view, chunks, target.descriptor().blobId());
+            var definition = target.readDefinition(() -> false, chunks);
             try {
                 var info = view.getManifest().info();
                 var sets =
@@ -114,20 +114,6 @@ public final class BuiltinModelMaterializer {
         return new Result(handle.representation().modelId(), Map.copyOf(animationHashes), List.copyOf(programManifest),
             new ModelProgramInventory.Counts(candidateCount, executableCount, literalCount, programCount, fallbackCount,
                 failureCount, callableEntryCount, eventEntryCount, rejectedSuffixCount));
-    }
-
-    private static ModelDataProto readDefinition(ModelFileView view, ChunkDataSource chunks, int blobId)
-        throws IOException {
-        var chunk = view.getFileView().getAssetView().getChunkInfo(AssetFileConstant.BLOB_CHUNK_PREFIX + blobId);
-        if (chunk == null) {
-            throw new FileNotFoundException("Missing render target definition blob " + blobId);
-        }
-        var data = chunks.readPayload(chunk, BufferType.ARRAY);
-        try {
-            return ModelDataProto.parseFrom(ProtoUtil.source((ArrayBuffer)data));
-        } finally {
-            java.lang.ref.Reference.reachabilityFence(data);
-        }
     }
 
     private static void bindAndHashAnimations(RenderTargetProto target, ModelDataProto definition,

@@ -6,6 +6,8 @@ import com.elfmcys.ysm.model.ModelRuntime;
 import com.elfmcys.ysm.client.gui.overlay.DebugAnimationScreen;
 import com.elfmcys.ysm.client.gui.overlay.ExtraPlayerScreen;
 import com.elfmcys.ysm.client.gui.overlay.LoadingStateScreen;
+import com.elfmcys.ysm.client.physics.debug.PhysicsDebugController;
+import com.elfmcys.ysm.client.physics.debug.PhysicsDebugHud;
 import com.elfmcys.ysm.client.input.AnimationRouletteKey;
 import com.elfmcys.ysm.client.input.DebugAnimationKey;
 import com.elfmcys.ysm.client.input.ExtraAnimationKey;
@@ -54,6 +56,11 @@ public class ClientSetupEvent {
         event.registerAbove(DEBUG_TEXT.id(), "ysm_debug_info", DebugAnimationScreen.getGuiOverlay());
         event.registerAbove(DEBUG_TEXT.id(), "ysm_extra_player", new ExtraPlayerScreen());
         event.registerAbove(DEBUG_TEXT.id(), "ysm_loading_state", new LoadingStateScreen());
+        event.registerAbove(DEBUG_TEXT.id(), "ysm_physics", (gui, graphics, partialTick, width, height) -> {
+            var view = PhysicsDebugController.hudView();
+            if (view != null)
+                PhysicsDebugHud.render(graphics, width, height, view);
+        });
     }
 
 }

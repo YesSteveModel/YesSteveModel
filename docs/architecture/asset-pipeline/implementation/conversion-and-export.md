@@ -20,6 +20,8 @@ Catalog 冷转换与独立 capture 入口共用解析编译逻辑，仅输入保
 - **`NativeArchive.getFile()`**：返回复用借用缓冲区。Parser 在下一次 extract 前同步消费 JSON 与文本，延迟音频复制为独立副本，图片通过 `share` 取得自有字节；Capture 同样在下次 extract 前复制输入，避免旧视图进入异步任务（规则见[JNI 内存](../../native-runtime/implementation/jni-and-memory.md#buffer-传递)）。
 - **Java raw `Directory.getFile`**：每次以受检单流读完并核验文件与目录观察后立即关闭，Parser 仅消费返回字节。Native archive 内部 I/O 归 archive 持有方，Java wrapper 在同步借用结束后释放。
 
+若 `files.player.physics` 声明路径，`RawModelAssembler` 通过 `RawModelSource` 把该文件计入同一来源闭包。Capture 保存字节，正式编译在下一次 VFS 读取前消费物理 JSON。编译器使用已转换的 `player/main` 骨骼投影共享关节架，展开预设，再调用与 definition 读取共用的 `PhysicsDefinitionValidator`。写入器将结果内嵌到 `ModelData`。字段和预设见 [Raw 物理输入](../../../standards/model-schema/assets-and-validation.md#raw-物理输入)。
+
 ## 图像处理的位置
 
 图像压缩由 `RawImageCompressor.Policy` 按用途选择策略并交由 native `ImageEncoder` 编码，只在来源进入当前容器前执行：
@@ -63,6 +65,8 @@ Raw 与历史格式共用同一套音频规范化出口：
 ## 发布与失败
 
 `RawCompileResult` 仅为临时 staging 结果，发布由上游负责。Raw 与历史格式共用已转换工作区的同一 staging 对象校验身份、逻辑 payload、声音与存储完整性；失败时仅清理本次候选，不覆盖原文件或已有有效产物。存储提交与目录候选由 `ConvertedObjectStore` 和 `ModelSourceResolver` 承接，见[存储设计](../../model-management/storage/overview.md)。
+
+导出重开暂存容器时逐个读取 target definition。有物理的 definition 在这一步执行内容校验。失败由当前导出清理暂存文件，原子替换门禁仅在验证成功后运行。
 
 ## Preview 取得与显式 export
 

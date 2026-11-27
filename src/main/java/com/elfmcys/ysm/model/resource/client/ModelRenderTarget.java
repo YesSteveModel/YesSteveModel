@@ -6,11 +6,13 @@ import com.elfmcys.ysm.format.schema.model.views.ModelInfoView;
 import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.model.domain.ModelFileIdentity;
 import com.elfmcys.ysm.model.resource.client.render.RenderTargetKey;
+import com.elfmcys.ysm.natives.physics.NativePhysicsAsset;
 import com.elfmcys.ysm.util.CleanerUtil;
 import com.elfmcys.ysm.util.ResourceDiagnostics;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.ResourceLocation;
+import org.jetbrains.annotations.Nullable;
 
 import java.lang.ref.Cleaner;
 import java.util.Collections;
@@ -47,7 +49,7 @@ public final class ModelRenderTarget implements AutoCloseable {
         AnimationStore armAnimationStore, AutoCloseable preparedOwner, java.util.Map<String,
             com.elfmcys.ysm.model.resource.client.render.DefaultAnimationRuntime.Source> defaultSources) {
         this(modelHash, renderTargetId, targetResources, assets, animationStore, modelInfo, armAssets,
-            armAnimationStore, preparedOwner, defaultSources, null);
+            armAnimationStore, preparedOwner, defaultSources, null, null, null);
     }
 
     public ModelRenderTarget(ModelId modelHash, String renderTargetId, RenderTargetResources targetResources,
@@ -55,7 +57,8 @@ public final class ModelRenderTarget implements AutoCloseable {
         AnimationStore armAnimationStore, AutoCloseable preparedOwner,
         java.util.Map<String,
             com.elfmcys.ysm.model.resource.client.render.DefaultAnimationRuntime.Source> defaultSources,
-        StateIdentity stateIdentity) {
+        StateIdentity stateIdentity, @Nullable NativePhysicsAsset physicsAsset,
+        @Nullable PhysicsAssetMetadata physicsMetadata) {
         this.modelHash = Objects.requireNonNull(modelHash, "modelHash");
         this.renderTargetId = Objects.requireNonNull(renderTargetId, "renderTargetId");
         Objects.requireNonNull(targetResources, "targetResources");
@@ -67,7 +70,7 @@ public final class ModelRenderTarget implements AutoCloseable {
         this.stateIdentity = stateIdentity;
         resources = new Resources(targetResources, assets, animationStore, armAnimationStore, armAssets,
             java.util.Map.copyOf(defaultSources), animationStore.sharedSemantics(modelHash),
-            Objects.requireNonNull(modelInfo, "modelInfo"));
+            Objects.requireNonNull(modelInfo, "modelInfo"), physicsAsset, physicsMetadata);
         cleanupState =
             new CleanupState(targetResources, assets, armAssets, preparedOwner, modelHash + "/" + renderTargetId);
         cleanable = CleanerUtil.ref(this, cleanupState, CleanupState::clean);
@@ -82,6 +85,10 @@ public final class ModelRenderTarget implements AutoCloseable {
 
     public String renderTargetId() {
         return renderTargetId;
+    }
+
+    public @Nullable StateIdentity stateIdentity() {
+        return stateIdentity;
     }
 
     public boolean isStateCompatible(ModelRenderTarget next) {
@@ -104,8 +111,11 @@ public final class ModelRenderTarget implements AutoCloseable {
         }
 
         public boolean isCompatible(StateIdentity next) {
-            return next != null && content.equals(next.content) && key.equals(next.key)
-                && preparation == next.preparation;
+            return hasSameInputs(next) && preparation == next.preparation;
+        }
+
+        public boolean hasSameInputs(@Nullable StateIdentity next) {
+            return next != null && content.equals(next.content) && key.equals(next.key);
         }
     }
 
@@ -115,6 +125,15 @@ public final class ModelRenderTarget implements AutoCloseable {
 
     public CommonAsset assets() {
         return requireResources().assets;
+    }
+
+    /** Borrows the shared asset while retaining this target's lease. The preparation owns its close. */
+    public @Nullable NativePhysicsAsset physicsAsset() {
+        return requireResources().physicsAsset;
+    }
+
+    public @Nullable PhysicsAssetMetadata physicsMetadata() {
+        return requireResources().physicsMetadata;
     }
 
     public AnimationStore animationStore() {
@@ -209,7 +228,8 @@ public final class ModelRenderTarget implements AutoCloseable {
         AnimationStore armAnimationStore, CommonAsset armAssets,
         java.util.Map<String,
             com.elfmcys.ysm.model.resource.client.render.DefaultAnimationRuntime.Source> defaultSources,
-        com.elfmcys.ysm.expression.inventory.SharedExpressionSemantics sharedSemantics, ModelInfoView modelInfo) {
+        com.elfmcys.ysm.expression.inventory.SharedExpressionSemantics sharedSemantics, ModelInfoView modelInfo,
+        @Nullable NativePhysicsAsset physicsAsset, @Nullable PhysicsAssetMetadata physicsMetadata) {
     }
 
     private static final class CleanupState {

@@ -131,6 +131,9 @@ public final class ModelExporter {
                     PreviewStore.validate(image::share, staged.size());
                 }
             }
+            for (var target : checked.modelFile().getRenderTargets()) {
+                target.readDefinition(() -> false, checked.chunks());
+            }
             checked.modelFile().getCommon().validateSoundContent(() -> false, checked.chunks());
         } finally {
             checked.representation().close();

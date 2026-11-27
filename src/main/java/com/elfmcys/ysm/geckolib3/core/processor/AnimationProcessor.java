@@ -65,11 +65,14 @@ public class AnimationProcessor<TEntity extends Entity> {
     }
 
     public RandomSource randomSource() {
-        return random;
+        return observingPose ? observationRandom : random;
     }
 
     private final SoundInstanceManager globalSoundManager = new SoundInstanceManager();
     private final RandomSource random = new XoroshiroRandomSource(RandomSupport.generateUniqueSeed());
+    private RandomSource observationRandom;
+    private boolean observingPose;
+    private ObservationPose observationPose;
     private final ArrayDeque<TransientTask> readyTransients = new ArrayDeque<>();
     private final AtomicInteger ownedTransientRequests = new AtomicInteger();
     private final AtomicInteger pendingTransientCompiles = new AtomicInteger();
@@ -96,7 +99,31 @@ public class AnimationProcessor<TEntity extends Entity> {
         } else if (lastTrimTime > renderTicks) {
             lastTrimTime = renderTicks;
         }
+        evaluatePose(event, shouldTick, executeEvents, evaluation, null);
+    }
 
+    public void observePose(AnimationEvent<AnimatableEntity<TEntity>> event, Runnable decoratePose) {
+        if (observationPose == null) {
+            observationPose = new ObservationPose();
+            observationRandom = new XoroshiroRandomSource(RandomSupport.generateUniqueSeed());
+        }
+        observingPose = true;
+        try {
+            observationPose.begin(activeModelBones);
+            animatable.getExpressionRuntime().observe(invocationInputs(event), evaluation -> {
+                evaluatePose(event, false, false, evaluation, observationPose);
+                decoratePose.run();
+                return null;
+            });
+        } finally {
+            observingPose = false;
+        }
+    }
+
+    private void evaluatePose(AnimationEvent<AnimatableEntity<TEntity>> event, boolean shouldTick,
+        boolean executeEvents, EntityExpressionRuntime.Evaluation evaluation, @Nullable ObservationPose observation) {
+        var renderTicks = event.renderTicks;
+        var activeBones = observation == null ? activeModelBones : observation.active;
         AnimationData manager = this.animatable.getAnimationData();
         for (IAnimationController<AnimatableEntity<TEntity>> controller : manager.getAnimationControllers()) {
             if (shouldTick) {
@@ -109,10 +136,11 @@ public class AnimationProcessor<TEntity extends Entity> {
             boolean blendRotation = controller.blendRotation();
             // 遍历每个骨骼，并对属性进行插值计算
             controller.visitBoneAnimationQueues(boneAnimation -> {
-                BoneTopLevelSnapshot snapshot = boneAnimation.getSnapshot();
+                var source = boneAnimation.getSnapshot();
+                var snapshot = observation == null ? source : observation.bone(source);
                 if (!snapshot.hasAnimation) {
                     snapshot.hasAnimation = true;
-                    activeModelBones.add(snapshot);
+                    activeBones.add(snapshot);
                 }
 
                 boneAnimation.pollRotationPoint(evaluation).ifPresent(rot -> {
@@ -154,7 +182,7 @@ public class AnimationProcessor<TEntity extends Entity> {
         }
 
         // 追踪哪些骨骼应用了动画，并最终将没有动画的骨骼过渡到默认值
-        var activeBoneIterator = activeModelBones.iterator();
+        var activeBoneIterator = activeBones.iterator();
         while (activeBoneIterator.hasNext()) {
             var snapshot = activeBoneIterator.next();
             var active = false;
@@ -224,7 +252,8 @@ public class AnimationProcessor<TEntity extends Entity> {
     }
 
     public EntityExpressionRuntime.InvocationInputs invocationInputs(AnimationEvent<AnimatableEntity<TEntity>> event) {
-        var production = new MinecraftInvocationInputs(animatable, event, random, globalSoundManager, null, null);
+        var production =
+            new MinecraftInvocationInputs(animatable, event, randomSource(), globalSoundManager, null, null);
         return new EntityExpressionRuntime.InvocationInputs(production);
     }
 
@@ -272,12 +301,36 @@ public class AnimationProcessor<TEntity extends Entity> {
     }
 
     public void clearModel() {
+        observationPose = null;
+        observationRandom = null;
         this.modelBonesMap.clear();
         this.activeModelBones.clear();
         this.modelBones.clear();
         this.eventHandlers = Object2ReferenceMaps.emptyMap();
         closeTransientWork();
 
+    }
+
+    private static final class ObservationPose {
+        private final java.util.IdentityHashMap<BoneTopLevelSnapshot, BoneTopLevelSnapshot> bones =
+            new java.util.IdentityHashMap<>();
+        private final java.util.Set<BoneTopLevelSnapshot> initialized =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        private final ArrayDeque<BoneTopLevelSnapshot> active = new ArrayDeque<>();
+
+        void begin(ArrayDeque<BoneTopLevelSnapshot> source) {
+            initialized.clear();
+            active.clear();
+            for (var activeBone : source)
+                active.add(bone(activeBone));
+        }
+
+        BoneTopLevelSnapshot bone(BoneTopLevelSnapshot source) {
+            var scratch = bones.computeIfAbsent(source, key -> new BoneTopLevelSnapshot(key.bone));
+            if (initialized.add(source))
+                scratch.copyForObservation(source);
+            return scratch;
+        }
     }
 
     public void loadModel(AnimatedGeoModel model, Object2ReferenceMap<String, List<EventProgram>> eventHandlers,

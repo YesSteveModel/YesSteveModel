@@ -4,6 +4,14 @@
 
 共享依据：动画业务根见[实体隔离与动作次数](../../product-decisions/decisions/animation-isolation.md)、[采样](../../product-decisions/decisions/animation-sampling.md)和[controller 选择](../../product-decisions/decisions/bone-and-controller.md)，当前数据流见[动画架构](../../architecture/animation/overview.md)与[帧执行](../../architecture/rendering/implementation/frame-execution.md)。
 
+## 玩家骨骼物理
+
+- **AN-01 的安装所有权**。`AnimationSession` 持有 `PlayerPhysicsSession`，每份含物理的玩家安装独立拥有原生世界。兼容换纹理沿用会话，结束安装会关闭世界。把世界挂到共享资产上会让同一模型的玩家共享速度和接触历史。把世界挂到单次绘制上则会丢失跨帧历史。 [实体安装生命周期](../../architecture/animation/entity-lifecycle.md#模型使用与完整安装)
+- **AN-02 的跨实体输入**。并行调度把载具状态交给载具自己的 worker，骑手仍需要匹配的倾角和竖直偏移。调用级预采样为提取和绘制固定同一份输入，代价是倾角可落后载具本轮求值一帧。 [实体根与载具预采样](../../architecture/rendering/implementation/frame-execution.md#实体根与载具预采样)
+- **AN-04 的观察隔离**。多 pass 共用物理历史时，正文独占主槽，先到的观察路径使用独立快照求值并还原共享骨属性。代际校验使已经准备但尚未绘制的输出随样本失效。如果移除主槽隔离，观察结果会改变下次主轮的骨枢轴查询输入。 [骨骼物理的主槽与观察槽](../../architecture/rendering/implementation/frame-execution.md#骨骼物理的主槽与观察槽) · [物理提交与绘制借用](../../architecture/rendering/implementation/frame-execution.md#物理提交与绘制借用)
+
+## 机制条目
+
 | ID / 机制 | 当前行为与直接删除的失败 | 上游原因与必要性 | 证据与未验证部分 |
 |---|---|---|---|
 | AN-01 实体私有求值状态 | 同一目标的不可变 module、catalog、绑定与模型资源可以共享，而每个 owner 独占 holder、instance、controller、random、physics、deferred、Roaming 与骨骼状态。GUI 卡片另外持有私有主体。唯一的世界角色在正常主轮成功后一次性发布不可变完成样本，GUI、第一人称、watch 与 defer 不参与发布。真实使用结束时会封口并清空 Entity 槽，连续换模则保留前值；远端玩家输入会被复制为不可变快照。源槽可持有 Entity，但不持有目标组件、runtime 或 lease，源结束时清槽。主线程先固定本帧输入，owner 捕获私有的类型化草稿，任务在同一份输入下完整绑定并求值，临时主体值在任务退出前恢复，绘制阶段只消费准备结果。实体本身只保存 selection target、操作与实际使用情况，派生候选不另建 assignment。`LocalPlayer` 会话只保留一份恢复快照，临时 runtime 不建立恢复资格；主线程按精确对应的安装接纳 Body 变化，`endUse` 在封口前完成最终接纳。Roaming 按模块局部编号读写必有值数组，producer 的 dirty 列表有界；变量名只在布局配对与命名持久化边界出现，去掉了 roaming presence 与逐批字符串回转。两侧交接完成后才投影到精确对应的 arm 或 vehicle，双手与背景仍共用第一人称时间线。如果合并可变状态，不同 owner 的动画历史会互相污染；如果把恢复数据绑在具体安装上，卸载或迟到恢复时会丢失值。 | `D-ENTITY`；**Essential** 保护的是实例隔离本身，不要求通用的 runtime 锁。GUI 输入快照与临时主体作用域引入了帧输入捕获、装备复制与恢复成本；只有当 owner 能直接消费等价的不可变输入并保持绑定、求值与绘制语义时，才可删除这些桥接状态。 | **Fact**：`ClientRoamingSession`、`EntityExpressionRuntime`、`EntityExecutionLifecycle`、`AnimatableEntity`、`AnimationProcessor`，以及[实体 owner](../../architecture/animation/implementation/entity-and-frame-state.md#实体级所有权)与[Roaming](../../architecture/animation/implementation/state-inputs-and-sync.md#roaming)。Retire 永久终止 owner，reset 与 reload 保留再次使用资格。兼容纹理保留原操作及既有历史；同值显式重选会建立新操作并初始化私有状态，新内容仅承接位置历史。Cleaner 只兜底独立 lease；GUI 固定输入测试不替代真实宿主与可选扩展 provider 的运行观测。 |

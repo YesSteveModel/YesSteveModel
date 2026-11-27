@@ -1,13 +1,11 @@
 package com.elfmcys.ysm.util;
 
-import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
-import com.elfmcys.ysm.capability.VehicleAnimatableCapabilityProvider;
+import com.elfmcys.ysm.client.animation.AnimationParallelTicker;
 import com.elfmcys.ysm.client.compat.FirstPersonCompat;
 import com.elfmcys.ysm.client.compat.IrisCompat;
 import com.elfmcys.ysm.client.entity.CustomHumanoidEntity;
 import com.elfmcys.ysm.client.entity.IPreviewEntity;
 import com.elfmcys.ysm.client.gui.GuiModelFraming;
-import com.elfmcys.ysm.client.renderer.replace.EntityRendererReplace;
 import com.elfmcys.ysm.geckolib3.geo.GeoReplacedEntityRenderer;
 import com.elfmcys.ysm.geckolib3.geo.RenderContext;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
@@ -60,46 +58,10 @@ public final class RenderUtil {
             renderingInPaperDoll, false, false);
     }
 
-    public static void adjustPassengerPosition(Entity entity, PoseStack poseStack, float partialTicks) {
-        Entity vehicle = entity.getVehicle();
-        if (vehicle != null) {
-            vehicle.getCapability(VehicleAnimatableCapabilityProvider.CAP).ifPresent(vehicleCap -> {
-                if (!vehicleCap.isAssigned()) {
-                    return;
-                }
-                vehicleCap.waitForRenderUpdate();
-                if (!vehicleCap.hasMatchingInstallation()) {
-                    return;
-                }
-                int index = vehicle.getPassengers().indexOf(entity);
-                if (index < 0) {
-                    return;
-                }
-                // TODO
-                // if (loadedGeoModel == null || loadedGeoModel.passengerBones().isEmpty() || index >=
-                // loadedGeoModel.passengerBones().size()) {
-                // return;
-                // }
-                // var bone = loadedGeoModel.passengerBones().get(index);
-                // if (bone == null) {
-                // return;
-                // }
-                float rawVehicleYaw = Mth.lerp(partialTicks, vehicle.yRotO, vehicle.getYRot());
-                float vehicleYaw = EntityRendererReplace.getYaw(vehicle, rawVehicleYaw, partialTicks);
-                poseStack.mulPose(Axis.YP.rotationDegrees(180 - vehicleYaw));
-                // TODO
-                // RenderUtils.prepMatrixForLocator(poseStack, bone);
-                poseStack.mulPose(Axis.YN.rotationDegrees(180 - vehicleYaw));
-
-                double yOffset = -vehicle.getPassengersRidingOffset() - entity.getMyRidingOffset();
-                boolean playerHasCap = entity instanceof Player player
-                    && player.getCapability(PlayerAnimatableCapabilityProvider.CAP).isPresent();
-                if (playerHasCap) {
-                    yOffset = yOffset - 0.5;
-                }
-                poseStack.translate(0, yOffset, 0);
-            });
-        }
+    public static void adjustPassengerPosition(Entity entity, PoseStack poseStack) {
+        var passenger = AnimationParallelTicker.passengerTransform(entity);
+        if (passenger != null)
+            poseStack.translate(0, passenger.yOffset(), 0);
     }
 
     public static <T extends LivingEntity, TAnimatable extends AnimatableEntity<T> & IPreviewEntity> void

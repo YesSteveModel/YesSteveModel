@@ -52,6 +52,8 @@ Animatable 只保存两项事实：当前选中 target 与操作身份，以及�
 - **私有动画执行态**：持有 store、执行借用、表达式实例、组件、controller、时间线与私有骨骼状态；实体根独占其关闭权。
 - **可替换 target 绑定**：持有自身 lease、查询 view、failure gate、几何与声音 resolver；更换绑定只撤销旧绑定的引用与 lease，不转移执行态关闭权。
 
+世界玩家的完整安装具备物理资产时，由 `AnimationSession` 持有一个 `PlayerPhysicsSession`，统一管理该玩家的原生世界、物理样本历史和降级状态。候选放弃或安装结束时，由该动画会话关闭原生世界。
+
 构造完整候选前先校验当前 request、bake profile 和真实 subject，再私有构造全套执行态与绑定。普通安装由主线程发布；GUI 帧任务凭单实体许可完整绑定已 Ready 的 target 并在同次任务内求值，主线程在对应 `join` 前不访问该安装或私有状态。候选全部通过后才撤销旧资格并提交新安装；中途退出只释放新建资源。
 
 仅纹理变化时可走兼容替换路径，原位保留执行态。兼容条件：精确内容、发布角色、逻辑 target、bake profile、binding、purpose、同一准备结果及 main/arm store 对象身份全部一致，且旧安装健康、属于同一次选择操作与同一 owner、当前无活动绘制借用。兼容候选私有验证新绑定；激活时先撤销旧输出，再向组件通知实际 target，一次性刷新 resolver、查询 view 与 failure gate，最后提交新绑定并撤销旧绑定。
@@ -95,7 +97,7 @@ flowchart LR
 
 候选构造期间外部查询只能看到完整旧安装或 Unbound；同一 owner 上的切模、reset、retire 和递归求值均拒绝。新安装发布后，外部绘制回调可发起新请求或封口，但不能递归安装；回调抛异常不回滚已发布的新安装。
 
-兼容纹理替换成功后，私有执行态、变量、组件初始化、采样历史、播放进度、controller、Roaming、物理状态与事件游标原位保留；绑定相关查询缓存刷新且不重放初始化或事件。真正更换 store 时重建模型域，仅承接同一主体仍适用的位置历史，不复制任意组件。
+兼容纹理替换成功后，私有执行态、变量、组件初始化、采样历史、播放进度、controller、Roaming 与事件游标原位保留；绑定相关查询缓存刷新且不重放初始化或事件。玩家沿用原物理会话及其原生世界、运动历史和降级状态。真正更换 store 时重建模型域，仅承接同一主体仍适用的位置历史，不复制任意组件。
 
 #### 查询与借用
 
@@ -138,6 +140,17 @@ flowchart LR
 
 真正 `endUse`、reset、retire 或 disconnect 时，在原任务交接完成后清空样本槽并拒收迟到发布。连续换模或私有候选失败期间保留上一完成样本直至新主轮替换。箭头表达式只读入口捕获的快照样本，不触发目标求值或等待。
 
+#### 玩家物理历史与传送
+
+客户端线程在原版接纳传送的入口按玩家实体发布传送代际。物理会话看到新的代际即撤销旧物理样本的消费资格，并在下一次合格的主更新执行零速复位。
+
+- 本地玩家每次完成 `ClientPacketListener.handleMovePlayer` 都推进代际，零位移同样触发复位。
+- 远端玩家在 `ClientPacketListener.handleTeleportEntity` 的实际 `lerpTo` 调用前比较包目标与实体当前根位置。距离达到 16 方块才推进代际并开始抑制，期间再次收到符合条件的长跳会更新窗口。普通相对移动、旋转和小于 16 方块的绝对纠偏沿用原截止 tick。
+
+以接包时的 `entity.tickCount` 为 `t`。从接包后本 tick 的剩余渲染帧到 `t+3` 的末帧，每次合格主更新都执行零速复位。从 `t+4` 起的首个合格主更新建立落位基线。即使渲染跳过整个窗口，新的传送代际也会触发这次复位。
+
+例如，Minecraft 1.20.1 的远端玩家从 `x=0` 传到 `x=24` 时，第三次实体更新已经把坐标设为 24，但同一 tick 里 `partialTick` 为 0.25 和 0.75 的渲染根位置分别为 18 和 22。整个 `t+3` 继续复位，避免把这段渲染插值当成实际运动。`PlayerTeleportStateTest.lastInterpolationTickStillMovesBetweenRenderFrames` 回放了这一边界。
+
 #### 显式释放与 GC 回收
 
 各资源 owner 用 `Cleaner` 兜底物理释放；`Cleaner` 不触发实体/组件回调，也不保证及时取消网络需求，清理状态不反向持有生成 Root、component 或实体。Compiled instance 释放 generation lease，短期 session 释放 program lease 与配额；共享 target 关闭见[客户端资源](../model-management/client-resources/overview.md)，音频播放见[音频终态](../model-management/audio/overview.md)。
@@ -153,6 +166,10 @@ flowchart LR
 - **普通表达式异常或组件失败**：结束该精确安装。Worker 逆序完成已成功 `beginEval` 的配对 `endEval`，主线程在 `get` 或 GUI `join` 后记录拒绝并结束使用。函数深度终止仅截断当前表达式。恢复留待下一次协调机会（采用 intrinsic default 或回退宿主），不在 hook 或清理栈内递归安装。Intrinsic default 失败直接传播。
 
 安装失败按精确请求与内容记忆，仅约束当前 owner；切走再切回、普通 reset 或时间推移不解除记忆，内容身份变化时重新评估，显式 reload 仅清本 owner 记忆。
+
+玩家物理在建世界或求解失败后撤销物理样本，当前模型继续以纯动画运行，建世界失败记为 `WORLD_CREATE_FAILED`。当前安装的原位恢复由显式 `retryPhysics()` 在执行权交还后发起。若原生世界尚未建成，该次重试会尝试创建世界。显式 `reloadGeoModel()` 结束当前安装，换模、物理资产变化及重进世界通过新的完整安装建立会话。
+
+显示限制可以结束安装并释放世界。同一世界、相同准备输入重新安装时，实体仅保留失败原因与恢复门禁。缓存重新准备产生的新标识不会开启重试。
 
 会话进入 `intrinsic-default-only` 模式后，普通安装立即失去求值与消费资格，在下一次同步边界结束旧使用：humanoid 改用 intrinsic default，scoped replacement 恢复宿主模型（见[模型会话](../model-management/sessions/overview.md)）。
 

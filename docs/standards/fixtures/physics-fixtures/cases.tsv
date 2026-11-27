@@ -1,0 +1,78 @@
+file	result	expectation
+animation-only.mxc	M2	absent
+physics-export.mxc	M2	present
+physics-p4-controls.mxc	M2	present
+reject-nodes-129.mxc	M2_CONTENT	at most 128 nodes
+reject-constraints-257.mxc	M2_CONTENT	at most 256 constraints
+reject-node-shapes-33.mxc	M2_CONTENT	at most 32 collision shapes
+reject-model-shapes-513.mxc	M2_CONTENT	at most 512 collision shapes per model
+reject-duplicate-node.mxc	M2_CONTENT	node 'anchor' has a duplicate id
+reject-duplicate-joint.mxc	M2_CONTENT	constraint 'point' has a duplicate id
+reject-duplicate-dynamic-bone.mxc	M2_CONTENT	duplicates dynamic bone 'hair'
+reject-missing-binding.mxc	M2_CONTENT	needs an explicit bone binding
+reject-absent-bone.mxc	M2_CONTENT	bone named 'missing'
+reject-arm-only-bone.mxc	M2_CONTENT	bone named 'arm_only'
+reject-missing-main.mxc	M2_CONTENT	Physics requires player/main geometry
+reject-dynamic-without-shape.mxc	M2_CONTENT	at least one collision shape
+reject-anchor-with-shape.mxc	M2_CONTENT	anchor can only bind
+reject-proxy-on-dynamic.mxc	M2_CONTENT	outside the dynamic bone lineages
+reject-anchor-on-dynamic-descendant.mxc	M2_CONTENT	outside the dynamic bone lineages
+reject-collection-slot-0.mxc	M2_CONTENT	collection slot must be within 1..20: 0
+reject-collection-slot-21.mxc	M2_CONTENT	collection slot must be within 1..20: 21
+reject-collection-mask-high-bit.mxc	M2_CONTENT	collection mask must use only slots 1..20
+reject-self-joint.mxc	M2_CONTENT	connects node 'anchor' to itself
+reject-missing-node.mxc	M2_CONTENT	references unknown node 'missing'
+reject-non-dynamic-joint.mxc	M2_CONTENT	needs at least one dynamic endpoint
+reject-unanchored-free.mxc	M2_CONTENT	via effective mechanical constraints
+reject-unanchored-full-turn.mxc	M2_CONTENT	via effective mechanical constraints
+reject-unanchored-full-turn-soft.mxc	M2_CONTENT	via effective mechanical constraints
+reject-unanchored-zero-soft.mxc	M2_CONTENT	via effective mechanical constraints
+reject-unanchored-chain.mxc	M2_CONTENT	via effective mechanical constraints
+reject-bone-missing-parent.mxc	M2_CONTENT	missing parent
+reject-bone-cycle.mxc	M2_CONTENT	bone cycle
+reject-bone-duplicate.mxc	M2_CONTENT	duplicate bone
+reject-bone-pivot-nan.mxc	M2_CONTENT	pivot must be finite
+reject-bone-rotation-infinite.mxc	M2_CONTENT	rotate must be finite
+reject-bind-pose-overflow.mxc	M2_CONTENT	nonfinite bind pose
+reject-mass-low.mxc	M2_CONTENT	 mass
+reject-mass-high.mxc	M2_CONTENT	 mass
+reject-friction-high.mxc	M2_CONTENT	 friction
+reject-bounciness-high.mxc	M2_CONTENT	 bounciness
+reject-linear-damping-high.mxc	M2_CONTENT	 linear damping
+reject-angular-damping-low.mxc	M2_CONTENT	 angular damping
+reject-gravity-scale-low.mxc	M2_CONTENT	 gravity scale
+reject-mass-nan.mxc	M2_CONTENT	 mass must be finite
+reject-gravity-outside.mxc	M2_CONTENT	Physics gravity
+reject-gravity-nan.mxc	M2_CONTENT	Physics gravity
+reject-unsupported-shape.mxc	M2_CONTENT	no supported shape type
+reject-sphere-radius-quantized-zero.mxc	M2_CONTENT	 radius
+reject-capsule-radius-low.mxc	M2_CONTENT	 radius
+reject-sphere-radius-high.mxc	M2_CONTENT	 radius
+reject-box-size-high.mxc	M2_CONTENT	 box dimensions
+reject-sphere-center-outside.mxc	M2_CONTENT	 center
+reject-capsule-endpoint-outside.mxc	M2_CONTENT	 point A
+reject-capsule-span-outside.mxc	M2_CONTENT	capsule endpoint distance
+reject-shape-vector-infinite.mxc	M2_CONTENT	 size must be finite
+reject-shape-rotation-nan.mxc	M2_CONTENT	 rotation must be finite
+reject-pivot-outside.mxc	M2_CONTENT	 pivot offset
+reject-basis-zero.mxc	M2_CONTENT	orthonormal right-handed basis
+reject-basis-collinear.mxc	M2_CONTENT	orthonormal right-handed basis
+reject-basis-left-handed.mxc	M2_CONTENT	orthonormal right-handed basis
+reject-linear-limit-low.mxc	M2_CONTENT	within [-10000, 10000] pixels
+reject-linear-limit-high.mxc	M2_CONTENT	within [-10000, 10000] pixels
+reject-limit-reversed.mxc	M2_CONTENT	min <= max
+reject-hinge-outside.mxc	M2_CONTENT	angular Z limit must be within [-pi, pi]
+reject-twist-outside.mxc	M2_CONTENT	angular X limit must be within [-pi, pi]
+reject-angular-limit-infinite.mxc	M2_CONTENT	finite limit bounds
+reject-cone-angle-high.mxc	M2_CONTENT	cone half-angle
+reject-swing-pole-locked.mxc	M2_CONTENT	intersect the 179 degree disk
+reject-swing-pole-free.mxc	M2_CONTENT	intersect the 179 degree disk
+reject-swing-outside-disk.mxc	M2_CONTENT	intersect the 179 degree disk
+reject-spring-on-locked.mxc	M2_CONTENT	locked axis cannot enable a spring
+reject-soft-limit-on-locked.mxc	M2_CONTENT	require the soft limit kind
+reject-soft-limit-on-free.mxc	M2_CONTENT	require the soft limit kind
+reject-frequency-quantized-zero.mxc	M2_CONTENT	target spring frequency
+reject-frequency-high.mxc	M2_CONTENT	target spring frequency
+reject-damping-ratio-high.mxc	M2_CONTENT	target spring damping ratio
+reject-stiffness-low.mxc	M2_CONTENT	soft limit stiffness
+reject-spring-damping-high.mxc	M2_CONTENT	soft limit damping

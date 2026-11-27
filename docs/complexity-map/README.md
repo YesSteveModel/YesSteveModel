@@ -29,6 +29,7 @@
 | 传输与状态同步 | 连接寿命短于延后工作，需要精确匹配 session 并在退役时清理；按类型区分的分片带来覆盖度检查与先验证后构造；仅在超出单帧预算时才引入 parent 组装。accepted cursor 衍生出背压、重建与单点关闭；表达式瞬时事件依赖 shared semantics 与三端门禁。 | [MN-07、11–16、26](java-models-and-network/README.md) |
 | 派生物复用与存储边界 | 要求精确匹配表示衍生出原子 cache；文件写入目标受物理路径约束；根级活跃消费者与来源引用保护两池周期回收；表达式特化（specialization）需要独立的本地身份。内存交付与可选持久化分离带来有界工作域和独立输入保留；跨进程共享派生物则需要独占完整文件与短索引事务。 | [MN-05、22、24、27–30](java-models-and-network/README.md)、[NR-04/05](native-capabilities/mechanisms.md) |
 | 动画状态与执行权限 | 原地异步求值需要主线程汇合；多 pass 共用动画历史衍生出姿态恢复与动作门禁；共享解析产物要求每实体独立持有 processor、Molang 内存与 roaming 结构；求值窗口限定动作能力；`defer` 衍生出参数快照与逆序排空。 | [AN-01–06、08–12、19](java-animation-and-integration/README.md) |
+| 玩家骨骼物理 | 各安装独立持有物理世界。多个绘制 pass 共享模拟历史，因此需要主槽独占、观察姿态隔离与样本代际。原生提取通过骨骼增量合成绘制结果，分别报告求解与绘制状态。 | [AN-01、02、04](java-animation-and-integration/mechanisms.md#玩家骨骼物理)、[NR-06](native-capabilities/mechanisms.md#物理提取的帧发布) |
 | Native 输出与借用 | JNI 边界引入绑定、地址与失败协议；固定并行区间衍生出容量空洞清理与透明暂存；全局 scratch 要求串行调用前提；原地帧视图（frame view）与 schedule cache 各有失效条件。 | [NR-01/02、04–10、15/16](native-capabilities/README.md)、AN-11/12 |
 | 展示、接入与未明补偿 | 短命意图与独立用途衍生出连续门槛、用途 anchor 与接收 lease；图片解码与上传分离带来像素计价及接纳点交接。direct 来源准入与 schema 校验分层；可选扩展依赖加载前隔离与生成的 checker；builtin 声明生成组件与调用计划。历史旋转混合补丁与 allocator 补偿的必要性目前仍未查清。 | [AP-03–05、07/08](java-assets-and-presentation/mechanisms.md)、[MN-10](java-models-and-network/mechanisms.md)、[AN-08–10/21](java-animation-and-integration/mechanisms.md)、[NR-03](native-capabilities/mechanisms.md) |
 

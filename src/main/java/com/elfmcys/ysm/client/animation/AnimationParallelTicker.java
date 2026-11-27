@@ -1,15 +1,21 @@
 package com.elfmcys.ysm.client.animation;
 
+import com.elfmcys.ysm.capability.PlayerAnimatableCapabilityProvider;
+import com.elfmcys.ysm.capability.VehicleAnimatableCapabilityProvider;
 import com.elfmcys.ysm.client.entity.AnimatableEntity;
+import com.elfmcys.ysm.client.entity.CustomVehicleEntity;
+import com.elfmcys.ysm.client.physics.debug.PhysicsDebugController;
 import com.elfmcys.ysm.config.ClientConfig;
 import com.elfmcys.ysm.util.ResourceDiagnostics;
+import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
+import org.jetbrains.annotations.Nullable;
+import org.joml.Vector3f;
 
 import java.lang.ref.WeakReference;
 
@@ -19,7 +25,7 @@ import java.lang.ref.WeakReference;
  * <p>
  * Execution: the host invokes this coordinator on the main thread. The host must pair scheduleAll() with waitAll()
  * before leaving the invocation, including when scheduling fails. Scheduled tasks own separate entity state; the
- * coordinator does not freeze live host inputs.
+ * coordinator freezes the passenger transforms before submitting any worker.
  *
  * <p>
  * Ownership: registrations are weak. The invocation retains scheduled owners until every task and final projection is
@@ -33,6 +39,9 @@ public class AnimationParallelTicker {
     private static final ReferenceArrayList<WeakReference<AnimatableEntity<?>>> ANIMATABLE_LIST =
         new ReferenceArrayList<>(64);
     private static final ReferenceArrayList<AnimatableEntity<?>> TASK_LIST = new ReferenceArrayList<>(16);
+    // Task submission publishes the samples. Only the main thread mutates the map, before submission and after drain.
+    private static final Reference2ObjectOpenHashMap<Entity, PassengerTransform> PASSENGER_TRANSFORMS =
+        new Reference2ObjectOpenHashMap<>(4);
 
     private static boolean invocationActive;
     private static Throwable invocationFailure;
@@ -95,10 +104,14 @@ public class AnimationParallelTicker {
             throw new IllegalStateException("Recursive world animation invocation");
         invocationActive = true;
         invocationFailure = null;
+        PhysicsDebugController.beginWorldRender();
         final Minecraft mc = Minecraft.getInstance();
         final LocalPlayer localPlayer = mc.player;
         if (localPlayer == null) {
             return;
+        }
+        if (!ClientConfig.DISABLE_VEHICLE_MODEL.get()) {
+            samplePassengers();
         }
         final var iterator = ANIMATABLE_LIST.iterator();
         while (iterator.hasNext()) {
@@ -124,6 +137,50 @@ public class AnimationParallelTicker {
                 invocationFailure = appendFailure(invocationFailure, failure);
             }
         }
+    }
+
+    private static void samplePassengers() {
+        for (int i = 0, count = ANIMATABLE_LIST.size(); i < count; i++) {
+            if (!(ANIMATABLE_LIST.get(i).get() instanceof CustomVehicleEntity vehicle) || !vehicle.isActive())
+                continue;
+            try {
+                Entity subject = vehicle.getEntity();
+                var passengers = subject.getPassengers();
+                if (!passengers.isEmpty() && vehicle.isAssigned() && vehicle.hasMatchingInstallation()) {
+                    var tilt = vehicle.getRotation();
+                    for (Entity passenger : passengers) {
+                        PASSENGER_TRANSFORMS.put(passenger, samplePassenger(passenger, subject, tilt));
+                    }
+                }
+            } catch (RuntimeException | Error failure) {
+                invocationFailure = appendFailure(invocationFailure, failure);
+            }
+        }
+    }
+
+    /** Uses the frozen world-invocation sample or reads the idle vehicle during a standalone render. */
+    public static @Nullable PassengerTransform passengerTransform(Entity passenger) {
+        if (invocationActive)
+            return PASSENGER_TRANSFORMS.get(passenger);
+
+        Entity vehicle = passenger.getVehicle();
+        if (vehicle == null || ClientConfig.DISABLE_VEHICLE_MODEL.get())
+            return null;
+        var cap = vehicle.getCapability(VehicleAnimatableCapabilityProvider.CAP).orElse(null);
+        if (cap == null || !cap.isAssigned() || !cap.hasMatchingInstallation()
+            || !vehicle.getPassengers().contains(passenger))
+            return null;
+        return samplePassenger(passenger, vehicle, cap.getRotation());
+    }
+
+    private static PassengerTransform samplePassenger(Entity passenger, Entity vehicle, @Nullable Vector3f tilt) {
+        double yOffset = -vehicle.getPassengersRidingOffset() - passenger.getMyRidingOffset();
+        if (passenger instanceof Player && passenger.getCapability(PlayerAnimatableCapabilityProvider.CAP).isPresent())
+            yOffset -= 0.5;
+        return new PassengerTransform(yOffset, tilt == null ? 0 : tilt.x, tilt == null ? 0 : tilt.z);
+    }
+
+    public record PassengerTransform(double yOffset, float pitch, float roll) {
     }
 
     /**
@@ -172,6 +229,7 @@ public class AnimationParallelTicker {
         for (var animatable : TASK_LIST)
             animatable.releaseAnimationInvocation();
         TASK_LIST.clear();
+        PASSENGER_TRANSFORMS.clear();
         invocationFailure = null;
         invocationActive = false;
         if (failure instanceof RuntimeException error)

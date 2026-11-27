@@ -6,9 +6,11 @@ package mixel.asset.model;
 import "asset/model/data/geo_model.proto";
 import "asset/model/data/animation.proto";
 import "asset/model/data/animation_controller.proto";
+import "asset/model/data/physics.proto";
 
 message ModelData {
   map<string, bytes> geo_models = 1;
   map<string, data.AnimationFile> animation_files = 2;
   map<string, data.AnimationControllerFile> animation_controllers = 3;
+  optional data.PhysicsDefinition physics = 4;
 }

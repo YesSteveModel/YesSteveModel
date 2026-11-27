@@ -9,7 +9,10 @@ import com.elfmcys.ysm.expression.host.builtin.PositionComponent;
 import com.elfmcys.ysm.util.ResourceDiagnostics;
 
 import com.elfmcys.ysm.client.animation.physics.PhysicsManager;
+import com.elfmcys.ysm.client.animation.physics.PlayerTeleportState;
+import com.elfmcys.ysm.capability.PlayerAnimatableCapability;
 import com.elfmcys.ysm.client.event.ClientTickEvent;
+import com.elfmcys.ysm.client.physics.debug.PhysicsDebugController;
 import com.elfmcys.ysm.client.sound.instance.AudioPlaybackFactory;
 import com.elfmcys.ysm.geckolib3.core.AnimationState;
 import com.elfmcys.ysm.expression.aot.EntityExpressionRuntime;
@@ -34,6 +37,10 @@ import com.elfmcys.ysm.geckolib3.geo.RenderContext;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
 import com.elfmcys.ysm.geckolib3.model.provider.data.EntityModelData;
 import com.elfmcys.ysm.natives.NativeProfiler;
+import com.elfmcys.ysm.natives.physics.NativePhysicsAsset;
+import com.elfmcys.ysm.natives.physics.NativePhysicsWorld;
+import com.elfmcys.ysm.natives.render.NativeModelState;
+import com.elfmcys.ysm.model.resource.client.PhysicsAssetMetadata;
 import com.elfmcys.ysm.util.RenderUtil;
 import com.google.common.collect.Maps;
 import net.minecraft.client.Minecraft;
@@ -107,6 +114,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     private boolean invocationRetained;
     private com.elfmcys.ysm.client.entity.EntityModelDemand demandScope;
     private PhysicsManager alterPhysicsManager;
+    private PlayerPhysicsSession.RecoveryGate physicsRecovery;
 
     public enum InstallationRelation {
         UNBOUND, MATCHING, RETAINED, DEFAULT_SUBSTITUTE
@@ -245,6 +253,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             lifecycle.retire();
         } finally {
             modelBinding.revokeAssignment();
+            physicsRecovery = null;
+            PhysicsDebugController.retire(this);
             onEntityRetired();
         }
     }
@@ -484,8 +494,11 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         var installation = requireInstallation();
         try (var ignored = NativeProfiler.beginAnimatableUpdate()) {
             var event = createAnimationEvent(partialTicks, context);
+            var session = requireSession();
+            if (session.physics != null)
+                return computePhysicsPose(installation, session, event);
             tickAnimation(event);
-            var data = getRenderData(context);
+            var data = getRenderData(context, context.immutable());
             if (!context.immutable() || !currentFrameExtracted || !data.modelState.isValid()
                 || data.modelState.getModel() != requireSession().geoModel.getModel() || !context.equals(data.ctx)
                 || partialTicks != data.partialTicks) {
@@ -507,6 +520,100 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         }
     }
 
+    private @Nullable GeoRenderData computePhysicsPose(ResourceHolder installation, AnimationSession session,
+        AnimationEvent<AnimatableEntity<TEntity>> event) {
+        var physics = session.physics;
+        var context = event.getRenderContext();
+        var pass = PhysicsRenderPass.classify(context);
+        var canonical = pass == PhysicsRenderPass.CANONICAL;
+        var frame = Math.max(event.renderTicks, lastFrameTime);
+        var time = observedSeekTime(frame) / 20.0;
+        var partialTicks = event.getRequestedPartialTick();
+        var level = entity.level();
+        var teleport = PlayerTeleportState.capture(entity);
+        EntityRootTransform root = null;
+        if (pass != PhysicsRenderPass.PURE_ANIMATION_ONLY && !physics.isDegraded()) {
+            root = EntityRootTransform.capture((LivingEntity)entity, partialTicks, event.getExtraData().lerpBodyRot);
+            physics.invalidate(level, teleport, event.getEntityTickCount(), root.entityWorldPos(), time, frame);
+        }
+        if (canonical) {
+            tickAnimation(event);
+            session.canonicalBonePoseFrameTime = frame;
+            session.canonicalBonePosePartialTick = partialTicks;
+        } else {
+            event.renderTicks = observedSeekTime(frame);
+        }
+
+        var mode = root == null ? PlayerPhysicsSession.ANIMATION_ONLY
+            : physics.select(time, frame, canonical && currentFrameShouldTick);
+        long epoch = pass == PhysicsRenderPass.PURE_ANIMATION_ONLY ? PlayerPhysicsSession.NO_SAMPLE_EPOCH
+            : physics.sampleEpoch();
+        var data = getRenderData(context, canonical);
+        boolean advancing = mode == NativeModelState.RESET || mode == NativeModelState.STEP;
+        if (advancing || (canonical && !currentFrameExtracted) || (!canonical && !context.immutable())
+            || !data.modelState.isValid() || data.modelState.getModel() != session.geoModel.getModel()
+            || !context.equals(data.ctx) || partialTicks != data.partialTicks || frame != data.physicsFrameTime
+            || epoch != data.physicsSampleEpoch) {
+            data.installation = null;
+            if (canonical)
+                currentFrameExtracted = false;
+            float[] restored = null;
+            try {
+                if (!canonical && (!context.immutable() || session.canonicalBonePoseFrameTime != frame
+                    || session.canonicalBonePosePartialTick != partialTicks)) {
+                    restored = session.saveBoneAttributes();
+                    evaluateObservedPose(session, event);
+                }
+                var state = data.modelState;
+                if (mode == PlayerPhysicsSession.ANIMATION_ONLY) {
+                    state.extract(session.geoModel);
+                } else {
+                    var dt = mode == NativeModelState.STEP ? (float)physics.secondsSinceSample(time) : 0;
+                    var flags = state.extractWithPhysics(session.geoModel, physics.world(), mode, dt,
+                        root.renderRootPos(), root.renderRootQuat());
+                    physics.accept(mode, flags, state.getNativeState().getRawJoltError(), level, teleport,
+                        event.getEntityTickCount(), root.entityWorldPos(), time, frame);
+                    if (physics.isDegraded() && (flags & NativeModelState.EXTRACT_OK) == 0)
+                        state.extract(session.geoModel);
+                }
+            } catch (RuntimeException failure) {
+                throw new FailedExtract(installation, event, failure);
+            } finally {
+                if (restored != null)
+                    System.arraycopy(restored, 0, session.geoModel.getBoneAttributes(), 0, restored.length);
+            }
+            if (!data.modelState.isValid())
+                return null;
+            if (canonical)
+                currentFrameExtracted = true;
+            data.physicsFrameTime = frame;
+            data.physicsSampleEpoch = root != null ? physics.sampleEpoch() : epoch;
+            data.rootTransform = root;
+        }
+        updateRenderData(event, data);
+        data.owner = this;
+        data.installation = installation;
+        return data;
+    }
+
+    private float observedSeekTime(float frame) {
+        return lastFrameTime < 0 ? seekTime : seekTime + Math.max(0, frame - lastFrameTime);
+    }
+
+    private void evaluateObservedPose(AnimationSession session, AnimationEvent<AnimatableEntity<TEntity>> event) {
+        session.observingPose = true;
+        try {
+            recoverLastCodedAnimation();
+            getAnimationProcessor().observePose(event, () -> codeAnimation(event, true));
+        } finally {
+            session.observingPose = false;
+        }
+    }
+
+    protected final boolean isObservingPose() {
+        return requireSession().observingPose;
+    }
+
     /** Allows a synchronous host to consume a local result without extracting the whole model. */
     protected boolean updateAnimationOnly(float partialTicks, RenderContext context) {
         RenderSystem.assertOnRenderThread();
@@ -518,7 +625,20 @@ public abstract class AnimatableEntity<TEntity extends Entity>
             return inCall(() -> {
                 if (!canEvaluate())
                     return false;
-                tickAnimation(createAnimationEvent(partialTicks, resolveRenderContext(context)));
+                var resolved = resolveRenderContext(context);
+                var event = createAnimationEvent(partialTicks, resolved);
+                var session = requireSession();
+                if (session.physics == null || PhysicsRenderPass.classify(resolved) == PhysicsRenderPass.CANONICAL) {
+                    tickAnimation(event);
+                } else {
+                    event.renderTicks = observedSeekTime(event.renderTicks);
+                    var restored = session.saveBoneAttributes();
+                    try {
+                        evaluateObservedPose(session, event);
+                    } finally {
+                        System.arraycopy(restored, 0, session.geoModel.getBoneAttributes(), 0, restored.length);
+                    }
+                }
                 return true;
             });
         } catch (OutOfMemoryError failure) {
@@ -544,9 +664,9 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         data.animationData = event.getExtraData();
     }
 
-    private GeoRenderData getRenderData(RenderContext context) {
+    private GeoRenderData getRenderData(RenderContext context, boolean mainSlot) {
         GeoRenderData renderData;
-        if (context.immutable()) {
+        if (mainSlot) {
             if (mainRenderData == null) {
                 renderData = new GeoRenderData();
                 mainRenderData = renderData;
@@ -565,7 +685,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         var data = mainRenderData;
         var installation = modelBinding.resourceHolder();
         if (data == null || installation == null || data.installation != installation || !data.modelState.isValid()
-            || data.modelState.getModel() != requireSession().geoModel.getModel())
+            || data.modelState.getModel() != requireSession().geoModel.getModel()
+            || !matchesPhysicsEpoch(data, requireSession().physics))
             return null;
         return data.modelState;
     }
@@ -913,6 +1034,18 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                     var session = new AnimationSession(store);
                     candidate.session = session;
                     session.geoModel = new AnimatedGeoModel(geometry);
+                    if (this instanceof PlayerAnimatableCapability) {
+                        var asset = ready.target().physicsAsset();
+                        if (asset != null) {
+                            var inputs = ready.target().stateIdentity();
+                            var level = entity.level();
+                            var recovery = physicsRecovery != null && physicsRecovery.blocks(inputs, level)
+                                ? physicsRecovery : new PlayerPhysicsSession.RecoveryGate(inputs, level);
+                            session.physics =
+                                PlayerPhysicsSession.open(entity.getUUID() + " " + ready.target().modelHash() + "/"
+                                    + ready.target().renderTargetId(), recovery, () -> createPhysicsWorld(asset));
+                        }
+                    }
                     session.animations = new AnimationData();
                     var processor = new AnimationProcessor<TEntity>(this);
                     session.processor = processor;
@@ -940,6 +1073,7 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                                     commitRole.run();
                                 publication.run();
                                 animationSession = session;
+                                physicsRecovery = session.physics == null ? null : session.physics.recoveryGate();
                                 candidate.session = null;
                                 session.expressions = null;
                             } catch (RuntimeException | Error failure) {
@@ -991,8 +1125,60 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     public final void reloadGeoModel() {
         rejectCandidateMutation();
         waitForAsyncUpdate();
+        physicsRecovery = null;
         modelBinding.retryRejectedInstallations();
         reset();
+    }
+
+    /** Restores attempt eligibility only for an explicitly retried, currently installed physics session. */
+    public final boolean retryPhysics() {
+        lifecycle.rejectRecursiveCall();
+        waitForAsyncUpdate();
+        return inCall(() -> {
+            if (!canEvaluate())
+                return false;
+            var physics = requireSession().physics;
+            if (physics == null || !physics.isDegraded())
+                return false;
+            var asset = requireInstallation().model.physicsAsset();
+            physics.retry(() -> createPhysicsWorld(asset));
+            return true;
+        });
+    }
+
+    private @Nullable NativePhysicsWorld createPhysicsWorld(NativePhysicsAsset asset) {
+        var world = NativePhysicsWorld.create(asset);
+        if (world != null && PhysicsDebugController.isTarget(this))
+            world.setDebugContactCapture(true);
+        return world;
+    }
+
+    /** Changes contact capture only after the owner has joined any outstanding world task. */
+    public final void setPhysicsDebugContactCapture(boolean enabled) {
+        waitForAsyncUpdate();
+        lifecycle.assertStateAccess();
+        var session = animationSession;
+        var world = session == null || session.physics == null ? null : session.physics.world();
+        if (world != null)
+            world.setDebugContactCapture(enabled);
+    }
+
+    /** A main-thread read after joining the current owner. No native world or render data escapes. */
+    public final @Nullable PhysicsDebugStatus physicsDebugStatus() {
+        waitForAsyncUpdate();
+        var target = getModelRenderTarget();
+        if (target == null || target.physicsMetadata() == null)
+            return null;
+        var physics = requireSession().physics;
+        boolean current =
+            physics != null && physics.hasCurrentSample(entity.level(), PlayerTeleportState.capture(entity).epoch());
+        return new PhysicsDebugStatus(installationIdentity(), target.physicsMetadata(),
+            current ? physics.sampleEpoch() : PlayerPhysicsSession.NO_SAMPLE_EPOCH,
+            physics == null ? null : physics.debugFailure());
+    }
+
+    public record PhysicsDebugStatus(Object installation, PhysicsAssetMetadata metadata, long sampleEpoch,
+        @Nullable String failure) {
     }
 
     @Nullable
@@ -1407,10 +1593,33 @@ public abstract class AnimatableEntity<TEntity extends Entity>
     }
 
     public final boolean canConsume(GeoRenderData data, RenderContext context) {
-        return !lifecycle.hasTask() && data != null && data.owner == this && canPrepare(context)
-            && data.installation == modelBinding.resourceHolder() && data.modelState.isValid()
-            && context.equals(data.ctx) && getLoadedGeoModel() != null
-            && data.modelState.getModel() == getLoadedGeoModel().getModel();
+        if (lifecycle.hasTask() || data == null || data.owner != this || !canPrepare(context)
+            || data.installation != modelBinding.resourceHolder() || !data.modelState.isValid()
+            || !context.equals(data.ctx))
+            return false;
+        var session = requireSession();
+        if (session.physics != null && data.physicsSampleEpoch != PlayerPhysicsSession.NO_SAMPLE_EPOCH)
+            session.physics.invalidateIngress(entity.level(), PlayerTeleportState.capture(entity).epoch());
+        return data.modelState.getModel() == session.geoModel.getModel() && matchesPhysicsEpoch(data, session.physics);
+    }
+
+    private static boolean matchesPhysicsEpoch(GeoRenderData data, @Nullable PlayerPhysicsSession physics) {
+        return physics == null || data.physicsSampleEpoch == PlayerPhysicsSession.NO_SAMPLE_EPOCH
+            || data.physicsSampleEpoch == physics.sampleEpoch();
+    }
+
+    /** Visits an accepted sample only inside the draw borrow for this exact installation and epoch. */
+    public final boolean visitPhysicsSample(GeoRenderData data,
+        BiConsumer<NativePhysicsWorld, PhysicsAssetMetadata> visitor) {
+        lifecycle.assertDrawBorrow();
+        if (data == null || data.physicsSampleEpoch == PlayerPhysicsSession.NO_SAMPLE_EPOCH
+            || !canConsume(data, data.ctx))
+            return false;
+        var physics = requireSession().physics;
+        if (physics == null || !physics.hasSample())
+            return false;
+        visitor.accept(physics.world(), requireInstallation().model.physicsMetadata());
+        return true;
     }
 
     public final BlockReason getConsumptionBlockReason(GeoRenderData data, RenderContext context) {
@@ -1833,14 +2042,31 @@ public abstract class AnimatableEntity<TEntity extends Entity>
         private ComponentScope components;
         private boolean componentsSampled;
         private EntityExpressionRuntime.PreparedInstallation expressions;
+        private @Nullable PlayerPhysicsSession physics;
+        private float canonicalBonePoseFrameTime = Float.NEGATIVE_INFINITY;
+        private float canonicalBonePosePartialTick;
+        private boolean observingPose;
+        private float[] savedBoneAttributes;
 
         private AnimationSession(AnimationStore store) {
             this.store = store;
         }
 
+        private float[] saveBoneAttributes() {
+            var attributes = geoModel.getBoneAttributes();
+            if (savedBoneAttributes == null)
+                savedBoneAttributes = new float[attributes.length];
+            System.arraycopy(attributes, 0, savedBoneAttributes, 0, attributes.length);
+            return savedBoneAttributes;
+        }
+
         @Override
         public void close() {
             var failure = attemptCleanup(null, () -> {
+                if (physics != null)
+                    physics.close();
+            });
+            failure = attemptCleanup(failure, () -> {
                 if (processor != null)
                     processor.clearModel();
             });
@@ -1857,6 +2083,8 @@ public abstract class AnimatableEntity<TEntity extends Entity>
                     expressions.close();
             });
             expressions = null;
+            physics = null;
+            savedBoneAttributes = null;
             processor = null;
             animations = null;
             components = null;

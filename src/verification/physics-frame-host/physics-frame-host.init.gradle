@@ -1,0 +1,42 @@
+gradle.beforeProject { project ->
+    if (project != project.rootProject || project.projectDir.name == 'buildSrc') return
+    if (gradle.startParameter.taskNames != ['runClient'])
+        throw new GradleException('The physics frame harness only supports runClient.')
+    def output = new File(System.getenv('YSM_FRAME_OUTPUT'))
+    def harness = new File(project.projectDir, 'src/verification/physics-frame-host')
+    project.layout.buildDirectory.set(new File(System.getenv('YSM_FRAME_BUILD')))
+    project.afterEvaluate {
+        project.sourceSets.main.java.srcDir(new File(harness, 'host'))
+        def compileAgent = project.tasks.register('compilePhysicsFrameAgent', JavaCompile) {
+            source = project.fileTree(new File(harness, 'agent')) { include '**/*.java' }
+            classpath = project.sourceSets.main.compileClasspath
+            destinationDirectory = project.layout.buildDirectory.dir('physics-frame/agent')
+            javaCompiler = project.javaToolchains.compilerFor(project.java.toolchain)
+            options.annotationProcessorPath = project.files()
+        }
+        def agent = project.tasks.register('physicsFrameAgent', Jar) {
+            dependsOn compileAgent
+            archiveFileName = 'physics-frame-agent.jar'
+            destinationDirectory = project.layout.buildDirectory.dir('physics-frame')
+            from(compileAgent.flatMap { it.destinationDirectory })
+            from {
+                project.sourceSets.main.compileClasspath.findAll { it.name ==~ /asm-[0-9].*\.jar/ }
+                    .collect { project.zipTree(it) }
+            }
+            manifest { attributes 'Premain-Class': 'com.elfmcys.ysm.verification.physicsframe.PhysicsFrameAgent' }
+        }
+        project.tasks.named('runClient') { dependsOn agent }
+        project.legacyForge.runs.named('client') {
+            environment.set(environment.get().findAll { key, value ->
+                key != 'YSM_DEBUG_RESOURCE' && key != 'YSM_DEBUG_NETWORK'
+            })
+            gameDirectory = new File(output, 'game')
+            programArguments = ['--username', 'PhysicsFrameHost', '--mixin.config', 'ysm.mixins.json',
+                                '--width', '1280', '--height', '720']
+            logLevel = org.slf4j.event.Level.INFO
+            jvmArguments.add('-Xms2g')
+            jvmArguments.add('-Xmx5g')
+            jvmArguments.add('-javaagent:' + agent.get().archiveFile.get().asFile.absolutePath)
+        }
+    }
+}

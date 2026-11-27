@@ -327,7 +327,7 @@ tasks.register('swarfareNoModTest', Test) {
 sourceSets {
     test {
         java.setSrcDirs(['src/verification/test/java', 'src/verification/shared/java'])
-        resources.setSrcDirs(['src/verification/test/resources'])
+        resources.setSrcDirs(['src/verification/test/resources', 'docs/standards/fixtures'])
         compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
         runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
     }
@@ -336,6 +336,18 @@ sourceSets {
 tasks.named('test', Test) {
     useJUnitPlatform {
         excludeTags 'mock'
+    }
+}
+
+tasks.register('generatePhysicsConformanceFixtures', JavaExec) {
+    group = 'verification'
+    description = 'Writes the physics conformance fixtures into a new directory.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.elfmcys.ysm.format.schema.model.PhysicsConformanceFixtureGenerator'
+    doFirst {
+        environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+        args file(providers.gradleProperty('physicsFixtureOutput').get()).absolutePath
     }
 }
 

@@ -1,5 +1,6 @@
 package com.elfmcys.ysm.model.resource.client.render;
 
+import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.model.storage.ModelStorageInfra;
 
 import com.elfmcys.ysm.model.resource.client.work.ClientResourceScheduler;
@@ -8,6 +9,7 @@ import com.elfmcys.ysm.model.resource.client.BakeProfile;
 import com.elfmcys.ysm.model.resource.client.ModelResourceFailures;
 import com.elfmcys.ysm.model.resource.client.ModelResourcePurpose;
 import com.elfmcys.ysm.model.resource.client.ModelRenderTarget;
+import com.elfmcys.ysm.model.resource.client.PhysicsAssetMetadata;
 import com.elfmcys.ysm.client.model.locator.PlayerLocator;
 import com.elfmcys.ysm.model.resource.client.PlayerModelVariant;
 import com.elfmcys.ysm.model.resource.client.ResourceFailure;
@@ -43,6 +45,7 @@ import com.elfmcys.ysm.model.catalog.content.ModelContent;
 import com.elfmcys.ysm.model.domain.ModelRepresentation;
 import com.elfmcys.ysm.model.domain.Hash256;
 import com.elfmcys.ysm.model.catalog.content.DefaultAnimationKey;
+import com.elfmcys.ysm.natives.physics.NativePhysicsAsset;
 import com.elfmcys.ysm.format.schema.model.ModelManifestLookup;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.GeoModelProto;
@@ -391,11 +394,11 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
     }
 
     private record PreparedTarget(ModelDataProto definition, PreparedSet main, PreparedSet arm,
-        Map<String, DefaultAnimationRuntime.Source> defaultSources, TargetSoundResources sounds,
-        Object identityToken) implements AutoCloseable {
+        Map<String, DefaultAnimationRuntime.Source> defaultSources, TargetSoundResources sounds, Object identityToken,
+        NativePhysicsAsset physicsAsset, PhysicsAssetMetadata physicsMetadata) implements AutoCloseable {
         @Override
         public void close() {
-            closeResources(arm, main, sounds);
+            closeResources(physicsAsset, arm, main, sounds);
         }
     }
 
@@ -517,8 +520,24 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                         sources.put(DefaultAnimationKey.domain(request.target().descriptor(), "fp_arm"),
                             arm.defaultSource());
                 }
-                return publishCandidate(cancelled, resources,
-                    new PreparedTarget(definition, main, arm, Map.copyOf(sources), sounds, new Object()));
+                NativePhysicsAsset physicsAsset = null;
+                PhysicsAssetMetadata physicsMetadata = null;
+                // The M2 read already validated these bytes against player/main. Compile before any texture bake.
+                if (request.purpose() == ModelResourcePurpose.FULL && request.target().kind() == RenderTargetKind.PLAYER
+                    && definition.hasPhysics()) {
+                    requireActive(cancelled);
+                    var physics = definition.physicsUnsafe();
+                    try (var geometryBytes = NativeBuffer.copyOf(definition.geoModels().get("main"));
+                        var physicsBytes = ProtoUtil.serializeToBuffer(physics)) {
+                        physicsAsset = resources.own(NativePhysicsAsset.compile(geometryBytes, physicsBytes));
+                    } catch (IOException failure) {
+                        throw AssetLoadException.content("Failed to compile physics for " + request.targetId(),
+                            failure);
+                    }
+                    physicsMetadata = new PhysicsAssetMetadata(physics);
+                }
+                return publishCandidate(cancelled, resources, new PreparedTarget(definition, main, arm,
+                    Map.copyOf(sources), sounds, new Object(), physicsAsset, physicsMetadata));
             }
         }
 
@@ -639,7 +658,7 @@ public final class ModelRenderTargetLoader implements AutoCloseable {
                     var armCommon = prepared.arm() == null ? null : commonAssets(view, soundResources);
                     var data = new ModelRenderTargetBuildInput(targetId, targetData, common, store, view.getMetadata(),
                         armCommon, prepared.arm() == null ? null : prepared.arm().animationStore(), preparedOwner,
-                        prepared.defaultSources(), stateIdentity);
+                        prepared.defaultSources(), stateIdentity, prepared.physicsAsset(), prepared.physicsMetadata());
                     textures.prepare(cancelled);
                     final ModelRenderTarget targetResult;
                     try {

@@ -3,8 +3,10 @@ package com.elfmcys.ysm.format.schema.model;
 import com.elfmcys.ysm.model.domain.ModelId;
 import com.elfmcys.ysm.buffer.ArrayBuffer;
 import com.elfmcys.ysm.buffer.BufferType;
+import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.container.AssetContainerReader;
 import com.elfmcys.ysm.format.container.InlineChunkReader;
+import com.elfmcys.ysm.format.schema.file.FileChunkDataSource;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationFileProto;
 import com.elfmcys.ysm.proto.mixel.asset.model.data.AnimationProto;
@@ -43,6 +45,7 @@ import java.nio.file.StandardOpenOption;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ModelAssetProtobufInteropTest {
@@ -154,6 +157,81 @@ class ModelAssetProtobufInteropTest {
             assertEquals("protobuf-java", view.getManifest().info().metadataUnsafe().name());
             assertEquals("player", view.getPlayer().id());
             assertTrue(view.getPlayer().textureDescriptor("main").hasSpecular());
+        }
+    }
+
+    @Test
+    void physicsWireRoundTripsAndLeavesHistoricalDefinitionBytesUnchanged() throws Exception {
+        var model = PhysicsWireFixture.modelData(PhysicsWireFixture.definition());
+        var encoded = ProtoUtil.serializeToArray(model);
+        var reference = ProtobufJavaOracle.parse("mixel.asset.model.ModelData", encoded);
+        var physics = messageField(reference, "physics");
+        var first = repeatedMessage(physics, "nodes", 0);
+        var collectionMask = ProtobufJavaOracle.field(first.getDescriptorForType(), "collection_mask");
+        assertTrue(first.hasField(collectionMask));
+        assertEquals(0, first.getField(collectionMask));
+        assertFalse(repeatedMessage(physics, "nodes", 3).hasField(collectionMask));
+        assertEquals(model, ModelDataProto.parseFrom(ProtoSource.newInstance(reference.toByteArray())));
+
+        var withoutPhysics = model.withPhysics(null);
+        var historical = reference.toBuilder()
+            .clearField(ProtobufJavaOracle.field(reference.getDescriptorForType(), "physics")).build().toByteArray();
+        assertArrayEquals(historical, ProtoUtil.serializeToArray(withoutPhysics));
+        assertFalse(ModelDataProto.parseFrom(ProtoSource.newInstance(historical)).hasPhysics());
+    }
+
+    @Test
+    void invalidPhysicsLeavesMetadataReadableAndRejectsTheOwningDefinition(@TempDir Path temp) throws Exception {
+        var invalid = PhysicsWireFixture.modelData(PhysicsWireFixture.definition()).toBuilder().clearGeoModels()
+            .putGeoModels("main", ByteBuffer.wrap(ProtoUtil.serializeToArray(PhysicsWireFixture.geometry("body"))))
+            .putGeoModels("arm", ByteBuffer.wrap(ProtoUtil.serializeToArray(PhysicsWireFixture.geometry("hair"))))
+            .build();
+        var valid = PhysicsWireFixture.modelData(PhysicsWireFixture.definition());
+        var file = temp.resolve("invalid-physics.mxc");
+        var validFile = temp.resolve("valid-physics.mxc");
+        writeDefinitions(file, invalid);
+        writeDefinitions(validFile, valid);
+        try (var input = FileChannel.open(file, StandardOpenOption.READ)) {
+            var m1 = new ModelFileView(input);
+            assertEquals("player", m1.getPlayer().id());
+            var source = new FileChunkDataSource(file);
+            var failure =
+                assertThrows(AssetLoadException.class, () -> m1.getPlayer().readDefinition(() -> false, source));
+            assertEquals(AssetLoadException.Reason.CONTENT, failure.reason());
+            assertTrue(failure.getMessage().contains("strand"));
+            assertTrue(failure.getMessage().contains("player/main"));
+            var projectile = m1.requireRenderTarget("projectile");
+            assertFalse(projectile.readDefinition(() -> false, source).hasPhysics());
+            var impostor = m1.requireRenderTarget("vehicle");
+            assertEquals(AssetLoadException.Reason.CONTENT,
+                assertThrows(AssetLoadException.class, () -> impostor.readDefinition(() -> false, source)).reason());
+        }
+        try (var input = FileChannel.open(validFile, StandardOpenOption.READ)) {
+            var m1 = new ModelFileView(input);
+            assertEquals(valid, m1.getPlayer().readDefinition(() -> false, new FileChunkDataSource(validFile)));
+        }
+    }
+
+    private static void writeDefinitions(Path file, ModelDataProto definition) throws Exception {
+        var manifest = manifest("physics");
+        var player = manifest.renderTargets().get(0);
+        try (var writer = new ModelFileWriter();
+            var output = FileChannel.open(file, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            var playerDefinition = writer.addProtoBlob(definition, 0);
+            var projectileDefinition = writer.addProtoBlob(definition.withPhysics(null), 0);
+            var projectile = player.toBuilder().setTargetId("projectile")
+                .setKind(com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind.PROJECTILE)
+                .setBlobId(projectileDefinition).clearTextures().build();
+            var vehicle = projectile.toBuilder().setTargetId("vehicle")
+                .setKind(com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind.VEHICLE)
+                .setBlobId(playerDefinition).build();
+            var image = player.textures().get("main").uv().withBlobId(20);
+            var texture = PBRTextureSetProto.newBuilder().setUv(image).build();
+            writer.setManifest(manifest.toBuilder().clearRenderTargets()
+                .addRenderTargets(player.toBuilder().setBlobId(playerDefinition).putTextures("main", texture).build(),
+                    projectile, vehicle)
+                .build());
+            writer.write(output);
         }
     }
 

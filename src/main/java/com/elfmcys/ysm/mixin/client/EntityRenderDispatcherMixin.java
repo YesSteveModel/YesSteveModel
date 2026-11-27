@@ -42,7 +42,7 @@ public class EntityRenderDispatcherMixin {
         }
 
         if (!ClientConfig.DISABLE_VEHICLE_MODEL.get()) {
-            RenderUtil.adjustPassengerPosition(entity, poseStack, partialTicks);
+            RenderUtil.adjustPassengerPosition(entity, poseStack);
             return EntityRendererReplace.renderInMixin(entity, rotationYaw, partialTicks, poseStack, buffer,
                 packedLight);
         }

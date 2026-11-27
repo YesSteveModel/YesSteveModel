@@ -44,6 +44,7 @@
 ```text
 Manifest
 ├── render_targets[] ──> blob-N: ModelData
+│   ├── player ModelData.physics? ──> 内嵌 PhysicsDefinition
 │   └── textures{} ────> blob-N: Image payload
 ├── common_assets
 │   ├── strings_blob_id -> blob-N: StringData
@@ -56,6 +57,10 @@ Manifest
 - **Manifest**：可先行读取的顶层描述，声明模型身份、展示信息、渲染目标（render target）以及全部资源引用。
 - **Blob**：按正整数 ID 命名的不可变 payload，用于存放 definition、字符串、图像或声音块。
 - **命名图像**：专用于模型列表的缩略图（thumbnail）与图标（icon），格式和尺寸直接记录在容器的 chunk descriptor 中。
+
+`ModelData` 的 [PhysicsDefinition](proto/asset/model/data/physics.proto) 绑定同一 definition 的 `player/main` 骨骼。字段缺省时沿用纯动画；存在时随 definition 一并通过[物理资产校验](assets-and-validation.md#physics)。
+
+Raw 来源通过 `ysm.json` 的 `files.player.physics` 显式指定物理 JSON。省略或设为 `null` 时，目录内未引用的文件不启用物理。解析器将实际读取的物理字节计入未命名模型的来源摘要，并把展开后的定义内嵌到 `player` 的制品中。对照[创作键名、缺省值与预设展开](assets-and-validation.md#raw-物理输入)及[独立成品与拒绝 fixtures](../conformance.md#物理资产-fixtures)可以验证生产和读取结果。
 
 达到 M2 的完整模型必须满足引用完整闭合：每个正整数 blob ID（包含声音块 ID）都必须解析到存在的 `blob-N`，所有引用方对 payload 类型和用途的预期一致，且每个资源都通过容器 hash 与 schema 校验。
 

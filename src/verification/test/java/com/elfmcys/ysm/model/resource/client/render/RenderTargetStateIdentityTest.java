@@ -189,7 +189,8 @@ class RenderTargetStateIdentityTest {
             property(prepared, "identityToken"));
         var input = new ModelRenderTargetBuildInput(request.targetId(), targetData, assets, store,
             request.view().getMetadata(), arm == null ? null : assets, armStore, (AutoCloseable)pin,
-            (Map<String, DefaultAnimationRuntime.Source>)property(prepared, "defaultSources"), stateIdentity);
+            (Map<String, DefaultAnimationRuntime.Source>)property(prepared, "defaultSources"), stateIdentity, null,
+            null);
         return ModelRenderTargetLoader.ModelCandidate
             .testing(ModelRenderTargetAssembler.build(request.representation().modelId(), input));
     }

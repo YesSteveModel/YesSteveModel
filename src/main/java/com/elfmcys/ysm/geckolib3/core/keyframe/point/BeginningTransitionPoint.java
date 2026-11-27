@@ -22,12 +22,7 @@ public class BeginningTransitionPoint extends AnimationPoint {
     public Vector3f getLerpPoint(EntityExpressionRuntime.Evaluation evaluation) {
         var dst = dstKeyframe.getTransitionDst(evaluation);
         MathUtil.lerpValues(transitionPercentProgress, offsetPoint, dst, dst);
-        if (lastLerpResult == null) {
-            lastLerpResult = new Vector3f(dst);
-        } else {
-            lastLerpResult.set(dst);
-        }
-        return dst;
+        return remember(evaluation, dst);
     }
 
     public Vector3f getTransitionDst(EntityExpressionRuntime.Evaluation evaluation) {

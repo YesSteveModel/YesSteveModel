@@ -28,4 +28,15 @@ public abstract class AnimationPoint {
     }
 
     public abstract Vector3f getLerpPoint(EntityExpressionRuntime.Evaluation evaluation);
+
+    protected final Vector3f remember(EntityExpressionRuntime.Evaluation evaluation, Vector3f value) {
+        // Transitions on the main timeline start from the last authoritative interpolation.
+        if (!evaluation.isObservation()) {
+            if (lastLerpResult == null)
+                lastLerpResult = new Vector3f(value);
+            else
+                lastLerpResult.set(value);
+        }
+        return value;
+    }
 }

@@ -3,14 +3,17 @@ package com.elfmcys.ysm.geckolib3.geo.animated;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoLocator;
 import com.elfmcys.ysm.geckolib3.geo.render.built.GeoModel;
 import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
+import com.elfmcys.ysm.natives.physics.NativePhysicsWorld;
 import com.elfmcys.ysm.natives.render.NativeModelState;
 import com.elfmcys.ysm.util.Closeable;
 import com.elfmcys.ysm.util.ExposedShortArrayList;
 import com.mojang.blaze3d.vertex.PoseStack;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import it.unimi.dsi.fastutil.shorts.ShortArrayList;
+import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
+import org.joml.Quaternionfc;
 
 import java.util.function.Consumer;
 
@@ -49,46 +52,58 @@ public final class GeoModelState implements Closeable {
         invalidate();
         try {
             var model = animatedModel.getModel();
-            var boneCount = model.sortedBones().size();
-            var activeLocatorMap = this.activeLocatorMap;
-
-            var valid = nativeState.extract(model.bakedModel(), animatedModel.getBoneAttributes());
-            if (!valid) {
-                return false;
-            }
-
-            var locatorSlotCount = model.locatorType().size();
-            if (activeLocatorMap.size() != locatorSlotCount) {
-                var oldSize = activeLocatorMap.size();
-                activeLocatorMap.size(locatorSlotCount);
-                for (var i = oldSize; i < locatorSlotCount; i++) {
-                    activeLocatorMap.set(i, new ExposedShortArrayList(2));
-                }
-            }
-            for (var list : activeLocatorMap) {
-                list.clear();
-            }
-
-            var sortedBones = model.sortedBones();
-            var activeLocators = nativeState.getLocatorBoneIndices();
-            for (var i = 0; i < activeLocators.size(); i++) {
-                var boneIndex = Short.toUnsignedInt(activeLocators.getShort(i));
-                if (boneIndex >= boneCount) {
-                    return false;
-                }
-                var locatorType = sortedBones.get(boneIndex).locatorType();
-                if (locatorType != null) {
-                    activeLocatorMap.get(Byte.toUnsignedInt(locatorType.seq()) - 1).add((short)boneIndex);
-                }
-            }
-
-            this.model = model;
-            return true;
+            return nativeState.extract(model.bakedModel(), animatedModel.getBoneAttributes()) && publishModel(model);
         } finally {
             if (this.model == null) {
                 nativeState.invalidate();
             }
         }
+    }
+
+    /** Locator publication can revoke extraction without revoking an already accepted physics step. */
+    public int extractWithPhysics(AnimatedGeoModel animatedModel, NativePhysicsWorld world, int mode, float dt,
+        Vec3 root, Quaternionfc rotation) {
+        model = null;
+        var baked = animatedModel.getModel();
+        var flags = nativeState.extractWithPhysics(baked.bakedModel(), world, animatedModel.getBoneAttributes(), mode,
+            dt, root.x, root.y, root.z, rotation.x(), rotation.y(), rotation.z(), rotation.w());
+        if ((flags & NativeModelState.EXTRACT_OK) == 0)
+            return flags;
+        try {
+            if (publishModel(baked))
+                return flags;
+        } catch (RuntimeException | OutOfMemoryError failure) {
+            // Dropping the draw must preserve the native commit bit for the caller.
+        }
+        nativeState.invalidate();
+        return flags & ~NativeModelState.EXTRACT_OK;
+    }
+
+    private boolean publishModel(GeoModel model) {
+        var locatorSlotCount = model.locatorType().size();
+        if (activeLocatorMap.size() != locatorSlotCount) {
+            var oldSize = activeLocatorMap.size();
+            activeLocatorMap.size(locatorSlotCount);
+            for (var i = oldSize; i < locatorSlotCount; i++) {
+                activeLocatorMap.set(i, new ExposedShortArrayList(2));
+            }
+        }
+        for (var list : activeLocatorMap) {
+            list.clear();
+        }
+
+        var sortedBones = model.sortedBones();
+        var activeLocators = nativeState.getLocatorBoneIndices();
+        for (var i = 0; i < activeLocators.size(); i++) {
+            var boneIndex = Short.toUnsignedInt(activeLocators.getShort(i));
+            if (boneIndex >= sortedBones.size())
+                return false;
+            var locatorType = sortedBones.get(boneIndex).locatorType();
+            if (locatorType != null)
+                activeLocatorMap.get(Byte.toUnsignedInt(locatorType.seq()) - 1).add((short)boneIndex);
+        }
+        this.model = model;
+        return true;
     }
 
     public boolean isValid() {

@@ -14,12 +14,6 @@ public class KeyFramePoint extends AnimationPoint {
 
     @Override
     public Vector3f getLerpPoint(EntityExpressionRuntime.Evaluation evaluation) {
-        var result = keyframe.getLerpPoint(evaluation, getPercentCompleted());
-        if (lastLerpResult == null) {
-            lastLerpResult = new Vector3f(result);
-        } else {
-            lastLerpResult.set(result);
-        }
-        return result;
+        return remember(evaluation, keyframe.getLerpPoint(evaluation, getPercentCompleted()));
     }
 }

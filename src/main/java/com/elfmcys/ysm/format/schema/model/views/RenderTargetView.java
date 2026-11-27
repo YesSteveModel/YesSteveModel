@@ -1,12 +1,16 @@
 package com.elfmcys.ysm.format.schema.model.views;
 
+import com.elfmcys.ysm.format.AssetLoadException;
 import com.elfmcys.ysm.format.schema.file.AssetFileView;
 import com.elfmcys.ysm.format.schema.file.ChunkDataSource;
 import com.elfmcys.ysm.format.schema.file.PBRImageSources;
+import com.elfmcys.ysm.format.schema.model.PhysicsDefinitionValidator;
 import com.elfmcys.ysm.proto.mixel.asset.model.ModelDataProto;
+import com.elfmcys.ysm.proto.mixel.asset.model.data.GeoModelProto;
 import com.elfmcys.ysm.proto.mixel.manifest.asset.PBRTextureSetProto;
 import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetProto;
 import com.elfmcys.ysm.proto.mixel.manifest.asset.RenderTargetKind;
+import us.hebi.quickbuf.ProtoSource;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -62,7 +66,24 @@ public final class RenderTargetView {
     }
 
     public ModelDataProto readDefinition(BooleanSupplier cancelled, ChunkDataSource source) throws IOException {
-        return fileView.readProtoBlob(cancelled, source, descriptor.blobId(), ModelDataProto::parseFrom);
+        var definition = fileView.readProtoBlob(cancelled, source, descriptor.blobId(), ModelDataProto::parseFrom);
+        if (definition.hasPhysics()) {
+            if (kind() != RenderTargetKind.PLAYER) {
+                throw AssetLoadException.content("Render target '" + id() + "' cannot carry physics");
+            }
+            var main = definition.geoModels().get("main");
+            if (main == null) {
+                throw AssetLoadException.content("Physics requires player/main geometry");
+            }
+            GeoModelProto geometry;
+            try {
+                geometry = GeoModelProto.parseFrom(ProtoSource.newInstance(main));
+            } catch (IOException error) {
+                throw AssetLoadException.content("Failed to decode player/main geometry for physics", error);
+            }
+            PhysicsDefinitionValidator.validate(definition.physicsUnsafe(), geometry, id());
+        }
+        return definition;
     }
 
     public PBRImageSources textureSources(ChunkDataSource source, String textureName) throws IOException {

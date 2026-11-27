@@ -47,6 +47,19 @@
 
 每个负例应只破坏单个不变量，并明确断言在预期的层级失败，不能只断言“最终某处抛出了异常”。
 
+## 物理资产 fixtures
+
+以下固定字节覆盖[物理资产校验](model-schema/assets-and-validation.md#physics)。`cases.tsv` 登记每个制品在 M2 读取目标 definition 时的预期结果，`containers.tsv` 登记容器版本、preamble 长度、模型身份、chunk 布局与 hash。可将任一制品复制到空目录独立验证。[预期结果](fixtures/physics-fixtures/cases.tsv) · [容器摘要](fixtures/physics-fixtures/containers.tsv) · [制品生成](fixtures/physics-fixtures/README.md)
+
+| 制品 | 预期 |
+| --- | --- |
+| [physics-export.mxc](fixtures/physics-fixtures/physics-export.mxc) | M2。正式导出的玩家模型内嵌发束预设展开结果，读取方可直接编译物理资产。 |
+| [animation-only.mxc](fixtures/physics-fixtures/animation-only.mxc) | M2。`ModelData.physics` 缺省，继续按纯动画消费。 |
+| [physics-p4-controls.mxc](fixtures/physics-fixtures/physics-p4-controls.mxc) | M2。覆盖正尺寸及有符号局部量的合法端点、零长度和最大长度胶囊、179° 硬摆动、有效球铰及可共存的力学空边。 |
+| `reject-*.mxc` | C3、M1 通过，读取 `player` definition 时返回内容错误。各制品保留合法的容器和 Manifest，注入一个静态安全边界或结构错误。 |
+
+成品拒绝矩阵覆盖数量上限、骨树和绑定、节点与约束拓扑、过滤集合、图元、有限数及数值区间、参考架、限位与弹簧。自动化读取固定字节，逐个验证容器完整性、可读的 M1 元数据和对应的 M2 结果。raw 文件缺失、JSON 语法或类型错误、互斥回正目标、预设定向失败和显式多圈历史请求由 raw 转换与导出入口验证。
+
 ## 边界 fixture
 
 当实现跨越语言、进程、JNI、IPC 或其他边界时，必须使用正式生产者输出的字节，经过真实的打包与消费入口验证，不能只让同一侧解析器自产自读。测试至少要证明：

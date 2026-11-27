@@ -145,6 +145,24 @@ tasks.register('verifyRequiredDefaultResidency', Test) {
     }
 }
 
+tasks.register('verifyPhysicsTargetPreparation', Test) {
+    group = 'verification'
+    description = 'Verifies model definition admission and native physics asset lifetime through the render target cache.'
+    def imageAgent = tasks.named('nativeImageBenchmarkAgent', Jar).flatMap { it.archiveFile }
+    dependsOn tasks.named('testClasses')
+    inputs.file(imageAgent)
+    inputs.file(ysmNativeLibraryFile)
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    filter { includeTestsMatching '*PhysicsTargetPreparationIntegrationTest' }
+    systemProperty 'ysm.physicsTargetPreparation', 'true'
+    doFirst {
+        environment 'YSM_NATIVE_PATH', ysmNativeLibraryPath.get()
+        jvmArgs "-javaagent:${imageAgent.get().asFile.absolutePath}"
+    }
+}
+
 tasks.register('verifyDemandDiskReads', JavaExec) {
     group = 'verification'
     description = 'Checks actual file reads across page demand admission using production resource preparation.'

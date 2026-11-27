@@ -4,6 +4,7 @@ import com.elfmcys.ysm.buffer.NativeBuffer;
 import com.elfmcys.ysm.buffer.annotation.Borrowed;
 import com.elfmcys.ysm.geckolib3.model.AnimatedGeoModel;
 import com.elfmcys.ysm.natives.NativeObject;
+import com.elfmcys.ysm.natives.physics.NativePhysicsWorld;
 import com.elfmcys.ysm.util.ExposedShortArrayList;
 import it.unimi.dsi.fastutil.shorts.ShortList;
 import org.lwjgl.system.MemoryUtil;
@@ -34,6 +35,18 @@ import java.util.function.Function;
  * Seam: implements the [frame publication and borrow contract](docs/architecture/rendering/overview.md#帧状态发布与借用).
  */
 public final class NativeModelState extends NativeObject {
+    public static final int OBSERVE = 0;
+    public static final int RESET = 1;
+    public static final int STEP = 2;
+    public static final int EXTRACT_OK = 1;
+    public static final int PHYSICS_ACCEPTED = 1 << 1;
+    public static final int OUTCOME_SHIFT = 2;
+    public static final int OUTCOME_MASK = 0xf;
+    public static final int OK = 0;
+    public static final int CAPACITY_EXCEEDED = 1;
+    public static final int SCRATCH_EXHAUSTED = 2;
+    public static final int NON_FINITE_STATE = 3;
+
     private static final int BONE_INFO_INT_COUNT = 8;
     private static final int CUBE_INFO_HEADER_INT_COUNT = 2;
     private static final int CUBE_INFO_INT_COUNT = 2;
@@ -45,7 +58,7 @@ public final class NativeModelState extends NativeObject {
     private static final ThreadLocal<int[]> CUBE_INFO_BUFFER = ThreadLocal.withInitial(() -> new int[0]);
 
     private final ExposedShortArrayList locatorBoneIndices = new ExposedShortArrayList(0);
-    private final long[] extractOutput = new long[4];
+    private final long[] extractOutput = new long[5];
 
     private BonePoseView bonePoses;
     private ShortBuffer renderBoneIndices;
@@ -106,10 +119,7 @@ public final class NativeModelState extends NativeObject {
         clearResult();
         var statePtr = get();
         try {
-            var expectedBoneCount = boneAttributes.length / AnimatedGeoModel.BONE_ATTRIBUTE_COUNT;
-            if (locatorBoneIndices.size() < expectedBoneCount) {
-                locatorBoneIndices.size(expectedBoneCount);
-            }
+            var expectedBoneCount = prepareLocators(boneAttributes);
             var success = local
                 ? nExtractSubtree(statePtr, bakedModel.get(), boneAttributes, locatorBoneIndices.getUnderlyingArray(),
                     extractOutput, rootIndex)
@@ -119,22 +129,7 @@ public final class NativeModelState extends NativeObject {
                 return false;
             }
 
-            var renderBoneCount = Math.toIntExact(extractOutput[2] & 0xFFFFFFFFL);
-            var nextLocatorCount = Math.toIntExact(extractOutput[2] >>> 32);
-            var nextVertexCount = Math.toIntExact(extractOutput[3] & 0xFFFFFFFFL);
-            var nextTranslucentCount = Math.toIntExact(extractOutput[3] >>> 32);
-            if (renderBoneCount > expectedBoneCount || nextLocatorCount > expectedBoneCount
-                || nextTranslucentCount > nextVertexCount) {
-                throw new IllegalStateException("Invalid native ModelState counts");
-            }
-            var nextPoses = new BonePoseView(extractOutput[0], expectedBoneCount);
-            var nextIndices = borrowShortBuffer(extractOutput[1], renderBoneCount);
-            bonePoses = nextPoses;
-            renderBoneIndices = nextIndices;
-            locatorCount = nextLocatorCount;
-            totalVertexCount = nextVertexCount;
-            translucentVertexCount = nextTranslucentCount;
-            valid = true;
+            publish(expectedBoneCount);
             return true;
         } finally {
             if (!valid) {
@@ -144,6 +139,71 @@ public final class NativeModelState extends NativeObject {
             Reference.reachabilityFence(this);
             Reference.reachabilityFence(bakedModel);
         }
+    }
+
+    /**
+     * A caller that receives PHYSICS_ACCEPTED commits the master update even when EXTRACT_OK is clear. Any further
+     * extraction for that frame uses OBSERVE. Root rotation is a unit quaternion in xyzw order.
+     */
+    @Borrowed
+    public int extractWithPhysics(NativeBakedModel model, NativePhysicsWorld world, float[] attributes, int mode,
+        float dtSeconds, double rootX, double rootY, double rootZ, float quatX, float quatY, float quatZ, float quatW) {
+        clearResult();
+        long state = get();
+        boolean revokeNative = true;
+        try {
+            var boneCount = prepareLocators(attributes);
+            extractOutput[4] = 0;
+            int flags = nExtractWithPhysics(state, model.get(), world.get(), attributes,
+                locatorBoneIndices.getUnderlyingArray(), extractOutput, mode, dtSeconds, rootX, rootY, rootZ, quatX,
+                quatY, quatZ, quatW);
+            if ((flags & EXTRACT_OK) != 0) {
+                try {
+                    publish(boneCount);
+                } catch (RuntimeException | OutOfMemoryError failure) {
+                    return flags & ~EXTRACT_OK;
+                }
+            }
+            revokeNative = false;
+            return flags;
+        } finally {
+            if (revokeNative) {
+                nInvalidate(state);
+            }
+            Reference.reachabilityFence(world);
+            Reference.reachabilityFence(model);
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    public int getRawJoltError() {
+        return (int)extractOutput[4];
+    }
+
+    private int prepareLocators(float[] attributes) {
+        int boneCount = attributes.length / AnimatedGeoModel.BONE_ATTRIBUTE_COUNT;
+        if (locatorBoneIndices.size() < boneCount) {
+            locatorBoneIndices.size(boneCount);
+        }
+        return boneCount;
+    }
+
+    private void publish(int boneCount) {
+        var renderBoneCount = Math.toIntExact(extractOutput[2] & 0xFFFFFFFFL);
+        var nextLocatorCount = Math.toIntExact(extractOutput[2] >>> 32);
+        var nextVertexCount = Math.toIntExact(extractOutput[3] & 0xFFFFFFFFL);
+        var nextTranslucentCount = Math.toIntExact(extractOutput[3] >>> 32);
+        if (renderBoneCount > boneCount || nextLocatorCount > boneCount || nextTranslucentCount > nextVertexCount) {
+            throw new IllegalStateException("Invalid native ModelState counts");
+        }
+        var nextPoses = new BonePoseView(extractOutput[0], boneCount);
+        var nextIndices = borrowShortBuffer(extractOutput[1], renderBoneCount);
+        bonePoses = nextPoses;
+        renderBoneIndices = nextIndices;
+        locatorCount = nextLocatorCount;
+        totalVertexCount = nextVertexCount;
+        translucentVertexCount = nextTranslucentCount;
+        valid = true;
     }
 
     /** Revokes both publications and all outstanding views; native storage capacity may remain allocated. */
@@ -305,6 +365,10 @@ public final class NativeModelState extends NativeObject {
 
     private static native boolean nExtract(long state, long bakedModel, float[] boneAttributes,
         short[] locatorBoneIndices, long[] output);
+
+    static native int nExtractWithPhysics(long state, long model, long world, float[] attributes, short[] locators,
+        long[] output, int mode, float dtSeconds, double rootX, double rootY, double rootZ, float quatX, float quatY,
+        float quatZ, float quatW);
 
     private static native boolean nExtractSubtree(long state, long bakedModel, float[] boneAttributes,
         short[] locatorBoneIndices, long[] output, int rootIndex);

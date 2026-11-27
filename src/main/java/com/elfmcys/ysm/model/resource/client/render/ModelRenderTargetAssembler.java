@@ -35,7 +35,7 @@ public final class ModelRenderTargetAssembler {
         }
         return new ModelRenderTarget(modelHash, data.renderTargetId(), targetResources, assets, data.animationStore(),
             data.info(), armAssets, data.armAnimationStore(), data.preparedOwner(), data.defaultSources(),
-            data.stateIdentity());
+            data.stateIdentity(), data.physicsAsset(), data.physicsMetadata());
     }
 
     private static PlayerModelResources buildPlayerModel(PlayerModelData player, ModelInfoView info) {
